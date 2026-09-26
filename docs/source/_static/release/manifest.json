@@ -2,7 +2,7 @@
   "approved": true,
   "purpose": "release",
   "report": "test/benchmarks/results/release-report-final-20260926",
-  "table_json_sha256": "a5d12088bc733fc8ce36d993a943508707b88156585acb9468dc6e25bc600f04",
+  "table_json_sha256": "e5e6fba7a84fc62fcecc358ddccc2c6508b7e87088791a3375dfeb850dc41e2f",
   "commits": [
     "c908ac26587fea3f54acf3e0f821deeed446425d",
     "d4073b56d227171ba2ff1c261946ebe8f017d810",
@@ -38,19 +38,19 @@
     "validation_failed": 4
   },
   "outputs": {
-    "stacked_core.svg": "652e6ce6528e6c15affb7240452cff673874483145bd47f4b7f84f9ed028c247",
-    "stacked_core.png": "2b253b338836b844dff8656473d4408e618ce7724fbff15da2eaf1b3f2db963c",
-    "stacked_all.svg": "db328e573ca18d5033ae464554678c0dea99dcea2e18473d729b760f1fd8ea54",
-    "stacked_all.png": "eff43a55cec8721c8e8589fe5c72f7e7586864d4fecfe213619f22363179ea4d",
-    "speedup_pinocchio.svg": "096d62074206da8a05d570979bb448a44018c1ec318f2a5449c6c7deda79f9b4",
-    "speedup_pinocchio.png": "18890a3962f7b97176ca751b6693f373b9783fd6567b888317f868feb5013603",
-    "speedup_gpu_resident.svg": "07ea1e5353644082b1de4b73434c76d566b0f3d203180c5a25c8e926da8bd322",
-    "speedup_gpu_resident.png": "bd8b3d1e86b6a621969d6daac71fd3efb5003a71419a6071b5c2fdd7938eb442",
-    "speedup_gpu_jax_resident.svg": "bff78ee2f956a1c9e553c8934459ee2b46f59014c659c2a0c411ac3fd7257560",
-    "speedup_gpu_jax_resident.png": "44283b03dc8d438516b43b3dd547cb53399fef0d039acf80ee58c391f4a66052",
-    "speedup_gpu_full.svg": "a53f29bcd089232975a817a381521a6ba8720642e543d037c912150bf8fb5324",
-    "speedup_gpu_full.png": "9fd5fcf7c7eefefc9c83b0d1fdbf6c583c53ac1b86fe3d999857716b38e779d9",
-    "table.csv": "178a2cdc8b33dfa755876acd5a7bde4463af4fa28ac95429009648a0b6e02ca2",
+    "stacked_core.svg": "f914da49a837a2ee99431c1ba462950989f0628f46104bafde95a44937d10845",
+    "stacked_core.png": "15ef816ea7eb534f5640fcc063e0a81b2b912d8964af739b79332b94c9a70bc5",
+    "stacked_all.svg": "59f9f2e4eadd62f044f9309edf78106c439129beff6096b14ccd0698c45dfd29",
+    "stacked_all.png": "2d786cd620b4fa71f5dabb79fd4067534248ba2efe13fcd684e96b888b92cdb7",
+    "speedup_pinocchio.svg": "fd2773c5dfef626da8bea2e1d5ef451d4a86037e05ba5d1ca67875f2e7ee86c7",
+    "speedup_pinocchio.png": "b88704f8a61a25d91fd589908e2b1921110ed32e7fe115b74d38e0caec29aa61",
+    "speedup_gpu_resident.svg": "6bbfe2110194655b74e87a005885b51beb0677836a92e6e333d4e11bec0b955a",
+    "speedup_gpu_resident.png": "0fe1715dba20d64afed3c821ec00700483726cc507ec0fc4e26ae07b3e3dd7fa",
+    "speedup_gpu_jax_resident.svg": "3f8f0ddd107a6fc3e5fcb0959d492ee2c7fcc355902077623bc9dcb2a917587e",
+    "speedup_gpu_jax_resident.png": "72fed0d260fbd82bf8a9d2ef6939f1d9806363daa3b4f3def5b9e983f888d45f",
+    "speedup_gpu_full.svg": "9b2df5da5c521c9480f689b2c33ede1a61d74982192f74b9154b728b7a77bd18",
+    "speedup_gpu_full.png": "ec1e68a038f6f067a41ed673dfbc3c9f0b7b6e19b67d70a1c72cd360e27f64d3",
+    "table.csv": "fa28e6646581874437d8dcde6748e4fc3c89963603dee9a1cd7ec8391ca34b83",
     "decomposition.csv": "afc9465c3fe9f7b1261221561f01e7c463fa2f832f3af43c551a9fa2aff035ed"
   }
 }

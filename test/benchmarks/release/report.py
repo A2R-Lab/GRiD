@@ -157,7 +157,7 @@ def aggregate(rows):
                    variation_relative_l2_error=max((r["variation_relative_l2_error"] for r in group if r.get("variation_relative_l2_error") is not None), default=None),
                    max_bad_entries=max(r.get("bad_entries", 0) for r in group),
                    entries=max(r.get("entries", 0) for r in group),
-                   host_min_us=None, host_max_us=None, overhead_us=None, boundary_flag="",
+                   host_min_us=None, host_max_us=None, resident_min_us=None, resident_max_us=None, overhead_us=None, boundary_flag="",
                    max_abs_error=max((r["max_abs_error"] for r in group if r["max_abs_error"] is not None), default=None),
                    relative_l2_error=max((r["relative_l2_error"] for r in group if r["relative_l2_error"] is not None), default=None))
         contracts = {(r["contract"], r["urdf_sha256"], r["input_values_sha256"], r["dtype"], r["method"], r["purpose"], r["expected_repeats"]) for r in group}
@@ -176,7 +176,8 @@ def aggregate(rows):
             if all(r.get("resident_eager_us") is not None for r in group):
                 row["resident_eager_us"] = statistics.median(r["resident_eager_us"] for r in group)
             if all(r["resident_us"] is not None for r in group):
-                row["resident_us"] = statistics.median(r["resident_us"] for r in group)
+                res = [r["resident_us"] for r in group]
+                row.update(resident_us=statistics.median(res), resident_min_us=min(res), resident_max_us=max(res))
                 if any(overhead(r["host_us"], r["resident_us"]) is None for r in group):
                     row["boundary_flag"] = "negative total-minus-resident in at least one repeat; recollect"
                 else:
@@ -192,7 +193,7 @@ def aggregate(rows):
         peers = comparisons[(r["robot"],r["operation"],r["batch"])]
         if len({(p["contract"],p["urdf_sha256"],p["input_values_sha256"]) for p in peers}) > 1:
             r.update(status="contract_mismatch", reason="cross-backend hardware/software/input contracts differ",
-                host_us=None,resident_us=None,host_min_us=None,host_max_us=None,overhead_us=None)
+                host_us=None,resident_us=None,host_min_us=None,host_max_us=None,resident_min_us=None,resident_max_us=None,overhead_us=None)
     return output
 
 
@@ -289,7 +290,7 @@ def plot(rows, directory, kind, purpose):
     handles = [Patch(color=colors[b], label=LABELS[b]) for b in used]
     handles.append(Patch(facecolor=".86", edgecolor=".4", hatch="////", label="Full-call minus resident API wall time"))
     fig.legend(handles=handles, loc="lower center", ncol=3, fontsize=8, bbox_to_anchor=(.5,.015))
-    fig.suptitle(f"{'SMOKE TEST — NOT PERFORMANCE EVIDENCE' if purpose == 'smoke' else 'DRAFT — UNREVIEWED COLLECTION'}\n{kind.title()} comparison · median of run means; whiskers show run-mean range", fontsize=12)
+    fig.suptitle(banner(purpose, f"{kind.title()} comparison · median of run means; whiskers show run-mean range"), fontsize=12)
     if kind == "table":
         fig.set_size_inches(max(10, 5.3*len(robots)), 3.3*len(ops))
     fig.text(.5,.095,"* fp64 arithmetic exception. Red triangle: negative timing delta, not stacked. N/C: not collected.\nGRiD CUDA host call: base = compute-only kernel launch, cap = H2D/D2H of one call. Other stacked bases include resident API dispatch. Unstacked bars are full-call only.",ha="center",fontsize=8)
@@ -390,6 +391,13 @@ def plot_stacked_comparison(rows, directory, purpose, api="grid_jax", ops=CORE, 
                             values.append(bottom)
                         if flags:
                             ax.plot(x, bottom, "v", color="#d03b3b", markersize=5)
+                        api_row = lookup.get((robot, op, api, batch), {})
+                        if wrapper is not None and api_row.get("host_min_us") and api_row.get("host_max_us"):
+                            ax.errorbar(x, api_row["host_us"], yerr=[[api_row["host_us"] - api_row["host_min_us"]], [api_row["host_max_us"] - api_row["host_us"]]], color="black", capsize=2, linewidth=.7)
+                        marks = "".join(m for m, hit in (("*", any(lookup.get((robot, op, b, batch), {}).get("dtype") == "float64" for b in ("grid_cuda", api))),
+                                                          ("†", any(lookup.get((robot, op, b, batch), {}).get("status") == "accuracy_warning" for b in ("grid_cuda", api)))) if hit)
+                        if marks:
+                            ax.annotate(marks, (x, bottom), xytext=(0, 3), textcoords="offset points", ha="center")
                         continue
                     row = lookup.get((robot, op, backend, batch), {})
                     total, resident = row.get("host_us"), row.get("resident_us")
@@ -414,6 +422,12 @@ def plot_stacked_comparison(rows, directory, purpose, api="grid_jax", ops=CORE, 
                         ax.bar(x, cap, width*.85, bottom=resident, facecolor=BACKEND_HUE[backend], alpha=.45, hatch="////", edgecolor="white", linewidth=.6)
                     else:
                         ax.bar(x, total, width*.85, color=BACKEND_HUE[backend], edgecolor="white", linewidth=.6)
+                    lo, hi = row.get("host_min_us"), row.get("host_max_us")
+                    if backend == "pinocchio" and cap is not None:
+                        plain_row = lookup.get((robot, op, "pinocchio_plain", batch), {})
+                        lo, hi = plain_row.get("host_min_us"), plain_row.get("host_max_us")
+                    if lo and hi:
+                        ax.errorbar(x, total, yerr=[[max(total - lo, 0.)], [max(hi - total, 0.)]], color="black", capsize=2, linewidth=.7)
                     if resident is not None and cap is None:
                         ax.plot(x, total, "v", color="#d03b3b", markersize=5)
                     if row.get("dtype") == "float64":
@@ -441,7 +455,7 @@ def plot_stacked_comparison(rows, directory, purpose, api="grid_jax", ops=CORE, 
     fig.legend(handles=handles, loc="lower center", ncol=2, fontsize=8, bbox_to_anchor=(.5, .01))
     tall = len(ops) > 3
     fig.text(.5, .045 if tall else .13, "Log axis: stacked segment heights are not proportional; read the composition figure or the decomposition table for shares. "
-             "* fp64 arithmetic exception. † accuracy warning. Red triangle: a negative difference, segment omitted. N/C: not collected.", ha="center", fontsize=7.5)
+             "Whiskers: range of the three run means of the full call. * fp64 arithmetic exception. † accuracy warning. Red triangle: a negative difference, segment omitted. N/C: not collected.", ha="center", fontsize=7.5)
     fig.tight_layout(rect=(0, .06 if tall else .19, 1, .97 if tall else .93))
     fig.savefig(directory / f"{stem}.svg")
     fig.savefig(directory / f"{stem}.png", dpi=140)
@@ -516,7 +530,27 @@ SHORT_OP = {"inverse_dynamics": "RNEA", "inverse_dynamics_gradient": "∇RNEA", 
 SPEEDUP_CMAP = LinearSegmentedColormap.from_list("grid_speedup", ["#d03b3b", "#ec835a", "#f0efec", "#86b6ef", "#2a78d6", "#0d366b"])
 
 
-def _ratio_heatmap(ax, matrix, row_labels, col_labels, title, vmax=100.):
+UNSTABLE_SPREAD = 1.5   # largest / smallest run mean across the repeats
+
+
+def unstable(row, field):
+    """True when the repeats of this boundary disagree by more than UNSTABLE_SPREAD."""
+    if not row:
+        return False
+    lo, hi = row.get(field.replace("_us", "_min_us")), row.get(field.replace("_us", "_max_us"))
+    return bool(lo and hi and hi / lo > UNSTABLE_SPREAD)
+
+
+def cell_marks(grid_row, grid_field, comp_row, comp_field):
+    """'*' when a side is fp64, '†' when a side is a retained accuracy warning,
+    '~' when a side's repeats of the compared boundary spread by more than 1.5×."""
+    rows = [r for r in (grid_row, comp_row) if r]
+    return ("*" if any(r.get("dtype") == "float64" for r in rows) else "") + \
+           ("†" if any(r.get("status") == "accuracy_warning" for r in rows) else "") + \
+           ("~" if unstable(grid_row, grid_field) or unstable(comp_row, comp_field) else "")
+
+
+def _ratio_heatmap(ax, matrix, row_labels, col_labels, title, vmax=100., marks=None):
     import numpy as np
     m = np.array(matrix, float)
     ax.imshow(np.log10(np.where(np.isfinite(m), m, np.nan)), cmap=SPEEDUP_CMAP,
@@ -527,7 +561,7 @@ def _ratio_heatmap(ax, matrix, row_labels, col_labels, title, vmax=100.):
         for j in range(m.shape[1]):
             v = m[i, j]
             if np.isfinite(v):
-                ax.text(j, i, f"{v:.0f}×" if v >= 10 else f"{v:.1f}×", ha="center", va="center", fontsize=7,
+                ax.text(j, i, (f"{v:.0f}×" if v >= 10 else f"{v:.1f}×") + (marks[i][j] if marks else ""), ha="center", va="center", fontsize=7,
                         color="white" if abs(math.log10(v)) > 0.9 else "#0b0b0b")
             else:
                 ax.text(j, i, "–", ha="center", va="center", fontsize=7, color="#9a9994")
@@ -560,10 +594,11 @@ def plot_speedup(rows, directory, purpose, grid_backend, grid_field, comp_field,
         matrix = [[(lambda g, c: c / g if (g and c) else np.nan)(
             lookup.get((ro, op, grid_backend, b), {}).get(grid_field), lookup.get((ro, op, comp, b), {}).get(comp_field))
             for b in batches] for op, ro in cells]
-        _ratio_heatmap(axes[0, ci], matrix, labels, batches, LABELS[comp])
+        marks = [[cell_marks(lookup.get((ro, op, grid_backend, b)), grid_field, lookup.get((ro, op, comp, b)), comp_field) for b in batches] for op, ro in cells]
+        _ratio_heatmap(axes[0, ci], matrix, labels, batches, LABELS[comp], marks=marks)
         axes[0, ci].set_xlabel("batch")
     fig.suptitle(banner(purpose, title), fontsize=11)
-    fig.text(.5, .01, "Ratio > 1: GRiD faster. Diverging scale centred on 1×, log spaced, clipped at 100×. '–': no matched cell (adapter pending, excluded, or failed validation).", ha="center", fontsize=7.5)
+    fig.text(.5, .01, "Ratio > 1: GRiD faster. Diverging scale centred on 1×, log spaced, clipped at 100×. '–': no matched cell (adapter pending, excluded, or failed validation). * a side computes in fp64. † a side is a retained fp32 accuracy warning. ~ a side's three run means spread by more than 1.5×.", ha="center", fontsize=7.5)
     fig.tight_layout(rect=(0, .03, 1, .94))
     fig.savefig(directory / f"{name}.svg"); fig.savefig(directory / f"{name}.png", dpi=150)
     plt.close(fig)
@@ -585,17 +620,19 @@ def plot_best_competitor(rows, directory, purpose):
     import matplotlib.pyplot as plt
     fig, axes = plt.subplots(1, 3, figsize=(11, .28*len(labels) + 1.8), squeeze=False, sharey=True)
     for pi, (gb, gf, cf, ttl) in enumerate(panels):
-        matrix = []
+        matrix, marks = [], []
         for op, ro in cells:
-            line = []
+            line, mline = [], []
             for b in batches:
                 g = lookup.get((ro, op, gb, b), {}).get(gf)
-                cvs = [lookup[(ro, op, c, b)].get(cf) for c in COMPETITOR_ORDER_ALL if (ro, op, c, b) in lookup and lookup[(ro, op, c, b)].get(cf)]
-                line.append(min(cvs) / g if (g and cvs) else np.nan)
-            matrix.append(line)
-        _ratio_heatmap(axes[0, pi], matrix, labels, batches, ttl)
+                cands = [lookup[(ro, op, c, b)] for c in COMPETITOR_ORDER_ALL if (ro, op, c, b) in lookup and lookup[(ro, op, c, b)].get(cf)]
+                best = min(cands, key=lambda r: r[cf]) if cands else None
+                line.append(best[cf] / g if (g and best) else np.nan)
+                mline.append(cell_marks(lookup.get((ro, op, gb, b)), gf, best, cf))
+            matrix.append(line); marks.append(mline)
+        _ratio_heatmap(axes[0, pi], matrix, labels, batches, ttl, marks=marks)
         axes[0, pi].set_xlabel("batch")
-    fig.suptitle(f"{'SMOKE TEST — NOT PERFORMANCE EVIDENCE' if purpose == 'smoke' else 'DRAFT — UNREVIEWED COLLECTION'}\nGRiD against the fastest competitor measured for each cell, same boundary on both sides", fontsize=11)
+    fig.suptitle(banner(purpose, "GRiD against the fastest competitor measured for each cell, same boundary on both sides"), fontsize=11)
     fig.tight_layout(rect=(0, .02, 1, .94))
     fig.savefig(directory / "best_competitor.svg"); fig.savefig(directory / "best_competitor.png", dpi=150)
     plt.close(fig)
@@ -632,7 +669,7 @@ def plot_throughput(rows, directory, purpose):
             if l not in names:
                 handles.append(h); names.append(l)
     fig.legend(handles, names, loc="lower center", ncol=6, fontsize=8)
-    fig.suptitle(f"{'SMOKE TEST — NOT PERFORMANCE EVIDENCE' if purpose == 'smoke' else 'DRAFT — UNREVIEWED COLLECTION'}\nThroughput per full call (host in, host out) · higher is better", fontsize=12)
+    fig.suptitle(banner(purpose, "Throughput per full call (host in, host out) · higher is better"), fontsize=12)
     fig.tight_layout(rect=(0, .04, 1, .96))
     fig.savefig(directory / "throughput.svg"); fig.savefig(directory / "throughput.png", dpi=110)
     plt.close(fig)

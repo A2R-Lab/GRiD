@@ -36,7 +36,7 @@ ASSETS = ROOT / "docs/source/_static/release"
 sys.path.insert(0, str(ROOT))
 
 from test.benchmarks.release.report import (  # noqa: E402
-    LABELS, SHORT_OP, _ratio_heatmap, banner, plot_stacked_comparison)
+    LABELS, SHORT_OP, _ratio_heatmap, banner, cell_marks, plot_stacked_comparison)
 from test.benchmarks.release.protocol import CORE, EXTRA, ROBOTS  # noqa: E402
 
 PINOCCHIO = ("pinocchio", "pinocchio_plain")
@@ -80,11 +80,12 @@ def speedup_grid(rows, out, name, purpose, sides, comps, comp_field, title, note
             matrix = [[(lambda g, c: c / g if (g and c) else np.nan)(
                 lookup.get((ro, op, gb, b), {}).get(gf), lookup.get((ro, op, comp, b), {}).get(comp_field))
                 for b in batches] for op, ro in cells]
-            _ratio_heatmap(axes[si, ci], matrix, labels, batches, f"{side_label}\nvs {LABELS[comp]}")
+            marks = [[cell_marks(lookup.get((ro, op, gb, b)), gf, lookup.get((ro, op, comp, b)), comp_field) for b in batches] for op, ro in cells]
+            _ratio_heatmap(axes[si, ci], matrix, labels, batches, f"{side_label}\nvs {LABELS[comp]}", marks=marks)
             axes[si, ci].set_xlabel("batch")
     fig.suptitle(banner(purpose, title), fontsize=12)
     fig.text(.5, .005, note + "  Ratio > 1: GRiD faster; < 1: GRiD slower. Log-spaced diverging scale centred on 1×, clipped at 100×. "
-             "'–': no matched cell.", ha="center", fontsize=7.5, wrap=True)
+             "'–': no matched cell. * a side computes in fp64. † a side is a retained fp32 accuracy warning. ~ a side's three run means spread by more than 1.5×.", ha="center", fontsize=7.5, wrap=True)
     fig.tight_layout(rect=(0, .02, 1, .96))
     fig.savefig(out / f"{name}.svg"); fig.savefig(out / f"{name}.png", dpi=150)
     plt.close(fig)
