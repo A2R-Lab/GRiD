@@ -3,11 +3,9 @@ Library Overview
 
 Each submodule of GRiD is an essential component to getting the most out of GRiD as a whole. Here we will discuss how each module relates to each other. 
 
-Table of Contents
------------------
-I. `RBDReference`
-II. `URDFParser`
-III. `GRiDCodeGenerator`
+.. contents::
+   :local:
+   :depth: 1
 
 I. RBDReference 
 ----------------
@@ -49,9 +47,46 @@ Here is a list of relevant and helpful getters which can also be viewed from the
 
 This is just a short list, please look to the function glossary for ``URDFParser`` for more detailed usage instructions and guidelines.
 
-II. URDFParser 
----------------
+II. URDFParser
+--------------
 
+URDFParser reads a URDF file and builds the ``robot`` object that both
+RBDReference and the code generator consume. Nothing downstream touches the XML
+again: joint ordering, motion subspaces, spatial inertias and the joint-frame
+transforms all come from this object.
+
+.. code:: python
+
+   from URDFParser import URDFParser
+
+   robot = URDFParser().parse("iiwa14.urdf", floating_base=False)
+
+Parsing choices that matter for GRiD:
+
+* **Joint ordering.** ``joint_ordering="pinocchio_order"`` (the default)
+  orders joints by a depth-first walk with Pinocchio's sibling sorting, so the
+  input vectors of the generated code line up with Pinocchio's. The other
+  options keep the raw URDF sibling order or sort siblings by name.
+* **Floating base.** ``floating_base=True`` adds a free-flyer root.
+  ``floating_base_convention="pinocchio"`` (the default) uses
+  ``q = [x, y, z, qx, qy, qz, qw]`` and ``v = [vx, vy, vz, wx, wy, wz]``; the
+  parser normalises the legacy ordering to this convention internally.
+* **Strictness.** ``strict_inertial=True`` turns a missing or degenerate
+  ``<inertial>`` block into a ``URDFParseError`` instead of a warning.
+
+Supported joint types: revolute, continuous, prismatic, fixed, helical (screw),
+planar, spherical and mimic, including chained mimics, which are flattened at
+parse time. An arbitrary ``<axis>`` direction is parsed into a dense 6-vector
+motion subspace; cardinal axes keep the compact form. Closed kinematic loops
+are not supported.
+
+The getters that the dynamics code relies on are listed above under
+RBDReference (``get_num_bodies``, ``get_parent_id``, ``get_S_by_id``, the
+``Xmat`` functions, ``get_Imat_by_id`` and the subtree and ancestor queries),
+and the joint-limit, origin-table and spherical helpers are part of the same
+API. The full method list is on the :doc:`URDFParser API page
+<../../api_reference/urdf>`, and the parser's own README in
+``external/URDFParser`` is the reference for its options and errors.
 
 III. GRiDCodeGenerator
 -----------------------

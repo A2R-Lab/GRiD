@@ -1,7 +1,10 @@
 Algorithms
 ==========
 
-GRiD implements several key rigid body dynamics algorithms
+GRiD implements the core rigid-body dynamics algorithms, their analytical
+derivatives, and the kinematic, centroidal and trajectory-optimization
+operations built on them. Each page gives the algorithm, its Python signature,
+where the reference and the CUDA code generator live, and how GRiD exposes it.
 
 .. toctree::
     :maxdepth: 2
@@ -13,6 +16,9 @@ GRiD implements several key rigid body dynamics algorithms
     frame_jacobian
     idsva
     fdsva_so
+    kinematics
+    centroidal_and_bias
+    integrators_and_plant
 
 Algorithm Overview
 ------------------
@@ -35,7 +41,12 @@ Here's a quick overview of the main algorithms:
 * **FDSVA-SO**: Second-order Forward Dynamics, layered on top of IDSVA-SO
   with a four-tier shared-memory selector for large floating-base
   robots.
-* **Centroidal & energy**: CoM (+ Jacobian), CCRBA (:math:`A`, :math:`h`),
+* **Kinematics** (:doc:`kinematics`): end-effector pose, its Jacobian and
+  Hessian, batched forward kinematics and runtime-selected targets.
+* **Integrators and the plant layer** (:doc:`integrators_and_plant`): the
+  discrete step, its gradient and Hessian, and the costs and barriers that a
+  trajectory optimizer needs.
+* **Centroidal & energy** (:doc:`centroidal_and_bias`): CoM (+ Jacobian), CCRBA (:math:`A`, :math:`h`),
   the centroidal derivatives ``dccrba`` (:math:`\partial A/\partial q`) and
   ``cmm_time_variation`` (:math:`\dot A`), the Coriolis matrix
   :math:`C(q,\dot q)`, and the kinetic / potential energy and their

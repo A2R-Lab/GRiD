@@ -11,13 +11,9 @@ For documentation-authoring instructions, see :doc:`sphinx_edit_guide`.
 
    sphinx_edit_guide
 
-Table of Contents
-=================
-1. `How to Contribute`
-2. `Code of Conduct`
-3. `Pull Request Process`
-4. `Testing and Documentation`
-5. `Code Style`
+.. contents::
+   :local:
+   :depth: 1
 
 How to Contribute
 =================

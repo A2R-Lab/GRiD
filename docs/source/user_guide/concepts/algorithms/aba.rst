@@ -30,6 +30,25 @@ The Python reference is ``RBDReference.aba`` in
 `grid_codegen/algorithms/_aba.py
 <https://github.com/A2R-Lab/GRiDCodeGenerator>`__.
 
+In GRiD
+-------
+``qdd = h.aba(q, qd, u)`` returns ``(B, NV)``. It takes the same optional
+per-body external forces as inverse dynamics (``f_ext``, shape
+``(B, 6*num_bodies)``, body-major, ``[angular; linear]`` in each body's local
+frame) and the signed gravity (default ``-9.81``). ``h.forward_dynamics`` gives
+the same accelerations through the mass-matrix-inverse path,
+``qdd = M⁻¹·(u − c)``; the two are independent implementations and the
+release benchmarks report both. The forward-dynamics gradient and the
+second-order :doc:`fdsva_so` are built on the ``forward_dynamics`` path, so a
+workload that needs derivatives usually calls that one for the value as
+well.
+
+The CUDA host entries are ``grid::aba`` and ``grid::forward_dynamics``, each
+with a ``_compute_only`` variant. In fp32 the forward-dynamics family can
+amplify rounding on high-velocity states; the release collection retains
+such cells with their measured error rather than hiding them (see the
+:doc:`release measurements <../../../release_measurements>`).
+
 See Also
 --------
 * :doc:`inverse_dynamics` — inverse dynamics counterpart (RNEA).
