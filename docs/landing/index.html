@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GRiD · GPU Dynamics, Kinematics, and Collisions with Analytical Derivatives</title>
+  <meta name="description" content="Robot-specific GPU dynamics, kinematics, and collisions with analytical derivatives and Hessians. Generate CUDA from your URDF and integrate with NumPy, JAX, PyTorch, or CUDA C++.">
+  <link rel="canonical" href="https://a2r-lab.org/GRiD/">
+  <link rel="icon" href="docs/_static/favicon/favicon.ico">
+  <link rel="stylesheet" href="landing/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar"><nav class="container" aria-label="Main navigation">
+  <a class="brand" href="#main">GRiD <span> / A²R Lab</span></a>
+  <div class="navlinks"><a href="#capabilities">Capabilities</a><a href="#measurements">Benchmarks</a><a href="#get-started">Get started</a><a href="docs/">Docs</a></div>
+</nav></header>
+<main id="main" class="container">
+  <section class="hero" aria-labelledby="hero-title">
+    <span class="badge">Robot-specific GPU computation</span>
+    <h1 id="hero-title"><span>GRiD</span><br>GPU Dynamics, Kinematics, and Collisions with Analytical Derivatives</h1>
+    <p class="hero-sub">Turn your URDF into robot-specific CUDA kernels with analytical derivatives and Hessians.<br>Work from NumPy, JAX, PyTorch, or directly in CUDA C++.</p>
+    <div class="links"><a class="button primary" href="#get-started">Get started</a><a class="button" href="https://github.com/A2R-Lab/GRiD">Code on GitHub</a><a class="button" href="docs/">Documentation</a></div>
+    <p class="note">Developed at <a href="https://a2r-lab.org/">A²R Lab</a> · <a href="#research">Original ICRA 2022 paper and project history</a></p>
+    <aside class="review-note"><strong>Rerelease preview.</strong> This draft follows <code>modernizing-tests</code>. Benchmark figures are reserved below while we agree on and collect new release data. The release will live in <a href="https://github.com/A2R-Lab/GRiD">A2R-Lab/GRiD</a>.</aside>
+  </section>
+
+  <div id="capabilities" class="highlights" aria-label="Core capabilities">
+    <article class="card"><div class="eyebrow">Dynamics</div><h2>Compute how your robot moves</h2><p>Batched inverse and forward dynamics, inertia matrices, and centroidal quantities for fixed- and floating-base robots.</p></article>
+    <article class="card"><div class="eyebrow">Kinematics</div><h2>Connect joints to task space</h2><p>End-effector poses, frame Jacobians, and runtime targets for task-space computation.</p></article>
+    <article class="card"><div class="eyebrow">Collisions</div><h2>Check configurations on the GPU</h2><p>Generate self- and environment-collision routines from robot geometry, with coarse-to-fine checks in CUDA.</p></article>
+    <article class="card"><div class="eyebrow">Gradients &amp; Hessians</div><h2>Use analytical derivatives</h2><p>Analytical gradients and Hessians for supported dynamics, kinematics, and optimization operations.</p></article>
+  </div>
+
+  <section id="approach">
+    <div class="eyebrow">From model to computation</div><h2>Your robot model becomes reusable GPU code.</h2>
+    <figure class="workflow">
+      <ol class="flow"><li><span class="step">01</span><strong>Describe your robot</strong><span>URDF, geometry, and the operations you need</span></li><li><span class="step">02</span><strong>Generate and compile</strong><span>Robot-specific CUDA and a cache per GPU architecture</span></li><li><span class="step">03</span><strong>Build your application</strong><span>NumPy · JAX · PyTorch · CUDA C++</span></li></ol>
+      <figcaption>Keep supported JAX and PyTorch computations on the device, or call generated CUDA from your own application. Add integrators, costs, external wrenches, and runtime model parameters as needed. <a href="docs/user_guide/tutorials/cuda_support_status.html">Browse supported operations →</a></figcaption>
+    </figure>
+    <p class="note">Collision routines use the <a href="docs/user_guide/tutorials/collisions.html">generated CUDA interface</a> and require complete geometry coverage. Analytical Hessians are explicit outputs, not nested higher-order autograd; see <a href="docs/user_guide/getting_started/compatibility.html#differentiation">differentiation support</a>.</p>
+  </section>
+
+  <section id="measurements">
+    <div class="eyebrow">Release measurements</div><h2>Compare computation, derivatives, and interface costs.</h2>
+    <p>The proposed collection covers iiwa14, go2, and G1 at batch sizes 16 through 256. We will compare supported operations at matched numerical and timing boundaries, with missing capabilities identified explicitly. New release data is pending.</p>
+    <div class="grid results-grid">
+      <figure id="figure-core" class="placeholder"><div class="placeholder-label">Figure 1 · Release data pending</div><h3 id="figure-derivatives">RNEA, analytical gradients, and Hessians</h3><p>Clustered bars compare GRiD with applicable CPU and GPU baselines across three robots. Gray hatching identifies the measured additional host-boundary cost.</p><figcaption><a href="docs/plot_designs.html#core-design">Preview the plot design →</a> · <a href="docs/release_measurements.html#figure-core">Collection checklist</a></figcaption></figure>
+      <figure id="figure-workflows" class="placeholder"><div class="placeholder-label">Figure 2 · Release data pending</div><h3>CUDA C++, NumPy, JAX, and PyTorch</h3><p>RNEA and its gradient through the same generated GRiD kernels. Compare complete calls and show the incremental interface cost against a matched native reference.</p><figcaption><a href="docs/plot_designs.html#workflow-design">Preview the plot design →</a> · <a href="docs/release_measurements.html#figure-workflows">Collection checklist</a></figcaption></figure>
+    </div>
+    <h3>Full results table</h3>
+    <p>After the plot collection, add inverse inertia, forward dynamics and its derivatives, and forward kinematics and its derivatives. The complete table will include every requested robot, batch, baseline, and operation, with N/A reasons and downloadable captures. No missing timing will be treated as zero.</p>
+    <p id="figure-collisions" class="note">Collision measurements are a separate follow-up. <a href="docs/release_measurements.html">Review the comparison set, full table scope, and release gates →</a></p>
+  </section>
+
+  <section id="get-started">
+    <div class="eyebrow">Get started</div><h2>Start with one robot and one computation.</h2>
+    <p>This preview uses the current development branch. From a machine with a compatible NVIDIA GPU, CUDA toolkit, and C++ compiler:</p>
+    <pre><code>git clone --recursive --branch modernizing-tests https://github.com/A2R-Lab/GRiD.git
+cd GRiD
+bash install/base_install.sh
+source .venv/bin/activate</code></pre>
+    <p>Run this from the repository root. Building only the operation you need keeps the first example focused.</p>
+    <pre><code>import numpy as np
+import grid_rbd
+
+robot = grid_rbd.load_robot(
+    "config/robot_assets/iiwa14.urdf",
+    algorithm_list=["forward_dynamics"],
+    enable_mujoco_kernels=False,
+)
+q, qd, tau = (np.zeros((8, robot.nq), dtype=np.float32) for _ in range(3))
+qdd = robot.forward_dynamics(q, qd, tau)
+print(qdd.shape)  # (8, 7)
+robot.close()</code></pre>
+    <p class="note">The first load generates and compiles code; it can take minutes. Later loads reuse compatible cached artifacts. This NumPy example moves inputs and outputs through host memory. JAX and PyTorch require separately installed CUDA-enabled frameworks.</p>
+    <div class="links start-links"><a class="button" href="docs/user_guide/getting_started/installation.html">Installation</a><a class="button" href="docs/user_guide/tutorials/python_wrappers.html">Python examples</a><a class="button" href="docs/user_guide/tutorials/codegen.html">CUDA integration</a><a class="button" href="docs/user_guide/tutorials/collisions.html">Collision codegen</a></div>
+    <details><summary>Platform and interface scope</summary><p>Current validation targets Linux x86_64 with NVIDIA CUDA. Generated code can be rebuilt for different GPU architectures; compiled robot binaries are architecture-specific. Jetson is a target, not a deployment certified by the current receipt. Source-checkout installation is supported; published wheels are not available.</p><p>Joint types, operation coverage, runtime contexts, differentiation, and graph-capture restrictions are documented in <a href="docs/user_guide/getting_started/compatibility.html">compatibility and known limitations</a>. New release measurements and a fresh full validation receipt remain release gates.</p></details>
+  </section>
+
+  <section id="research">
+    <div class="eyebrow">Research and continuity</div><h2 id="citation">Cite GRiD.</h2>
+    <p>The original ICRA 2022 paper describes the implementation preserved at <a href="https://github.com/robot-acceleration/GRiD">robot-acceleration/GRiD</a>. Ongoing development and the upcoming release live at <a href="https://github.com/A2R-Lab/GRiD">A2R-Lab/GRiD</a>. The paper does not describe all current features or establish their performance. If you use GRiD in your research, cite the original paper and record the software commit or release:</p>
+    <pre><code>@inproceedings{plancher2022grid,
+  title={GRiD: GPU-Accelerated Rigid Body Dynamics with Analytical Gradients},
+  author={Brian Plancher and Sabrina M. Neuman and Radhika Ghosal and
+          Scott Kuindersma and Vijay Janapa Reddi},
+  booktitle={IEEE International Conference on Robotics and Automation (ICRA)},
+  year={2022},
+  month={May}
+}</code></pre>
+    <p><a href="https://a2r-lab.org/publication/grid/">Original paper, PDF, and arXiv →</a></p>
+    <p class="note">Built with <a href="https://github.com/A2R-Lab/URDFParser">URDFParser</a>, <a href="https://github.com/A2R-Lab/RBDReference">RBDReference</a>, and <a href="https://a2r-lab.org/GLASS/">GLASS</a>. GPU validation records use <a href="https://a2r-lab.org/pytest-gpu-proof/">pytest-GPU-proof</a>.</p>
+  </section>
+</main>
+<footer><div class="container"><p><a href="https://a2r-lab.org/">A²R Lab</a> · <a href="https://github.com/A2R-Lab/GRiD">GRiD on GitHub</a> · <a href="docs/">Documentation</a></p><p>Design follows the A²R <a href="https://a2r-lab.org/GLASS/">GLASS</a> and <a href="https://a2r-lab.org/GATO/">GATO</a> pages, adapted from <a href="https://github.com/nerfies/nerfies.github.io">Nerfies</a> under <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>. GRiD software is MIT licensed.</p></div></footer>
+</body>
+</html>

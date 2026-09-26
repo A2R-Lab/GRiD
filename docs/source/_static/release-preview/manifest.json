@@ -1,0 +1,13 @@
+{
+  "status": "HISTORICAL NATIVE STYLE PREVIEW \u2014 NOT RELEASE COMPARISONS",
+  "input_sha256": "7d25afdca91d703a650905654a4c83ec40d29d9550964524c0e75a71d127615c",
+  "script_sha256": "73c49d0af5901171398144be4a4984e747d270c683814d5672193f31aed5c7f3",
+  "outputs": {
+    "core.svg": "7aa335b99b72ea59ef73e14a342d2bf8369cab653206ffa36af18121107e8607",
+    "core.png": "aea9bfc2ded6cbe0e4a8d602010df39a3d82deddfc66cea6c346dc29807834f5",
+    "wrappers-layout.svg": "45f008548751b92e3393ce91f038a5992fc839bda787a007d90e667917d591cf",
+    "wrappers-layout.png": "54af98402178b9860ebbdf9749948e534efdff2e898f3d21944e1a2a41a1f0aa",
+    "collisions-layout.svg": "7c2db91f36b5f8b6bf45e7d28d0ba61db4aa321e6ec2347458f83adcafe386fc",
+    "collisions-layout.png": "21989e0a3e65b115b7340c74067eae048f81a2c660dcacace66014fcb3109e29"
+  }
+}

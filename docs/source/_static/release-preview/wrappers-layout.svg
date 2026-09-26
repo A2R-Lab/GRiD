@@ -1,0 +1,570 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="1152pt" height="540pt" viewBox="0 0 1152 540" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.10.9, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 540 
+L 1152 540 
+L 1152 0 
+L 0 0 
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 80.64 231.690566 
+L 392.64 231.690566 
+L 392.64 97.2 
+L 80.64 97.2 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_1">
+    <g id="xtick_1">
+     <g id="line2d_1">
+      <defs>
+       <path id="mab9871b25f" d="M 0 0 
+L 0 3.5 
+" style="stroke: #000000; stroke-width: 0.8"/>
+      </defs>
+      <g>
+       <use xlink:href="#mab9871b25f" x="111.84" y="231.690566" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_1">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="111.84" y="245.52916" transform="rotate(-0 111.84 245.52916)">16</text>
+     </g>
+    </g>
+    <g id="xtick_2">
+     <g id="line2d_2">
+      <g>
+       <use xlink:href="#mab9871b25f" x="174.24" y="231.690566" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_2">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="174.24" y="245.52916" transform="rotate(-0 174.24 245.52916)">32</text>
+     </g>
+    </g>
+    <g id="xtick_3">
+     <g id="line2d_3">
+      <g>
+       <use xlink:href="#mab9871b25f" x="236.64" y="231.690566" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_3">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="236.64" y="245.52916" transform="rotate(-0 236.64 245.52916)">64</text>
+     </g>
+    </g>
+    <g id="xtick_4">
+     <g id="line2d_4">
+      <g>
+       <use xlink:href="#mab9871b25f" x="299.04" y="231.690566" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_4">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="299.04" y="245.52916" transform="rotate(-0 299.04 245.52916)">128</text>
+     </g>
+    </g>
+    <g id="xtick_5">
+     <g id="line2d_5">
+      <g>
+       <use xlink:href="#mab9871b25f" x="361.44" y="231.690566" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_5">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="361.44" y="245.52916" transform="rotate(-0 361.44 245.52916)">256</text>
+     </g>
+    </g>
+    <g id="text_6">
+     <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="236.64" y="258.239472" transform="rotate(-0 236.64 258.239472)">Batch size</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_2">
+    <g id="text_7">
+     <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="74.768281" y="164.445283" transform="rotate(-90 74.768281 164.445283)">Host-to-host µs / batch · pending</text>
+    </g>
+   </g>
+   <g id="patch_3">
+    <path d="M 80.64 231.690566 
+L 80.64 97.2 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 80.64 231.690566 
+L 392.64 231.690566 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="text_8">
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(132.4875 137.25285)">CUDA C++  |  NumPy/pybind  |  JAX  |  PyTorch</text>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(236.64 147.581193)"/>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(128.313047 157.659225)">Native reference + gray hatched interface delta</text>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(236.64 167.737256)"/>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(169.310859 177.815287)">No matched timings collected</text>
+   </g>
+   <g id="text_9">
+    <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: middle" x="236.64" y="91.2" transform="rotate(-0 236.64 91.2)">RNEA · iiwa14 (fixed)</text>
+   </g>
+  </g>
+  <g id="axes_2">
+   <g id="patch_5">
+    <path d="M 448.8 231.690566 
+L 760.8 231.690566 
+L 760.8 97.2 
+L 448.8 97.2 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_3">
+    <g id="xtick_6">
+     <g id="line2d_6">
+      <g>
+       <use xlink:href="#mab9871b25f" x="480" y="231.690566" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_10">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="480" y="245.52916" transform="rotate(-0 480 245.52916)">16</text>
+     </g>
+    </g>
+    <g id="xtick_7">
+     <g id="line2d_7">
+      <g>
+       <use xlink:href="#mab9871b25f" x="542.4" y="231.690566" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_11">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="542.4" y="245.52916" transform="rotate(-0 542.4 245.52916)">32</text>
+     </g>
+    </g>
+    <g id="xtick_8">
+     <g id="line2d_8">
+      <g>
+       <use xlink:href="#mab9871b25f" x="604.8" y="231.690566" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_12">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="604.8" y="245.52916" transform="rotate(-0 604.8 245.52916)">64</text>
+     </g>
+    </g>
+    <g id="xtick_9">
+     <g id="line2d_9">
+      <g>
+       <use xlink:href="#mab9871b25f" x="667.2" y="231.690566" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_13">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="667.2" y="245.52916" transform="rotate(-0 667.2 245.52916)">128</text>
+     </g>
+    </g>
+    <g id="xtick_10">
+     <g id="line2d_10">
+      <g>
+       <use xlink:href="#mab9871b25f" x="729.6" y="231.690566" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_14">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="729.6" y="245.52916" transform="rotate(-0 729.6 245.52916)">256</text>
+     </g>
+    </g>
+    <g id="text_15">
+     <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="604.8" y="258.239472" transform="rotate(-0 604.8 258.239472)">Batch size</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_4"/>
+   <g id="patch_6">
+    <path d="M 448.8 231.690566 
+L 448.8 97.2 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 448.8 231.690566 
+L 760.8 231.690566 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="text_16">
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(500.6475 137.25285)">CUDA C++  |  NumPy/pybind  |  JAX  |  PyTorch</text>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(604.8 147.581193)"/>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(496.473047 157.659225)">Native reference + gray hatched interface delta</text>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(604.8 167.737256)"/>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(537.470859 177.815287)">No matched timings collected</text>
+   </g>
+   <g id="text_17">
+    <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: middle" x="604.8" y="91.2" transform="rotate(-0 604.8 91.2)">RNEA · go2 (floating)</text>
+   </g>
+  </g>
+  <g id="axes_3">
+   <g id="patch_8">
+    <path d="M 816.96 231.690566 
+L 1128.96 231.690566 
+L 1128.96 97.2 
+L 816.96 97.2 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_5">
+    <g id="xtick_11">
+     <g id="line2d_11">
+      <g>
+       <use xlink:href="#mab9871b25f" x="848.16" y="231.690566" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_18">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="848.16" y="245.52916" transform="rotate(-0 848.16 245.52916)">16</text>
+     </g>
+    </g>
+    <g id="xtick_12">
+     <g id="line2d_12">
+      <g>
+       <use xlink:href="#mab9871b25f" x="910.56" y="231.690566" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_19">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="910.56" y="245.52916" transform="rotate(-0 910.56 245.52916)">32</text>
+     </g>
+    </g>
+    <g id="xtick_13">
+     <g id="line2d_13">
+      <g>
+       <use xlink:href="#mab9871b25f" x="972.96" y="231.690566" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_20">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="972.96" y="245.52916" transform="rotate(-0 972.96 245.52916)">64</text>
+     </g>
+    </g>
+    <g id="xtick_14">
+     <g id="line2d_14">
+      <g>
+       <use xlink:href="#mab9871b25f" x="1035.36" y="231.690566" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_21">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="1035.36" y="245.52916" transform="rotate(-0 1035.36 245.52916)">128</text>
+     </g>
+    </g>
+    <g id="xtick_15">
+     <g id="line2d_15">
+      <g>
+       <use xlink:href="#mab9871b25f" x="1097.76" y="231.690566" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_22">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="1097.76" y="245.52916" transform="rotate(-0 1097.76 245.52916)">256</text>
+     </g>
+    </g>
+    <g id="text_23">
+     <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="972.96" y="258.239472" transform="rotate(-0 972.96 258.239472)">Batch size</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_6"/>
+   <g id="patch_9">
+    <path d="M 816.96 231.690566 
+L 816.96 97.2 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_10">
+    <path d="M 816.96 231.690566 
+L 1128.96 231.690566 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="text_24">
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(868.8075 137.25285)">CUDA C++  |  NumPy/pybind  |  JAX  |  PyTorch</text>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(972.96 147.581193)"/>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(864.633047 157.659225)">Native reference + gray hatched interface delta</text>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(972.96 167.737256)"/>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(905.630859 177.815287)">No matched timings collected</text>
+   </g>
+   <g id="text_25">
+    <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: middle" x="972.96" y="91.2" transform="rotate(-0 972.96 91.2)">RNEA · g1 (floating)</text>
+   </g>
+  </g>
+  <g id="axes_4">
+   <g id="patch_11">
+    <path d="M 80.64 453.6 
+L 392.64 453.6 
+L 392.64 319.109434 
+L 80.64 319.109434 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_7">
+    <g id="xtick_16">
+     <g id="line2d_16">
+      <g>
+       <use xlink:href="#mab9871b25f" x="111.84" y="453.6" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_26">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="111.84" y="467.438594" transform="rotate(-0 111.84 467.438594)">16</text>
+     </g>
+    </g>
+    <g id="xtick_17">
+     <g id="line2d_17">
+      <g>
+       <use xlink:href="#mab9871b25f" x="174.24" y="453.6" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_27">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="174.24" y="467.438594" transform="rotate(-0 174.24 467.438594)">32</text>
+     </g>
+    </g>
+    <g id="xtick_18">
+     <g id="line2d_18">
+      <g>
+       <use xlink:href="#mab9871b25f" x="236.64" y="453.6" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_28">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="236.64" y="467.438594" transform="rotate(-0 236.64 467.438594)">64</text>
+     </g>
+    </g>
+    <g id="xtick_19">
+     <g id="line2d_19">
+      <g>
+       <use xlink:href="#mab9871b25f" x="299.04" y="453.6" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_29">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="299.04" y="467.438594" transform="rotate(-0 299.04 467.438594)">128</text>
+     </g>
+    </g>
+    <g id="xtick_20">
+     <g id="line2d_20">
+      <g>
+       <use xlink:href="#mab9871b25f" x="361.44" y="453.6" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_30">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="361.44" y="467.438594" transform="rotate(-0 361.44 467.438594)">256</text>
+     </g>
+    </g>
+    <g id="text_31">
+     <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="236.64" y="480.148906" transform="rotate(-0 236.64 480.148906)">Batch size</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_8">
+    <g id="text_32">
+     <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="74.768281" y="386.354717" transform="rotate(-90 74.768281 386.354717)">Host-to-host µs / batch · pending</text>
+    </g>
+   </g>
+   <g id="patch_12">
+    <path d="M 80.64 453.6 
+L 80.64 319.109434 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_13">
+    <path d="M 80.64 453.6 
+L 392.64 453.6 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="text_33">
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(132.4875 359.162284)">CUDA C++  |  NumPy/pybind  |  JAX  |  PyTorch</text>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(236.64 369.490627)"/>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(128.313047 379.568659)">Native reference + gray hatched interface delta</text>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(236.64 389.64669)"/>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(169.310859 399.724721)">No matched timings collected</text>
+   </g>
+   <g id="text_34">
+    <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: middle" x="236.64" y="313.109434" transform="rotate(-0 236.64 313.109434)">grad RNEA · iiwa14 (fixed)</text>
+   </g>
+  </g>
+  <g id="axes_5">
+   <g id="patch_14">
+    <path d="M 448.8 453.6 
+L 760.8 453.6 
+L 760.8 319.109434 
+L 448.8 319.109434 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_9">
+    <g id="xtick_21">
+     <g id="line2d_21">
+      <g>
+       <use xlink:href="#mab9871b25f" x="480" y="453.6" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_35">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="480" y="467.438594" transform="rotate(-0 480 467.438594)">16</text>
+     </g>
+    </g>
+    <g id="xtick_22">
+     <g id="line2d_22">
+      <g>
+       <use xlink:href="#mab9871b25f" x="542.4" y="453.6" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_36">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="542.4" y="467.438594" transform="rotate(-0 542.4 467.438594)">32</text>
+     </g>
+    </g>
+    <g id="xtick_23">
+     <g id="line2d_23">
+      <g>
+       <use xlink:href="#mab9871b25f" x="604.8" y="453.6" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_37">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="604.8" y="467.438594" transform="rotate(-0 604.8 467.438594)">64</text>
+     </g>
+    </g>
+    <g id="xtick_24">
+     <g id="line2d_24">
+      <g>
+       <use xlink:href="#mab9871b25f" x="667.2" y="453.6" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_38">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="667.2" y="467.438594" transform="rotate(-0 667.2 467.438594)">128</text>
+     </g>
+    </g>
+    <g id="xtick_25">
+     <g id="line2d_25">
+      <g>
+       <use xlink:href="#mab9871b25f" x="729.6" y="453.6" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_39">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="729.6" y="467.438594" transform="rotate(-0 729.6 467.438594)">256</text>
+     </g>
+    </g>
+    <g id="text_40">
+     <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="604.8" y="480.148906" transform="rotate(-0 604.8 480.148906)">Batch size</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_10"/>
+   <g id="patch_15">
+    <path d="M 448.8 453.6 
+L 448.8 319.109434 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_16">
+    <path d="M 448.8 453.6 
+L 760.8 453.6 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="text_41">
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(500.6475 359.162284)">CUDA C++  |  NumPy/pybind  |  JAX  |  PyTorch</text>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(604.8 369.490627)"/>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(496.473047 379.568659)">Native reference + gray hatched interface delta</text>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(604.8 389.64669)"/>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(537.470859 399.724721)">No matched timings collected</text>
+   </g>
+   <g id="text_42">
+    <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: middle" x="604.8" y="313.109434" transform="rotate(-0 604.8 313.109434)">grad RNEA · go2 (floating)</text>
+   </g>
+  </g>
+  <g id="axes_6">
+   <g id="patch_17">
+    <path d="M 816.96 453.6 
+L 1128.96 453.6 
+L 1128.96 319.109434 
+L 816.96 319.109434 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_11">
+    <g id="xtick_26">
+     <g id="line2d_26">
+      <g>
+       <use xlink:href="#mab9871b25f" x="848.16" y="453.6" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_43">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="848.16" y="467.438594" transform="rotate(-0 848.16 467.438594)">16</text>
+     </g>
+    </g>
+    <g id="xtick_27">
+     <g id="line2d_27">
+      <g>
+       <use xlink:href="#mab9871b25f" x="910.56" y="453.6" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_44">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="910.56" y="467.438594" transform="rotate(-0 910.56 467.438594)">32</text>
+     </g>
+    </g>
+    <g id="xtick_28">
+     <g id="line2d_28">
+      <g>
+       <use xlink:href="#mab9871b25f" x="972.96" y="453.6" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_45">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="972.96" y="467.438594" transform="rotate(-0 972.96 467.438594)">64</text>
+     </g>
+    </g>
+    <g id="xtick_29">
+     <g id="line2d_29">
+      <g>
+       <use xlink:href="#mab9871b25f" x="1035.36" y="453.6" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_46">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="1035.36" y="467.438594" transform="rotate(-0 1035.36 467.438594)">128</text>
+     </g>
+    </g>
+    <g id="xtick_30">
+     <g id="line2d_30">
+      <g>
+       <use xlink:href="#mab9871b25f" x="1097.76" y="453.6" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_47">
+      <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="1097.76" y="467.438594" transform="rotate(-0 1097.76 467.438594)">256</text>
+     </g>
+    </g>
+    <g id="text_48">
+     <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: middle" x="972.96" y="480.148906" transform="rotate(-0 972.96 480.148906)">Batch size</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_12"/>
+   <g id="patch_18">
+    <path d="M 816.96 453.6 
+L 816.96 319.109434 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_19">
+    <path d="M 816.96 453.6 
+L 1128.96 453.6 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="text_49">
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(868.8075 359.162284)">CUDA C++  |  NumPy/pybind  |  JAX  |  PyTorch</text>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(972.96 369.490627)"/>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(864.633047 379.568659)">Native reference + gray hatched interface delta</text>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(972.96 389.64669)"/>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(905.630859 399.724721)">No matched timings collected</text>
+   </g>
+   <g id="text_50">
+    <text style="font-size: 10.8px; font-family: 'DejaVu Sans'; text-anchor: middle" x="972.96" y="313.109434" transform="rotate(-0 972.96 313.109434)">grad RNEA · g1 (floating)</text>
+   </g>
+  </g>
+  <g id="text_51">
+   <text style="font-weight: 700; font-size: 17px; font-family: 'DejaVu Sans'; text-anchor: start" x="80.64" y="21.017344" transform="rotate(-0 80.64 21.017344)">Interface comparison layout · same generated kernels</text>
+  </g>
+  <g id="text_52">
+   <text style="font-weight: 700; font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #925e11" x="80.64" y="32.4" transform="rotate(-0 80.64 32.4)">LAYOUT ONLY · NO SYNTHETIC TIMINGS OR IMPLIED SPEEDUPS</text>
+  </g>
+  <g id="text_53">
+   <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(80.64 519.121969)">Four bars per batch after collection. Match inputs, outputs, precision, launch configuration and allocation policy.</text>
+   <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #535d66" transform="translate(80.64 529.2)">Gray hatching = wrapper total minus matched native host-to-host reference, not pure Python time.</text>
+  </g>
+ </g>
+</svg>

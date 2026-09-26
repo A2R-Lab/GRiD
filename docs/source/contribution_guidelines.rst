@@ -4,6 +4,13 @@ Contributing to Project
 
 We welcome contributions to our project! By participating in this project, you agree to abide by the guidelines and rules set forth below. These guidelines will help maintain the quality and consistency of the codebase.
 
+For documentation-authoring instructions, see :doc:`sphinx_edit_guide`.
+
+.. toctree::
+   :hidden:
+
+   sphinx_edit_guide
+
 Table of Contents
 =================
 1. `How to Contribute`

@@ -1,29 +1,15 @@
-/* Override theme colors and styles */
-.wy-side-nav-search {
-    background-color: #2980B9;
+/* PyData Sphinx theme; shared green accents with the GRiD cover page. */
+html[data-theme="light"] {
+    --pst-color-primary: #087c58;
+    --pst-color-link: #087c58;
+    --pst-color-link-hover: #055a40;
 }
-
-.wy-nav-side {
-    position: sticky;
-    top: 0;
-    background: #343131;
+html[data-theme="dark"] {
+    --pst-color-primary: #72d4ae;
+    --pst-color-link: #72d4ae;
 }
-
-.rst-content .section h1 {
-    border-bottom: 2px solid #2980B9;
-    padding-bottom: 10px;
-}
-
-.rst-content .section h2 {
-    border-bottom: 1px solid #e1e4e5;
-    padding-bottom: 5px;
-}
-
-.wy-menu-vertical li.current {
-    background: #fcfcfc;
-}
-
-.navbar-brand img {
-    height: 100px; 
-    width: auto;
-}
+.navbar-brand img { max-height: 48px; width: auto; }
+.bd-sidebar-primary { font-size: .9rem; }
+.bd-main .bd-content .bd-article-container { max-width: 58rem; }
+h1, h2, h3 { text-wrap: balance; }
+:focus-visible { outline: 3px solid #2778c4; outline-offset: 3px; }

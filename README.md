@@ -6,7 +6,7 @@
 [![agent-ready](https://img.shields.io/badge/agent--ready-CLAUDE.md-8A2BE2?style=flat-square)](CLAUDE.md)
 [![All Contributors](https://img.shields.io/github/all-contributors/A2R-Lab/GRiD?color=ee8449&style=flat-square)](#contributors)
 
-A GPU-accelerated library for computing rigid body dynamics with analytical gradients.
+A GPU-accelerated library for robot dynamics, kinematics, and collisions, with analytical derivatives and Hessians for supported numerical operations.
 
 GRiD turns a URDF into optimized, per-robot CUDA C++ for rigid-body dynamics, kinematics, their analytical
 first- and second-order derivatives and a trajectory-optimization plant layer, then hands you that code three
@@ -17,7 +17,13 @@ adaptation from embedded Jetson class devices to desktop GPUs. Website: https://
 
 GRiD builds on our [URDFParser](https://github.com/A2R-Lab/URDFParser), [RBDReference](https://github.com/A2R-Lab/RBDReference), and [GLASS](https://github.com/A2R-Lab/GLASS) packages (URDF parsing, Pinocchio-validated reference dynamics, and GPU linear algebra), together with its own bundled code generator. Using its scripts, users can easily generate and test optimized rigid body dynamics CUDA C++ code for their URDF files.
 
-For additional information and links to our paper on this work, check out our [project website](https://a2r-lab.org/publication/grid/).
+Ongoing development and the upcoming rerelease live in [A2R-Lab/GRiD](https://github.com/A2R-Lab/GRiD).
+The [original ICRA 2022 paper](https://a2r-lab.org/publication/grid/) describes the
+implementation preserved in the archival [robot-acceleration/GRiD](https://github.com/robot-acceleration/GRiD)
+repository, not the full feature set or performance of the upcoming release.
+See the [project website](https://a2r-lab.org/GRiD/) for the overview. Collision
+routines use the generated CUDA interface; numerical Python interface coverage
+is documented separately.
 
 ## I want to…
 
@@ -224,11 +230,14 @@ To cite GRiD in your research, please use the following bibtex for our paper ["G
 ```
 
 ## Performance
-When performing multiple computations of rigid body dynamics algorithms, GRiD provides as much as a 7.6x speedup over a state-of-the-art, multi-threaded CPU implementation, and maintains as much as a 2.6x speedup when accounting for I/O overhead. 
-
-![Latency (including GPU I/O overhead) for N = 16, 32, 64, 128, and 256 computations of the gradient of forward dynamics for both the Pinocchio CPU baseline and the GRiD GPU library for various robot models (IIWA, HyQ, and Atlas). Overlayed is the speedup (or slowdown) of GRiD as compared to Pinocchio both in terms of pure computation and including I/O overhead.](docs/imgs/benchmark_multi_fd_grad.png)
-
-To learn more about GRiD's performance results and to run your own benchmark analysis please see [`test/benchmarks/`](test/benchmarks/) and our [paper](https://a2r-lab.org/publication/grid//).
+Fresh measurements for the rerelease are pending. The [release measurement
+checklist](docs/source/release_measurements.rst) proposes a small first pass over
+dynamics, kinematics, a gradient, a Hessian, and a resident rollout. Collision
+timings and broader comparisons are follow-ups. [Plot-design previews](docs/source/plot_designs.rst)
+use explicitly historical data, not new results. Earlier development reports and
+the original paper are historical evidence, not performance claims for the
+current implementation. The [benchmark harness](test/benchmarks/) is the starting
+point for new collection; no old figure should be relabeled as a new result.
 
 ## Installation
 The Quick Start above covers the common-case install. For CUDA Toolkit

@@ -1,10 +1,10 @@
-GRiD: GPU-Accelerated Rigid Body Dynamics with Analytical Gradients
-===================================================================
+GRiD documentation
+==================
 
 `GRiD <https://github.com/A2R-Lab/GRiD>`_ turns a URDF into optimized,
-per-robot CUDA C++ for rigid-body dynamics, kinematics, their **analytical
-first- and second-order derivatives**, and a trajectory-optimization plant
-layer — then hands you that code three ways: a numpy handle, a
+per-robot CUDA C++ for dynamics, kinematics, and collisions, with **analytical
+derivatives and Hessians** for supported numerical operations and a
+trajectory-optimization plant layer. Numerical Python interfaces include a numpy handle, a
 ``jax.jit``-able FFI surface, or ``torch.autograd``-aware ops, all backed by
 one content-addressed ``.so`` cache. It is the dynamics layer underneath
 `GATO <http://a2r-lab.org/GATO/>`_, `MPCGPU <https://a2r-lab.org/publication/mpcgpu/>`_,
@@ -13,6 +13,11 @@ solvers, built on `GLASS <http://a2r-lab.org/GLASS/>`_ (block-local linear
 algebra), `RBDReference <https://github.com/A2R-Lab/RBDReference>`_ (the
 Pinocchio-validated numpy oracle every kernel is tested against) and
 `URDFParser <https://github.com/A2R-Lab/URDFParser>`_.
+
+Collision routines use the generated CUDA interface; see
+:doc:`the collision workflow <user_guide/tutorials/collisions>` for geometry
+coverage and integration. Start with the installation guide and examples below,
+or visit the `project homepage <../>`_ for an overview.
 
 **One block per problem, batched.** Every algorithm runs as a single CUDA
 block per sample with in-block parallelism, so a batch of 16 or 4096 states
@@ -65,6 +70,8 @@ What you get per robot
   momentum matrix, its time variation and the operational-space inertia.
 * **Plant layer**: integrators with gradients, quadratic and barrier costs
   with gradients and Hessians, ready for a trajectory optimizer.
+* **Collisions**: self- and environment-collision checks with covering-sphere
+  or native-primitive representations and coarse-to-fine evaluation in CUDA.
 * **Conventions**: Pinocchio by default; MuJoCo/mjx-convention twins of
   values and derivatives on floating-base robots (``handle.mujoco.<op>``).
 
@@ -75,17 +82,15 @@ verifies against the committed test fingerprints (the receipt-verify job goes
 red when fingerprinted tests change without a refreshed receipt; a release
 requires one fresh full receipt at the release tip under the release policy).
 
-Measured
---------
+Performance and release measurements
+------------------------------------------------------------
 
-GPU-resident (the state already on the device, the design point for MPC
-rollouts and RL sampling), GRiD wins every comparable cell against the five
-GPU and CPU baselines in the competitive sweep; the largest second-order
-tensor (a 29-DoF humanoid at batch 256) stays on the GPU for the next
-pipeline stage at wall-time parity with a 24-thread CPU codegen. The
-:doc:`benchmarks page <user_guide/tutorials/benchmarks>` has the dated,
-per-cell numbers, the with-memory caveats and the harness to reproduce them
-on your GPU.
+New release measurements are being planned, not inferred from earlier
+development captures. The :doc:`release measurement checklist <release_measurements>`
+defines the proposed figures, timing boundaries, and evidence needed before
+publishing comparisons. The :doc:`benchmarks page <user_guide/tutorials/benchmarks>`
+retains dated development experiments and harness guidance; those results do
+not certify performance of the upcoming release.
 
 Portable by construction
 ------------------------
@@ -228,7 +233,12 @@ Go deeper
 Citation
 --------
 
-If you use GRiD in your research, please cite:
+The original ICRA 2022 paper describes the implementation preserved at
+`robot-acceleration/GRiD <https://github.com/robot-acceleration/GRiD>`_.
+Ongoing development and the upcoming release live at
+`A2R-Lab/GRiD <https://github.com/A2R-Lab/GRiD>`_. The paper does not describe
+all current features or establish their performance. If you use GRiD in your
+research, cite the original paper and record the software commit or release:
 
 .. code-block:: text
 
@@ -247,7 +257,7 @@ If you use GRiD in your research, please cite:
 
 .. toctree::
    :hidden:
-   :caption: User Guide
+   :caption: Get started
 
    user_guide/getting_started/installation
    user_guide/getting_started/fast_robot_setup
@@ -258,7 +268,7 @@ If you use GRiD in your research, please cite:
 
 .. toctree::
    :hidden:
-   :caption: Tutorials
+   :caption: Examples
 
    user_guide/tutorials/index
 
@@ -276,7 +286,13 @@ If you use GRiD in your research, please cite:
 
 .. toctree::
    :hidden:
+   :caption: Performance and validation
+
+   release_measurements
+   plot_designs
+
+.. toctree::
+   :hidden:
    :caption: Project info
 
    contribution_guidelines
-   sphinx_edit_guide

@@ -5,6 +5,7 @@ grid.cuh
 
 # Generated documentation output
 docs/build/
+docs/_build/
 
 # Custom debug files
 t.txt

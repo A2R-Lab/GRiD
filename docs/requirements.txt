@@ -1,5 +1,10 @@
-# Runtime imports used by autodoc and examples.
--r ../requirements.txt
+# Pure-Python imports used by autodoc. No CUDA build or framework installation.
+# Keep these aligned with the runtime dependencies in ../pyproject.toml.
+numpy>=1.23
+sympy>=1.7.1
+beautifulsoup4>=4.9.3
+lxml>=4.2.1
+platformdirs>=4.0
 
 # Sphinx documentation build stack.
 Sphinx==8.1.3

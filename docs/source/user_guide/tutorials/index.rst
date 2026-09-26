@@ -12,6 +12,7 @@ Using GRiD
 
    python_wrappers
    codegen
+   collisions
    python_algorithms
    urdf_parser
    cuda_support_status

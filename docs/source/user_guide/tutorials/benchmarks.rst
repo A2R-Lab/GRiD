@@ -1,6 +1,14 @@
 Benchmarks
 ==========
 
+.. warning::
+
+   This page includes dated development measurements, not a benchmark of the
+   upcoming rerelease. Some historical reports compare different timing
+   boundaries or model variants. Do not reuse their speedups as release
+   headlines. The :doc:`release measurement plan <../../release_measurements>`
+   defines the matched comparisons and new captures required for the website.
+
 GRiD ships a benchmark harness that compares GRiD against CPU and GPU
 baselines (Pinocchio, MJX, Frax, BARD) and against historical GRiD
 reference points. BARD (PyTorch) is timed on both torch CPU and CUDA, so
