@@ -329,20 +329,33 @@ def grid_stack(lookup, robot, op, batch, api):
     return compute, memory, wrapper, flags
 
 
+BANNER = {"smoke": "SMOKE TEST — NOT PERFORMANCE EVIDENCE", "collection": "DRAFT — UNREVIEWED COLLECTION"}
+
+
+def banner(purpose, title):
+    """Figure title with the purpose banner. Only the explicit publication
+    purpose ("release", set by docs/plot_release_figures.py --approve after the
+    audit) drops the banner; every report this tool writes keeps it."""
+    prefix = BANNER.get(purpose, BANNER["collection"] if purpose != "release" else "")
+    return f"{prefix}\n{title}" if prefix else title
+
+
 def _panel_grid(ops, robots, purpose, title):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     fig, axes = plt.subplots(len(ops), len(robots), figsize=(max(10, 5.3*len(robots)), 3.4*len(ops)), squeeze=False)
-    fig.suptitle(f"{'SMOKE TEST — NOT PERFORMANCE EVIDENCE' if purpose == 'smoke' else 'DRAFT — UNREVIEWED COLLECTION'}\n{title}", fontsize=12)
+    fig.suptitle(banner(purpose, title), fontsize=12)
     return plt, fig, axes
 
 
-def plot_stacked_comparison(rows, directory, purpose, api="grid_jax"):
-    """Core operations: GRiD (one API surface) as a compute/memory/wrapper stack
-    beside every competitor that has data, per batch size, log axis."""
+def plot_stacked_comparison(rows, directory, purpose, api="grid_jax", ops=CORE, stem="comparison_stacked"):
+    """The given operations (core by default): GRiD (one API surface) as a
+    compute/memory/wrapper stack beside every competitor that has data, per
+    batch size, log axis."""
     from matplotlib.patches import Patch
-    ops = [op for op in CORE if any(r["operation"] == op for r in rows)]
+    # a panel needs the GRiD stack (the CUDA host call) to exist for that operation
+    ops = [op for op in ops if any(r["operation"] == op and r["backend"] == "grid_cuda" and r["host_us"] for r in rows)]
     robots = [r for r in ROBOTS if any(x["robot"] == r for x in rows)]
     if not ops or not robots:
         return None
@@ -351,7 +364,10 @@ def plot_stacked_comparison(rows, directory, purpose, api="grid_jax"):
     plt, fig, axes = _panel_grid(ops, robots, purpose,
         f"GRiD ({LABELS[api]}) stacked as kernel compute + memory traffic + wrapper overhead, competitors as resident + host round trip · medians of run means, log scale")
     for oi, op in enumerate(ops):
-        competitors = [b for b in COMPETITOR_ORDER if any(r["operation"] == op and r["backend"] == b and r["host_us"] for r in rows)]
+        # Pinocchio has a bar when either API measured the operation (the standard
+        # API alone for the operations without a codegen class)
+        has = lambda b: any(r["operation"] == op and r["backend"] == b and r["host_us"] for r in rows)
+        competitors = [b for b in COMPETITOR_ORDER if has(b) or (b == "pinocchio" and has("pinocchio_plain"))]
         backends = ["grid"] + competitors
         values = []
         for ri, robot in enumerate(robots):
@@ -423,13 +439,14 @@ def plot_stacked_comparison(rows, directory, purpose, api="grid_jax"):
     handles.append(Patch(facecolor=".7", alpha=.45, hatch="////", edgecolor="white",
                          label="Competitor host round trip (full call − resident); for Pinocchio: standard API minus codegen"))
     fig.legend(handles=handles, loc="lower center", ncol=2, fontsize=8, bbox_to_anchor=(.5, .01))
-    fig.text(.5, .13, "Log axis: stacked segment heights are not proportional; read the composition figure or the decomposition table for shares. "
+    tall = len(ops) > 3
+    fig.text(.5, .045 if tall else .13, "Log axis: stacked segment heights are not proportional; read the composition figure or the decomposition table for shares. "
              "* fp64 arithmetic exception. † accuracy warning. Red triangle: a negative difference, segment omitted. N/C: not collected.", ha="center", fontsize=7.5)
-    fig.tight_layout(rect=(0, .19, 1, .93))
-    fig.savefig(directory / "comparison_stacked.svg")
-    fig.savefig(directory / "comparison_stacked.png", dpi=140)
+    fig.tight_layout(rect=(0, .06 if tall else .19, 1, .97 if tall else .93))
+    fig.savefig(directory / f"{stem}.svg")
+    fig.savefig(directory / f"{stem}.png", dpi=140)
     plt.close(fig)
-    return directory / "comparison_stacked.svg"
+    return directory / f"{stem}.svg"
 
 
 def plot_grid_composition(rows, directory, purpose):
@@ -545,7 +562,7 @@ def plot_speedup(rows, directory, purpose, grid_backend, grid_field, comp_field,
             for b in batches] for op, ro in cells]
         _ratio_heatmap(axes[0, ci], matrix, labels, batches, LABELS[comp])
         axes[0, ci].set_xlabel("batch")
-    fig.suptitle(f"{'SMOKE TEST — NOT PERFORMANCE EVIDENCE' if purpose == 'smoke' else 'DRAFT — UNREVIEWED COLLECTION'}\n{title}", fontsize=11)
+    fig.suptitle(banner(purpose, title), fontsize=11)
     fig.text(.5, .01, "Ratio > 1: GRiD faster. Diverging scale centred on 1×, log spaced, clipped at 100×. '–': no matched cell (adapter pending, excluded, or failed validation).", ha="center", fontsize=7.5)
     fig.tight_layout(rect=(0, .03, 1, .94))
     fig.savefig(directory / f"{name}.svg"); fig.savefig(directory / f"{name}.png", dpi=150)
@@ -636,15 +653,24 @@ def main():
     # one — so a narrow re-collection goes FIRST, and the core and wrappers
     # captures (which both plan the GRiD CUDA/JAX RNEA cells) can be reported
     # together without being mistaken for extra repeats.
-    raw, seen, superseded = [], set(), []
+    # A planned cell that an earlier capture never collected (a chain that died,
+    # a worker that was never reached) is only a placeholder: it must not shadow
+    # the same cell collected later, so a later collected record replaces it and
+    # the placeholder is recorded as superseded instead.
+    chosen, superseded = {}, []
     for directory in args.captures:
         for r in records(directory):
             key = (r["robot"], r["operation"], r["backend"], r["batch"], r["repeat"])
-            if key in seen:
-                superseded.append({"capture": str(directory), **dict(zip(("robot", "operation", "backend", "batch", "repeat"), key))})
-                continue
-            seen.add(key)
-            raw.append(r)
+            named = dict(zip(("robot", "operation", "backend", "batch", "repeat"), key))
+            held = chosen.get(key)
+            if held is None:
+                chosen[key] = r
+            elif held["status"] == "not_collected" and r["status"] != "not_collected":
+                superseded.append({"capture": held["capture"], "reason": "planned but never collected; a later capture holds the cell", **named})
+                chosen[key] = r
+            else:
+                superseded.append({"capture": str(directory), **named})
+    raw = list(chosen.values())
     if not raw:
         ap.error("No planned cells")
     purposes = {r["purpose"] for r in raw}

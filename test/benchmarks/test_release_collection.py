@@ -493,3 +493,28 @@ def test_speedup_best_and_throughput_figures(tmp_path):
     assert plot_speedup(rows,tmp_path,"smoke","grid_jax","resident_us","resident_us","t","speedup_resident").exists()
     assert plot_best_competitor(rows,tmp_path,"smoke").exists() and plot_throughput(rows,tmp_path,"smoke").exists()
     assert plot_speedup([r for r in rows if r["backend"].startswith("grid_")],tmp_path,"smoke","grid_jax","host_us","host_us","t","none") is None
+
+
+def test_report_uncollected_placeholder_never_shadows_a_later_collected_cell(tmp_path):
+    """A capture whose chain died leaves planned cells with no job; listing it first
+    must not hide the same cell collected by a later capture (2026-09-26: the g1
+    grid_cuda remainder was reported not_collected behind the dead chain's plan)."""
+    from test.benchmarks.release.report import main as report_main
+    import sys as _sys
+    job=list(p.jobs('table',['iiwa14'],['grid_cuda'],['crba']))[0]
+    plan=dict(jobs=[job],batches=[16],repeats=1,purpose='smoke',iterations=2,warmups=2,accuracy_policy='strict')
+    (tmp_path/'dead').mkdir(); p.write_json(tmp_path/'dead'/'plan.json',plan)
+    later=tmp_path/'later'; later.mkdir(); p.write_json(later/'plan.json',plan)
+    good=p.agreement(np.array([1000.,0.]),np.array([1000.,0.]))
+    p.write_json(later/'capture.json',dict(adapter=dict(dtype='float32'),cells=[dict(batch=16,status='validated',
+        comparison_eligible=True,oracle_agreement=good,post_timing_agreement=good,host_to_host=dict(mean_us=10.))]))
+    p.write_json(later/'results.json',dict(jobs=[dict(job,repeat=0,capture='capture.json',sha256=p.digest(later/'capture.json'))]))
+    out=tmp_path/'report'
+    _sys.argv=['report',str(tmp_path/'dead'),str(later),'--output',str(out)]
+    report_main()
+    table=json.loads((out/'table.json').read_text())
+    assert [r['status'] for r in table['raw_records']]==['validated']
+    assert table['raw_records'][0]['capture']==str(later/'capture.json')
+    assert len(table['superseded_cells'])==1 and table['superseded_cells'][0]['capture'].endswith('dead/plan.json')
+    assert 'never collected' in table['superseded_cells'][0]['reason']
+    assert table['cells'][0]['status']=='validated' and table['cells'][0]['host_us']==10.
