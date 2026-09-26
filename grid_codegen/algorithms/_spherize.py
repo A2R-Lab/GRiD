@@ -116,7 +116,13 @@ def _cover_mesh(mesh_elem, urdf_dir, spacing, link_name):
     """Voxel-fill a collision mesh -> one sphere per occupied interior voxel (radius = half the
     voxel space-diagonal). Falls back to the mesh bounding box if fill fails; returns [] + warns
     if the mesh cannot be resolved/loaded (collision skipped, not aborted)."""
-    import trimesh  # local import: primitive-only robots need no trimesh
+    try:
+        import trimesh  # local import: primitive-only robots never reach this
+    except ImportError as e:  # a declared base dependency, but name it for a hand-rolled env
+        raise ImportError(
+            f"spherize: link '{link_name}' has a mesh <collision> element, which needs the "
+            "'trimesh' package (a grid-rbd base dependency: pip install 'trimesh>=4', or "
+            "reinstall with pip install -e .)") from e
 
     filename = mesh_elem.get("filename")
     path = _resolve_mesh_path(filename, urdf_dir)

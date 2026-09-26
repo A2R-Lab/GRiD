@@ -38,6 +38,9 @@ dependencies = [
     "sympy>=1.7.1",
     "beautifulsoup4>=4.9.3",
     "lxml>=4.2.1",
+    # collision codegen: mesh <collision> elements are voxel-filled into spheres
+    # (grid_codegen/algorithms/_spherize.py); iiwa14 and most robot assets have them
+    "trimesh>=4",
     # runtime wrapper (cache dirs; nvcc invoked at register_robot time)
     "platformdirs>=4.0",
 ]
