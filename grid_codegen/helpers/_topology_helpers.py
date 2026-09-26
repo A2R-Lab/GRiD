@@ -654,6 +654,26 @@ def gen_load_update_XImats_helpers_function_call(self, updated_var_names = None,
     code_start += var_names["s_topology_helpers_name"] + ", "
     self.gen_add_code_line(code_start + code_end)
 
+def _helpers_sincos_temp_floor(self):
+    """Floats the XImats / XmatsHom helpers write into s_temp BEFORE any inner
+    runs: sin and cos per position (2*num_pos), or the folded per-body table
+    (3*NB) on mimic robots — the base of gen_load_update_XImats_helpers_temp_mem_size
+    without the runtime_transform band (the band is added separately by
+    _resolve_arena_layout, so adding it here would double count and change
+    runtime_transform builds byte-for-byte).
+
+    An arena whose inner scratch is smaller than this lets the helper's cos
+    block overrun the next region: g1 end_effector_pose (2026-09-25) carved
+    s_temp[32] from the inner's 2x16 need while the helper wrote 72 floats,
+    so cos(q[k]) and s_topology_helpers[k-32] raced (racecheck: WAW hazards)
+    and a topology sentinel landing last read back as a NaN cosine — whole
+    NaN pose rows, nondeterministic per block, on every surface. The
+    dynamics inners only escaped because their scratch is always larger."""
+    if self.robot_has_mimic_joints():
+        return 3 * self.robot.get_num_joints()
+    return 2 * self.robot.get_num_pos()
+
+
 def gen_XImats_helpers_temp_shared_memory_code(self, temp_mem_size = 0, include_base_inertia = False,
                                                include_homogenous_transforms = False, extra_t_buffers = None,
                                                include_linalg_scratch = False,
@@ -663,6 +683,8 @@ def gen_XImats_helpers_temp_shared_memory_code(self, temp_mem_size = 0, include_
     XI_size = self.gen_get_XI_size(include_base_inertia,include_homogenous_transforms)
     if extra_t_buffers is None:
         extra_t_buffers = []
+    # The helper's sin/cos table must fit whatever the inner asked for.
+    temp_mem_size = max(int(temp_mem_size or 0), _helpers_sincos_temp_floor(self))
     # runtime_transform: the XImats helper rebuilds each joint's constant 6x6
     # Xfixed into s_temp at offset _runtime_transform_xfixed_offset (= 2*num_pos
     # non-mimic / 3*NB mimic), occupying 36*NB extra floats. That block is DEAD
@@ -1122,6 +1144,9 @@ def gen_XmatsHom_helpers_temp_shared_memory_code(self, temp_mem_size = 0, includ
     Xhom_size, dXhom_size, d2Xhom_size = self.gen_get_Xhom_size()
     if extra_t_buffers is None:
         extra_t_buffers = []
+    # The helper's sin/cos table must fit whatever the inner asked for (the
+    # end_effector_pose inner needs only 2x16 floats; g1 needs 72 here).
+    temp_mem_size = max(int(temp_mem_size or 0), _helpers_sincos_temp_floor(self))
     hom_buffers = [("s_XmatsHom", Xhom_size)]
     if include_gradients and include_dxhom_shared:
         hom_buffers.append(("s_dXmatsHom", dXhom_size))

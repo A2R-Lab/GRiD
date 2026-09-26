@@ -2367,3 +2367,34 @@ be held across Python, audit every waiter for the GIL; (2) test the race in a
 SUBPROCESS with a hard timeout so a regression fails instead of hanging the
 suite; (3) never `pkill -f <pattern>` from a command whose own text contains
 the pattern — kill by PID (the bracket trick is not reliable here; rc 144).
+
+### 7.z28 Helper sin/cos scratch overran a small inner arena → NaN pose rows (g1 end_effector_pose, 2026-09-25)
+Found by the release timing collection: `end_effector_pose` on g1 returned whole rows of
+NaN on every surface (NumPy C ABI, JAX resident and host), nondeterministically per block
+(6 of 40 calls at B=256 on NumPy, 47 of 80 on JAX; iiwa14 never, go2 never observed),
+with every other row exact. Racecheck on the NumPy path: 20 WAW hazards inside
+`end_effector_pose_kernel_right_hand_palm_joint` ("Current Value: 3, Incoming Value: 121").
+Root cause: the kernel's arena carve sized `s_temp` from the INNER's need
+(`gen_end_effector_pose_inner_temp_mem_size` = 2×16 = 32 floats for one target) but
+`load_update_XmatsHom_helpers` writes `sin(q[k])` to `s_temp[k]` and `cos(q[k])` to
+`s_temp[k+num_pos]` — 72 floats on g1 — so the cos block overlapped
+`s_topology_helpers[0..39]`, which the same prologue fills from another loop. Whichever
+write landed last won; a topology sentinel (-1 = 0xFFFFFFFF) read back as a NaN cosine
+and poisoned the whole transform chain. The launch-size macro (828 floats, from the
+descriptor composer) always COVERED the carve (714), so `test_shared_arena_covers_carve`
+could not see it: the overrun was inside the carve, region into region. The XImats
+helper has the same contract (documented as "inners stash ≥ 2*num_pos"), which the
+dynamics inners satisfy by size, not by construction.
+Fix: `_helpers_sincos_temp_floor` (2*num_pos, 3*NB for mimic) applied in BOTH
+`gen_XImats_helpers_temp_shared_memory_code` and `gen_XmatsHom_helpers_temp_shared_memory_code`
+before `_resolve_arena_layout` — byte-identical for every kernel whose inner scratch
+already exceeds it (all 8 byte-gate cells identical; the change reaches only small-EE
+subsets on robots with num_pos > 16). After the fix: g1 carve `s_temp[72]`, 0/40 NumPy,
+racecheck clean. Regression test: `test/test_helper_sincos_scratch_fits.py` (parses the
+carve of a one-target end_effector_pose subset for g1/go2/iiwa14/fr3 against the floor).
+RULES: (1) a helper that writes into a caller-provided scratch region must have its
+requirement floored INTO the carve, never assumed from "inners are always bigger";
+(2) whole-row NaN that is nondeterministic per block and bitwise-exact elsewhere =
+racecheck first (`compute-sanitizer --tool racecheck`), the hazard names the kernel even
+without -lineinfo; (3) the collector's oracle gate caught this at B=256 only because
+the race is more likely with more blocks in flight — a passing B=16 smoke is not evidence.
