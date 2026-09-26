@@ -258,6 +258,8 @@ class SimulatorAdapter:
                 pose = wp.empty((batch,6), dtype=wp.float32)
             inverse_like = op in {"inverse_dynamics", "nonlinear_effects", "generalized_gravity"}
             field = "qfrc_inverse" if inverse_like else "qacc"
+            if op == "crba" and getattr(self.mx, "is_sparse", False):
+                raise NotImplementedError("Warp model is sparse; the dense qM path needs a dense model")
             def upload():
                 d.qpos.assign(host[0]); d.qvel.assign(host[1])
                 (d.qacc if inverse_like else d.qfrc_applied).assign(host[2])
@@ -266,6 +268,10 @@ class SimulatorAdapter:
                     mjw.kinematics(self.mx, d)
                     wp.launch(endpoint_pose, dim=batch, inputs=[d.xpos, d.xmat, self.body, pose])
                     return pose
+                if op == "crba":
+                    # dense CRB: kinematics + com_pos + crb fill d.qM (nworld, nv, nv)
+                    mjw.kinematics(self.mx, d); mjw.com_pos(self.mx, d); mjw.crb(self.mx, d)
+                    return d.qM
                 (mjw.inverse if inverse_like else mjw.forward)(self.mx, d)
                 return getattr(d, field)
             # One eager call loads/compiles every kernel, then the call is

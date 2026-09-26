@@ -25,6 +25,23 @@ OP_LABELS = {**dict(zip(CORE, ("RNEA", "grad RNEA", "Hessian RNEA"))),
              "ccrba": "centroidal momentum matrix", "coriolis_matrix": "Coriolis matrix"}
 
 
+BACKEND_HUE = {"grid_cuda": "#2a78d6", "grid_native": "#2a78d6", "grid_numpy": "#2a78d6",
+               "grid_jax": "#2a78d6", "grid_torch": "#2a78d6", "pinocchio": "#eb6834", "pinocchio_plain": "#c94d1f",
+               "mjx": "#1baf7a", "mujoco_warp": "#eda100", "mujoco_cpu": "#e87ba4",
+               "bard": "#008300", "frax": "#4a3aa7"}
+
+
+def stable_provenance(provenance):
+    """The hardware identity that a cross-capture comparison must share, with
+    the values that legitimately change between captures on one box removed:
+    the momentary SM clock in the nvidia-smi line and lscpu's current scaling
+    percentage. Driver, memory, power limit and the CPU model stay."""
+    gpu = provenance.get("gpu") or ""
+    gpu = ", ".join(t for t in gpu.split(", ") if not t.strip().endswith("MHz"))
+    cpu = "\n".join(l for l in (provenance.get("cpu") or "").splitlines() if "scaling MHz" not in l)
+    return gpu, cpu
+
+
 def records(directory):
     directory = Path(directory)
     plan = json.loads((directory / "plan.json").read_text())
@@ -96,7 +113,7 @@ def records(directory):
                         "accuracy_policy": policy, "fd_warning_max_relative_l2": plan.get("fd_warning_max_relative_l2"),
                         "accuracy_policy_version": version,
                         "code_diff": provenance.get("diff_sha256"), "submodules": provenance.get("submodules"),
-                        "gpu": provenance.get("gpu"), "cpu": provenance.get("cpu"),
+                        "gpu": stable_provenance(provenance)[0], "cpu": stable_provenance(provenance)[1],
                         "iterations": plan["iterations"], "warmups": plan["warmups"],
                         "cpu_threads": plan.get("cpu_threads")}, sort_keys=True),
                     "max_abs_error": max((b["max_abs"] for ck in checks for b in ck.get("blocks", [])), default=None),
@@ -217,7 +234,8 @@ def plot(rows, directory, kind, purpose):
     batches = sorted({r["batch"] for r in rows})
     lookup = {(r["robot"], r["operation"], r["backend"], r["batch"]): r for r in rows}
     fig, axes = plt.subplots(len(ops), len(robots), figsize=(max(10,5.3*len(robots)), 3.3*len(ops)), squeeze=False)
-    colors = {b: plt.get_cmap("tab10")(i) for i,b in enumerate(LABELS)}
+    colors = {b: BACKEND_HUE[b] for b in LABELS}   # fixed validated palette, shared with the stacked figure
+    colors.update({"grid_cuda": "#0d366b", "grid_native": "#184f95", "grid_numpy": "#256abf", "grid_jax": "#3987e5", "grid_torch": "#86b6ef"})
     for oi, op in enumerate(ops):
         row_values = [v for r in rows if r["operation"] == op and r["backend"] in selected(op)
                       for v in (r.get("resident_us"),r.get("host_min_us"),r.get("host_max_us")) if v is not None and v > 0]
@@ -272,10 +290,7 @@ def plot(rows, directory, kind, purpose):
 # (with-memory minus compute) and wrapper (API full call minus with-memory),
 # in three ordinal steps of the same hue. Competitors with a resident boundary
 # show resident (solid) plus host round trip (hatched, same hue, lighter).
-BACKEND_HUE = {"grid_cuda": "#2a78d6", "grid_native": "#2a78d6", "grid_numpy": "#2a78d6",
-               "grid_jax": "#2a78d6", "grid_torch": "#2a78d6", "pinocchio": "#eb6834",
-               "mjx": "#1baf7a", "mujoco_warp": "#eda100", "mujoco_cpu": "#e87ba4",
-               "bard": "#008300", "frax": "#4a3aa7"}
+# (BACKEND_HUE is defined near the top of the module.)
 SEGMENT_HUE = {"compute": "#184f95", "memory": "#3987e5", "wrapper": "#86b6ef"}
 COMPETITOR_ORDER = ("pinocchio", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax")
 SURFACE_LABELS = {"grid_native": "C ABI", "grid_numpy": "NumPy", "grid_jax": "JAX", "grid_torch": "PyTorch"}
@@ -449,6 +464,144 @@ def plot_grid_composition(rows, directory, purpose):
     return directory / "grid_composition.svg"
 
 
+# ── Presentation figures: speedup heatmaps, best competitor, throughput ──────
+# Every ratio is a ratio of medians of run means from matched cells of the same
+# report, same boundary on both sides; a missing side is blank, never zero.
+from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm  # noqa: E402
+import math  # noqa: E402
+
+COMPETITOR_ORDER_ALL = ("pinocchio", "pinocchio_plain", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax")
+SHORT_OP = {"inverse_dynamics": "RNEA", "inverse_dynamics_gradient": "∇RNEA", "idsva_so": "∇²RNEA", "minv": "M⁻¹",
+            "forward_dynamics": "ABA", "forward_dynamics_gradient": "∇ABA", "fdsva_so": "∇²ABA",
+            "end_effector_pose": "EE pose", "end_effector_pose_gradient": "∇EE", "end_effector_pose_hessian": "∇²EE",
+            "crba": "M", "nonlinear_effects": "C·q̇+g", "generalized_gravity": "g", "ccrba": "A_G", "coriolis_matrix": "C"}
+# diverging blue <-> gray <-> red (reference palette poles), centred on 1x
+SPEEDUP_CMAP = LinearSegmentedColormap.from_list("grid_speedup", ["#d03b3b", "#ec835a", "#f0efec", "#86b6ef", "#2a78d6", "#0d366b"])
+
+
+def _ratio_heatmap(ax, matrix, row_labels, col_labels, title, vmax=100.):
+    import numpy as np
+    m = np.array(matrix, float)
+    ax.imshow(np.log10(np.where(np.isfinite(m), m, np.nan)), cmap=SPEEDUP_CMAP,
+              norm=TwoSlopeNorm(vmin=-math.log10(vmax), vcenter=0., vmax=math.log10(vmax)), aspect="auto")
+    ax.set_xticks(range(len(col_labels))); ax.set_xticklabels(col_labels, fontsize=8)
+    ax.set_yticks(range(len(row_labels))); ax.set_yticklabels(row_labels, fontsize=8)
+    for i in range(m.shape[0]):
+        for j in range(m.shape[1]):
+            v = m[i, j]
+            if np.isfinite(v):
+                ax.text(j, i, f"{v:.0f}×" if v >= 10 else f"{v:.1f}×", ha="center", va="center", fontsize=7,
+                        color="white" if abs(math.log10(v)) > 0.9 else "#0b0b0b")
+            else:
+                ax.text(j, i, "–", ha="center", va="center", fontsize=7, color="#9a9994")
+    ax.set_title(title, fontsize=9, wrap=True)
+    for side in ("top", "right", "left", "bottom"):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(length=0)
+
+
+def _ratio_rows(rows, grid_backend):
+    ops = [op for op in CORE + EXTRA if any(r["operation"] == op and r["backend"] == grid_backend and r["host_us"] for r in rows)]
+    robots = [ro for ro in ROBOTS if any(r["robot"] == ro for r in rows)]
+    return [(op, ro) for op in ops for ro in robots]
+
+
+def plot_speedup(rows, directory, purpose, grid_backend, grid_field, comp_field, title, name):
+    import numpy as np
+    lookup = {(r["robot"], r["operation"], r["backend"], r["batch"]): r for r in rows}
+    batches = sorted({r["batch"] for r in rows})
+    comps = [c for c in COMPETITOR_ORDER_ALL if any(r["backend"] == c and r.get(comp_field) for r in rows)]
+    cells = [(op, ro) for op, ro in _ratio_rows(rows, grid_backend)
+             if any(lookup.get((ro, op, c, b), {}).get(comp_field) for c in comps for b in batches)]
+    if not comps or not cells:
+        return None
+    labels = [f"{ro} · {SHORT_OP.get(op, op)}" for op, ro in cells]
+    plt, fig, axes = _panel_grid([None], [None], purpose, title)
+    plt.close(fig)
+    fig, axes = plt.subplots(1, len(comps), figsize=(2.6*len(comps) + 1.6, .28*len(labels) + 1.8), squeeze=False, sharey=True)
+    for ci, comp in enumerate(comps):
+        matrix = [[(lambda g, c: c / g if (g and c) else np.nan)(
+            lookup.get((ro, op, grid_backend, b), {}).get(grid_field), lookup.get((ro, op, comp, b), {}).get(comp_field))
+            for b in batches] for op, ro in cells]
+        _ratio_heatmap(axes[0, ci], matrix, labels, batches, LABELS[comp])
+        axes[0, ci].set_xlabel("batch")
+    fig.suptitle(f"{'SMOKE TEST — NOT PERFORMANCE EVIDENCE' if purpose == 'smoke' else 'DRAFT — UNREVIEWED COLLECTION'}\n{title}", fontsize=11)
+    fig.text(.5, .01, "Ratio > 1: GRiD faster. Diverging scale centred on 1×, log spaced, clipped at 100×. '–': no matched cell (adapter pending, excluded, or failed validation).", ha="center", fontsize=7.5)
+    fig.tight_layout(rect=(0, .03, 1, .94))
+    fig.savefig(directory / f"{name}.svg"); fig.savefig(directory / f"{name}.png", dpi=150)
+    plt.close(fig)
+    return directory / f"{name}.svg"
+
+
+def plot_best_competitor(rows, directory, purpose):
+    import numpy as np
+    lookup = {(r["robot"], r["operation"], r["backend"], r["batch"]): r for r in rows}
+    batches = sorted({r["batch"] for r in rows})
+    panels = (("grid_jax", "host_us", "host_us", "GRiD JAX full call vs the fastest competitor full call"),
+              ("grid_jax", "resident_us", "resident_us", "GRiD JAX resident vs the fastest GPU competitor resident"),
+              ("grid_cuda", "host_us", "host_us", "GRiD CUDA host call (with memory) vs the fastest competitor full call"))
+    cells = [(op, ro) for op, ro in _ratio_rows(rows, "grid_jax")
+             if any(lookup.get((ro, op, c, b), {}).get("host_us") for c in COMPETITOR_ORDER_ALL for b in batches)]
+    if not cells:
+        return None
+    labels = [f"{ro} · {SHORT_OP.get(op, op)}" for op, ro in cells]
+    import matplotlib.pyplot as plt
+    fig, axes = plt.subplots(1, 3, figsize=(11, .28*len(labels) + 1.8), squeeze=False, sharey=True)
+    for pi, (gb, gf, cf, ttl) in enumerate(panels):
+        matrix = []
+        for op, ro in cells:
+            line = []
+            for b in batches:
+                g = lookup.get((ro, op, gb, b), {}).get(gf)
+                cvs = [lookup[(ro, op, c, b)].get(cf) for c in COMPETITOR_ORDER_ALL if (ro, op, c, b) in lookup and lookup[(ro, op, c, b)].get(cf)]
+                line.append(min(cvs) / g if (g and cvs) else np.nan)
+            matrix.append(line)
+        _ratio_heatmap(axes[0, pi], matrix, labels, batches, ttl)
+        axes[0, pi].set_xlabel("batch")
+    fig.suptitle(f"{'SMOKE TEST — NOT PERFORMANCE EVIDENCE' if purpose == 'smoke' else 'DRAFT — UNREVIEWED COLLECTION'}\nGRiD against the fastest competitor measured for each cell, same boundary on both sides", fontsize=11)
+    fig.tight_layout(rect=(0, .02, 1, .94))
+    fig.savefig(directory / "best_competitor.svg"); fig.savefig(directory / "best_competitor.png", dpi=150)
+    plt.close(fig)
+    return directory / "best_competitor.svg"
+
+
+def plot_throughput(rows, directory, purpose):
+    import matplotlib.pyplot as plt
+    lookup = {(r["robot"], r["operation"], r["backend"], r["batch"]): r for r in rows}
+    ops = [op for op in CORE + EXTRA if any(r["operation"] == op and r["host_us"] for r in rows)]
+    robots = [ro for ro in ROBOTS if any(r["robot"] == ro for r in rows)]
+    if not ops or not robots:
+        return None
+    batches = sorted({r["batch"] for r in rows})
+    backends = ["grid_cuda", "grid_jax", "grid_torch", "grid_numpy"] + list(COMPETITOR_ORDER_ALL)
+    styles = {"grid_cuda": "-", "grid_jax": "--", "grid_torch": "-.", "grid_numpy": ":", "pinocchio_plain": ":"}
+    fig, axes = plt.subplots(len(ops), len(robots), figsize=(5*len(robots), 3.2*len(ops)), squeeze=False)
+    for oi, op in enumerate(ops):
+        for ri, ro in enumerate(robots):
+            ax = axes[oi, ri]
+            for be in backends:
+                pts = [(b, b / lookup[(ro, op, be, b)]["host_us"] * 1e6) for b in batches
+                       if (ro, op, be, b) in lookup and lookup[(ro, op, be, b)]["host_us"]]
+                if pts:
+                    ax.plot(*zip(*pts), label=LABELS[be], color=BACKEND_HUE[be], linestyle=styles.get(be, "-"), linewidth=2, marker="o", markersize=4)
+            ax.set(xscale="log", yscale="log", title=f"{ro} · {SHORT_OP.get(op, op)}", xlabel="batch", ylabel="samples / s (full call)")
+            ax.set_xticks(batches); ax.set_xticklabels(batches)
+            ax.grid(alpha=.15)
+            for side in ("top", "right"):
+                ax.spines[side].set_visible(False)
+    handles, names = [], []
+    for a in axes.flat:
+        for h, l in zip(*a.get_legend_handles_labels()):
+            if l not in names:
+                handles.append(h); names.append(l)
+    fig.legend(handles, names, loc="lower center", ncol=6, fontsize=8)
+    fig.suptitle(f"{'SMOKE TEST — NOT PERFORMANCE EVIDENCE' if purpose == 'smoke' else 'DRAFT — UNREVIEWED COLLECTION'}\nThroughput per full call (host in, host out) · higher is better", fontsize=12)
+    fig.tight_layout(rect=(0, .04, 1, .96))
+    fig.savefig(directory / "throughput.svg"); fig.savefig(directory / "throughput.png", dpi=110)
+    plt.close(fig)
+    return directory / "throughput.svg"
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("captures", nargs="+", type=Path)
@@ -484,6 +637,13 @@ def main():
         plot(rows,args.output,kind,raw[0]["purpose"])
     stacked = plot_stacked_comparison(rows, args.output, raw[0]["purpose"])
     composition = plot_grid_composition(rows, args.output, raw[0]["purpose"])
+    purpose = raw[0]["purpose"]
+    extra_figures = [f for f in (
+        plot_speedup(rows, args.output, purpose, "grid_jax", "host_us", "host_us", "Speedup of GRiD (JAX API, full call) over each competitor's full call", "speedup_full"),
+        plot_speedup(rows, args.output, purpose, "grid_jax", "resident_us", "resident_us", "Speedup of GRiD (JAX API, resident) over each GPU competitor's resident call", "speedup_resident"),
+        plot_speedup(rows, args.output, purpose, "grid_cuda", "host_us", "host_us", "Speedup of GRiD (CUDA host call with memory) over each competitor's full call", "speedup_kernel"),
+        plot_best_competitor(rows, args.output, purpose),
+        plot_throughput(rows, args.output, purpose)) if f]
     decomposition = decompose(rows)
     write_json(args.output / "decomposition.json", {"publication_approved": False, "cells": decomposition,
         "definition": {name: (f"{LABELS[b]} {f}" if bb is None else f"{LABELS[b]} {f} minus {LABELS[bb]} {bf}")
@@ -499,7 +659,7 @@ def main():
     dcols = ["robot", "operation", "batch"] + [d[0] for d in DECOMPOSITION] + ["flags"]
     dtable = "<tr>"+"".join(f"<th>{c}</th>" for c in dcols)+"</tr>"
     dtable += "".join("<tr>"+"".join(f"<td>{esc(round(r[c], 1) if isinstance(r[c], float) else r[c])}</td>" for c in dcols)+"</tr>" for r in decomposition)
-    (args.output / "index.html").write_text('<!doctype html><meta charset="utf-8"><title>GRiD benchmark draft</title><style>body{font:14px system-ui;margin:2rem}td,th{padding:.5rem;border:1px solid #ddd}table{border-collapse:collapse}img{max-width:100%}</style><h1>DRAFT benchmark audit</h1><p>Not publication-approved. Smoke captures are functional checks, not performance evidence. All times are microseconds per batch; summary is median of run means. Gray caps are paired boundary differences, not isolated transfer timings. Precision exceptions are explicit. No speedup claims are generated.</p><a href="table.csv">CSV</a> · <a href="table.json">Full provenance and error metrics</a> · <a href="decomposition.csv">Overhead decomposition CSV</a><h2>Core</h2><img src="core.svg">'+('<h2>Stacked comparison (GRiD compute + memory + wrapper vs competitors)</h2><img src="comparison_stacked.svg">' if stacked else '')+'<h2>Wrappers</h2><img src="wrappers.svg">'+('<h2>Table operations</h2><img src="table.svg">' if (args.output / "table.svg").exists() else '')+('<h2>GRiD surface composition</h2><img src="grid_composition.svg">' if composition else '')+'<h2>GRiD overhead decomposition (µs per batch, differences of medians of run means)</h2><p>kernel_compute = CUDA host call compute-only; memory_traffic = with-memory host call minus compute-only; c_abi_staging = C ABI minus CUDA host call; numpy_python = NumPy minus C ABI; *_dispatch = framework resident minus compute-only; *_round_trip = framework full-call minus resident. Pinocchio rows show the selected thread count in the main table (threads column, best of the recorded variants).</p><table>'+dtable+'</table><h2>All planned cells</h2><table>'+table+'</table>\n')
+    (args.output / "index.html").write_text('<!doctype html><meta charset="utf-8"><title>GRiD benchmark draft</title><style>body{font:14px system-ui;margin:2rem}td,th{padding:.5rem;border:1px solid #ddd}table{border-collapse:collapse}img{max-width:100%}</style><h1>DRAFT benchmark audit</h1><p>Not publication-approved. Smoke captures are functional checks, not performance evidence. All times are microseconds per batch; summary is median of run means. Gray caps are paired boundary differences, not isolated transfer timings. Precision exceptions are explicit. No speedup claims are generated.</p><a href="table.csv">CSV</a> · <a href="table.json">Full provenance and error metrics</a> · <a href="decomposition.csv">Overhead decomposition CSV</a><h2>Core</h2><img src="core.svg">'+('<h2>Stacked comparison (GRiD compute + memory + wrapper vs competitors)</h2><img src="comparison_stacked.svg">' if stacked else '')+'<h2>Wrappers</h2><img src="wrappers.svg">'+('<h2>Table operations</h2><img src="table.svg">' if (args.output / "table.svg").exists() else '')+('<h2>GRiD surface composition</h2><img src="grid_composition.svg">' if composition else '')+'<h2>Speedup and throughput views</h2>'+''.join(f'<h3>{f.stem}</h3><img src="{f.name}">' for f in extra_figures)+'<h2>GRiD overhead decomposition (µs per batch, differences of medians of run means)</h2><p>kernel_compute = CUDA host call compute-only; memory_traffic = with-memory host call minus compute-only; c_abi_staging = C ABI minus CUDA host call; numpy_python = NumPy minus C ABI; *_dispatch = framework resident minus compute-only; *_round_trip = framework full-call minus resident. Pinocchio rows show the selected thread count in the main table (threads column, best of the recorded variants).</p><table>'+dtable+'</table><h2>All planned cells</h2><table>'+table+'</table>\n')
     print(args.output / "index.html")
     with (args.output / "index.html").open("a") as stream:
         stream.write('<h2>Accuracy disclosure</h2><p>'+html.escape(ACCURACY_FOOTNOTE)+

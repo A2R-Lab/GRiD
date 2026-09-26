@@ -109,8 +109,6 @@ def capability(backend, operation, robot):
     if backend in {"mujoco_warp", "mujoco_cpu"}:
         if backend == "mujoco_warp" and operation == "minv":
             return "adapter_pending: no dense inverse-inertia output path"
-        if backend == "mujoco_warp" and operation == "crba":
-            return "adapter_pending: dense qM layout of the Warp CRB output not validated"
         if operation in {"inverse_dynamics", "forward_dynamics", "end_effector_pose", "minv", "crba",
                          "nonlinear_effects", "generalized_gravity"}:
             return None

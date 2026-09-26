@@ -35,7 +35,7 @@ def test_capability_gaps_are_not_library_claims():
     assert p.capability("grid_cuda","minv","g1").startswith("adapter_pending:")
     assert p.capability("grid_native","idsva_so","g1").startswith("adapter_pending:")
     assert p.capability("pinocchio_plain","ccrba","g1") is None and p.capability("pinocchio","ccrba","g1").startswith("adapter_pending:")
-    assert p.capability("mjx","crba","go2") is None and p.capability("mujoco_warp","crba","go2").startswith("adapter_pending:")
+    assert p.capability("mjx","crba","go2") is None and p.capability("mujoco_warp","crba","go2") is None
     assert p.capability("bard","generalized_gravity","g1") is None and p.capability("frax","crba","iiwa14") is None
     assert p.capability("mjx","ccrba","iiwa14").startswith("adapter_pending:")
 
@@ -472,3 +472,24 @@ def test_report_earlier_capture_supersedes_same_cell(tmp_path):
     assert len(table["raw_records"])==1 and len(table["superseded_cells"])==1
     assert table["superseded_cells"][0]["capture"].endswith("second")
     assert all(r["capture"].startswith(str(tmp_path/"first")) for r in table["raw_records"])
+
+
+def test_contract_ignores_momentary_clock_fields():
+    from test.benchmarks.release.report import stable_provenance
+    a = {"gpu": "NVIDIA GeForce RTX 5090, 615.71.09, 32607 MiB, 292 MHz, 575.00 W", "cpu": "Model name: X\nCPU(s) scaling MHz: 67%\nCPU max MHz: 6500.0000"}
+    b = {"gpu": "NVIDIA GeForce RTX 5090, 615.71.09, 32607 MiB, 2407 MHz, 575.00 W", "cpu": "Model name: X\nCPU(s) scaling MHz: 43%\nCPU max MHz: 6500.0000"}
+    c = {"gpu": "NVIDIA GeForce RTX 5090, 615.71.09, 32607 MiB, 292 MHz, 450.00 W", "cpu": a["cpu"]}
+    assert stable_provenance(a) == stable_provenance(b)
+    assert stable_provenance(a) != stable_provenance(c)
+    assert "max MHz" in stable_provenance(a)[1] and "scaling" not in stable_provenance(a)[1]
+
+
+def test_speedup_best_and_throughput_figures(tmp_path):
+    from test.benchmarks.release.report import plot_speedup, plot_best_competitor, plot_throughput
+    cells={"grid_cuda":(12.,4.),"grid_jax":(400.,9.),"pinocchio":(30.,None),"pinocchio_plain":(70.,None),"mjx":(900.,300.),"mujoco_warp":(500.,600.)}
+    rows=[dict(robot="iiwa14",operation=op,backend=b,batch=batch,host_us=h,resident_us=r,dtype="float32",status="validated")
+          for op in ("inverse_dynamics","minv") for batch in (16,256) for b,(h,r) in cells.items()]
+    assert plot_speedup(rows,tmp_path,"smoke","grid_jax","host_us","host_us","t","speedup_full").exists()
+    assert plot_speedup(rows,tmp_path,"smoke","grid_jax","resident_us","resident_us","t","speedup_resident").exists()
+    assert plot_best_competitor(rows,tmp_path,"smoke").exists() and plot_throughput(rows,tmp_path,"smoke").exists()
+    assert plot_speedup([r for r in rows if r["backend"].startswith("grid_")],tmp_path,"smoke","grid_jax","host_us","host_us","t","none") is None
