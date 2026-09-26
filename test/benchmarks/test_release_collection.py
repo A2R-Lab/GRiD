@@ -518,3 +518,28 @@ def test_report_uncollected_placeholder_never_shadows_a_later_collected_cell(tmp
     assert len(table['superseded_cells'])==1 and table['superseded_cells'][0]['capture'].endswith('dead/plan.json')
     assert 'never collected' in table['superseded_cells'][0]['reason']
     assert table['cells'][0]['status']=='validated' and table['cells'][0]['host_us']==10.
+
+
+def test_cpu_power_is_recorded_and_part_of_the_contract(tmp_path):
+    """Timings taken under different CPU power settings (governor / energy preference /
+    affinity) must not be compared silently: the report flags the cross-backend cells."""
+    from test.benchmarks.release.collect import cpu_power
+    from test.benchmarks.release.report import main as report_main
+    import sys as _sys
+    keys = set(cpu_power())
+    assert {"governor", "energy_performance_preference", "affinity", "scaling_max_khz"} <= keys
+    jobs = list(p.jobs('table', ['iiwa14'], ['grid_cuda', 'pinocchio'], ['crba']))
+    good = p.agreement(np.array([1000., 0.]), np.array([1000., 0.]))
+    for name, job, governor in (("a", jobs[0], "powersave"), ("b", jobs[1], "performance")):
+        d = tmp_path / name; d.mkdir()
+        p.write_json(d / 'plan.json', dict(jobs=[job], batches=[16], repeats=1, purpose='smoke', iterations=2, warmups=2,
+            accuracy_policy='strict', provenance=dict(gpu="G", cpu="C", cpu_power=dict(governor=governor, affinity=[0]))))
+        p.write_json(d / 'capture.json', dict(adapter=dict(dtype='float32'), cells=[dict(batch=16, status='validated',
+            comparison_eligible=True, oracle_agreement=good, post_timing_agreement=good, host_to_host=dict(mean_us=10.))]))
+        p.write_json(d / 'results.json', dict(jobs=[dict(job, repeat=0, capture='capture.json', sha256=p.digest(d / 'capture.json'))]))
+    out = tmp_path / 'report'
+    _sys.argv = ['report', str(tmp_path / 'a'), str(tmp_path / 'b'), '--output', str(out)]
+    report_main()
+    table = json.loads((out / 'table.json').read_text())
+    assert {c['status'] for c in table['cells']} == {'contract_mismatch'}
+    assert all('cpu_power' in r['contract'] for r in table['raw_records'])

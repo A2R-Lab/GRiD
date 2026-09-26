@@ -129,6 +129,9 @@ def records(directory):
                         "accuracy_policy": policy, "fd_warning_max_relative_l2": plan.get("fd_warning_max_relative_l2"),
                         "accuracy_policy_version": version,
                         "gpu": stable_provenance(provenance)[0], "cpu": stable_provenance(provenance)[1],
+                        # CPU power management (governor, energy preference, limits, affinity):
+                        # captures taken under different settings are never combined silently.
+                        "cpu_power": provenance.get("cpu_power"),
                         "iterations": plan["iterations"], "warmups": plan["warmups"],
                         "cpu_threads": plan.get("cpu_threads")}, sort_keys=True),
                     "max_abs_error": max((b["max_abs"] for ck in checks for b in ck.get("blocks", [])), default=None),

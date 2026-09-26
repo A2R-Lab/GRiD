@@ -2,7 +2,7 @@
   "approved": true,
   "purpose": "release",
   "report": "test/benchmarks/results/release-report-final-20260926",
-  "table_json_sha256": "e5e6fba7a84fc62fcecc358ddccc2c6508b7e87088791a3375dfeb850dc41e2f",
+  "table_json_sha256": "d4d3a3481fd38e950ff9efad3d4d70bcaf869b8bb8708edccb5eac6cebc0c762",
   "commits": [
     "c908ac26587fea3f54acf3e0f821deeed446425d",
     "d4073b56d227171ba2ff1c261946ebe8f017d810",
@@ -38,17 +38,17 @@
     "validation_failed": 4
   },
   "outputs": {
-    "stacked_core.svg": "f914da49a837a2ee99431c1ba462950989f0628f46104bafde95a44937d10845",
+    "stacked_core.svg": "dc3688629acc9b12d93a15bfa1ca5314c69b873786e5463a8044743a4ab5122b",
     "stacked_core.png": "15ef816ea7eb534f5640fcc063e0a81b2b912d8964af739b79332b94c9a70bc5",
-    "stacked_all.svg": "59f9f2e4eadd62f044f9309edf78106c439129beff6096b14ccd0698c45dfd29",
+    "stacked_all.svg": "702a2c05a81babd75d5bd8660d018541956f4fe9d4071bfb7ecb0273dabec922",
     "stacked_all.png": "2d786cd620b4fa71f5dabb79fd4067534248ba2efe13fcd684e96b888b92cdb7",
-    "speedup_pinocchio.svg": "fd2773c5dfef626da8bea2e1d5ef451d4a86037e05ba5d1ca67875f2e7ee86c7",
+    "speedup_pinocchio.svg": "64f4f7947defd3d72ae16df42e66faad90a73c262991b2437f7886869311f775",
     "speedup_pinocchio.png": "b88704f8a61a25d91fd589908e2b1921110ed32e7fe115b74d38e0caec29aa61",
-    "speedup_gpu_resident.svg": "6bbfe2110194655b74e87a005885b51beb0677836a92e6e333d4e11bec0b955a",
+    "speedup_gpu_resident.svg": "becb5a6d2691e5a9665e3e48a703d703a11190ffd796de327b7d9a5984501dc7",
     "speedup_gpu_resident.png": "0fe1715dba20d64afed3c821ec00700483726cc507ec0fc4e26ae07b3e3dd7fa",
-    "speedup_gpu_jax_resident.svg": "3f8f0ddd107a6fc3e5fcb0959d492ee2c7fcc355902077623bc9dcb2a917587e",
+    "speedup_gpu_jax_resident.svg": "7789ef07f68e4c3b1c89b366b1af3c9a6e349945decc41e11da968b3760862ec",
     "speedup_gpu_jax_resident.png": "72fed0d260fbd82bf8a9d2ef6939f1d9806363daa3b4f3def5b9e983f888d45f",
-    "speedup_gpu_full.svg": "9b2df5da5c521c9480f689b2c33ede1a61d74982192f74b9154b728b7a77bd18",
+    "speedup_gpu_full.svg": "91e676e43bc5237b76658a070c202e0cf61e94a8261c8342c06d16258291cf47",
     "speedup_gpu_full.png": "ec1e68a038f6f067a41ed673dfbc3c9f0b7b6e19b67d70a1c72cd360e27f64d3",
     "table.csv": "fa28e6646581874437d8dcde6748e4fc3c89963603dee9a1cd7ec8391ca34b83",
     "decomposition.csv": "afc9465c3fe9f7b1261221561f01e7c463fa2f832f3af43c551a9fa2aff035ed"

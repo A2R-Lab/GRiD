@@ -20,7 +20,9 @@ The short version, stated the way the data says it:
   (1–30×, most cells 5–20×), faster than MuJoCo Warp on the dynamics operations
   (2–17×), faster than BARD by 14–160× and faster than Frax by 4–7×, at every
   batch size up to 1024. With GRiD's own JAX dispatch included on its side too
-  (the middle panel of Figure 3) the ratios shrink but the pattern holds.
+  (the middle panel of Figure 3) the ratios shrink and two MJX cells turn into
+  losses (floating-base end-effector pose at batch 1024, 0.7× on go2, 0.9× on
+  G1); the rest of the pattern holds.
 * **We do not always win.** End-effector pose on the floating-base robots is
   a tiny kernel and MuJoCo Warp's is faster (GRiD at 0.4–0.9× of Warp, kernel
   to kernel; 0.3–0.6× through the JAX API). On G1 at batch 1024 the ABA and
@@ -128,8 +130,9 @@ Protocol
   the affected cells is a listed follow-up.
 * Boundaries measured directly, never stacked from unrelated runs:
   *resident* = inputs pre-placed on the device, outputs left on the device,
-  synchronised, no copies (for every GPU library and for GRiD's JAX and PyTorch
-  surfaces alike); *full call* = fresh upload, call, download to host arrays. GRiD's CUDA host call is the generated
+  synchronised, no host–device transfers (any device-side copies a framework
+  makes are inside it; the same rule for every GPU library and for GRiD's JAX
+  and PyTorch surfaces); *full call* = fresh upload, call, download to host arrays. GRiD's CUDA host call is the generated
   ``<op>_compute_only`` (resident) and ``<op>`` (with memory) host functions
   called from a C++ harness, checked bitwise against the NumPy wrapper.
 * fp32 for every backend, including GRiD's Hessians, with two exceptions

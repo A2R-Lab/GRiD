@@ -43,6 +43,23 @@ def command_output(cmd):
     return p.stdout.strip() if p.returncode == 0 else p.stderr.strip()
 
 
+def cpu_power():
+    """CPU power-management state the timing ran under: governor, energy
+    preference, frequency limits and the collector's CPU affinity. Part of the
+    cross-capture contract — timings taken under different settings are never
+    combined silently (the Python-driven paths are sensitive to it)."""
+    base = "/sys/devices/system/cpu/cpu0/cpufreq/"
+    def read(name):
+        try:
+            return open(base + name).read().strip()
+        except OSError:
+            return None
+    return {"governor": read("scaling_governor"), "driver": read("scaling_driver"),
+            "energy_performance_preference": read("energy_performance_preference"),
+            "scaling_min_khz": read("scaling_min_freq"), "scaling_max_khz": read("scaling_max_freq"),
+            "affinity": sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None}
+
+
 def provenance():
     packages = {}
     for name in ("numpy", "jax", "torch", "mujoco", "mujoco-mjx", "mujoco-warp", "pin", "bard", "frax"):
@@ -59,7 +76,7 @@ def provenance():
         "packages": packages, "python": sys.version,
         "compiler": command_output(["g++", "--version"]),
         "gpu": command_output(["nvidia-smi", "--query-gpu=name,driver_version,memory.total,clocks.current.sm,power.limit", "--format=csv,noheader"]),
-        "cpu": command_output(["lscpu"])}
+        "cpu": command_output(["lscpu"]), "cpu_power": cpu_power()}
 
 
 def run_job(cmd, log, timeout):
