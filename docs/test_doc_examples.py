@@ -35,19 +35,16 @@ def test_backend_inventory_matches_class_definitions():
 
 @pytest.mark.parametrize("name,nq,nv", [("iiwa14", 7, 7), ("go2", 19, 18)])
 def test_documented_input_packing(name, nq, nv):
-    robot, q, qd, u_padded, x, u = model_inputs(name)
+    robot, q, qd, u, x = model_inputs(name)
     assert (robot.get_num_pos(), robot.get_num_vel()) == (nq, nv)
-    assert q.shape == qd.shape == u_padded.shape == (2, nq)
+    assert q.shape == (2, nq)
+    assert qd.shape == u.shape == (2, nv)
     assert x.shape == (2, nq + nv)
-    assert u.shape == (2, nv)
-    for array in (q, qd, u_padded, x, u):
+    for array in (q, qd, u, x):
         assert array.dtype == np.float32
         assert array.flags.c_contiguous
     np.testing.assert_array_equal(x[:, :nq], q)
-    np.testing.assert_array_equal(x[:, nq:], qd[:, :nv])
-    np.testing.assert_array_equal(u, u_padded[:, :nv])
-    assert not np.any(qd[:, nv:])
-    assert not np.any(u_padded[:, nv:])
+    np.testing.assert_array_equal(x[:, nq:], qd)
     if name == "go2":
         np.testing.assert_array_equal(q[:, 3:7], [[0, 0, 0, 1]] * 2)
 
@@ -78,9 +75,11 @@ def test_runtime_tool_transform_normalization_cpu_only():
         normalize([[0, 0, 0], [0, 0, 1]], 3)
 
 
-def test_current_integrator_characterization():
-    # This documents current semantics, NOT desired classical RK4 behavior.
-    # Update deliberately together with the docs if that contract changes.
+def test_reference_integrator_constant_acceleration():
+    # A simple exact-solution check; oscillator/manifold convergence tests live
+    # in RBDReference. This test makes no claim about generated GPU kernels.
     for steps in (10, 20, 40, 80):
-        assert position_error(steps) == pytest.approx(0.5 / steps, abs=1e-14)
+        assert position_error(steps, "euler") == pytest.approx(0.5 / steps, abs=1e-14)
+        assert position_error(steps) < 1e-14
+        assert position_error(steps, "constant_acceleration") < 1e-14
         assert position_error(steps, "trapezoidal") < 1e-14

@@ -40,6 +40,14 @@ sensitivity of the same step.
 
 .. important::
 
+   The following describes the generated GPU implementation. The CPU
+   reference has been updated to full-state midpoint, explicit Heun
+   (``trapezoidal``), and RK4; the previous one-evaluation ``trapezoidal``
+   is now ``constant_acceleration``, and ``rk3``/``si_euler`` are removed
+   there. Reference tests do not certify the GPU implementation. The reference
+   uses base-point retractions, with second-order rotational accuracy even
+   for RK4, rather than Munthe-Kaas corrections.
+
    The names ``midpoint``, ``rk3`` and ``rk4`` refer to GRiD's current
    TrajoptPlant-style schemes. Intermediate configurations use the original
    velocity, and the final position is ``integrate(q, dt*qd)``; only the
@@ -56,10 +64,9 @@ A runnable :doc:`CPU diagnostic <../../tutorials/verified_inputs>` illustrates
 the current RK position-update semantics on constant acceleration.
 
 These examples require a handle built with the relevant algorithms. The
-NumPy ``integrator`` calls take ``q``, ``qd`` and ``u`` in position-width
-``(B, h.nq)`` storage on the default Pinocchio path (pad tangent inputs);
-the ``plant_step`` calls instead take ``x`` of shape ``(B, NQ+NV)`` and
-``u`` of shape ``(B, NV)``. They return the same position-plus-velocity state.
+``integrator`` calls take ``q`` at ``(B, NQ)`` and ``qd``, ``u`` at ``(B, NV)``;
+the ``plant_step`` calls take ``x`` of shape ``(B, NQ+NV)`` and ``u`` of shape
+``(B, NV)``. Both return the same position-plus-velocity state.
 ``NX = NQ + NV``; derivative outputs use the ``2*NV`` tangent state, not
 the ambient quaternion coordinates.
 
@@ -113,6 +120,13 @@ velocity–velocity Hessian block ``A.T @ diag(W) @ A``. These are not the
 full derivatives of ``h(q, qd)`` with respect to the state. On quaternion
 models, geometric tracking derivatives occupy tangent blocks embedded in
 the ``NX``-sized outputs; they are not ambient quaternion Hessians.
+
+The updated CPU ``RBDReference.momentum_cost`` instead returns the full
+gradient and full Gauss–Newton Hessian in ``2*NV`` tangent-state coordinates,
+including configuration and cross blocks, using
+``J = [(dA/dq)*qd | A]``. Its Hessian is ``J.T @ diag(W) @ J``, not the exact
+cost Hessian at a general nonzero residual. This reference update must not
+be mistaken for availability in a previously generated GPU artifact.
 
 Select ``integrator`` / ``integrator_gradient`` for step values / gradients
 and ``fdsva_so`` for the step Hessian dependency; the plant generator only

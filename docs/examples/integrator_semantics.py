@@ -1,4 +1,4 @@
-"""Characterize the current CPU RK4 position update, not GPU correctness."""
+"""Check the full-state CPU update on constant acceleration, not GPU correctness."""
 import numpy as np
 from RBDReference import RBDReference
 
@@ -26,7 +26,8 @@ def position_error(steps, scheme="rk4"):
 
 
 if __name__ == "__main__":
-    print("steps  rk4 position error  trapezoidal position error")
+    print("steps  Euler position error  RK4 position error  constant-acceleration error")
     for steps in (10, 20, 40, 80):
-        print(f"{steps:5d}  {position_error(steps):.8f}          "
-              f"{position_error(steps, 'trapezoidal'):.3e}")
+        print(f"{steps:5d}  {position_error(steps, 'euler'):.8f}            "
+              f"{position_error(steps):.3e}           "
+              f"{position_error(steps, 'constant_acceleration'):.3e}")
