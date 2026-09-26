@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import numpy as np
-from .protocol import digest, ROOT, CORE
+from .protocol import digest, ROOT, CORE, VECTOR_OPS
 
 KERNEL_OPS = {"inverse_dynamics": 0, "inverse_dynamics_gradient": 1, "idsva_so": 2}
 assert tuple(KERNEL_OPS) == CORE
@@ -68,6 +68,15 @@ class GridAdapter:
             "library_sha256": digest(self.h._so_path) if hasattr(self.h, "_so_path") else None}
         self.build_dir = Path(build_dir)
         self.max_batch = max_batch
+        # Arena fit at this max batch: a slot count below the batch means the
+        # kernels grid-stride (correct, but fewer blocks in flight) — recorded
+        # so the report can flag such cells.
+        try:
+            profile = self.h.device_profile
+            self.metadata["workspace_slots"] = int(profile.get("workspace_slots", 0))
+            self.metadata["arena_bytes"] = int(profile.get("arena_bytes", 0))
+        except Exception as error:  # a handle without a default context yet
+            self.metadata["workspace_slots_error"] = f"{type(error).__name__}: {error}"
         self.kernel = None
         if backend == "grid_cuda":
             if operation not in KERNEL_OPS:
@@ -111,7 +120,7 @@ class GridAdapter:
 
     def normalize(self, result):
         result = self.download(result)
-        if self.op in {"inverse_dynamics", "forward_dynamics"}:
+        if self.op in VECTOR_OPS:
             result = result[..., :self.fixture.nv]
         return result
 

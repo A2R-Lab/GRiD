@@ -1,7 +1,7 @@
 """Identical project-order fp32 states and a double-precision independent oracle."""
 from __future__ import annotations
 import numpy as np
-from .protocol import ROBOTS, digest
+from .protocol import ROBOTS, Q_ONLY_OPS, Q_QD_OPS, digest
 
 TARGETS = {"iiwa14": "iiwa_joint_ee", "go2": "FR_foot_joint", "g1": "right_hand_palm_joint"}
 
@@ -38,8 +38,10 @@ class Fixture:
     def args(self, op, batch, padded=True):
         def width(a):
             return np.pad(a[:batch], ((0, 0), (0, self.nq-self.nv))) if padded else a[:batch]
-        if op in {"minv", "end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian"}:
+        if op in Q_ONLY_OPS:
             return (self.q[:batch],)
+        if op in Q_QD_OPS:
+            return self.q[:batch], width(self.v)
         third = self.u if op in {"forward_dynamics", "forward_dynamics_gradient", "fdsva_so"} else self.a
         return self.q[:batch], width(self.v), width(third)
 
@@ -52,6 +54,9 @@ class Fixture:
             if op.startswith("end_effector_pose"):
                 inputs.append(self.target)
             out = method(*inputs)
+            # The oracle may hand back views of its Pinocchio data buffers (e.g.
+            # ccrba's Ag / hg); copy before the next sample overwrites them.
+            out = tuple(np.array(o, copy=True) for o in out) if isinstance(out, tuple) else np.array(out, copy=True)
             if op in {"inverse_dynamics_gradient", "forward_dynamics_gradient"}:
                 out = np.concatenate(out[:2], axis=-1)
             outs.append(out)

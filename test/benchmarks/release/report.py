@@ -12,13 +12,17 @@ import json
 from pathlib import Path
 import statistics
 
-from .protocol import CORE, PRIMARY, ROBOTS, WRAPPER_OPS, WRAPPERS, digest, overhead, write_json
+from .protocol import CORE, EXTRA, PRIMARY, ROBOTS, WRAPPER_OPS, WRAPPERS, TABLE_BACKENDS, digest, overhead, write_json
 from .protocol import TIMED_STATUSES, cell_accuracy_status, ACCURACY_FOOTNOTE
 
 LABELS = {"grid_cuda": "GRiD CUDA host call", "grid_native": "GRiD C ABI", "grid_numpy": "GRiD NumPy", "grid_jax": "GRiD JAX",
-          "grid_torch": "GRiD PyTorch", "pinocchio": "Pinocchio CPU", "mjx": "MJX",
+          "grid_torch": "GRiD PyTorch", "pinocchio": "Pinocchio CPU (codegen)", "pinocchio_plain": "Pinocchio CPU (standard API)", "mjx": "MJX",
           "mujoco_warp": "MuJoCo Warp", "mujoco_cpu": "MuJoCo CPU", "bard": "BARD", "frax": "Frax"}
-OP_LABELS = dict(zip(CORE, ("RNEA", "grad RNEA", "Hessian RNEA")))
+OP_LABELS = {**dict(zip(CORE, ("RNEA", "grad RNEA", "Hessian RNEA"))),
+             "minv": "M⁻¹", "forward_dynamics": "ABA", "forward_dynamics_gradient": "grad ABA", "fdsva_so": "Hessian ABA",
+             "end_effector_pose": "EE pose", "end_effector_pose_gradient": "grad EE pose", "end_effector_pose_hessian": "Hessian EE pose",
+             "crba": "CRBA (M)", "nonlinear_effects": "bias (C·qd + g)", "generalized_gravity": "gravity g",
+             "ccrba": "centroidal momentum matrix", "coriolis_matrix": "Coriolis matrix"}
 
 
 def records(directory):
@@ -172,12 +176,14 @@ DECOMPOSITION = (
     ("jax_round_trip_us", "grid_jax", "host_us", "grid_jax", "resident_us"),
     ("torch_dispatch_us", "grid_torch", "resident_us", "grid_cuda", "resident_us"),
     ("torch_round_trip_us", "grid_torch", "host_us", "grid_torch", "resident_us"),
+    ("pinocchio_codegen_us", "pinocchio", "host_us", None, None),
+    ("pinocchio_standard_api_overhead_us", "pinocchio_plain", "host_us", "pinocchio", "host_us"),
 )
 
 
 def decompose(rows):
     lookup = {(r["robot"], r["operation"], r["backend"], r["batch"]): r for r in rows}
-    keys = sorted({(r["robot"], r["operation"], r["batch"]) for r in rows if r["backend"] == "grid_cuda"})
+    keys = sorted({(r["robot"], r["operation"], r["batch"]) for r in rows if r["backend"] in {"grid_cuda", "pinocchio_plain"}})
     output = []
     for robot, op, batch in keys:
         row = {"robot": robot, "operation": op, "batch": batch, "flags": []}
@@ -200,8 +206,13 @@ def plot(rows, directory, kind, purpose):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
-    ops = CORE if kind == "core" else WRAPPER_OPS
-    selected = lambda op: PRIMARY[op] if kind == "core" else WRAPPERS
+    if kind == "table":
+        ops = [op for op in EXTRA if any(r["operation"] == op and r["host_us"] for r in rows)]
+        if not ops:
+            return None
+    else:
+        ops = CORE if kind == "core" else WRAPPER_OPS
+    selected = lambda op: PRIMARY[op] if kind == "core" else WRAPPERS if kind == "wrappers" else TABLE_BACKENDS
     robots = [r for r in ROBOTS if any(x["robot"] == r for x in rows)]
     batches = sorted({r["batch"] for r in rows})
     lookup = {(r["robot"], r["operation"], r["backend"], r["batch"]): r for r in rows}
@@ -246,6 +257,8 @@ def plot(rows, directory, kind, purpose):
     handles.append(Patch(facecolor=".86", edgecolor=".4", hatch="////", label="Full-call minus resident API wall time"))
     fig.legend(handles=handles, loc="lower center", ncol=3, fontsize=8, bbox_to_anchor=(.5,.015))
     fig.suptitle(f"{'SMOKE TEST — NOT PERFORMANCE EVIDENCE' if purpose == 'smoke' else 'DRAFT — UNREVIEWED COLLECTION'}\n{kind.title()} comparison · median of run means; whiskers show run-mean range", fontsize=12)
+    if kind == "table":
+        fig.set_size_inches(max(10, 5.3*len(robots)), 3.3*len(ops))
     fig.text(.5,.095,"* fp64 arithmetic exception. Red triangle: negative timing delta, not stacked. N/C: not collected.\nGRiD CUDA host call: base = compute-only kernel launch, cap = H2D/D2H of one call. Other stacked bases include resident API dispatch. Unstacked bars are full-call only.",ha="center",fontsize=8)
     fig.tight_layout(rect=(0,.15,1,.93))
     fig.savefig(directory / f"{kind}.svg")
@@ -332,6 +345,14 @@ def plot_stacked_comparison(rows, directory, purpose, api="grid_jax"):
                         continue
                     row = lookup.get((robot, op, backend, batch), {})
                     total, resident = row.get("host_us"), row.get("resident_us")
+                    if backend == "pinocchio":
+                        # codegen full call as the base, the standard API's extra
+                        # time as the cap (same robot, inputs and thread policy).
+                        plain = lookup.get((robot, op, "pinocchio_plain", batch), {}).get("host_us")
+                        if total is None and plain is not None:
+                            total, resident = plain, None
+                        elif total is not None and plain is not None:
+                            resident, total = total, plain
                     if total is None:
                         ax.text(x, .025, "N/C" if not row else row.get("status", "N/A").replace("_", " "),
                                 rotation=90, ha="center", va="bottom", fontsize=5.5, transform=ax.get_xaxis_transform())
@@ -362,9 +383,10 @@ def plot_stacked_comparison(rows, directory, purpose, api="grid_jax"):
     handles = [Patch(color=SEGMENT_HUE["compute"], label="GRiD kernel compute (CUDA host call, compute-only)"),
                Patch(color=SEGMENT_HUE["memory"], label="GRiD memory traffic (with-memory host call − compute)"),
                Patch(color=SEGMENT_HUE["wrapper"], label=f"GRiD wrapper overhead ({LABELS[api]} full call − with-memory)")]
-    handles += [Patch(color=BACKEND_HUE[b], label=f"{LABELS[b]} (resident or full call)") for b in COMPETITOR_ORDER
-                if any(r["backend"] == b and r["host_us"] for r in rows)]
-    handles.append(Patch(facecolor=".7", alpha=.45, hatch="////", edgecolor="white", label="Competitor host round trip (full call − resident)"))
+    handles += [Patch(color=BACKEND_HUE[b], label=f"{LABELS[b]} (resident or full call)" if b != "pinocchio" else "Pinocchio CPU codegen full call")
+                for b in COMPETITOR_ORDER if any(r["backend"] == b and r["host_us"] for r in rows)]
+    handles.append(Patch(facecolor=".7", alpha=.45, hatch="////", edgecolor="white",
+                         label="Competitor host round trip (full call − resident); for Pinocchio: standard API minus codegen"))
     fig.legend(handles=handles, loc="lower center", ncol=2, fontsize=8, bbox_to_anchor=(.5, .01))
     fig.text(.5, .13, "Log axis: stacked segment heights are not proportional; read the composition figure or the decomposition table for shares. "
              "* fp64 arithmetic exception. † accuracy warning. Red triangle: a negative difference, segment omitted. N/C: not collected.", ha="center", fontsize=7.5)
@@ -458,7 +480,7 @@ def main():
     with (args.output / "table.csv").open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader(); writer.writerows(rows)
-    for kind in ("core", "wrappers"):
+    for kind in ("core", "wrappers", "table"):
         plot(rows,args.output,kind,raw[0]["purpose"])
     stacked = plot_stacked_comparison(rows, args.output, raw[0]["purpose"])
     composition = plot_grid_composition(rows, args.output, raw[0]["purpose"])
@@ -477,7 +499,7 @@ def main():
     dcols = ["robot", "operation", "batch"] + [d[0] for d in DECOMPOSITION] + ["flags"]
     dtable = "<tr>"+"".join(f"<th>{c}</th>" for c in dcols)+"</tr>"
     dtable += "".join("<tr>"+"".join(f"<td>{esc(round(r[c], 1) if isinstance(r[c], float) else r[c])}</td>" for c in dcols)+"</tr>" for r in decomposition)
-    (args.output / "index.html").write_text('<!doctype html><meta charset="utf-8"><title>GRiD benchmark draft</title><style>body{font:14px system-ui;margin:2rem}td,th{padding:.5rem;border:1px solid #ddd}table{border-collapse:collapse}img{max-width:100%}</style><h1>DRAFT benchmark audit</h1><p>Not publication-approved. Smoke captures are functional checks, not performance evidence. All times are microseconds per batch; summary is median of run means. Gray caps are paired boundary differences, not isolated transfer timings. Precision exceptions are explicit. No speedup claims are generated.</p><a href="table.csv">CSV</a> · <a href="table.json">Full provenance and error metrics</a> · <a href="decomposition.csv">Overhead decomposition CSV</a><h2>Core</h2><img src="core.svg">'+('<h2>Stacked comparison (GRiD compute + memory + wrapper vs competitors)</h2><img src="comparison_stacked.svg">' if stacked else '')+'<h2>Wrappers</h2><img src="wrappers.svg">'+('<h2>GRiD surface composition</h2><img src="grid_composition.svg">' if composition else '')+'<h2>GRiD overhead decomposition (µs per batch, differences of medians of run means)</h2><p>kernel_compute = CUDA host call compute-only; memory_traffic = with-memory host call minus compute-only; c_abi_staging = C ABI minus CUDA host call; numpy_python = NumPy minus C ABI; *_dispatch = framework resident minus compute-only; *_round_trip = framework full-call minus resident. Pinocchio rows show the selected thread count in the main table (threads column, best of the recorded variants).</p><table>'+dtable+'</table><h2>All planned cells</h2><table>'+table+'</table>\n')
+    (args.output / "index.html").write_text('<!doctype html><meta charset="utf-8"><title>GRiD benchmark draft</title><style>body{font:14px system-ui;margin:2rem}td,th{padding:.5rem;border:1px solid #ddd}table{border-collapse:collapse}img{max-width:100%}</style><h1>DRAFT benchmark audit</h1><p>Not publication-approved. Smoke captures are functional checks, not performance evidence. All times are microseconds per batch; summary is median of run means. Gray caps are paired boundary differences, not isolated transfer timings. Precision exceptions are explicit. No speedup claims are generated.</p><a href="table.csv">CSV</a> · <a href="table.json">Full provenance and error metrics</a> · <a href="decomposition.csv">Overhead decomposition CSV</a><h2>Core</h2><img src="core.svg">'+('<h2>Stacked comparison (GRiD compute + memory + wrapper vs competitors)</h2><img src="comparison_stacked.svg">' if stacked else '')+'<h2>Wrappers</h2><img src="wrappers.svg">'+('<h2>Table operations</h2><img src="table.svg">' if (args.output / "table.svg").exists() else '')+('<h2>GRiD surface composition</h2><img src="grid_composition.svg">' if composition else '')+'<h2>GRiD overhead decomposition (µs per batch, differences of medians of run means)</h2><p>kernel_compute = CUDA host call compute-only; memory_traffic = with-memory host call minus compute-only; c_abi_staging = C ABI minus CUDA host call; numpy_python = NumPy minus C ABI; *_dispatch = framework resident minus compute-only; *_round_trip = framework full-call minus resident. Pinocchio rows show the selected thread count in the main table (threads column, best of the recorded variants).</p><table>'+dtable+'</table><h2>All planned cells</h2><table>'+table+'</table>\n')
     print(args.output / "index.html")
     with (args.output / "index.html").open("a") as stream:
         stream.write('<h2>Accuracy disclosure</h2><p>'+html.escape(ACCURACY_FOOTNOTE)+

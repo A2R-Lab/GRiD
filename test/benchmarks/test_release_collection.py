@@ -13,10 +13,10 @@ from test.benchmarks.release.report import aggregate, records
 
 
 def test_stage_sizes_and_exact_batches():
-    assert p.BATCHES == (16,32,64,128,256)
-    assert len(list(p.jobs("core", p.ROBOTS))) == 36
+    assert p.BATCHES == (16,32,64,128,256,1024)
+    assert len(list(p.jobs("core", p.ROBOTS))) == 45
     assert len(list(p.jobs("wrappers", p.ROBOTS))) == 30
-    assert len(list(p.jobs("table", p.ROBOTS))) == 210
+    assert len(list(p.jobs("table", p.ROBOTS))) == 3*len(p.OPERATIONS)*len(p.TABLE_BACKENDS)
     assert all(job["backend"] == "grid_cuda" for job in list(p.jobs("core", ["iiwa14"]))[::len(p.PRIMARY["inverse_dynamics"])][:1])
 
 
@@ -34,6 +34,10 @@ def test_capability_gaps_are_not_library_claims():
     assert all(p.capability("grid_cuda",op,"g1") is None for op in p.CORE)
     assert p.capability("grid_cuda","minv","g1").startswith("adapter_pending:")
     assert p.capability("grid_native","idsva_so","g1").startswith("adapter_pending:")
+    assert p.capability("pinocchio_plain","ccrba","g1") is None and p.capability("pinocchio","ccrba","g1").startswith("adapter_pending:")
+    assert p.capability("mjx","crba","go2") is None and p.capability("mujoco_warp","crba","go2").startswith("adapter_pending:")
+    assert p.capability("bard","generalized_gravity","g1") is None and p.capability("frax","crba","iiwa14") is None
+    assert p.capability("mjx","ccrba","iiwa14").startswith("adapter_pending:")
 
 
 def test_accuracy_checks_shapes_blocks_finiteness_and_near_zero():
@@ -353,6 +357,8 @@ def test_cli_dry_run_and_bad_tool_no_gpu_needed():
     result=subprocess.run([sys.executable,"-m","test.benchmarks.release.collect","--stage","wrappers","--smoke"],cwd=p.ROOT,text=True,capture_output=True,check=True)
     plan=json.loads(result.stdout)
     assert plan["batches"]==[16] and len(plan["jobs"])==30 and plan["warm_seconds"]==p.WARM_SECONDS
+    full=json.loads(subprocess.run([sys.executable,"-m","test.benchmarks.release.collect","--stage","core"],cwd=p.ROOT,text=True,capture_output=True,check=True).stdout)
+    assert full["batches"]==list(p.BATCHES) and full["batches"][-1]==1024
     assert command_output(["/definitely/no/such/binary"]).startswith("unavailable:")
 
 
@@ -411,13 +417,15 @@ def test_release_pool_runs_every_slice_once_on_persistent_threads(tmp_path):
 
 def test_overhead_decomposition_differences_and_negative_flags():
     from test.benchmarks.release.report import decompose
-    cells={"grid_cuda":(12.,4.),"grid_native":(15.,None),"grid_numpy":(22.,None),"grid_jax":(400.,9.),"grid_torch":(300.,3.)}
+    cells={"grid_cuda":(12.,4.),"grid_native":(15.,None),"grid_numpy":(22.,None),"grid_jax":(400.,9.),"grid_torch":(300.,3.),
+           "pinocchio":(30.,None),"pinocchio_plain":(70.,None)}
     rows=[dict(robot="iiwa14",operation="inverse_dynamics",batch=16,backend=b,host_us=h,resident_us=r) for b,(h,r) in cells.items()]
     d=decompose(rows)[0]
     assert (d["kernel_compute_us"],d["memory_traffic_us"],d["c_abi_staging_us"],d["numpy_python_us"]) == (4.,8.,3.,7.)
     assert (d["jax_dispatch_us"],d["jax_round_trip_us"]) == (5.,391.)
+    assert (d["pinocchio_codegen_us"],d["pinocchio_standard_api_overhead_us"]) == (30.,40.)
     assert d["torch_dispatch_us"] is None and "torch_dispatch_us: negative" in d["flags"]
-    assert decompose([r for r in rows if r["backend"]!="grid_cuda"]) == []
+    assert decompose([r for r in rows if r["backend"] not in {"grid_cuda","pinocchio_plain"}]) == []
 
 
 def test_plot_handles_single_robot_and_missing_backends(tmp_path):
@@ -432,7 +440,7 @@ def test_plot_handles_single_robot_and_missing_backends(tmp_path):
 def test_stacked_and_composition_figures_from_synthetic_rows(tmp_path):
     from test.benchmarks.release.report import plot_stacked_comparison, plot_grid_composition, grid_stack
     cells={"grid_cuda":(12.,4.),"grid_native":(15.,None),"grid_numpy":(22.,None),"grid_jax":(400.,9.),"grid_torch":(10.,3.),
-           "pinocchio":(30.,None),"mjx":(900.,300.),"mujoco_warp":(500.,600.)}
+           "pinocchio":(30.,None),"pinocchio_plain":(70.,None),"mjx":(900.,300.),"mujoco_warp":(500.,600.)}
     rows=[]
     for op in ("inverse_dynamics","inverse_dynamics_gradient","idsva_so"):
         for batch in (16,256):

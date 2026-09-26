@@ -67,13 +67,23 @@ def mujoco_model(fixture, directory):
     return model, body_id, np.array(qindex), np.array(vindex), path
 
 
+# Bias/gravity are inverse dynamics at zero acceleration (and zero velocity) in
+# the SIMULATOR's convention; the oracle transport carries the pin-frame
+# "qacc = 0 is not frame-invariant" correction (mujoco_convention).
+FAMILY = {"nonlinear_effects": "inverse_dynamics", "generalized_gravity": "inverse_dynamics"}
+
+
 class SimulatorAdapter:
     def __init__(self, backend, operation, fixture, directory):
         import mujoco
         self.backend, self.op, self.f = backend, operation, fixture
+        self.family = FAMILY.get(operation, operation)
         self.m, self.body, self.qindex, self.vindex, path = mujoco_model(fixture, directory)
         self.metadata = {"backend": backend, "dtype": "float64" if backend == "mujoco_cpu" else "float32",
-            "method": "autodiff" if operation.endswith("_gradient") else "simulator",
+            "method": "autodiff" if operation.endswith("_gradient") else
+                      "simulator inverse dynamics at zero acceleration" if operation == "nonlinear_effects" else
+                      "simulator inverse dynamics at zero velocity and acceleration" if operation == "generalized_gravity" else
+                      "simulator CRB + dense mass matrix" if operation == "crba" else "simulator",
             "model_xml_sha256": digest(path), "source_urdf_sha256": digest(fixture.urdf),
             "convention": "MuJoCo tangent space; oracle transported outside timing",
             "constraints": "disabled", "contacts": "disabled", "passive_forces": "disabled",
@@ -95,13 +105,18 @@ class SimulatorAdapter:
         from RBDReference.equivalents import mujoco_convention as c
         qs, vs, ts = [], [], []
         fd = self.op in {"forward_dynamics", "forward_dynamics_gradient"}
+        zero_v = self.op == "generalized_gravity"
+        zero_a = self.op in {"nonlinear_effects", "generalized_gravity"}
         for q, v, a, u in zip(self.f.q, self.f.v, self.f.a, self.f.u):
+            v = np.zeros_like(v) if zero_v else v
             q1, v1, t1 = q.copy(), v.copy(), (u if fd else a).copy()
             if self.f.base == "floating":
                 R = c.base_rotation(q)
                 q1 = c.q_pin_to_mjx(q)
                 v1 = c.v_pin_to_mjx(v, R)
                 t1 = c.id_tau_pin_to_mjx(u, R) if fd else c.accel_pin_to_mjx(a, v, R)
+            if zero_a:
+                t1 = np.zeros_like(t1)   # the simulator's own bias: qacc = 0 in ITS convention
             qm, vm, tm = np.empty(self.f.nq), np.empty(self.f.nv), np.empty(self.f.nv)
             qm[self.qindex], vm[self.vindex], tm[self.vindex] = q1, v1, t1
             qs.append(qm); vs.append(vm); ts.append(tm)
@@ -120,6 +135,12 @@ class SimulatorAdapter:
             R = c.base_rotation(q)
             if op == "inverse_dynamics":
                 value = c.id_tau_pin_to_mjx(out[i], R)
+            elif op == "nonlinear_effects":
+                value = c.nonlinear_effects_pin_to_mjx(out[i], f.oracle.crba(q), v, R)
+            elif op == "generalized_gravity":
+                value = c.nonlinear_effects_pin_to_mjx(out[i], f.oracle.crba(q), np.zeros_like(v), R)
+            elif op == "crba":
+                value = c.mass_matrix_pin_to_mjx(out[i], R)
             elif op == "forward_dynamics":
                 value = c.accel_pin_to_mjx(out[i], v, R)
             elif op == "minv":
@@ -142,7 +163,7 @@ class SimulatorAdapter:
         if self.op.endswith("_gradient"):
             cols = np.r_[self.vindex, self.vindex + self.f.nv]
             return a[:, self.vindex][:, :, cols]
-        if self.op == "minv":
+        if self.op in {"minv", "crba"}:
             return a[:, self.vindex][:, :, self.vindex]
         return a[:, self.vindex]
 
@@ -156,10 +177,20 @@ class SimulatorAdapter:
                 values = []
                 for i, d in enumerate(datas):
                     d.qpos[:], d.qvel[:] = host[0][i], host[1][i]
-                    if op == "inverse_dynamics":
+                    if op in {"inverse_dynamics", "nonlinear_effects", "generalized_gravity"}:
                         d.qacc[:] = host[2][i]
                         mujoco.mj_inverse(self.m, d)
                         out = d.qfrc_inverse
+                    elif op == "crba":
+                        # MuJoCo >= 3.3: mj_crb fills the CSR M; mj_makeM builds the
+                        # legacy sparse qM that mj_fullM expands (mj_forward does both).
+                        mujoco.mj_kinematics(self.m, d)
+                        mujoco.mj_comPos(self.m, d)
+                        mujoco.mj_crb(self.m, d)
+                        mujoco.mj_makeM(self.m, d)
+                        dense = np.empty((self.m.nv, self.m.nv))
+                        mujoco.mj_fullM(self.m, dense, d.qM)
+                        out = dense
                     elif op == "forward_dynamics":
                         d.qfrc_applied[:] = host[2][i]
                         mujoco.mj_forward(self.m, d)
@@ -190,8 +221,13 @@ class SimulatorAdapter:
                     r = d.xmat[self.body].reshape(3,3)
                     return jnp.concatenate((d.xpos[self.body], jnp.array([jnp.arctan2(r[2,1], r[2,2]),
                         jnp.arctan2(-r[2,0], jnp.hypot(r[2,2], r[2,1])), jnp.arctan2(r[1,0], r[0,0])])))
-                if op in {"inverse_dynamics", "inverse_dynamics_gradient"}:
+                if op in {"inverse_dynamics", "inverse_dynamics_gradient", "nonlinear_effects", "generalized_gravity"}:
                     return mjx.inverse(self.mx, self.dx.replace(qpos=q, qvel=v, qacc=third)).qfrc_inverse
+                if op == "crba":
+                    d = mjx.kinematics(self.mx, self.dx.replace(qpos=q))
+                    d = mjx.com_pos(self.mx, d)
+                    d = mjx.crb(self.mx, d)
+                    return mjx.full_m(self.mx, d)
                 return mjx.forward(self.mx, self.dx.replace(qpos=q, qvel=v, qfrc_applied=third)).qacc
             def retract(q, delta):
                 if self.f.base == "fixed":
@@ -220,16 +256,17 @@ class SimulatorAdapter:
             if op == "end_effector_pose":
                 from .warp_kernels import endpoint_pose
                 pose = wp.empty((batch,6), dtype=wp.float32)
-            field = "qfrc_inverse" if op == "inverse_dynamics" else "qacc"
+            inverse_like = op in {"inverse_dynamics", "nonlinear_effects", "generalized_gravity"}
+            field = "qfrc_inverse" if inverse_like else "qacc"
             def upload():
                 d.qpos.assign(host[0]); d.qvel.assign(host[1])
-                (d.qacc if op == "inverse_dynamics" else d.qfrc_applied).assign(host[2])
+                (d.qacc if inverse_like else d.qfrc_applied).assign(host[2])
             def launch():
                 if op == "end_effector_pose":
                     mjw.kinematics(self.mx, d)
                     wp.launch(endpoint_pose, dim=batch, inputs=[d.xpos, d.xmat, self.body, pose])
                     return pose
-                (mjw.inverse if op == "inverse_dynamics" else mjw.forward)(self.mx, d)
+                (mjw.inverse if inverse_like else mjw.forward)(self.mx, d)
                 return getattr(d, field)
             # One eager call loads/compiles every kernel, then the call is
             # captured into a CUDA graph and replayed — mujoco_warp's own
@@ -281,7 +318,10 @@ class TensorAdapter:
             self.model = Robot(fixture.urdf, add_floating_base=False)
 
     def prepare(self, batch):
-        args = self.f.args(self.op, batch, padded=False)
+        f = self.f
+        zero_v = self.op == "generalized_gravity"
+        third = f.u[:batch] if self.op == "forward_dynamics" else np.zeros_like(f.a[:batch]) if self.op in {"nonlinear_effects", "generalized_gravity"} else f.a[:batch]
+        args = (f.q[:batch], np.zeros_like(f.v[:batch]) if zero_v else f.v[:batch], third)
         if self.backend == "bard":
             import bard
             import torch
@@ -296,7 +336,11 @@ class TensorAdapter:
             def fn(q, v, t):
                 with torch.no_grad():
                     bard.update_kinematics(self.model, data, q, v)
-                    return (bard.rnea if self.op == "inverse_dynamics" else bard.aba)(self.model, data, t, gravity=gravity)
+                    if self.op == "crba":
+                        return bard.crba(self.model, data)
+                    if self.op == "forward_dynamics":
+                        return bard.aba(self.model, data, t, gravity=gravity)
+                    return bard.rnea(self.model, data, t, gravity=gravity)
             dev = tuple(torch.from_numpy(a).to("cuda") for a in args)
             torch.cuda.synchronize()
             self.resident = lambda: fn(*dev)
@@ -307,14 +351,16 @@ class TensorAdapter:
             import jax
             import jax.numpy as jnp
             model = self.model
-            if self.op == "inverse_dynamics":
+            if self.op in {"inverse_dynamics", "nonlinear_effects", "generalized_gravity"}:
                 # Unlike forward_dynamics, rnea(None gravity) means ZERO gravity.
                 gravity_accel = jnp.array([0,0,9.81,0,0,0], dtype=jnp.float32)
                 fn = jax.jit(jax.vmap(lambda q, v, a: model.rnea(q, v, a, gravity_accel, None)))
             elif self.op == "forward_dynamics":
                 fn = jax.jit(jax.vmap(lambda q, v, u: model.forward_dynamics(q, v, u, None)))
+            elif self.op == "crba":
+                fn = jax.jit(jax.vmap(lambda q, v, a: model.mass_matrix(q)))
             else:
-                fn = jax.jit(jax.vmap(lambda q: model.mass_matrix_inverse(model.mass_matrix(q))))
+                fn = jax.jit(jax.vmap(lambda q, v, a: model.mass_matrix_inverse(model.mass_matrix(q))))
             dev = tuple(jax.device_put(a) for a in args)
             jax.block_until_ready(dev)
             self.resident = lambda: fn(*dev)
@@ -331,4 +377,4 @@ def make_adapter(backend, operation, fixture, directory, cpu_threads=1):
     if backend in {"bard", "frax"}:
         return TensorAdapter(backend, operation, fixture, directory)
     from .pin_adapter import PinAdapter
-    return PinAdapter(operation, fixture, directory, cpu_threads=cpu_threads)
+    return PinAdapter(operation, fixture, directory, cpu_threads=cpu_threads, plain=(backend == "pinocchio_plain"))

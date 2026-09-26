@@ -12,17 +12,23 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[3]
 ROBOTS = {"iiwa14": "fixed", "go2": "floating", "g1": "floating"}
-BATCHES = (16, 32, 64, 128, 256)
+BATCHES = (16, 32, 64, 128, 256, 1024)
 CORE = ("inverse_dynamics", "inverse_dynamics_gradient", "idsva_so")
 EXTRA = ("minv", "forward_dynamics", "forward_dynamics_gradient", "fdsva_so",
-         "end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian")
+         "end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian",
+         "crba", "nonlinear_effects", "generalized_gravity", "ccrba", "coriolis_matrix")
+Q_ONLY_OPS = {"minv", "end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian",
+              "crba", "generalized_gravity"}
+Q_QD_OPS = {"nonlinear_effects", "ccrba", "coriolis_matrix"}
+VECTOR_OPS = {"inverse_dynamics", "forward_dynamics", "nonlinear_effects", "generalized_gravity"}
 OPERATIONS = CORE + EXTRA
 WRAPPER_OPS = CORE[:2]
-PRIMARY = {CORE[0]: ("grid_cuda", "grid_jax", "pinocchio", "mjx", "mujoco_warp"),
-           CORE[1]: ("grid_cuda", "grid_jax", "pinocchio", "mjx"),
-           CORE[2]: ("grid_cuda", "grid_jax", "pinocchio")}
+PRIMARY = {CORE[0]: ("grid_cuda", "grid_jax", "pinocchio", "pinocchio_plain", "mjx", "mujoco_warp"),
+           CORE[1]: ("grid_cuda", "grid_jax", "pinocchio", "pinocchio_plain", "mjx"),
+           CORE[2]: ("grid_cuda", "grid_jax", "pinocchio", "pinocchio_plain")}
 WRAPPERS = ("grid_cuda", "grid_native", "grid_numpy", "grid_jax", "grid_torch")
-BACKENDS = WRAPPERS + ("pinocchio", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax")
+TABLE_BACKENDS = ("grid_jax", "pinocchio", "pinocchio_plain", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax")
+BACKENDS = WRAPPERS + ("pinocchio", "pinocchio_plain", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax")
 # Sustained warm-up before sampling: a handful of microsecond calls never
 # leaves the idle clock (this box idles far below its sustained boost and
 # cannot lock clocks without root), so every backend, CPU or GPU, is driven
@@ -82,28 +88,48 @@ def cell_accuracy_status(cell, policy, operation, dtype, *, version=ACCURACY_POL
 
 def capability(backend, operation, robot):
     """Availability of OUR adapters, never inferred library-wide incapability."""
+    floating = ROBOTS[robot] == "floating"
+    hessian = operation in {"idsva_so", "fdsva_so", "end_effector_pose_hessian"}
     if backend == "grid_native":
         return None if operation in WRAPPER_OPS else "adapter_pending: native C-ABI timing bridge covers RNEA and its gradient"
     if backend == "grid_cuda":
         return None if operation in CORE else "adapter_pending: CUDA host-call timing bridge covers RNEA, grad RNEA and the RNEA Hessian"
-    if backend == "pinocchio" and operation in {"end_effector_pose_gradient", "end_effector_pose_hessian"}:
-        return "adapter_pending: Pinocchio spatial kinematic derivatives are not the requested RPY pose-coordinate derivatives"
-    if backend.startswith("grid_") or backend == "pinocchio":
+    if backend.startswith("grid_"):
         return None
-    if operation in {"idsva_so", "fdsva_so", "end_effector_pose_hessian"}:
+    if backend in {"pinocchio", "pinocchio_plain"}:
+        if operation in {"end_effector_pose_gradient", "end_effector_pose_hessian"}:
+            return "adapter_pending: Pinocchio spatial kinematic derivatives are not the requested RPY pose-coordinate derivatives"
+        if backend == "pinocchio" and operation in {"ccrba", "coriolis_matrix"}:
+            return "adapter_pending: no CppADCodeGen class for this operation; see pinocchio_plain"
+        return None
+    if hessian:
         return "excluded_method: analytical Hessian study; no finite-difference or nested-autodiff Hessian sweep"
+    if operation in {"ccrba", "coriolis_matrix"}:
+        return "adapter_pending: no matched centroidal-momentum / Coriolis-matrix output in this library's public API"
     if backend in {"mujoco_warp", "mujoco_cpu"}:
         if backend == "mujoco_warp" and operation == "minv":
             return "adapter_pending: no dense inverse-inertia output path"
-        return None if operation in {"inverse_dynamics", "forward_dynamics", "end_effector_pose", "minv"} else "adapter_pending: no matched full tangent-space derivative adapter"
+        if backend == "mujoco_warp" and operation == "crba":
+            return "adapter_pending: dense qM layout of the Warp CRB output not validated"
+        if operation in {"inverse_dynamics", "forward_dynamics", "end_effector_pose", "minv", "crba",
+                         "nonlinear_effects", "generalized_gravity"}:
+            return None
+        return "adapter_pending: no matched full tangent-space derivative adapter"
     if backend == "mjx":
-        return None if operation in {"inverse_dynamics", "forward_dynamics", "inverse_dynamics_gradient", "forward_dynamics_gradient", "end_effector_pose"} else "adapter_pending: selected operation not wired"
+        if operation in {"inverse_dynamics", "forward_dynamics", "inverse_dynamics_gradient", "forward_dynamics_gradient",
+                         "end_effector_pose", "crba", "nonlinear_effects", "generalized_gravity"}:
+            return None
+        return "adapter_pending: selected operation not wired"
     if backend == "bard":
-        return None if operation in {"inverse_dynamics", "forward_dynamics"} else "adapter_pending: selected operation not wired; not a library capability claim"
+        if operation in {"inverse_dynamics", "forward_dynamics", "crba", "nonlinear_effects", "generalized_gravity"}:
+            return None
+        return "adapter_pending: selected operation not wired; not a library capability claim"
     if backend == "frax":
-        if ROBOTS[robot] == "floating":
+        if floating:
             return "model_mismatch: existing Frax adapter uses a six-coordinate floating base; shared quaternion fixture needs a validated conversion"
-        return None if operation in {"inverse_dynamics", "forward_dynamics", "minv"} else "adapter_pending: selected operation not wired"
+        if operation in {"inverse_dynamics", "forward_dynamics", "minv", "crba", "nonlinear_effects", "generalized_gravity"}:
+            return None
+        return "adapter_pending: selected operation not wired"
     raise ValueError(backend)
 
 
@@ -119,7 +145,7 @@ def jobs(stage, robots, backends=None, operations=None):
                 raise ValueError(f"{op} is a table operation; use --stage table or explicit --backends")
             selected = backends or (PRIMARY[op] if stage == "core" else
                 WRAPPERS if stage == "wrappers" else
-                ("grid_jax", "pinocchio", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax"))
+                TABLE_BACKENDS)
             for backend in selected:
                 if backend not in BACKENDS:
                     raise ValueError(f"Unknown backend: {backend}")

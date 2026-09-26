@@ -76,7 +76,7 @@ between preparation and collection.
 
 ## Collection after reviewing smoke failures and the protocol
 
-Omit `--smoke` to run B=16,32,64,128,256, three isolated warmed repetitions,
+Omit `--smoke` to run B=16,32,64,128,256,1024, three isolated warmed repetitions,
 five warmups sustained for at least `--warm-seconds` (default 1.5 s) and 30
 timed samples per boundary. A displayed value is the median of the three **run
 means**, not a pooled single-call median. Whiskers show the range of those
@@ -94,11 +94,12 @@ stronger control and is recorded in provenance when used.
   --execute --output test/benchmarks/results/release-core
 .venv/bin/python -m test.benchmarks.release.collect --stage wrappers \
   --execute --output test/benchmarks/results/release-wrappers
-# Deferred table work; selecting only these seven avoids recollecting core ops.
+# Deferred table work; selecting only the non-core operations avoids recollecting core ops.
 .venv/bin/python -m test.benchmarks.release.collect --stage table \
   --accuracy-policy fp32-fd-warnings \
   --operations minv forward_dynamics forward_dynamics_gradient fdsva_so \
     end_effector_pose end_effector_pose_gradient end_effector_pose_hessian \
+    crba nonlinear_effects generalized_gravity ccrba coriolis_matrix \
   --execute --output test/benchmarks/results/release-table
 # The CPU/tensor baselines on the core operations are not in the core stage
 # (PRIMARY selects the headline comparators only); collect them separately.
@@ -124,7 +125,10 @@ directory and choose which version to retain. Do not merge duplicate repeats.
 ## Measurement contract and implementation choices
 
 - **Core plot configuration:** GRiD's CUDA host call (`grid_cuda`) and its JAX
-  resident API, Pinocchio CPU codegen, MJX, and MuJoCo Warp for RNEA; omit Warp
+  resident API, Pinocchio CPU codegen AND the standard Pinocchio API
+  (`pinocchio_plain`, the same fp32 algorithms without CppADCodeGen — the
+  stacked figure draws it as a cap over the codegen bar, exactly like the
+  memory/wrapper caps over GRiD's kernel), MJX, and MuJoCo Warp for RNEA; omit Warp
   for the gradient; GRiD and analytical Pinocchio for the Hessian. GRiD JAX is
   explicitly labeled, not presented as raw native kernel latency; the CUDA host
   call IS that latency (see below). The wrapper figure includes the CUDA host
@@ -172,6 +176,17 @@ directory and choose which version to retain. Do not merge duplicate repeats.
   threading implementation, but no Python executor is inside the timed call.
 - Full Jacobians are validated as two blocks (d/dq and d/dv) so the gross-error
   backstop cannot hide a wrong velocity block under a large position block.
+- Bias (`nonlinear_effects`) and gravity are each library's inverse dynamics at
+  zero acceleration (and zero velocity) in ITS convention; the oracle transport
+  carries the pin-frame correction ("qacc = 0" is not frame-invariant on a
+  floating base). `crba` is the dense mass matrix (MJX `crb` + `full_m`,
+  MuJoCo `mj_crb` + `mj_fullM`, BARD `crba`, Frax `mass_matrix`, Pinocchio
+  codegen `CodeGenCRBA` / standard `crba`); Warp's dense `qM` layout is not
+  validated yet. The centroidal momentum and Coriolis matrices are GRiD vs the
+  standard Pinocchio API only (no codegen class, no simulator output).
+- Each GRiD capture records the fitted `workspace_slots`: a value below the
+  batch means the kernels grid-stride with fewer blocks in flight (still
+  correct); B=1024 cells should be read with that column.
 - Default arithmetic is fp32. JAX matrix products use `highest` precision
   (no reduced-precision TF32 default), x64 is disabled, and BARD TF32 is disabled.
   Pinocchio codegen uses `-O3`, without `-Ofast`, and nine significant digits
