@@ -28,40 +28,37 @@ Signature
    value, grad, Hcost = h.quadratic_input_cost(u, u_des, R)
    value, grad, Hcost = h.ee_pos_cost(q, p_des, W)       # first EE only
    value, grad, Hcost = h.com_cost(q, p_des, W)
-   value, grad, Hcost = h.momentum_cost(q, qd, h_des, W) # velocity-only derivative blocks
+   value, grad, Hcost = h.momentum_cost(q, qd, h_des, W) # tangent [dq | dv] derivatives
    value, grad, Hdiag = h.joint_position_barrier(q, lower, upper, mu)
 
 ``integrator_type`` is one of ``euler``, ``semi_implicit_euler``,
-``midpoint``, ``rk3``, ``rk4`` and ``trapezoidal`` (``si_euler`` is an alias
-for semi-implicit Euler); the default is ``euler``. ``dt`` and
+``midpoint``, ``rk4``, ``trapezoidal`` and ``constant_acceleration``;
+the default is ``euler``. ``rk3`` and the ``si_euler`` alias are removed. ``dt`` and
 ``gravity=-9.81`` are runtime arguments. The gradient is ``[A | B] = ∂x_{k+1}/∂(x, u)`` in the tangent
 space, ``2·NV`` rows by ``3·NV`` columns, and the Hessian is the second-order
 sensitivity of the same step.
 
 .. important::
 
-   The following describes the generated GPU implementation. The CPU
-   reference has been updated to full-state midpoint, explicit Heun
-   (``trapezoidal``), and RK4; the previous one-evaluation ``trapezoidal``
-   is now ``constant_acceleration``, and ``rk3``/``si_euler`` are removed
-   there. Reference tests do not certify the GPU implementation. The reference
-   uses base-point retractions, with second-order rotational accuracy even
-   for RK4, rather than Munthe-Kaas corrections.
+   Regenerate previously built GPU artifacts after this contract change.
+   ``trapezoidal`` means explicit two-stage Heun, not an implicit solve.
+   The old one-evaluation formula is named ``constant_acceleration``:
+   ``q_next = integrate(q, dt*v + 0.5*dt**2*a)``, ``v_next = v + dt*a``.
 
-   The names ``midpoint``, ``rk3`` and ``rk4`` refer to GRiD's current
-   TrajoptPlant-style schemes. Intermediate configurations use the original
-   velocity, and the final position is ``integrate(q, dt*qd)``; only the
-   velocity update combines the intermediate acceleration evaluations.
-   This is not textbook Runge–Kutta integration of the full ``[q, qd]``
-   state, and the name ``rk4`` is not a claim of fourth-order state accuracy.
-   ``trapezoidal`` likewise uses one acceleration evaluation with a
-   half-acceleration position term, not an implicit trapezoidal solve.
+   Midpoint, Heun and RK4 advance the full state. Each stage retracts from
+   the initial configuration using the preceding stage velocity, evaluates
+   forward dynamics at that stage configuration and velocity, and combines
+   both velocities and accelerations with the scheme's weights. Controls
+   and body-local external forces stay constant throughout the step.
+   Midpoint/Heun have second order and RK4 fourth order on Euclidean
+   configurations. The base-point retraction limits rotational convergence
+   to second order even for RK4; no Munthe–Kaas correction is applied.
 
 Inputs, outputs and scope
 ---------------------------
 
 A runnable :doc:`CPU diagnostic <../../tutorials/verified_inputs>` illustrates
-the current RK position-update semantics on constant acceleration.
+the full-state position update on constant acceleration.
 
 These examples require a handle built with the relevant algorithms. The
 ``integrator`` calls take ``q`` at ``(B, NQ)`` and ``qd``, ``u`` at ``(B, NV)``;
@@ -72,15 +69,18 @@ the ambient quaternion coordinates.
 
 ``plant_step_hessian`` is a NumPy/CUDA surface, not a JAX or PyTorch handle
 method. It supports Euler and semi-implicit Euler on fixed and floating
-bases; multi-stage RK Hessians are not implemented. Multi-stage integrator
-gradients are not available for spherical joints or MuJoCo-output twins.
+bases; other scheme Hessians are not implemented. Multi-stage integrator
+gradients are not available for spherical joints. MuJoCo-output integration
+values and gradients currently support Euler and semi-implicit Euler only.
 See :doc:`../../tutorials/python_wrappers` for backend coverage.
 
 Weights are diagonal, supplied as vectors: state ``x_des`` and ``Q`` have
 shape ``(B, NX)``, input ``u_des`` and ``R`` have ``(B, NV)``, and tracking
 targets and weights have ``(B, 3)`` for position or ``(B, 6)`` for momentum.
 Cost outputs are a tuple of value ``(B,)``, gradient and Hessian; the
-state/tracking costs use ``NX``-sized outputs, and input costs use ``NV``.
+state/position-tracking costs use ``NX``-sized outputs, and input costs use ``NV``.
+Momentum returns a ``2*NV`` gradient and ``(2*NV, 2*NV)`` Gauss–Newton Hessian
+in tangent ``[dq | dv]`` coordinates, including configuration and cross blocks.
 Position barriers take ``(B, NQ)`` bounds and velocity/torque barriers take
 ``(B, NV)`` bounds. Their third output is the Hessian diagonal, not a dense
 matrix. Finite log-barrier bounds require strictly interior inputs;
@@ -114,24 +114,22 @@ costs, an end-effector position cost with a Gauss–Newton Hessian, centre-of-
 mass and centroidal-momentum costs, and log-barriers on joint positions,
 velocities and torques with a runtime ``mu``. Quadratic costs have exact
 ambient-coordinate Hessians; end-effector-position and CoM tracking use
-Gauss–Newton Hessians. The current momentum cost deliberately drops the
-configuration derivative: it returns ``[0; A.T @ (W*r)]`` and only the
-velocity–velocity Hessian block ``A.T @ diag(W) @ A``. These are not the
-full derivatives of ``h(q, qd)`` with respect to the state. On quaternion
-models, geometric tracking derivatives occupy tangent blocks embedded in
-the ``NX``-sized outputs; they are not ambient quaternion Hessians.
-
-The updated CPU ``RBDReference.momentum_cost`` instead returns the full
-gradient and full Gauss–Newton Hessian in ``2*NV`` tangent-state coordinates,
-including configuration and cross blocks, using
-``J = [(dA/dq)*qd | A]``. Its Hessian is ``J.T @ diag(W) @ J``, not the exact
-cost Hessian at a general nonzero residual. This reference update must not
-be mistaken for availability in a previously generated GPU artifact.
+Gauss–Newton Hessians. Momentum uses ``r = A(q)*qd - h_des`` and the full
+residual Jacobian ``J = [(dA/dq)*qd | A]`` from ``dccrba``. Its gradient is
+``J.T @ (W*r)`` and Hessian ``J.T @ diag(W) @ J``. This omits residual
+curvature, not configuration dependence, and is not the exact cost Hessian
+at a general nonzero residual. MuJoCo momentum derivatives include the
+configuration dependence of the velocity-frame conversion before forming
+the gradient and Hessian. On quaternion models, position-tracking
+derivatives retain tangent blocks embedded in ``NX``-sized outputs;
+momentum uses the compact ``2*NV`` tangent layout.
 
 Select ``integrator`` / ``integrator_gradient`` for step values / gradients
 and ``fdsva_so`` for the step Hessian dependency; the plant generator only
-emits operations whose dependencies exist. CoM and momentum costs require
-``com`` and ``ccrba``. Use the wrapper guide's available-operation checks
+emits operations whose dependencies exist. CoM costs require ``com`` and
+``ccrba``; full-state momentum costs require ``dccrba``. CUDA momentum
+callers supply a tier-sized dccrba arena and a workspace slot for spills.
+Use the wrapper guide's available-operation checks
 after registration rather than assuming every handle includes the full
 plant layer.
 

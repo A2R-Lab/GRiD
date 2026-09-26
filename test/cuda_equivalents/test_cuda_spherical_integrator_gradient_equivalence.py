@@ -6,7 +6,7 @@ joint 3x3 SO(3) dIntegrate blocks (ARG_q = exp(-phi), ARG_v = J_r(phi)) —
 the omega-only restriction of the floating free-flyer machinery — precomputed
 row-major into the repurposed s_dInt_*_6x6 buffers and consumed block-
 diagonally by the dAB assembly. Single-stage IntegratorTypes only (EULER /
-SEMI_IMPLICIT_EULER / TRAPEZOIDAL; multi-stage RK static_asserts — follow-on).
+SEMI_IMPLICIT_EULER / CONSTANT_ACCELERATION; multi-stage RK static_asserts — follow-on).
 
 Oracle: RBDReference.integrator_gradient, which routes every q-block through
 dIntegrate (spherical branch pinned against pinocchio's ARG0/ARG1 semantics by
@@ -46,7 +46,7 @@ DT = 0.01
 INTEGRATORS = (
     ("integrator_euler", "euler"),
     ("integrator_si_euler", "semi_implicit_euler"),
-    ("integrator_trapezoidal", "trapezoidal"),
+    ("integrator_constant_acceleration", "constant_acceleration"),
 )
 
 

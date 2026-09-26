@@ -166,8 +166,9 @@ void run() {
     run_one<T, grid::IntegratorType::EULER>("integrator_euler", h_q, h_qd, h_u, dt, d_robot_model, hd_data, B, gravity);
     run_one<T, grid::IntegratorType::SEMI_IMPLICIT_EULER>("integrator_si_euler", h_q, h_qd, h_u, dt, d_robot_model, hd_data, B, gravity);
     run_one<T, grid::IntegratorType::MIDPOINT>("integrator_midpoint", h_q, h_qd, h_u, dt, d_robot_model, hd_data, B, gravity);
-    run_one<T, grid::IntegratorType::RK3>("integrator_rk3", h_q, h_qd, h_u, dt, d_robot_model, hd_data, B, gravity);
+    run_one<T, grid::IntegratorType::TRAPEZOIDAL>("integrator_trapezoidal", h_q, h_qd, h_u, dt, d_robot_model, hd_data, B, gravity);
     run_one<T, grid::IntegratorType::RK4>("integrator_rk4", h_q, h_qd, h_u, dt, d_robot_model, hd_data, B, gravity);
+    run_one<T, grid::IntegratorType::CONSTANT_ACCELERATION>("integrator_constant_acceleration", h_q, h_qd, h_u, dt, d_robot_model, hd_data, B, gravity);
 
     grid::close_grid<T>(streams_global, d_robot_model, hd_data);
 }

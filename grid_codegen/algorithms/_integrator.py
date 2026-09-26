@@ -3,13 +3,14 @@
 Mirrors `_forward_dynamics.py` (inner / device / kernel / host layers) but
 emits a single time step `x_{k+1} = integrator(x_k, u_k, dt; f_dyn)` where
 `f_dyn` is the existing forward dynamics. State is `x = [q (nq); qd (nv)]`
-(fixed-base, so `nq == nv == n`), control `u` is size `n`, output `x_{k+1}`
-is size `2n`. dt is a per-call scalar threaded through device/kernel/host.
+(including floating and spherical joints), control `u` is size `nv`, output
+`x_{k+1}` is size `nq + nv`. dt is a per-call scalar.
 
 The integrator type is selected at compile time by an `IntegratorType IT`
-template parameter. Only `EULER` is wired up here; the `_dispatch` helper
-below is structured so adding semi-implicit Euler / Midpoint / TRAPEZOIDAL / RK4
-later is purely additive (one extra `if constexpr (IT == ...)` branch).
+template parameter. Multi-stage schemes integrate the full state, retracting
+each configuration from the initial configuration with the previous stage's
+velocity. RK4 has classical fourth order on Euclidean configurations; the
+base-point rotational retraction has second order, not Lie-group RK4 order.
 """
 from grid_codegen.helpers._code_generation_helpers import gen_workspace_repoint_line, wrap_host_single_call_timing
 
@@ -20,14 +21,12 @@ _INTEGRATOR_TYPES = ("EULER", "SEMI_IMPLICIT_EULER", "MIDPOINT", "RK4", "TRAPEZO
 # Number of forward-dynamics evaluations each integrator type requires.
 # Used at codegen time to size shared-memory buffers (per-stage qdd) and to
 # guide which stage-computation branches are emitted.
-# CONSTANT_ACCELERATION is single-stage (1 FD eval) like EULER, so _max_stages_in_use()
-# stays == 4 -> per-stage scratch sizing is byte-identical and EULER/SI/RK
-# kernels emit unchanged.
+# CONSTANT_ACCELERATION uses one evaluation; TRAPEZOIDAL is explicit Heun.
 _STAGE_COUNT = {
     "EULER": 1,
     "SEMI_IMPLICIT_EULER": 1,
     "MIDPOINT": 2,
-    "TRAPEZOIDAL": 3,
+    "TRAPEZOIDAL": 2,
     "RK4": 4,
     "CONSTANT_ACCELERATION": 1,
 }
@@ -836,8 +835,6 @@ def gen_integrator_inner(self):
     self.gen_add_code_line("__device__")
     self.gen_add_code_line(func_def_start + func_def_end, True)
 
-    self.gen_add_code_line('static_assert(IT == IntegratorType::EULER || IT == IntegratorType::SEMI_IMPLICIT_EULER || IT == IntegratorType::CONSTANT_ACCELERATION, "Full-state multi-stage integration is not yet enabled.");')
-
     # Stage 1: always run forward dynamics on (q, qd, u). Thread the Minv-F
     # placement + global scratch through every FD inner call (stages reuse the
     # same F bytes sequentially).
@@ -869,10 +866,8 @@ def gen_integrator_inner(self):
         self.gen_add_code_line("T *s_p3_q  = &s_stage_point[" + str(2 * slot_size) + "];")
         self.gen_add_code_line("T *s_p3_qd = &s_stage_point[" + str(2 * slot_size + nq) + "];")
 
-    # ----- Stage 2 (Midpoint / TRAPEZOIDAL / RK4): p1 = x + c1*dt*[qd; qdd_1] -----
-    # Midpoint: c1 = 0.5. TRAPEZOIDAL: c1 = 0.5. RK4: c1 = 0.5. (All three use 0.5
-    # for stage 2's offset.) For floating-base the q-update is a Lie retract.
-    self.gen_add_code_line("constexpr T c1 = static_cast<T>(0.5);")
+    # Stage 2: midpoint/RK4 use a half step; explicit Heun a full step.
+    self.gen_add_code_line("constexpr T c1 = (IT == IntegratorType::TRAPEZOIDAL) ? static_cast<T>(1) : static_cast<T>(0.5);")
     self.gen_add_parallel_loop("ind", str(n))
     self.gen_add_code_line("s_p1_qd[ind] = s_qd[ind] + c1 * dt * s_qdd[ind];")
     self.gen_add_end_control_flow()
@@ -890,21 +885,15 @@ def gen_integrator_inner(self):
     ), minv_f_in_smem_expr="MINV_F_IN_SMEM")
     self.gen_add_sync()
 
-    # ----- Stage 3 (TRAPEZOIDAL / RK4) -----
+    # ----- Stage 3 (RK4 only) -----
     if max_stages >= 3:
-        self.gen_add_code_line("if constexpr (IT == IntegratorType::TRAPEZOIDAL || IT == IntegratorType::RK4) {", True)
-        # TrajoptPlant convention: xdot_i = [qd; qdd_i] (note: uses original qd,
-        # NOT the stage-i velocity). So p_2 = xk + c2*dt*xdot_2 means
-        # p_2.q = q + c2*dt*qd, p_2.qd = qd + c2*dt*qdd_2.
-        # TRAPEZOIDAL: c2 = 0.75 (point2 = xk + 0.75*dt*xdot_2)
-        # RK4: c2 = 0.5  (point2 = xk + 0.5*dt*xdot_2)
-        self.gen_add_code_line("constexpr T c2 = (IT == IntegratorType::TRAPEZOIDAL) ? static_cast<T>(0.75) : static_cast<T>(0.5);")
+        self.gen_add_code_line("if constexpr (IT == IntegratorType::RK4) {", True)
+        self.gen_add_code_line("constexpr T c2 = static_cast<T>(0.5);")
         self.gen_add_parallel_loop("ind", str(n))
         self.gen_add_code_line("s_p2_qd[ind] = s_qd[ind] + c2 * dt * s_qdd_2[ind];")
         self.gen_add_end_control_flow()
         self.gen_add_sync()
-        self._emit_q_update("c2 * dt", "s_p2_q", src_q_name="s_q", src_v_name="s_qd",
-                            cardinal_line="s_p2_q[ind]  = s_q[ind]  + c2 * dt * s_qd[ind];")
+        self._emit_q_update("c2 * dt", "s_p2_q", src_q_name="s_q", src_v_name="s_p1_qd")
         self.gen_add_sync()
         self.gen_load_update_XImats_helpers_function_call(updated_var_names=dict(s_q_name="s_p2_q"))
         self.gen_add_sync()
@@ -922,8 +911,7 @@ def gen_integrator_inner(self):
         self.gen_add_code_line("s_p3_qd[ind] = s_qd[ind] + c3 * dt * s_qdd_3[ind];")
         self.gen_add_end_control_flow()
         self.gen_add_sync()
-        self._emit_q_update("c3 * dt", "s_p3_q", src_q_name="s_q", src_v_name="s_qd",
-                            cardinal_line="s_p3_q[ind]  = s_q[ind]  + c3 * dt * s_qd[ind];")
+        self._emit_q_update("c3 * dt", "s_p3_q", src_q_name="s_q", src_v_name="s_p2_qd")
         self.gen_add_sync()
         self.gen_load_update_XImats_helpers_function_call(updated_var_names=dict(s_q_name="s_p3_q"))
         self.gen_add_sync()
@@ -934,33 +922,32 @@ def gen_integrator_inner(self):
         self.gen_add_end_control_flow()
 
     # ----- Final assembly: x_{k+1} = xk + dt * sum(b_i * xdot_i) -----
-    # In TrajoptPlant's convention, xdot_i = [qd; qdd_i] with the SAME qd for
-    # every stage. So q_{k+1} is just integrate(q, dt*qd) (Euler-style q
-    # update; matches all multi-stage variants), and qd_{k+1} is the
-    # weighted sum of the stage qdds.
+    # Weight velocities as well as accelerations; reuse the dead first
+    # stage-position buffer for the nv weighted velocities (nq >= nv).
     self.gen_add_code_line("// final assembly: v_{k+1} part — qd + dt * sum(b_i * qdd_i)")
     self.gen_add_parallel_loop("ind", str(n))
     self.gen_add_code_line("T accel = static_cast<T>(0);")
+    self.gen_add_code_line("T velocity = static_cast<T>(0);")
     self.gen_add_code_line("if constexpr (IT == IntegratorType::MIDPOINT) {")
     self.gen_add_code_line("    accel = s_qdd_2[ind];")
+    self.gen_add_code_line("    velocity = s_p1_qd[ind];")
     self.gen_add_code_line("} else if constexpr (IT == IntegratorType::TRAPEZOIDAL) {")
-    self.gen_add_code_line("    constexpr T b1 = static_cast<T>(2.0/9.0);")
-    self.gen_add_code_line("    constexpr T b2 = static_cast<T>(3.0/9.0);")
-    self.gen_add_code_line("    constexpr T b3 = static_cast<T>(4.0/9.0);")
-    self.gen_add_code_line("    accel = b1 * s_qdd[ind] + b2 * s_qdd_2[ind] + b3 * s_qdd_3[ind];")
+    self.gen_add_code_line("    accel = static_cast<T>(0.5) * (s_qdd[ind] + s_qdd_2[ind]);")
+    self.gen_add_code_line("    velocity = static_cast<T>(0.5) * (s_qd[ind] + s_p1_qd[ind]);")
     self.gen_add_code_line("} else if constexpr (IT == IntegratorType::RK4) {")
     self.gen_add_code_line("    constexpr T b1 = static_cast<T>(1.0/6.0);")
     self.gen_add_code_line("    constexpr T b2 = static_cast<T>(2.0/6.0);")
     self.gen_add_code_line("    constexpr T b3 = static_cast<T>(2.0/6.0);")
     self.gen_add_code_line("    constexpr T b4 = static_cast<T>(1.0/6.0);")
     self.gen_add_code_line("    accel = b1 * s_qdd[ind] + b2 * s_qdd_2[ind] + b3 * s_qdd_3[ind] + b4 * s_qdd_4[ind];")
+    self.gen_add_code_line("    velocity = b1 * s_qd[ind] + b2 * s_p1_qd[ind] + b3 * s_p2_qd[ind] + b4 * s_p3_qd[ind];")
     self.gen_add_code_line("}")
     self.gen_add_code_line(f"s_x_kp1[{nq} + ind] = s_qd[ind] + dt * accel;")
+    self.gen_add_code_line("s_p1_q[ind] = velocity;")
     self.gen_add_end_control_flow()
     self.gen_add_sync()
-    # q_{k+1} part: same as Euler since the q-source is always the original qd
-    self.gen_add_code_line("// q_{k+1} part — Euler-style integrate(q, dt*qd) (TrajoptPlant convention)")
-    self._emit_q_update("dt", "s_x_kp1", src_q_name="s_q", src_v_name="s_qd")
+    self.gen_add_code_line("// q_{k+1} = integrate(q, dt * sum(b_i * v_i))")
+    self._emit_q_update("dt", "s_x_kp1", src_q_name="s_q", src_v_name="s_p1_q")
     self.gen_add_end_control_flow()  # end else (multi-stage)
     self.gen_add_end_function()
 
@@ -1082,6 +1069,7 @@ def _emit_integrator_kernel_body_for_flags(self, nq, nv, spill_minv_F, single_ca
         # the XImats build below.
         if self.robot.floating_base:
             self.gen_add_code_line("if constexpr (MUJOCO_OUTPUT) {", True)
+            self.gen_add_code_line('static_assert(IT == IntegratorType::EULER || IT == IntegratorType::SEMI_IMPLICIT_EULER, "MuJoCo integration currently supports Euler and semi-implicit Euler only.");')
             self.gen_mjx_quat_reorder("s_q")
             self.gen_add_end_control_flow()
         self.gen_add_code_line("// compute")

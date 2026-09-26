@@ -1,7 +1,7 @@
 // CUDA equivalence runner for the SPHERICAL (ball) joint integrator GRADIENT.
 // Mirrors cuda_integrator_smoke_runner.cu's gradient sections but instantiates
 // ONLY the single-stage IntegratorTypes (EULER / SEMI_IMPLICIT_EULER /
-// TRAPEZOIDAL) — spherical multi-stage RK gradients are a follow-on slice and
+// CONSTANT_ACCELERATION) — spherical multi-stage RK gradients are a follow-on slice and
 // static_assert out, so an RK instantiation would fail this TU's compile.
 //
 // Input on stdin: q (NUM_POS) qd (NUM_VEL) u (NUM_VEL) dt
@@ -119,7 +119,7 @@ void run() {
 
     run_one<T, grid::IntegratorType::EULER>("integrator_euler", hd_data, d_robotModel, streams, block_dimms, thread_dimms, original.data(), gravity, dt);
     run_one<T, grid::IntegratorType::SEMI_IMPLICIT_EULER>("integrator_si_euler", hd_data, d_robotModel, streams, block_dimms, thread_dimms, original.data(), gravity, dt);
-    run_one<T, grid::IntegratorType::TRAPEZOIDAL>("integrator_trapezoidal", hd_data, d_robotModel, streams, block_dimms, thread_dimms, original.data(), gravity, dt);
+    run_one<T, grid::IntegratorType::CONSTANT_ACCELERATION>("integrator_constant_acceleration", hd_data, d_robotModel, streams, block_dimms, thread_dimms, original.data(), gravity, dt);
 
     grid::close_grid<T>(streams, d_robotModel, hd_data);
 }

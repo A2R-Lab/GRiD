@@ -65,7 +65,9 @@ How to interpret availability
 
 Important examples: ``fk_batched`` is a restricted first-leaf pose helper;
 plant step Hessians support Euler/semi-implicit Euler, not multi-stage RK;
-and momentum-cost derivatives omit configuration blocks. See
+and momentum costs use the full ``2*NV`` tangent-state gradient and
+Gauss–Newton Hessian, requiring ``dccrba``. MuJoCo-output integration
+supports Euler/semi-implicit Euler only. See
 :doc:`../concepts/algorithms/kinematics` and
 :doc:`../concepts/algorithms/integrators_and_plant` before selecting a method.
 Use the :doc:`release measurements <../../release_measurements>` and linked

@@ -45,9 +45,9 @@ from RBDReference.equivalents.reference_backend import build_project_adapter
 RUNNER_SOURCE = Path(__file__).with_name("cuda_integrator_smoke_runner.cu")
 
 # Both fixed- and floating-base emit value + gradient + both-at-once kernels for
-# the EULER / SI-Euler / Midpoint / RK3 / RK4 integrators (the floating SI-Euler /
-# Midpoint / RK3 / RK4 gradients carry the SE(3) dIntegrate chain-rule wiring);
-# TRAPEZOIDAL is fixed-base only (see below). Floating-base MIMIC robots now
+# the EULER / SI-Euler / Midpoint / TRAPEZOIDAL / RK4 integrators (the floating SI-Euler /
+# Midpoint / TRAPEZOIDAL / RK4 gradients carry the SE(3) dIntegrate chain-rule wiring);
+# CONSTANT_ACCELERATION uses one evaluation on both bases. Floating-base MIMIC robots
 # emit the gradient too (B3 RESOLVED 2026-06-02 — the floating multi-stage mimic
 # gradient composes the correct B1 floating-mimic FD gradient in reduced tangent
 # space and is structurally exact, matched by go2-floating non-mimic to ~3e-7).
@@ -60,17 +60,17 @@ RUNNER_SOURCE = Path(__file__).with_name("cuda_integrator_smoke_runner.cu")
 # below), exactly as the floating-mimic SO equivalence test does. The VALUE
 # (x_kp1) path stays well-conditioned and is compared on every sample/dt.
 # (prefix, python-side integrator name, has_gradient, fixed_base_only)
-# TRAPEZOIDAL is single-stage; both fixed- and floating-base now emit value +
-# gradient (the floating trapezoidal gradient carries the SE(3) dIntegrate
+# CONSTANT_ACCELERATION is single-stage; both fixed- and floating-base now emit value +
+# gradient (the floating constant_acceleration gradient carries the SE(3) dIntegrate
 # chain-rule wiring at the combined tangent w = dt*qd + 0.5*dt^2*qdd, mirroring
 # the floating SI-Euler gradient). fixed_base_only is now False for all rows.
 _INTEGRATORS = (
     ("integrator_euler",       "euler",                True,  False),
     ("integrator_si_euler",    "semi_implicit_euler",  True,  False),
     ("integrator_midpoint",    "midpoint",             True,  False),
-    ("integrator_rk3",         "rk3",                  True,  False),
+    ("integrator_trapezoidal",         "trapezoidal",                  True,  False),
     ("integrator_rk4",         "rk4",                  True,  False),
-    ("integrator_trapezoidal", "trapezoidal",          True,  False),
+    ("integrator_constant_acceleration", "constant_acceleration",          True,  False),
 )
 
 
@@ -139,7 +139,7 @@ _GRADIENT_NORM_RTOL_FLOATING_MIMIC = 1.0e-2
 # reduced-Minv cond ~5e6, |qdd| ~1e5 at energetic samples) it carries the same
 # well-conditioned float32 signal as the gradient and is compared under the
 # norm-relative guard at the well-conditioned samples. The MULTI-STAGE value
-# (Midpoint / RK3 / RK4) RE-EVALUATES forward_dynamics at perturbed stage configs
+# (Midpoint / TRAPEZOIDAL / RK4) RE-EVALUATES forward_dynamics at perturbed stage configs
 # (p_qd = qd + c*dt*qdd1, with |dt*qdd1| ~ O(1e3)); pushing that energetic config
 # back through the cond-~5e6 reduced Minv amplifies the float32 round-off of an
 # already-O(1e5) qdd into a meaningless stage-2 qdd. (Verified: stage-1 qdd matches
@@ -150,7 +150,7 @@ _GRADIENT_NORM_RTOL_FLOATING_MIMIC = 1.0e-2
 # float32-meaningful at the rest-state sample; compare it there alone, mirroring the
 # gradient's conditioning scope. Non-mimic + fixed-base keep the strict check on
 # every IT/sample/dt.
-_MULTISTAGE_INTEGRATOR_TYPES = frozenset({"midpoint", "rk3", "rk4"})
+_MULTISTAGE_INTEGRATOR_TYPES = frozenset({"midpoint", "trapezoidal", "rk4"})
 _BIG_FLOATING_MIMIC_MULTISTAGE_SAMPLES = frozenset({"zero"})
 
 
@@ -299,7 +299,7 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode,
     """CUDA integrator kernels must match the Python reference composed via FD + Minv.
 
     Both fixed- and floating-base exercise value + gradient + both-at-once for
-    all 5 integrators (Euler / SI-Euler / Midpoint / RK3 / RK4), at PERF
+    all six integrators (including single-stage constant acceleration), at PERF
     (TIER_SHARED) AND at a spilled tier (TIER_LITE) so the big-robot (g1/h1_2)
     resource-tier SPILL path (FD-grad inner s_temp / s_D_qdd_stage band -> global
     d_workspace / d_temp_spill) is covered, not just the all-in-smem PERF arena.
@@ -377,8 +377,7 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode,
             actual = _run_sample(executable, compile_cmd, sample, dt, num_threads=num_threads)
             u = sample.qdd
             for prefix, integrator_type, has_gradient, fixed_base_only in _INTEGRATORS:
-                # TRAPEZOIDAL is fixed-base only (floating arm codegen-refused); the
-                # runner doesn't emit it on floating builds, so skip it there.
+                # Retain the per-row scope flag for future restricted schemes.
                 if fixed_base_only and base_mode != "fixed":
                     continue
                 expected_x_kp1 = project_model.integrator(
@@ -497,7 +496,7 @@ def test_cuda_integrator_fext_matches_python_reference(tmp_path, monkeypatch):
     FD(q,qd,u, f_ext). The runner reads a body-major local-frame f_ext (opt-in via
     GRID_RUNNER_FEXT) into hd_data->d_f_ext; the host integrator wrapper reads it.
 
-    Fixed-base iiwa14 (well-conditioned; also covers the new TRAPEZOIDAL with
+    Fixed-base iiwa14 (well-conditioned; also covers the new CONSTANT_ACCELERATION with
     f_ext). The no-fext path stays byte-identical (env unset) and is covered by
     test_cuda_integrator_matches_python_reference.
     """

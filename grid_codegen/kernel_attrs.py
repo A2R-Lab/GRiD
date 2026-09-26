@@ -276,19 +276,19 @@ KERNEL_OVERLOADS = {
         (f"integrator_kernel{suffix}<T, IntegratorType::{it}>",
          "void (*)(T *, unsigned char *, const T *, const int, const robotModel<T> *, T *, const T, const T, const int)")
         for suffix in ("", "_single_timing")
-        for it in ("EULER", "SEMI_IMPLICIT_EULER", "MIDPOINT", "RK3", "RK4", "TRAPEZOIDAL")
+        for it in ("EULER", "SEMI_IMPLICIT_EULER", "MIDPOINT", "RK4", "TRAPEZOIDAL", "CONSTANT_ACCELERATION")
     ],
 "integrator_gradient": [
         (f"integrator_gradient_kernel{suffix}<T, IntegratorType::{it}>",
          "void (*)(T *, unsigned char *, const T *, const int, const robotModel<T> *, T *, const T, const T, const int)")
         for suffix in ("", "_single_timing")
-        for it in ("EULER", "SEMI_IMPLICIT_EULER", "MIDPOINT", "RK3", "RK4", "TRAPEZOIDAL")
+        for it in ("EULER", "SEMI_IMPLICIT_EULER", "MIDPOINT", "RK4", "TRAPEZOIDAL", "CONSTANT_ACCELERATION")
     ],
     "integrator_with_gradient": [
         (f"integrator_with_gradient_kernel{suffix}<T, IntegratorType::{it}>",
          "void (*)(T *, T *, unsigned char *, const T *, const int, const robotModel<T> *, T *, const T, const T, const int)")
         for suffix in ("", "_single_timing")
-        for it in ("EULER", "SEMI_IMPLICIT_EULER", "MIDPOINT", "RK3", "RK4", "TRAPEZOIDAL")
+        for it in ("EULER", "SEMI_IMPLICIT_EULER", "MIDPOINT", "RK4", "TRAPEZOIDAL", "CONSTANT_ACCELERATION")
     ],
     # ee_pose_hessian is special: only emitted when its shared-mem fits the
     # GRID_CUDA_TARGET_SHARED_MEM_BYTES budget at compile time. The runtime
@@ -460,7 +460,7 @@ MJX_KERNEL_OVERLOADS = {
          "void (*)(T *, unsigned char *, const T *, const int, T *, const robotModel<T> *, const T, const int)")],
     "integrator": [(f"integrator_kernel<T, IntegratorType::{it}, GRID_DEFAULT_RESOURCE_TIER, true>",
          "void (*)(T *, unsigned char *, const T *, const int, const robotModel<T> *, T *, const T, const T, const int)")
-         for it in ("EULER", "SEMI_IMPLICIT_EULER", "MIDPOINT", "RK3", "RK4")],
+         for it in ("EULER", "SEMI_IMPLICIT_EULER")],
     # integrator_gradient mjx is single-stage (EULER / SI-Euler) only.
     "integrator_gradient": [(f"integrator_gradient_kernel<T, IntegratorType::{it}, GRID_DEFAULT_RESOURCE_TIER, true>",
          "void (*)(T *, unsigned char *, const T *, const int, const robotModel<T> *, T *, const T, const T, const int)")
@@ -553,7 +553,7 @@ def gen_init_close_grid(self):
                 and algo_short in ("integrator_gradient", "integrator_with_gradient")):
             kernels = [
                 (kname, sig) for (kname, sig) in kernels
-                if not any(rk in kname for rk in ("MIDPOINT", "RK3", "RK4"))
+                if not any(rk in kname for rk in ("MIDPOINT", "TRAPEZOIDAL", "RK4"))
             ]
         # Wrap EVERY kernel's attribute registration in a compile-time-
         # resolvable size guard so init_grid never hard-aborts when a kernel

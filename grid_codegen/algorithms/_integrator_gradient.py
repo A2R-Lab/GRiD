@@ -28,14 +28,14 @@ from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines
 # Per-integrator Butcher coefficients used by the multi-stage gradient.
 # For each multi-stage IT, we record:
 #   c_i: stage offsets used to build the i+1-th point (p_{i+1} = x + c_i*dt*xdot_{i+1})
-#        — TrajoptPlant convention so c is one entry per stage transition, length N-1.
+#        — one entry per stage transition, length N-1, with full-state xdot.
 #   b_i: final combination weights (length N).
 # Stage 1 uses no offset (we set "c_0 = 0" in the unified formula so the chain
 # rule reduces correctly).
 _INTEGRATOR_BUTCHER = {
     # IT: (stage_count, [c_1..c_{N-1}], [b_1..b_N])
     "MIDPOINT": (2, [0.5],            [0.0, 1.0]),
-    "TRAPEZOIDAL":      (3, [0.5, 0.75],      [2.0/9.0, 3.0/9.0, 4.0/9.0]),
+    "TRAPEZOIDAL": (2, [1.0],            [0.5, 0.5]),
     "RK4":      (4, [0.5, 0.5, 1.0],  [1.0/6.0, 2.0/6.0, 2.0/6.0, 1.0/6.0]),
 }
 
@@ -608,21 +608,15 @@ def gen_integrator_gradient_multistage(self, compute_x_kp1=False,
                                        d_temp_spill_name="nullptr", temp_spill_flag_name="false"):
     """Emit the multi-stage gradient body inline.
 
-    Drives N stages of forward-dynamics-gradient at intermediate states with
-    the TrajoptPlant point construction (p_{i+1} = x + c_i*dt*xdot_{i+1}; xdot
-    has the original v in its first n slots, so q part of p only depends on
-    original (q, qd)). Computes per-stage `D_qdd_i = ∂qdd_i / ∂(q, qd, u)` of
-    shape (n × 3n, column-major) via the unified recurrence:
+    Full-state stage recurrence (Eq/Ev select the initial q/v tangents):
 
-        D_qdd_1     = [J_qq_1 | J_qv_1 | Minv_1]                  (no chain)
-        D_qdd_{i+1} = base_{i+1}(c_i, dt) + c_i*dt * J_qv_{i+1} @ D_qdd_i
+        Dq_i = dInt_q Eq + c_i dt dInt_v Dv_{i-1}
+        Dv_i = Ev + c_i dt Da_{i-1}
+        Da_i = FDq_i Dq_i + FDv_i Dv_i + [0 | 0 | Minv_i]
 
-    where base_{i+1} has block structure (per column c, block index = c // n):
-        block_q  : J_qq_{i+1}[:, c]
-        block_qd : c_i*dt * J_qq_{i+1}[:, c-n] + J_qv_{i+1}[:, c-n]
-        block_u  : Minv_{i+1}[:, c-2n]
-    (For stage 1, c_0 = 0 unifies the recurrence: chain term vanishes and
-    base reduces to [J_qq_1 | J_qv_1 | Minv_1].)
+    Store Da_i only: Dv_{i-1} is reconstructed from Da_{i-2}, requiring
+    no new arena buffers. The final q rows use the weighted stage velocity
+    derivatives, evaluated at the same retraction increment as the value.
 
     Mutates s_q, s_qd in shared memory across stages — caller must use the
     kernel-level non-const pointers (the per-stage XImats helper is also
@@ -669,7 +663,18 @@ def gen_integrator_gradient_multistage(self, compute_x_kp1=False,
             self.gen_add_code_line(
                 "constexpr T c_offset = " + " : ".join(offset_branches) + " : static_cast<T>(0);"
             )
-            # Build p.q = integrate(q_orig, c*dt*qd_orig), p.qd = qd_orig + c*dt*qdd_{prev}.
+            # Previous stage velocity = v0 + c_previous*dt*a_{i-2}.
+            # Reconstruct it rather than allocating a second stage-Jacobian band.
+            previous_velocity = "s_qd_orig[i]"
+            if stage_idx > 1:
+                branches = [
+                    f"(IT == IntegratorType::{name}) ? static_cast<T>({cs[stage_idx - 2]})"
+                    for name, (cnt, cs, _) in _INTEGRATOR_BUTCHER.items()
+                    if cnt >= stage_num
+                ]
+                self.gen_add_code_line("constexpr T c_previous = " + " : ".join(branches) + " : static_cast<T>(0);")
+                previous_velocity = f"(s_qd_orig[i] + c_previous * dt * s_stage_grad_qdd[{(stage_idx - 2) * n} + i])"
+            # Build p.q = integrate(q_orig, c*dt*v_previous).
             # Prior stage's qdd lives in s_stage_grad_qdd at offset (stage_idx - 1) * n.
             prev_offset = (stage_idx - 1) * n
             if fb:
@@ -677,7 +682,7 @@ def gen_integrator_gradient_multistage(self, compute_x_kp1=False,
                 # nq layout; the velocity update is the plain Euler add.
                 self.gen_add_serial_ops()
                 self.gen_add_code_line(f"T v_scaled[{n}];")
-                self.gen_add_code_line(f"for (int i = 0; i < {n}; ++i) v_scaled[i] = c_offset * dt * s_qd_orig[i];")
+                self.gen_add_code_line(f"for (int i = 0; i < {n}; ++i) v_scaled[i] = c_offset * dt * {previous_velocity};")
                 self.gen_add_code_line(f"grid_integrate_floating_q<T, {nq}>(s_q_orig, v_scaled, s_q);")
                 self.gen_add_end_control_flow()
                 self.gen_add_parallel_loop("ind", str(n))
@@ -685,7 +690,7 @@ def gen_integrator_gradient_multistage(self, compute_x_kp1=False,
                 self.gen_add_end_control_flow()
             else:
                 self.gen_add_parallel_loop("ind", str(n))
-                self.gen_add_code_line(f"s_q[ind] = s_q_orig[ind] + c_offset * dt * s_qd_orig[ind];")
+                self.gen_add_code_line(f"s_q[ind] = s_q_orig[ind] + c_offset * dt * {previous_velocity.replace('[i]', '[ind]').replace('+ i]', '+ ind]')};")
                 self.gen_add_code_line(f"s_qd[ind] = s_qd_orig[ind] + c_offset * dt * s_stage_grad_qdd[{prev_offset} + ind];")
                 self.gen_add_end_control_flow()
             self.gen_add_sync()
@@ -693,13 +698,12 @@ def gen_integrator_gradient_multistage(self, compute_x_kp1=False,
             self.gen_load_update_XImats_helpers_function_call()
             self.gen_add_sync()
             if fb:
-                # Per-stage SE(3) dIntegrate blocks at v_dt = c*dt*qd_orig (the
-                # q-perturbation increment for p.q = integrate(q_orig, c*dt*qd_orig)).
+                # Per-stage SE(3) dIntegrate at the actual full-state increment.
                 # Reused buffers s_dInt_*_6x6 — consumed in this stage's D_qdd loop
                 # below before the next stage overwrites them.
                 self.gen_add_serial_ops()
                 self.gen_add_code_line(f"T v_dt_stage[{n}];")
-                self.gen_add_code_line(f"for (int i = 0; i < {n}; ++i) v_dt_stage[i] = c_offset * dt * s_qd_orig[i];")
+                self.gen_add_code_line(f"for (int i = 0; i < {n}; ++i) v_dt_stage[i] = c_offset * dt * {previous_velocity};")
                 self.gen_add_code_line("grid_dIntegrate_q_block<T>(v_dt_stage, s_dInt_q_6x6);")
                 self.gen_add_code_line("grid_dIntegrate_v_block<T>(v_dt_stage, s_dInt_v_6x6);")
                 self.gen_add_end_control_flow()
@@ -794,6 +798,18 @@ def gen_integrator_gradient_multistage(self, compute_x_kp1=False,
                 f"    chain += s_df_du[{nn} + k * {n} + r] * s_D_qdd_prev[c * {n} + k];"
             )
             self.gen_add_code_line("}")
+            if stage_idx > 1:
+                # Extra chain through q_i's dependence on v_{i-1}.
+                # dInt_v has a dense 6x6 floating block and identity joints.
+                self.gen_add_code_line(f"for (int k = 0; k < {n}; ++k) {{")
+                self.gen_add_code_line(f"    T jq_dv = s_df_du[k * {n} + r];")
+                if fb:
+                    self.gen_add_code_line("    if (k < 6) {")
+                    self.gen_add_code_line("        jq_dv = static_cast<T>(0);")
+                    self.gen_add_code_line(f"        for (int j = 0; j < 6; ++j) jq_dv += s_df_du[j * {n} + r] * s_dInt_v_6x6[j * 6 + k];")
+                    self.gen_add_code_line("    }")
+                self.gen_add_code_line(f"    chain += c_previous * dt * jq_dv * s_D_qdd_stage[{(stage_idx - 2) * n * three_n} + c * {n} + k];")
+                self.gen_add_code_line("}")
             self.gen_add_code_line(
                 f"s_D_qdd_cur[c * {n} + r] = base + c_prev_s{stage_num} * dt * chain;"
             )
@@ -805,13 +821,22 @@ def gen_integrator_gradient_multistage(self, compute_x_kp1=False,
         self.gen_add_end_control_flow()  # close `if constexpr (gating)`
 
     # ----- Final assembly of dAB and optional x_kp1 -----
-    # q_{k+1} = integrate(q, dt*qd) (Euler-style for every RK variant), so the
-    # top rows are [dInt_q | dt*dInt_v | 0] at v_dt = dt*qd. For fixed-base these
-    # reduce to [I | dt*I | 0].
+    # Reuse the now-dead stage s_qd for sum(b_i*v_i). Original qd is saved.
+    self.gen_add_parallel_loop("ind", str(n))
+    self.gen_add_code_line("T weighted_velocity = s_qd_orig[ind];")
+    for name, (_, cs, bs) in _INTEGRATOR_BUTCHER.items():
+        self.gen_add_code_line(f"if constexpr (IT == IntegratorType::{name}) {{")
+        for i in range(1, len(bs)):
+            if bs[i]:
+                self.gen_add_code_line(f"    weighted_velocity += static_cast<T>({bs[i] * cs[i-1]}) * dt * s_stage_grad_qdd[{(i-1)*n} + ind];")
+        self.gen_add_code_line("}")
+    self.gen_add_code_line("s_qd[ind] = weighted_velocity;")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
     if fb:
         self.gen_add_serial_ops()
         self.gen_add_code_line(f"T v_dt_final[{n}];")
-        self.gen_add_code_line(f"for (int i = 0; i < {n}; ++i) v_dt_final[i] = dt * s_qd_orig[i];")
+        self.gen_add_code_line(f"for (int i = 0; i < {n}; ++i) v_dt_final[i] = dt * s_qd[i];")
         self.gen_add_code_line("grid_dIntegrate_q_block<T>(v_dt_final, s_dInt_q_6x6);")
         self.gen_add_code_line("grid_dIntegrate_v_block<T>(v_dt_final, s_dInt_v_6x6);")
         self.gen_add_end_control_flow()
@@ -842,6 +867,22 @@ def gen_integrator_gradient_multistage(self, compute_x_kp1=False,
         self.gen_add_code_line(f"        val = (row == col - {n}) ? dt : static_cast<T>(0);")
         self.gen_add_code_line("    } else {")
         self.gen_add_code_line("        val = static_cast<T>(0);")
+        self.gen_add_code_line("    }")
+    # Base top rows above contain dInt_q Eq + dt*dInt_v Ev. Add the
+    # weighted acceleration-Jacobian contribution to the stage velocities.
+    for name, (_, cs, bs) in _INTEGRATOR_BUTCHER.items():
+        self.gen_add_code_line(f"    if constexpr (IT == IntegratorType::{name}) {{")
+        for i in range(1, len(bs)):
+            if not bs[i]:
+                continue
+            offset = (i-1)*n*three_n
+            self.gen_add_code_line(f"        T projected_{i} = s_D_qdd_stage[{offset} + col * {n} + row];")
+            if fb:
+                self.gen_add_code_line("        if (row < 6) {")
+                self.gen_add_code_line(f"            projected_{i} = static_cast<T>(0);")
+                self.gen_add_code_line(f"            for (int k = 0; k < 6; ++k) projected_{i} += s_dInt_v_6x6[row * 6 + k] * s_D_qdd_stage[{offset} + col * {n} + k];")
+                self.gen_add_code_line("        }")
+            self.gen_add_code_line(f"        val += dt * dt * static_cast<T>({bs[i]*cs[i-1]}) * projected_{i};")
         self.gen_add_code_line("    }")
     self.gen_add_code_line("} else {")
     self.gen_add_code_line(f"    int r = row - {n};")
@@ -880,16 +921,16 @@ def gen_integrator_gradient_multistage(self, compute_x_kp1=False,
         self.gen_add_code_line(f"s_x_kp1[{v_out_index}] = s_qd_orig[ind] + dt * accel;")
         self.gen_add_end_control_flow()
         self.gen_add_sync()
-        # q_{k+1} = integrate(q, dt*qd) (Euler-style q-update for every RK variant).
+        # s_qd holds the weighted stage velocity used by the gradient above.
         if fb:
             self.gen_add_serial_ops()
             self.gen_add_code_line(f"T v_scaled_x[{n}];")
-            self.gen_add_code_line(f"for (int i = 0; i < {n}; ++i) v_scaled_x[i] = dt * s_qd_orig[i];")
+            self.gen_add_code_line(f"for (int i = 0; i < {n}; ++i) v_scaled_x[i] = dt * s_qd[i];")
             self.gen_add_code_line(f"grid_integrate_floating_q<T, {nq}>(s_q_orig, v_scaled_x, s_x_kp1);")
             self.gen_add_end_control_flow()
         else:
             self.gen_add_parallel_loop("ind", str(n))
-            self.gen_add_code_line("s_x_kp1[ind] = s_q_orig[ind] + dt * s_qd_orig[ind];")
+            self.gen_add_code_line("s_x_kp1[ind] = s_q_orig[ind] + dt * s_qd[ind];")
             self.gen_add_end_control_flow()
         self.gen_add_sync()
 
@@ -1108,7 +1149,6 @@ def gen_integrator_gradient_device(self, compute_x_kp1=False):
     # regcount error. Inlining folds them into the kernel. See _fdsva_so.py:295-300.
     self.gen_add_code_line("__device__ __forceinline__")
     self.gen_add_code_line(func_def, True)
-    self.gen_add_code_line('static_assert(IT == IntegratorType::EULER || IT == IntegratorType::SEMI_IMPLICIT_EULER || IT == IntegratorType::CONSTANT_ACCELERATION, "Full-state multi-stage integration gradients are not yet enabled.");')
     # Inner owns the FD-grad pool placement; the repoint covers every consumer below
     # (incl. the XImats helper's sincos scratch and the multi-stage per-stage XImats
     # refresh), so no caller-side repoint. This is the migrated kernel line-744 case.

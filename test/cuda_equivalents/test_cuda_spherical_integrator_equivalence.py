@@ -1,13 +1,13 @@
 """CUDA equivalence test for the SPHERICAL (ball) joint time INTEGRATOR.
 
 Validates `grid::integrator<T, IT>` (value surface x_{k+1} = integrator(x_k, u, dt))
-for all five IntegratorTypes (EULER / SEMI_IMPLICIT_EULER / MIDPOINT / RK3 / RK4)
+for all six IntegratorTypes
 on the spherical fixtures, against a Python reference composed from the verified
 RBDReference primitives:
   * the q-side is a Lie-group retract  q_{k+1} = ref.integrate(q, dt * src_v)
     (SO(3) quaternion exp per ball joint + plain add for the downstream-shifted
     revolute slots — the §1e case); and
-  * the qd-side is the TrajoptPlant Runge-Kutta weighting of stage accelerations
+  * the qd-side is the Runge-Kutta weighting of stage accelerations
     qd_{k+1} = qd + dt * sum_i b_i * qdd_i, with each stage qdd_i evaluated via the
     pinocchio-validated ref.aba at the stage configuration.
 
@@ -23,7 +23,7 @@ It exercises BOTH CUDA surfaces, fp32 + fp64, at thread counts {1, 32, 256}:
     §1e nq-stride check: every batch row must equal the single-call device row).
 
 Asserts additionally that the spherical q-block of x_{k+1} stays UNIT-NORM and that
-the downstream revolute q-slots equal the plain Euler add q + dt*qd.
+the downstream revolute q-slots follow the selected full-state scheme.
 
 Fixtures: spherical_arm (root spherical + revolute) and mixed_spherical_arm
 (revolute -> spherical -> revolute, the mid-chain §1e case).
@@ -49,13 +49,14 @@ from test.cuda_equivalents.cuda_harness import (
 RUNNER_SOURCE = Path(__file__).with_name("cuda_spherical_integrator_runner.cu")
 FIXDIR = Path(__file__).resolve().parents[2] / "external" / "URDFParser" / "tests" / "fixtures"
 
-# (tag-prefix, integrator-type-name) for the five emitted kernels.
+# (tag-prefix, integrator-type-name) for the six emitted kernels.
 INTEGRATORS = (
     ("integrator_euler", "euler"),
     ("integrator_si_euler", "semi_implicit_euler"),
     ("integrator_midpoint", "midpoint"),
-    ("integrator_rk3", "rk3"),
+    ("integrator_trapezoidal", "trapezoidal"),
     ("integrator_rk4", "rk4"),
+    ("integrator_constant_acceleration", "constant_acceleration"),
 )
 
 # Each fixture's quaternion-block start index in q (the spherical joint's first
@@ -142,52 +143,8 @@ def _random_q(robot, fixture, rng):
 
 
 def _ref_integrator(ref, robot, q, qd, u, dt, integrator_type):
-    """Python reference x_{k+1} = [q_{k+1}; qd_{k+1}] mirroring the codegen.
-
-    q-side: ref.integrate(q, dt*src_v) (SO(3) retract + add). src_v = qd for
-    EULER and the multi-stage TrajoptPlant variants (the q-source is always the
-    ORIGINAL qd); for SEMI_IMPLICIT_EULER it is the freshly-updated v_{k+1}.
-    qd-side: qd + dt*sum_i b_i*qdd_i with each stage qdd_i = ref.aba at the
-    stage config (the TrajoptPlant xdot_i = [qd; qdd_i] convention: every stage
-    uses the ORIGINAL qd for the q-offset)."""
-    q = np.asarray(q, dtype=np.float64)
-    qd = np.asarray(qd, dtype=np.float64)
-    u = np.asarray(u, dtype=np.float64)
-    g = -9.81
-    qdd1 = np.asarray(ref.aba(q, qd, u, GRAVITY=g), dtype=np.float64).reshape(-1)
-
-    if integrator_type in ("euler", "semi_implicit_euler"):
-        qd_new = qd + dt * qdd1
-        src_v = qd_new if integrator_type == "semi_implicit_euler" else qd
-        q_new = ref.integrate(q, dt * src_v)
-        return np.concatenate([q_new, qd_new])
-
-    # Multi-stage. Stage 2 config: p1 = integrate(q, c1*dt*qd), p1_qd = qd + c1*dt*qdd1.
-    c1 = 0.5
-    p1_q = ref.integrate(q, c1 * dt * qd)
-    p1_qd = qd + c1 * dt * qdd1
-    qdd2 = np.asarray(ref.aba(p1_q, p1_qd, u, GRAVITY=g), dtype=np.float64).reshape(-1)
-
-    if integrator_type == "midpoint":
-        accel = qdd2
-    else:
-        # Stage 3 config.
-        c2 = 0.75 if integrator_type == "rk3" else 0.5
-        p2_q = ref.integrate(q, c2 * dt * qd)
-        p2_qd = qd + c2 * dt * qdd2
-        qdd3 = np.asarray(ref.aba(p2_q, p2_qd, u, GRAVITY=g), dtype=np.float64).reshape(-1)
-        if integrator_type == "rk3":
-            accel = (2.0 / 9.0) * qdd1 + (3.0 / 9.0) * qdd2 + (4.0 / 9.0) * qdd3
-        else:  # rk4
-            c3 = 1.0
-            p3_q = ref.integrate(q, c3 * dt * qd)
-            p3_qd = qd + c3 * dt * qdd3
-            qdd4 = np.asarray(ref.aba(p3_q, p3_qd, u, GRAVITY=g), dtype=np.float64).reshape(-1)
-            accel = (1.0 / 6.0) * qdd1 + (2.0 / 6.0) * qdd2 + (2.0 / 6.0) * qdd3 + (1.0 / 6.0) * qdd4
-
-    qd_new = qd + dt * accel
-    q_new = ref.integrate(q, dt * qd)  # q-source always original qd (TrajoptPlant)
-    return np.concatenate([q_new, qd_new])
+    """Use the CPU contract, independently checked against ODE convergence."""
+    return ref.integrator(q, qd, u, dt, integrator_type=integrator_type)
 
 
 @pytest.mark.cuda_equivalence
@@ -237,7 +194,7 @@ def test_cuda_spherical_integrator_matches_reference(tmp_path, fixture, equiv_t,
             if abs(qnorm - 1.0) > unit_tol:
                 failures.append(f"{tag} {prefix} ball quat norm {qnorm:.12f} != 1 (tol {unit_tol})")
 
-            # downstream revolute slots integrate as plain Euler q + dt*qd.
+            # Every downstream scalar slot follows the selected full-state map.
             for jid in range(robot.get_num_joints()):
                 jtype = getattr(robot.get_joint_by_id(jid), "jtype", None)
                 if jtype == "spherical":
@@ -246,14 +203,11 @@ def test_cuda_spherical_integrator_matches_reference(tmp_path, fixture, equiv_t,
                 iv = robot.get_joint_index_v(jid)
                 iq = iq if isinstance(iq, (list, tuple)) else [iq]
                 iv = iv if isinstance(iv, (list, tuple)) else [iv]
-                src_v = qd  # q-source is original qd for euler + multi-stage
-                if it_name == "semi_implicit_euler":
-                    src_v = dev[nq:nq + nv]  # SI-Euler q-source is v_{k+1}
                 for qi, vi in zip(iq, iv):
-                    expect = q[qi] + DT * src_v[vi]
+                    expect = ref_x[qi]
                     if not np.isclose(dev[qi], expect, atol=max(atol, 1e-5), rtol=rtol):
                         failures.append(
-                            f"{tag} {prefix} revolute q[{qi}] {dev[qi]:.6e} != q+dt*qd {expect:.6e}")
+                            f"{tag} {prefix} revolute q[{qi}] {dev[qi]:.6e} != reference {expect:.6e}")
 
             # host batch: every row == oracle AND == device single-call (§1e).
             for k in range(4):

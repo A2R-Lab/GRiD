@@ -98,7 +98,7 @@ void run_one(const std::string &prefix,
     // name-looked-up and the symbols are absent in a value-only build.
     //
     // All five integrator gradients are now emitted for both fixed- and
-    // floating-base (the floating SI-Euler / Midpoint / RK3 / RK4 gradients add
+    // floating-base (the floating SI-Euler / Midpoint / TRAPEZOIDAL / RK4 gradients add
     // the SE(3) dIntegrate chain-rule wiring), so no per-IT guard is needed.
 #if GRID_HAS_INTEGRATOR_GRADIENT
     (void) nv;
@@ -188,20 +188,20 @@ void run() {
     run_one<T, grid::IntegratorType::SEMI_IMPLICIT_EULER>("integrator_si_euler",
         hd_data, d_robotModel, streams, block_dimms, thread_dimms, original.data(), gravity, dt);
 
-    // Midpoint / RK3 / RK4: full path (value + gradient + both).
+    // Midpoint / TRAPEZOIDAL / RK4: full path (value + gradient + both).
     run_one<T, grid::IntegratorType::MIDPOINT>("integrator_midpoint",
         hd_data, d_robotModel, streams, block_dimms, thread_dimms, original.data(), gravity, dt);
-    run_one<T, grid::IntegratorType::RK3>("integrator_rk3",
+    run_one<T, grid::IntegratorType::TRAPEZOIDAL>("integrator_trapezoidal",
         hd_data, d_robotModel, streams, block_dimms, thread_dimms, original.data(), gravity, dt);
     run_one<T, grid::IntegratorType::RK4>("integrator_rk4",
         hd_data, d_robotModel, streams, block_dimms, thread_dimms, original.data(), gravity, dt);
 
-    // Trapezoidal: single-stage. Value = combined-tangent retract
+    // Constant acceleration: single-stage. Value = combined-tangent retract
     // q_new = integrate(q, dt*qd + 0.5*dt^2*qdd); v_new = qd + dt*qdd. Gradient now
     // emitted for BOTH fixed- and floating-base (the floating top rows carry the
     // SE(3) dIntegrate chain-rule wiring at the combined tangent w), so it runs the
     // full value+gradient+both path like the other single-stage integrators.
-    run_one<T, grid::IntegratorType::TRAPEZOIDAL>("integrator_trapezoidal",
+    run_one<T, grid::IntegratorType::CONSTANT_ACCELERATION>("integrator_constant_acceleration",
         hd_data, d_robotModel, streams, block_dimms, thread_dimms, original.data(), gravity, dt);
 
     grid::close_grid<T>(streams, d_robotModel, hd_data);
