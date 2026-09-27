@@ -322,11 +322,31 @@ def test_failed_or_incomplete_repeats_produce_no_timing():
 
 
 def test_changed_input_or_contract_refuses_aggregation():
-    for field in ("input_values_sha256","urdf_sha256","contract","dtype"):
+    for field in ("input_values_sha256","urdf_sha256","contract","dtype","input_storage_dtype"):
         aa,bb=row(0),row(1)
         aa["expected_repeats"]=bb["expected_repeats"]=2
         bb[field]="changed"
         assert aggregate([aa,bb])[0]["status"] == "contract_mismatch"
+
+
+def test_report_contract_retains_sustained_warmup_and_input_dtype(tmp_path):
+    job=list(p.jobs('core',['iiwa14'],['pinocchio'],['inverse_dynamics']))[0]
+    capture=dict(warm_seconds=1.5, adapter=dict(dtype='float32', input_storage_dtype='float32'),
+        cells=[dict(batch=16,status='validated',comparison_eligible=True,
+                    oracle_agreement=dict(passed=True),host_to_host=dict(mean_us=10.))])
+    p.write_json(tmp_path/'plan.json',dict(jobs=[job],batches=[16],repeats=1,
+        purpose='smoke',iterations=2,warmups=2,warm_seconds=1.5))
+    p.write_json(tmp_path/'capture.json',capture)
+    def reread():
+        p.write_json(tmp_path/'results.json',dict(jobs=[dict(job,repeat=0,
+            capture='capture.json',sha256=p.digest(tmp_path/'capture.json'))]))
+        return list(records(tmp_path))[0]
+    first=reread()
+    assert first['input_storage_dtype']=='float32'
+    assert json.loads(first['contract'])['warm_seconds']==1.5
+    capture['warm_seconds']=0.
+    p.write_json(tmp_path/'capture.json',capture)
+    assert reread()['contract']!=first['contract']
 
 
 def test_negative_delta_is_flagged_not_clipped():

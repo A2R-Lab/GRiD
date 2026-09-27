@@ -1,10 +1,20 @@
 Release measurements
 ====================
 
-Every number on this page comes from one audited collection on one machine
+.. note::
+
+   These figures and downloads are the **26 September snapshot**, not measurements
+   of the latest release candidate. A 27 September collection is under review.
+   Follow-up work fixes floating-base JAX Hessian input packing and preserves
+   fp64 mapped inputs for Pinocchio's analytical paths. Focused validation of
+   the corrected paths passes; follow-up timing and a fresh full correctness
+   receipt remain release gates.
+   The existing figure files and capture manifest have not been replaced.
+
+Every number on this page comes from the audited 26 September collection on one machine
 (NVIDIA RTX 5090, fp32 everywhere except where marked, 26 September 2026,
 ``modernizing-tests`` branch). Three robots — **iiwa14** (fixed base, 7 joints),
-**go2** (floating base, 18 velocities) and **G1** (floating base, 43 velocities) —
+**go2** (floating base, 18 velocities) and **G1** (floating base, 35 velocities) —
 fifteen operations and batch sizes 16 to 1024, with supported comparisons
 against Pinocchio, MJX, MuJoCo Warp, MuJoCo CPU, BARD and Frax. The five GRiD
 surfaces are compared on RNEA and its gradient; expanded-operation coverage
@@ -150,7 +160,7 @@ Protocol
   ``<op>_compute_only`` (resident) and ``<op>`` (with memory) host functions
   called from a C++ harness, checked bitwise against the NumPy wrapper.
 * fp32 for every backend, including GRiD's Hessians, with two exceptions
-  marked ``*``: Pinocchio's analytical second derivatives and every MuJoCo CPU
+  marked ``*``: Pinocchio's analytical second derivatives and end-effector pose, and every MuJoCo CPU
   cell (the installed binary computes in double). MuJoCo Warp is graph-captured;
   its eager launch time is in the table as ``resident_eager_us``.
 * Identical inputs for every backend (seeded legal states, normalised
@@ -193,9 +203,14 @@ reason in the table:
      - Frax on the floating-base robots (six-coordinate base against the shared
        quaternion fixture, no validated conversion); Frax appears on iiwa14 only.
    * - ``validation_failed``
-     - G1 Pinocchio forward-dynamics Hessian (both APIs) at batch 256 and 1024: one tensor entry
-       of one sample disagrees with the oracle by about 1 %, identically in both
-       Pinocchio modes. Not timed; under investigation.
+     - Not timed or plotted. In this snapshot, G1 Pinocchio forward-dynamics
+       Hessian cells fail the entrywise gate in both APIs at batch 256 and 1024.
+       A saved-sample investigation reproduced the discrepancy by rounding the
+       normalized quaternion to fp32 before the fp64 analytical call. Preserving
+       the fp64 mapping resolves the discrepancy. The rebuilt native adapter
+       passes the original G1 batches through 1024 in both modes (maximum
+       absolute error below 4e-11 at batch 1024); replacement timings are still
+       pending. No tolerance was relaxed.
 
 Downloads and reproduction
 --------------------------

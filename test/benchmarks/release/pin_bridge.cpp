@@ -140,7 +140,41 @@ static int eval_plain(ReleasePin &c, const Eigen::VectorXf &q, const Eigen::Vect
     return 0;
 }
 
-// One sample of the context's operation into `output` (sample_size doubles).
+// Analytical fp64 paths must receive the fp64 coordinate mapping. Casting a
+// normalized quaternion back to float before this call makes it non-unit;
+// FD Hessians can amplify that perturbation enough to fail the oracle gate.
+static int eval_one(ReleasePin &c, const double *q_in, const double *v_in, const double *t_in, double *output) {
+    const int nq=c.model.nq, n=c.model.nv;
+    Eigen::VectorXd q=Eigen::Map<const Eigen::VectorXd>(q_in,nq);
+    Eigen::VectorXd v=Eigen::Map<const Eigen::VectorXd>(v_in,n);
+    Eigen::VectorXd t=Eigen::Map<const Eigen::VectorXd>(t_in,n);
+    if(c.op==2) {
+        c.data->d2tau_dqdq.setZero(); c.data->d2tau_dvdv.setZero();
+        c.data->d2tau_dqdv.setZero(); c.data->d2tau_dadq.setZero();
+        pinocchio::ComputeRNEASecondOrderDerivatives(c.model,*c.data,q,v,t);
+        copy_tensor(c.data->d2tau_dqdq,n,output); output+=n*n*n;
+        copy_tensor(c.data->d2tau_dvdv,n,output); output+=n*n*n;
+        copy_tensor(c.data->d2tau_dqdv,n,output,true); output+=n*n*n;
+        copy_tensor(c.data->d2tau_dadq,n,output);
+    } else if(c.op==6) {
+        fdsvaSoSynth_one<double>(c.model,*c.data,q,v,t,c.scratch);
+        copy_tensor(c.scratch.daba_dqdq,n,output); output+=n*n*n;
+        copy_tensor(c.scratch.daba_dvdq,n,output); output+=n*n*n;
+        copy_tensor(c.scratch.daba_dvdv,n,output); output+=n*n*n;
+        copy_tensor(c.scratch.daba_dtdq,n,output);
+    } else if(c.op==7) {
+        pinocchio::forwardKinematics(c.model,*c.data,q);
+        pinocchio::updateFramePlacements(c.model,*c.data);
+        const auto &p=c.data->oMf[c.frame]; const auto &r=p.rotation();
+        for(int i=0;i<3;++i) *output++=p.translation()[i];
+        *output++=std::atan2(r(2,1),r(2,2));
+        *output++=std::atan2(-r(2,0),std::sqrt(r(2,2)*r(2,2)+r(2,1)*r(2,1)));
+        *output++=std::atan2(r(1,0),r(0,0));
+    } else return -2;
+    return 0;
+}
+
+// One fp32 sample into `output` (sample_size doubles).
 // Shared by the single-context ABI and the pool so both paths compute the
 // same thing; returns 0, or -2 for an unknown operation.
 static int eval_one(ReleasePin &c, const float *q_in, const float *v_in, const float *t_in, double *output) {
@@ -148,8 +182,7 @@ static int eval_one(ReleasePin &c, const float *q_in, const float *v_in, const f
     Eigen::VectorXf q=Eigen::Map<const Eigen::VectorXf>(q_in,nq);
     Eigen::VectorXf v=Eigen::Map<const Eigen::VectorXf>(v_in,n);
     Eigen::VectorXf t=Eigen::Map<const Eigen::VectorXf>(t_in,n);
-    const bool analytical = (c.op==2 || c.op==6 || c.op==7);
-    if(c.plain && !analytical) return eval_plain(c,q,v,t,output);
+    if(c.plain) return eval_plain(c,q,v,t,output);
     if(c.op==0) { c.rnea->evalFunction(q,v,t); copy_matrix(c.rnea->getRes(),output); }
     else if(c.op==9) { c.rnea->evalFunction(q,v,Eigen::VectorXf::Zero(n)); copy_matrix(c.rnea->getRes(),output); }
     else if(c.op==10) { c.rnea->evalFunction(q,Eigen::VectorXf::Zero(n),Eigen::VectorXf::Zero(n)); copy_matrix(c.rnea->getRes(),output); }
@@ -158,14 +191,6 @@ static int eval_one(ReleasePin &c, const float *q_in, const float *v_in, const f
         c.grad->evalFunction(q,v,t);
         Eigen::MatrixXf J(n,2*n); J << c.grad->getDtauDq(), c.grad->getDtauDv();
         copy_matrix(J,output);
-    } else if(c.op==2) {
-        c.data->d2tau_dqdq.setZero(); c.data->d2tau_dvdv.setZero();
-        c.data->d2tau_dqdv.setZero(); c.data->d2tau_dadq.setZero();
-        pinocchio::ComputeRNEASecondOrderDerivatives(c.model,*c.data,q.cast<double>(),v.cast<double>(),t.cast<double>());
-        copy_tensor(c.data->d2tau_dqdq,n,output); output+=n*n*n;
-        copy_tensor(c.data->d2tau_dvdv,n,output); output+=n*n*n;
-        copy_tensor(c.data->d2tau_dqdv,n,output,true); output+=n*n*n;
-        copy_tensor(c.data->d2tau_dadq,n,output);
     } else if(c.op==3 || c.op==4 || c.op==5) {
         c.minv->evalFunction(q);
         // Installed CodeGenMinv allocates nv x nq, even though only
@@ -182,25 +207,12 @@ static int eval_one(ReleasePin &c, const float *q_in, const float *v_in, const f
             Eigen::MatrixXf J(n,2*n); J << -mi*c.grad->getDtauDq(), -mi*c.grad->getDtauDv();
             copy_matrix(J,output);
         }
-    } else if(c.op==6) {
-        fdsvaSoSynth_one<float>(c.model,*c.data,q,v,t,c.scratch);
-        copy_tensor(c.scratch.daba_dqdq,n,output); output+=n*n*n;
-        copy_tensor(c.scratch.daba_dvdq,n,output); output+=n*n*n;
-        copy_tensor(c.scratch.daba_dvdv,n,output); output+=n*n*n;
-        copy_tensor(c.scratch.daba_dtdq,n,output);
-    } else if(c.op==7) {
-        pinocchio::forwardKinematics(c.model,*c.data,q.cast<double>());
-        pinocchio::updateFramePlacements(c.model,*c.data);
-        const auto &p=c.data->oMf[c.frame]; const auto &r=p.rotation();
-        for(int i=0;i<3;++i) *output++=p.translation()[i];
-        *output++=std::atan2(r(2,1),r(2,2));
-        *output++=std::atan2(-r(2,0),std::sqrt(r(2,2)*r(2,2)+r(2,1)*r(2,1)));
-        *output++=std::atan2(r(1,0),r(0,0));
     } else return -2;
     return 0;
 }
 
-static int eval_range(ReleasePin &c, const float *qs, const float *vs, const float *ts, int start, int stop, double *output) {
+template<class Scalar>
+static int eval_range(ReleasePin &c, const Scalar *qs, const Scalar *vs, const Scalar *ts, int start, int stop, double *output) {
     const int nq=c.model.nq, n=c.model.nv, size=sample_size(c);
     for (int b=start; b<stop; ++b) {
         int rc = eval_one(c, qs+b*nq, vs+b*n, ts+b*n, output+(size_t)b*size);
@@ -211,6 +223,13 @@ static int eval_range(ReleasePin &c, const float *qs, const float *vs, const flo
 
 extern "C" int pin_release_eval(void *ptr, const float *qs, const float *vs,
                                   const float *ts, int batch, double *output) {
+    if(!ptr || !qs || !vs || !ts || !output || batch < 1) return -1;
+    try { return eval_range(*static_cast<ReleasePin*>(ptr), qs, vs, ts, 0, batch, output); }
+    catch(const std::exception &e) { release_error=e.what(); return -3; }
+}
+
+extern "C" int pin_release_eval_f64(void *ptr, const double *qs, const double *vs,
+                                     const double *ts, int batch, double *output) {
     if(!ptr || !qs || !vs || !ts || !output || batch < 1) return -1;
     try { return eval_range(*static_cast<ReleasePin*>(ptr), qs, vs, ts, 0, batch, output); }
     catch(const std::exception &e) { release_error=e.what(); return -3; }
@@ -241,8 +260,9 @@ extern "C" void pin_release_pool_close(void *ptr) { delete static_cast<ReleasePi
 // to the batch). Contiguous slices of near-equal size; every slice has its own
 // model/data/codegen context, so nothing is shared between threads but the
 // input and output arrays at disjoint offsets.
-extern "C" int pin_release_pool_eval(void *ptr, const float *qs, const float *vs, const float *ts,
-                                     int batch, double *output, int active) {
+template<class Scalar>
+static int pool_eval(void *ptr, const Scalar *qs, const Scalar *vs, const Scalar *ts,
+                     int batch, double *output, int active) {
     if(!ptr || !qs || !vs || !ts || !output || batch < 1 || active < 1) return -1;
     auto &p = *static_cast<ReleasePinPool*>(ptr);
     const int count = std::min<int>(active, std::min<int>((int)p.contexts.size(), batch));
@@ -258,4 +278,13 @@ extern "C" int pin_release_pool_eval(void *ptr, const float *qs, const float *vs
         if (rcs[(size_t)k]) { release_error = errors[(size_t)k]; return rcs[(size_t)k]; }
     }
     return 0;
+}
+
+extern "C" int pin_release_pool_eval(void *ptr, const float *qs, const float *vs, const float *ts,
+                                     int batch, double *output, int active) {
+    return pool_eval(ptr, qs, vs, ts, batch, output, active);
+}
+extern "C" int pin_release_pool_eval_f64(void *ptr, const double *qs, const double *vs, const double *ts,
+                                         int batch, double *output, int active) {
+    return pool_eval(ptr, qs, vs, ts, batch, output, active);
 }

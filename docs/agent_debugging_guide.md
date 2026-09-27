@@ -2440,3 +2440,35 @@ error), never silently sliced, or a padded caller gets plausible wrong dynamics 
 last joint; (4) `grid.cuh` and its raw buffer contract (`test_cuda_input_abi.py`) are
 unchanged, so kernel timings survive — only wrapper-boundary timings on nq != nv robots
 need re-collection.
+
+#### 7.z29 addendum — hand-written FFI tails also need the width migration (2026-09-27)
+
+Updating the generated handlers did not update the hand-written `idsva_so` handler
+or the shared integrator/gradient packer. They still validated/copied velocity-like
+operands using NQ. For Go2/G1, public rows are NV wide but the internal slots remain
+NQ wide. Using NQ as the **source pitch** shifts every row after the first and can
+read past the operand. The Hessian's velocity-independent blocks can still pass,
+so a partly correct tensor is not evidence of harmless roundoff. Check all three
+quantities independently: source pitch NV, copy width NV, destination pitch 3*NQ;
+q alone uses NQ source width. Validate each secondary operand's batch too. Test a
+floating model at B>1 with distinct nonzero velocity AND acceleration rows, eager
+and JIT, against the correctly packed C ABI. Fixed-base-only tests cannot detect
+this bug. CPU source guards cover the exceptions outside generated regions;
+`test_jax_floating_input_widths.py` provides the numerical regression.
+
+### 7.z30 Preserve mapped input precision for analytical fp64 baselines (2026-09-27)
+
+The release Pinocchio adapter normalized fp32 fixture quaternions in fp64, then
+rounded them back to fp32 for a float-pointer C ABI. Its analytical Hessian path
+promoted them to double again without restoring the unit-quaternion invariant.
+The fp64 oracle kept the normalized double values. On G1's FD Hessian, that tiny
+input perturbation reproduced the three sparse entrywise failures at samples
+203/377/638, despite blockwise relative L2 errors around 4e-7. CPU composition with
+the old mapped input reproduced saved outputs within 1.82e-12; preserving the
+fp64 mapping matched the saved oracle blocks exactly. The problem was input
+transport, not evidence that the analytical algorithm needs looser tolerances.
+Use double-pointer entry points for analytical fp64 routines (including FK),
+keep genuine fp32 algorithms on their existing float path, and record input
+storage precision separately from arithmetic/output precision. Validate the
+rebuilt bridge and the entire failing batch before accepting replacement data;
+a tiny initial-prefix smoke never reaches these samples.

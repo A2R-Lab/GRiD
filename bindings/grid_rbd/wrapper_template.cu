@@ -5465,18 +5465,23 @@ static ffi::Error grid_rbd_jax_idsva_so_impl(
     int nj    = grid::NUM_JOINTS;
     if (batch < 1) return ffi::Error::InvalidArgument("idsva_so: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("idsva_so: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "idsva_so: qd", grid::NUM_VEL, batch);
+    GRID_RBD_FFI_VALIDATE_ROWS(qdd, "idsva_so: qdd", grid::NUM_VEL, batch);
 
-    const size_t row_bytes = nj * sizeof(T);
+    // Public velocity/acceleration rows are NV wide; the device arena retains
+    // NQ-wide slots. Floating/spherical configurations have NQ != NV.
+    const size_t q_bytes = nj * sizeof(T);
+    const size_t v_bytes = grid::NUM_VEL * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0],    dst_pitch,
-                      q.typed_data(),          row_bytes,
-                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+                      q.typed_data(),          q_bytes,
+                      q_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj],   dst_pitch,
-                      qd.typed_data(),         row_bytes,
-                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+                      qd.typed_data(),         v_bytes,
+                      v_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[2*nj], dst_pitch,
-                      qdd.typed_data(),        row_bytes,
-                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+                      qdd.typed_data(),        v_bytes,
+                      v_bytes, batch, cudaMemcpyDeviceToDevice, stream);
 
     constexpr int stride_q_qd_u = 3 * grid::NUM_JOINTS;
     // Compile-time frame dispatch — mirrors grid::idsva_so's own codegen rule
@@ -5585,16 +5590,17 @@ static ffi::Error grid_rbd_jax_pack_qqdu(GridCtx *ctx, cudaStream_t stream, int 
                                    ffi::Buffer<GRID_FFI_T>& qd,
                                    ffi::Buffer<GRID_FFI_T>& u) {
     GRID_RBD_CTX_LOCALS(ctx);
-    GRID_RBD_FFI_VALIDATE_ROWS(qd, "qd", nj, batch);   // W03: q's batch sizes every copy
-    GRID_RBD_FFI_VALIDATE_ROWS(u, "u", nj, batch);
-    const size_t row_bytes = nj * sizeof(T);
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "qd", grid::NUM_VEL, batch);   // W03: q's batch sizes every copy
+    GRID_RBD_FFI_VALIDATE_ROWS(u, "u", grid::NUM_VEL, batch);
+    const size_t q_bytes = nj * sizeof(T);
+    const size_t v_bytes = grid::NUM_VEL * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
-    cudaMemcpy2DAsync(&g_data->d_q_qd_u[0],     dst_pitch, q.typed_data(),  row_bytes,
-                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj],    dst_pitch, qd.typed_data(), row_bytes,
-                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpy2DAsync(&g_data->d_q_qd_u[2*nj],  dst_pitch, u.typed_data(),  row_bytes,
-                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[0],     dst_pitch, q.typed_data(),  q_bytes,
+                      q_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj],    dst_pitch, qd.typed_data(), v_bytes,
+                      v_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[2*nj],  dst_pitch, u.typed_data(),  v_bytes,
+                      v_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     return ffi::Error::Success();
 }
 

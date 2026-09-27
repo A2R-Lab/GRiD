@@ -22,7 +22,7 @@
     <p class="hero-sub">Turn your URDF into robot-specific CUDA kernels with analytical derivatives and Hessians.<br>Interfaces in CUDA C++, NumPy, JAX, and PyTorch.</p>
     <div class="links"><a class="button primary" href="#get-started">Get started</a><a class="button" href="https://github.com/A2R-Lab/GRiD">Code on GitHub</a><a class="button" href="docs/">Documentation</a></div>
     <p class="note">Developed at <a href="https://a2r-lab.org/">A²R Lab</a> · <a href="#research">Original ICRA 2022 paper and project history</a></p>
-    <aside class="review-note"><strong>Rerelease of GRiD++</strong> The benchmark figures below are from the September 2026 rerelease of GRiD++ see below for links to the original paper and code.</aside>
+    <aside class="review-note"><strong>GRiD++ release preview</strong> The figures below show the 26 September 2026 benchmark snapshot. Updated measurements and a fresh full correctness receipt are still under review. Links to the original paper and archived code are below.</aside>
   </section>
 
   <div id="capabilities" class="highlights" aria-label="Core capabilities">
@@ -51,7 +51,7 @@
   </section>
 
   <section id="measurements">
-    <div class="eyebrow">Release measurements from September 2026</div><h2>Benchmark Results</h2>
+    <div class="eyebrow">Benchmark snapshot from 26 September 2026</div><h2>Benchmark Results</h2>
     <p>One collection on an RTX 5090 covers iiwa14, go2, and G1 at batch sizes 16 through 1024 and fifteen operations, with supported comparisons against Pinocchio, MJX, MuJoCo Warp, MuJoCo CPU, BARD, and Frax. GRiD's CUDA compute-only calls outperform the GPU libraries' resident calls on most matched cells; larger batches also expose gains over CPU baselines after host–device transfers. The result depends on the operation and API boundary. Timed cells were checked against an fp64 reference before and after timing; retained accuracy warnings and timing variability are marked. <a href="docs/release_measurements.html">Read the protocol and the full results →</a></p>
     <div class="grid results-grid">
       <figure id="figure-core"><h3 id="figure-derivatives">Where the time goes</h3><p>RNEA, its gradient, and its Hessian. GRiD separates its CUDA compute-only call, host–device transfer increment, and JAX overhead. GPU competitors separate resident calls from host round trips. Pinocchio shows codegen plus a standard-API cap where codegen exists; its Hessian bar is entirely standard analytical code. Larger batches can amortize transfers, while framework overhead can outweigh compute gains. These are measured call times, not an isolated device-kernel comparison.</p><a href="docs/_static/release/stacked_core.svg"><img src="docs/_static/release/stacked_core.png" alt="RNEA, grad RNEA and Hessian RNEA across iiwa14, go2 and G1: GRiD as a stack of kernel compute, memory traffic and wrapper overhead beside each competitor's resident time and host round trip, log axis, batches 16 to 1024." loading="lazy"></a><figcaption><a href="docs/release_measurements.html#figure-1-where-the-time-goes">Figure 1 and the all-operation version →</a></figcaption></figure>

@@ -99,6 +99,7 @@ def records(directory):
                     "batch": batch, "repeat": repeat, "expected_repeats": plan["repeats"],
                     "status": status, "reason": reason, "purpose": plan["purpose"],
                     "dtype": adapter.get("dtype", "unknown"), "method": adapter.get("method", "unknown"),
+                    "input_storage_dtype": adapter.get("input_storage_dtype", "unknown"),
                     "accuracy_policy": policy,
                     "accuracy_policy_version": version,
                     "warning_checks": c.get("warning_checks", []),
@@ -133,6 +134,7 @@ def records(directory):
                         # captures taken under different settings are never combined silently.
                         "cpu_power": provenance.get("cpu_power"),
                         "iterations": plan["iterations"], "warmups": plan["warmups"],
+                        "warm_seconds": capture.get("warm_seconds", plan.get("warm_seconds")),
                         "cpu_threads": plan.get("cpu_threads")}, sort_keys=True),
                     "max_abs_error": max((b["max_abs"] for ck in checks for b in ck.get("blocks", [])), default=None),
                     "relative_l2_error": max((b["relative_l2"] for ck in checks for b in ck.get("blocks", [])), default=None),
@@ -163,7 +165,7 @@ def aggregate(rows):
                    host_min_us=None, host_max_us=None, resident_min_us=None, resident_max_us=None, overhead_us=None, boundary_flag="",
                    max_abs_error=max((r["max_abs_error"] for r in group if r["max_abs_error"] is not None), default=None),
                    relative_l2_error=max((r["relative_l2_error"] for r in group if r["relative_l2_error"] is not None), default=None))
-        contracts = {(r["contract"], r["urdf_sha256"], r["input_values_sha256"], r["dtype"], r["method"], r["purpose"], r["expected_repeats"]) for r in group}
+        contracts = {(r["contract"], r["urdf_sha256"], r["input_values_sha256"], r["dtype"], r.get("input_storage_dtype", "unknown"), r["method"], r["purpose"], r["expected_repeats"]) for r in group}
         if len(contracts) != 1:
             row.update(status="contract_mismatch", reason="repeat hardware/software/input/precision contracts differ")
         elif len(group) != first["expected_repeats"]:

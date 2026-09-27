@@ -88,6 +88,9 @@ class PinAdapter:
         fp = ctypes.POINTER(ctypes.c_float)
         self.lib.pin_release_pool_eval.argtypes = [ctypes.c_void_p, fp, fp, fp, ctypes.c_int, ctypes.POINTER(ctypes.c_double), ctypes.c_int]
         self.lib.pin_release_pool_eval.restype = ctypes.c_int
+        dp = ctypes.POINTER(ctypes.c_double)
+        self.lib.pin_release_pool_eval_f64.argtypes = [ctypes.c_void_p, dp, dp, dp, ctypes.c_int, dp, ctypes.c_int]
+        self.lib.pin_release_pool_eval_f64.restype = ctypes.c_int
         target = fixture.oracle.model.frames[fixture.oracle._resolve_frame_id(fixture.target)].name
         previous = Path.cwd()
         # Pinocchio gives RNEA, its derivatives, and Minv distinct library
@@ -121,6 +124,8 @@ class PinAdapter:
                              "slice 0 on the caller; independent native contexts; every variant recorded",
             "method": method, "mode": "plain" if plain else "codegen",
             "dtype": "float32" if index in FP32_OPS else "float64",
+            "input_storage_dtype": "float32" if index in FP32_OPS else "float64",
+            "input_mapping": "project fp32 samples mapped/normalized in fp64; cast only for fp32 algorithms",
             "output_storage_dtype": "float64", "library_sha256": digest(library),
             "codegen_compiler_options": "-O3 (no fast-math)",
             "codegen_constant_digits": 9,
@@ -135,22 +140,25 @@ class PinAdapter:
 
     def prepare(self, batch):
         f = self.f
-        # Map project coordinates into the oracle's Pinocchio model layout.
-        q = np.ascontiguousarray([f.oracle._to_pin_q(x.astype(np.float64)) for x in f.q[:batch]], dtype=np.float32)
-        v = np.ascontiguousarray([f.oracle._expand_project_v_to_pin(x.astype(np.float64)) for x in f.v[:batch]], dtype=np.float32)
-        third = f.u if self.op in {"forward_dynamics", "forward_dynamics_gradient", "fdsva_so"} else f.a
-        t = np.ascontiguousarray([f.oracle._expand_project_v_to_pin(x.astype(np.float64)) for x in third[:batch]], dtype=np.float32)
-        n = f.nv
         index = OPS.index(self.op)
+        dtype = np.float32 if index in FP32_OPS else np.float64
+        # Map project coordinates into the oracle's Pinocchio model layout.
+        # Preserve the normalized quaternion in fp64 for analytical fp64 paths.
+        q = np.ascontiguousarray([f.oracle._to_pin_q(x.astype(np.float64)) for x in f.q[:batch]], dtype=dtype)
+        v = np.ascontiguousarray([f.oracle._expand_project_v_to_pin(x.astype(np.float64)) for x in f.v[:batch]], dtype=dtype)
+        third = f.u if self.op in {"forward_dynamics", "forward_dynamics_gradient", "fdsva_so"} else f.a
+        t = np.ascontiguousarray([f.oracle._expand_project_v_to_pin(x.astype(np.float64)) for x in third[:batch]], dtype=dtype)
+        n = f.nv
         size = (4*n**3 if index in {2, 6} else 2*n*n if index in {1, 5} else n*n if index in MATRIX_OPS
                 else 6 if index == 7 else 6*n + 6 if index == 11 else n)
-        fp = ctypes.POINTER(ctypes.c_float)
+        fp = ctypes.POINTER(ctypes.c_float if index in FP32_OPS else ctypes.c_double)
         pointers = tuple(a.ctypes.data_as(fp) for a in (q, v, t))
+        evaluate = self.lib.pin_release_pool_eval if index in FP32_OPS else self.lib.pin_release_pool_eval_f64
         self.active = 1
         self.metadata["active_cpu_threads"] = self.active
         def call():
             out = np.empty((batch, size), np.float64)
-            rc = self.lib.pin_release_pool_eval(self.pool, *pointers, batch,
+            rc = evaluate(self.pool, *pointers, batch,
                                                 out.ctypes.data_as(ctypes.POINTER(ctypes.c_double)), self.active)
             if rc:
                 raise RuntimeError(self.lib.pin_release_error().decode())
