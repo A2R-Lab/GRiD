@@ -55,7 +55,7 @@ PLANT_STEP_OPS = {
         dim_args="nx, grid::NUM_VEL",
         out_size="nx",
         out_name="x_kp1",
-        ss_split=False,
+        ss_split=True,   # MuJoCo integration values are Euler / semi-implicit Euler only
         mjx_comment="// MUJOCO=true launches the plant_step kernel with MUJOCO_OUTPUT=true (floating only).",
     ),
     "plant_step_gradient": dict(
@@ -118,19 +118,25 @@ COST_OPS = {
     "momentum_cost": dict(
         gate="GRID_PLANT_HAS_MOMENTUM_COST",
         kernel="momentum_cost_kernel",
-        smem="CCRBA_DYNAMIC_SHARED_MEM_BYTES",
+        # Full tangent-state Gauss-Newton momentum cost (2026-09-26 contract): the
+        # fused kernel evaluates dccrba once, so it runs in dccrba's dynamic arena at
+        # dccrba's launch tier and takes the shared spill workspace.
+        smem_expr="grid::DCCRBA_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_DCCRBA>::TIER>()",
+        setattr_smem=True,
         check="momentum_cost_kernel",
         comment=[
-            "// momentum_cost(q, qd, h_des, W) → (value (B,1), grad (B,NX), hess (B,NX*NX)).",
+            "// momentum_cost(q, qd, h_des, W) → (value (B,1), grad (B,2*NV), hess (B,2*NV*2*NV)) in",
+            "// tangent [dq | dv] order, including the configuration and cross blocks (needs dccrba).",
             "// h_des(6) and W(6) are packed into the two halves of d_in_c, matching the C-ABI.",
             "// MUJOCO=true launches with MUJOCO_OUTPUT=true (floating only).",
         ],
         ins=(("q", "nq"), ("qd", "nv"), ("h_des", "6"), ("W", "6")),
-        clamp_sym="momentum_cost_kernel<T, MUJOCO>",
-        clamp_comment="    // momentum_cost is register-heavy (~140 regs/thread): clamp to its launch cap.",
-        launch_targs="T, /*MUJOCO_OUTPUT=*/MUJOCO",
+        grad_dim="2 * nv",
+        clamp_sym="momentum_cost_kernel<T, MUJOCO, grid::launch_cfg<grid::GRID_ALGO_DCCRBA>::TIER>",
+        clamp_comment="    // momentum_cost is register-heavy: clamp to its launch cap (blocks are already clamped to the workspace slots).",
+        launch_targs="T, /*MUJOCO_OUTPUT=*/MUJOCO, grid::launch_cfg<grid::GRID_ALGO_DCCRBA>::TIER",
         extra_kargs=[],
-        jax_launch_targs="T, /*MUJOCO_OUTPUT=*/MUJOCO",
+        jax_launch_targs="T, /*MUJOCO_OUTPUT=*/MUJOCO, grid::launch_cfg<grid::GRID_ALGO_DCCRBA>::TIER",
         jax_kargs_layout="momentum",
         bind="explicit4",
     ),
@@ -211,6 +217,12 @@ def _jax_step_block(key: str) -> list[str]:
     return L
 
 
+def _smem_expr(op: dict) -> str:
+    """The dynamic shared-memory byte expression of a cost op: a full expression
+    (`smem_expr`, tiered kernels) or the default-tier `grid::<smem><T>()` form."""
+    return op["smem_expr"] if "smem_expr" in op else f"grid::{op['smem']}<T>()"
+
+
 def _size_expr(dim: str) -> str:
     return f"(size_t)batch * {dim} * sizeof(T)"
 
@@ -275,8 +287,10 @@ def _jax_cost_block(key: str) -> list[str]:
         for slot, (n, d) in zip(("a", "b", "c"), op["ins"]):
             pad = " " * (w - len(n) + 1)
             L.append(f"    cudaMemcpyAsync(g_plant.d_in_{slot}, {n}.typed_data(),{pad}{_size_expr(d)}, cudaMemcpyDeviceToDevice, stream);")
-    L.append(f"    size_t smem = grid::{op['smem']}<T>();")
+    L.append(f"    size_t smem = {_smem_expr(op)};")
     L.append("    dim3 grid_dim = grid_rbd_grid_for(g_ctx, batch);")
+    if op.get("setattr_smem"):
+        L.append(f"    cudaFuncSetAttribute(grid_plant::{op['clamp_sym']}, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);")
     if "clamp_comment" in op:
         L.append(op["clamp_comment"])
     L.append(f"    dim3 thr = grid_clamp_threads_for(grid_plant::{op['clamp_sym']}, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(g_ctx, batch));")
@@ -294,18 +308,19 @@ def _jax_cost_block(key: str) -> list[str]:
             "        g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,",
             "        g_robot, batch);",
         ]
-    else:  # momentum
+    else:  # momentum (fused dccrba: takes the shared spill workspace)
         L += [
-            "        g_plant.d_out, g_plant.d_grad, g_plant.d_hess,",
+            "        g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_data->d_workspace,",
             "        g_plant.d_in_a, g_plant.d_in_b,",
             "        g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6,",
             "        g_robot, batch);",
         ]
+    gd = op.get("grad_dim", "nx")
     L += [
         f'    GRID_RBD_FFI_CHECK_LAUNCH("{op["check"]}");',
         "    cudaMemcpyAsync(out->typed_data(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);",
-        "    cudaMemcpyAsync(grad->typed_data(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);",
-        "    cudaMemcpyAsync(hess->typed_data(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);",
+        f"    cudaMemcpyAsync(grad->typed_data(), g_plant.d_grad, (size_t)batch * ({gd}) * sizeof(T),      cudaMemcpyDeviceToDevice, stream);",
+        f"    cudaMemcpyAsync(hess->typed_data(), g_plant.d_hess, (size_t)batch * ({gd}) * ({gd}) * sizeof(T), cudaMemcpyDeviceToDevice, stream);",
         "    return ffi::Error::Success();",
         "}",
         "",
@@ -454,13 +469,16 @@ def _torch_cost_block(key: str) -> list[str]:
         for slot, (n, d) in zip(("a", "b", "c"), op["ins"]):
             pad = " " * (w - len(n) + 1)
             L.append(f"    cudaMemcpyAsync(g_plant.d_in_{slot}, {n}.data_ptr<T>(),{pad}{_size_expr(d)}, cudaMemcpyDeviceToDevice, stream);")
+    gd = op.get("grad_dim", "nx")
     L += [
         f"    auto out  = grid_torch_empty(batch, 1, {first});",
-        f"    auto grad = grid_torch_empty(batch, nx, {first});",
-        f"    auto hess = grid_torch_empty(batch, nx * nx, {first});",
-        f"    size_t smem = grid::{op['smem']}<T>();",
+        f"    auto grad = grid_torch_empty(batch, {gd}, {first});",
+        f"    auto hess = grid_torch_empty(batch, ({gd}) * ({gd}), {first});",
+        f"    size_t smem = {_smem_expr(op)};",
         "    dim3 grid_dim = grid_rbd_grid_for(g_ctx, batch);",
     ]
+    if op.get("setattr_smem"):
+        L.append(f"    cudaFuncSetAttribute(grid_plant::{op['clamp_sym']}, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);")
     if "clamp_comment" in op:
         L.append(op["clamp_comment"])
     L.append(f"    dim3 thr = grid_clamp_threads_for(grid_plant::{op['clamp_sym']}, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(g_ctx, batch));")
@@ -468,7 +486,7 @@ def _torch_cost_block(key: str) -> list[str]:
     L.append(f"    grid_plant::{kern}<{targs}><<<grid_dim, thr, smem, stream>>>(")
     if four_in:
         L += [
-            "        g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b,",
+            "        g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_data->d_workspace, g_plant.d_in_a, g_plant.d_in_b,",
             "        g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6, g_robot, batch);",
         ]
     elif op["extra_kargs"]:
@@ -484,8 +502,8 @@ def _torch_cost_block(key: str) -> list[str]:
     L += [
         f'    grid_torch_check_launch("{op["check"]}");',
         "    cudaMemcpyAsync(out.data_ptr<T>(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);",
-        "    cudaMemcpyAsync(grad.data_ptr<T>(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);",
-        "    cudaMemcpyAsync(hess.data_ptr<T>(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);",
+        f"    cudaMemcpyAsync(grad.data_ptr<T>(), g_plant.d_grad, (size_t)batch * ({gd}) * sizeof(T),      cudaMemcpyDeviceToDevice, stream);",
+        f"    cudaMemcpyAsync(hess.data_ptr<T>(), g_plant.d_hess, (size_t)batch * ({gd}) * ({gd}) * sizeof(T), cudaMemcpyDeviceToDevice, stream);",
         "    return {out, grad, hess};",
         "}",
         f"#endif  // {op['gate']}",

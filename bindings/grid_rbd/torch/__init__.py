@@ -1171,13 +1171,17 @@ class TorchRobotHandle(BaseDelegateMixin):
 
     def momentum_cost(self, q, qd, h_des, W, *, _convention=None):
         """Centroidal-momentum tracking cost. q (B, NQ); qd (B, NV); h_des/W (B, 6).
-        Returns (value (B,), grad_x (B, NX), GN hess_x (B, NX, NX)).
+        Returns (value (B,), grad (B, 2*NV), GN hess (B, 2*NV, 2*NV)) in tangent
+        ``[dq | dv]`` order: the full Gauss-Newton derivatives of the residual
+        ``A(q)·qd − h_des``, configuration and cross blocks included (built on
+        ``dccrba``). An exact cost Hessian is not implied.
 
         With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
-        MuJoCo-convention; value invariant, grad covector-rotated, GN hess congruence."""
-        nx = self.num_joints + self.num_vel
+        MuJoCo-convention; the value is invariant and the derivatives are pulled
+        back through the full input-state Jacobian in-kernel."""
+        nt = 2 * self.num_vel
         out, grad, hess = self._op(_convention, "momentum_cost")(q, qd, h_des, W)
-        return out[:, 0], grad, hess.reshape(-1, nx, nx)
+        return out[:, 0], grad, hess.reshape(-1, nt, nt)
 
     # ─── CUDA-Graphs capture ─────────────────────────────────────────────
 

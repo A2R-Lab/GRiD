@@ -1511,17 +1511,21 @@ class JaxRobotHandle(BaseDelegateMixin):
 
     def momentum_cost(self, q, qd, h_des, W, *, _convention=None):
         """Centroidal-momentum tracking cost. q (B, NQ); qd (B, NV); h_des/W (B, 6).
-        Returns (value (B,), grad_x (B, NX), GN hess_x (B, NX, NX)).
+        Returns (value (B,), grad (B, 2*NV), GN hess (B, 2*NV, 2*NV)) in tangent
+        ``[dq | dv]`` order: the full Gauss-Newton derivatives of the residual
+        ``A(q)·qd − h_des``, configuration and cross blocks included (built on
+        ``dccrba``). An exact cost Hessian is not implied.
 
         With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
-        MuJoCo-convention; value invariant, grad covector-rotated, GN hess congruence."""
+        MuJoCo-convention; the value is invariant and the derivatives are pulled
+        back through the full input-state Jacobian in-kernel."""
         import jax
         target = self._mt(_convention, "plant_momentum_cost", "grid_rbd_jax_plant_momentum_cost")
         cast, B = self._prep_plant("momentum_cost", q=q, qd=qd, h_des=h_des, W=W)
-        nx = self.num_joints + self.num_vel
-        out, grad, hess = self._ffi(target, self._cost_out_types(B, nx, nx * nx))(
+        nt = 2 * self.num_vel
+        out, grad, hess = self._ffi(target, self._cost_out_types(B, nt, nt * nt))(
             cast["q"], cast["qd"], cast["h_des"], cast["W"])
-        return out[:, 0], grad, hess.reshape(B, nx, nx)
+        return out[:, 0], grad, hess.reshape(B, nt, nt)
 
     # ─── lifecycle ───────────────────────────────────────────────────────────
 

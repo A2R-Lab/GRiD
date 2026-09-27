@@ -36,9 +36,8 @@
 //   com_cost_value               1 x 1             (grid_plant::com_cost)
 //   com_cost_grad                1 x NX            (q-block = J_com^T W r; qd-block zero)
 //   com_cost_hess                NX x NX           (top-left NV x NV q-block = J_com^T W J_com)
-//   momentum_cost_value          1 x 1             (grid_plant::momentum_cost)
-//   momentum_cost_grad           1 x NX            (qd-block = A^T W r; q-block zero)
-//   momentum_cost_hess           NX x NX           (bottom-right NV x NV qd-block = A^T W A)
+//   (momentum_cost: the full tangent-state GN cost is covered by
+//    test_cuda_momentum_contract.py / cuda_momentum_contract_runner.cu, not here)
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -97,8 +96,6 @@ template <typename T> __host__ __device__ T Ww_val(int r)     { return static_ca
 // Centroidal CoM-cost setup (3 axes) and momentum-cost setup (6 components).
 template <typename T> __host__ __device__ T com_pdes_val(int r) { return static_cast<T>(0.2) + static_cast<T>(0.1) * r; }
 template <typename T> __host__ __device__ T com_W_val(int r)    { return static_cast<T>(3.0) + static_cast<T>(0.5) * r; }
-template <typename T> __host__ __device__ T mom_hdes_val(int r) { return static_cast<T>(-0.3) + static_cast<T>(0.15) * r; }
-template <typename T> __host__ __device__ T mom_W_val(int r)    { return static_cast<T>(2.0) + static_cast<T>(0.25) * r; }
 
 // A single-block kernel: fill the deterministic setup, then call every primitive.
 template <typename T>
@@ -284,28 +281,26 @@ __global__ void plant_step_kernel(const T *g_q, const T *g_qd, const T *g_u, T d
 // dynamic smem byte count + the workspace allocation (mirrors the binding launch).
 // Fixed-base, EULER / SI-EULER. Output is row-major (2*NV x 3*NV x 3*NV).
 
-// ---- centroidal plant costs: com_cost / momentum_cost ----
+// ---- centroidal plant cost: com_cost ----
 // These compose grid::com_device / grid::ccrba_device, which use an `extern
-// __shared__` dynamic arena (COM/CCRBA_DYNAMIC_SHARED_MEM_BYTES). The launch
-// must size dynamic smem to max(COM, CCRBA) and raise the opt-in attribute.
+// __shared__` dynamic arena (COM_DYNAMIC_SHARED_MEM_BYTES). The launch
+// must size dynamic smem to it and raise the opt-in attribute.
 // Emitted ONLY when grid::com_device + grid::ccrba_device are present (the
 // GRID_PLANT_HAS_COM_COST / GRID_PLANT_HAS_MOMENTUM_COST macros, emitted by
 // _plant.py). For a robot/config that lacks them (e.g. a mimic robot whose ccrba
 // is gated off), the whole centroidal block (kernel + alloc + launch + print) is
 // #if-compiled out and a parseable `*_skipped` sentinel is emitted instead.
 // Validated on iiwa14:fixed / go2:floating (both non-mimic, macros present).
-#if defined(GRID_PLANT_HAS_COM_COST) && defined(GRID_PLANT_HAS_MOMENTUM_COST)
+#if defined(GRID_PLANT_HAS_COM_COST)
 template <typename T>
 __global__ void plant_centroidal_kernel(const T *g_q, const T *g_qd,
                                         const grid::robotModel<T> *d_robotModel,
-                                        T *o_com_val, T *o_com_grad, T *o_com_hess,
-                                        T *o_mom_val, T *o_mom_grad, T *o_mom_hess) {
+                                        T *o_com_val, T *o_com_grad, T *o_com_hess) {
     __shared__ T s_q[NQ], s_qd[NV];
-    // Caller-scratch centroidal arena for the com/momentum cost inners (the launch reserves
-    // max(COM, CCRBA)_DYNAMIC_SHARED_MEM_BYTES; the cost inners lay out s_A/s_com/s_extra here).
+    // Caller-scratch centroidal arena for the com cost inners (the launch reserves
+    // COM_DYNAMIC_SHARED_MEM_BYTES; the cost inner lays out s_com/s_extra here).
     extern __shared__ __align__(16) T s_cent_arena[];
     __shared__ T s_pdes[3], s_cW[3];       // CoM desired + per-axis weight
-    __shared__ T s_hdes[6], s_mW[6];       // momentum desired + per-component weight
     __shared__ T s_out[1];
     __shared__ T s_grad[NX], s_hess[NX * NX];
 
@@ -314,7 +309,6 @@ __global__ void plant_centroidal_kernel(const T *g_q, const T *g_qd,
     for (int i = tid; i < NQ; i += nth) s_q[i] = g_q[i];
     for (int i = tid; i < NV; i += nth) s_qd[i] = g_qd[i];
     for (int r = tid; r < 3; r += nth) { s_pdes[r] = com_pdes_val<T>(r); s_cW[r] = com_W_val<T>(r); }
-    for (int r = tid; r < 6; r += nth) { s_hdes[r] = mom_hdes_val<T>(r); s_mW[r] = mom_W_val<T>(r); }
     __syncthreads();
 
     // ---- CoM-tracking cost (value + grad over x=[q;qd] + GN hess) ----
@@ -328,18 +322,8 @@ __global__ void plant_centroidal_kernel(const T *g_q, const T *g_qd,
     for (int i = tid; i < NX * NX; i += nth) o_com_hess[i] = s_hess[i];
     __syncthreads();
 
-    // ---- centroidal-momentum-tracking cost (value + grad + GN hess) ----
-    grid_plant::momentum_cost<T>(s_out, s_q, s_qd, s_hdes, s_mW, s_cent_arena, d_robotModel);
-    __syncthreads(); if (tid == 0) o_mom_val[0] = s_out[0]; __syncthreads();
-    grid_plant::momentum_cost_gradient<T, false>(s_grad, s_q, s_qd, s_hdes, s_mW, s_cent_arena, d_robotModel);
-    __syncthreads();
-    grid_plant::momentum_cost_hessian<T, false>(s_hess, s_q, s_qd, s_mW, s_cent_arena, d_robotModel);
-    __syncthreads();
-    for (int i = tid; i < NX; i += nth) o_mom_grad[i] = s_grad[i];
-    for (int i = tid; i < NX * NX; i += nth) o_mom_hess[i] = s_hess[i];
-    __syncthreads();
 }
-#endif  // GRID_PLANT_HAS_COM_COST && GRID_PLANT_HAS_MOMENTUM_COST
+#endif  // GRID_PLANT_HAS_COM_COST
 
 // ---- tracking_cost PRESET check (fixed-base only; GRID_PLANT_HAS_TRACKING_COST) ----
 // Drives grid_plant::tracking_cost[_gradient/_hessian] (the GATO BSQP recipe, a chained
@@ -543,9 +527,8 @@ void run() {
     T *o_cbv = dmalloc<T>(1), *o_cbg = dmalloc<T>(NU);
     T *o_pdab = dmalloc<T>(2 * NV * 3 * NV), *o_idab = dmalloc<T>(2 * NV * 3 * NV);
     T *o_pxk = dmalloc<T>(NX), *o_ixk = dmalloc<T>(NX), *o_eepos = dmalloc<T>(3);
-#if defined(GRID_PLANT_HAS_COM_COST) && defined(GRID_PLANT_HAS_MOMENTUM_COST)
+#if defined(GRID_PLANT_HAS_COM_COST)
     T *o_comv = dmalloc<T>(1), *o_comg = dmalloc<T>(NX), *o_comh = dmalloc<T>(NX * NX);
-    T *o_momv = dmalloc<T>(1), *o_momg = dmalloc<T>(NX), *o_momh = dmalloc<T>(NX * NX);
 #endif
 #ifdef GRID_PLANT_HAS_STEP_HESSIAN
     const int D2AB_CNT = 2 * NV * (3 * NV) * (3 * NV);
@@ -569,11 +552,9 @@ void run() {
     size_t step_dyn = grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(plant_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)plant_dyn);
     cudaFuncSetAttribute(plant_step_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)step_dyn);
-#if defined(GRID_PLANT_HAS_COM_COST) && defined(GRID_PLANT_HAS_MOMENTUM_COST)
-    // com_cost composes grid::com_device, momentum_cost composes grid::ccrba_device;
-    // both use an extern __shared__ dynamic arena, so size to the max of the two.
+#if defined(GRID_PLANT_HAS_COM_COST)
+    // com_cost composes grid::com_device, which uses an extern __shared__ dynamic arena.
     size_t cent_dyn = grid::COM_DYNAMIC_SHARED_MEM_BYTES<T>();
-    if (grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>() > cent_dyn) cent_dyn = grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(plant_centroidal_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)cent_dyn);
 #endif
 
@@ -586,16 +567,16 @@ void run() {
     // (from grid.cuh) does cudaPeekAtLastError() + cudaDeviceSynchronize() + abort.
     gpuErrchkKernel();
 
-    // The centroidal cost kernel (com_cost / momentum_cost) is independent of the
+    // The centroidal cost kernel (com_cost) is independent of the
     // plant_step / integrator pass-through path, so drive it first — that way a
     // robot whose plant_step_kernel static scratch overflows the device smem cap
     // (e.g. go2:floating, where the big integrator-gradient static buffers exceed
     // the 48 KB default) still produces valid centroidal output. Compiled in only
     // when the centroidal macros are present; otherwise a `*_skipped` sentinel is
     // emitted below so the Python parser detects the absence cleanly.
-#if defined(GRID_PLANT_HAS_COM_COST) && defined(GRID_PLANT_HAS_MOMENTUM_COST)
+#if defined(GRID_PLANT_HAS_COM_COST)
     plant_centroidal_kernel<T><<<1, nthreads, cent_dyn>>>(g_q, g_qd, d_robotModel,
-        o_comv, o_comg, o_comh, o_momv, o_momg, o_momh);
+        o_comv, o_comg, o_comh);
     gpuErrchkKernel();
 #endif
 
@@ -705,13 +686,10 @@ void run() {
         dcopy_out("plant_x_kp1", o_pxk, 1, NX);
     }
     dcopy_out("ee_pos", o_eepos, 1, 3);
-#if defined(GRID_PLANT_HAS_COM_COST) && defined(GRID_PLANT_HAS_MOMENTUM_COST)
+#if defined(GRID_PLANT_HAS_COM_COST)
     dcopy_out("com_cost_value", o_comv, 1, 1);
     dcopy_out("com_cost_grad", o_comg, 1, NX);
     dcopy_out("com_cost_hess", o_comh, NX, NX);
-    dcopy_out("momentum_cost_value", o_momv, 1, 1);
-    dcopy_out("momentum_cost_grad", o_momg, 1, NX);
-    dcopy_out("momentum_cost_hess", o_momh, NX, NX);
 #else
     // Centroidal costs are not emitted for this robot/config (com/ccrba absent,
     // e.g. a mimic robot). Emit a parseable sentinel so the Python centroidal test

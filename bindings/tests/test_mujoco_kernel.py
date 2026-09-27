@@ -500,38 +500,42 @@ def test_native_mjx_position_cost_matches_oracle(go2_floating, which):
 @pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
 @pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
 def test_native_mjx_momentum_cost_matches_oracle(go2_floating):
-    """GN-COST class (qd-block): h invariant ⇒ value invariant; the qd-block grad/hess
-    reframe (covector / congruence at offset nq). Validated vs the RBDReference oracle."""
-    from RBDReference.equivalents.mujoco_convention import (
-        quadratic_tracking_cost_pin_to_mjx, FloatingRootLayout)
+    """Full tangent-state momentum GN (2026-09-26 contract): h invariant ⇒ value invariant;
+    grad/hess pull back through the FULL input-state Jacobian T of the mjx->pin
+    conversion, T = [[G⁻¹, 0], [∂v_pin/∂q_mjx, G⁻¹]] (the lower-left block carries
+    -e_a × v_pin_lin in the base-angular columns), not a block-diagonal G alone.
+    Same expectation as test/cuda_equivalents/test_cuda_momentum_contract.py."""
     h = go2_floating
     assert h._runner.has_momentum_cost_mujoco
     nq, nv = h.num_joints, h.num_vel
-    layout = FloatingRootLayout()
     rng = np.random.default_rng(35)
     for B in (1, 4):
         qpos, qvel, _ = _rand_state(h, rng, B, with_qd=True)
-        qvel = qvel[:, :nv]  # momentum_cost's qd is nv-wide (the ccrba velocity), not the nq-wide per-timestep slot
         h_des = rng.standard_normal((B, 6)).astype(np.float32)
         W = (rng.standard_normal((B, 6)) ** 2 + 0.1).astype(np.float32)
         val_m, grad_m, hess_m = h.momentum_cost(qpos, qvel, h_des, W, _convention="mujoco")
         q_pin, qd_pin, _, _, R = h._mjx_inputs(qpos, qvel)
         val_p, grad_p, hess_p = h.momentum_cost(q_pin, qd_pin, h_des, W)
+        assert grad_m.shape == (B, 2 * nv) and hess_m.shape == (B, 2 * nv, 2 * nv)
         assert np.allclose(np.asarray(val_m, np.float64), np.asarray(val_p, np.float64),
                            rtol=5e-3, atol=5e-2)
-        exp_g = np.empty_like(np.asarray(grad_m, np.float64))
-        exp_h = np.empty_like(np.asarray(hess_m, np.float64))
+        exp_g = np.empty((B, 2 * nv)); exp_h = np.empty((B, 2 * nv, 2 * nv))
         for b in range(B):
-            g, hh = quadratic_tracking_cost_pin_to_mjx(
-                np.asarray(grad_p[b], np.float64), np.asarray(hess_p[b], np.float64), R[b], nq, nv, layout)
-            exp_g[b] = g; exp_h[b] = hh
+            T = np.eye(2 * nv)
+            T[:3, :3] = R[b].T
+            T[nv:nv + 3, nv:nv + 3] = R[b].T
+            v_lin = np.asarray(qd_pin[b, :3], np.float64)
+            for axis in range(3):
+                T[nv:nv + 3, 3 + axis] = -np.cross(np.eye(3)[axis], v_lin)
+            exp_g[b] = T.T @ np.asarray(grad_p[b], np.float64)
+            exp_h[b] = T.T @ np.asarray(hess_p[b], np.float64) @ T
         assert np.allclose(np.asarray(grad_m, np.float64), exp_g, rtol=5e-3, atol=5e-2), \
             f"momentum_cost grad mjx != oracle: max|d|={np.abs(np.asarray(grad_m,np.float64)-exp_g).max():.3e}"
         assert np.allclose(np.asarray(hess_m, np.float64), exp_h, rtol=5e-3, atol=5e-2), \
             f"momentum_cost hess mjx != oracle: max|d|={np.abs(np.asarray(hess_m,np.float64)-exp_h).max():.3e}"
-    # non-triviality: the mjx qd-block grad differs from feeding raw mjx to the pin cost.
+    # non-triviality: the mjx velocity-block grad differs from feeding raw mjx to the pin cost.
     _, raw_g, _ = h.momentum_cost(qpos, qvel, h_des, W)
-    assert np.abs(np.asarray(grad_m, np.float64)[:, nq:nq + 6] - np.asarray(raw_g, np.float64)[:, nq:nq + 6]).max() > 1e-3
+    assert np.abs(np.asarray(grad_m, np.float64)[:, nv:nv + 6] - np.asarray(raw_g, np.float64)[:, nv:nv + 6]).max() > 1e-3
 
 
 @pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
@@ -675,7 +679,7 @@ def test_native_mjx_fdsva_so_matches_oracle(go2_floating):
 
 @pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
 @pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
-@pytest.mark.parametrize("it_name,it", [("euler", 0), ("si_euler", 1)])
+@pytest.mark.parametrize("it_name,it", [("euler", 0), ("semi_implicit_euler", 1)])
 def test_native_mjx_integrator_gradient_matches_oracle(go2_floating, it_name, it):
     """STATE-TRANSITION JACOBIAN class: dAB=[A|B]=d x_{k+1}/d[q;qd;u] mjx = global-add
     retract rows + G velocity reframe + input-conversion column couplings. Validated vs
@@ -733,7 +737,7 @@ def test_native_mjx_plant_step_retract(go2_floating):
 
 @pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
 @pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
-@pytest.mark.parametrize("it_name", ["euler", "si_euler"])
+@pytest.mark.parametrize("it_name", ["euler", "semi_implicit_euler"])
 def test_native_mjx_plant_step_gradient_matches_oracle(go2_floating, it_name):
     """plant_step_gradient = integrator_gradient over stacked x; mjx state-transition
     Jacobian. Validated vs the RBDReference oracle (same surface as integrator_gradient)."""
@@ -767,7 +771,7 @@ def test_native_mjx_plant_step_gradient_matches_oracle(go2_floating, it_name):
 
 @pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
 @pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
-@pytest.mark.parametrize("it_name", ["euler", "si_euler"])
+@pytest.mark.parametrize("it_name", ["euler", "semi_implicit_euler"])
 def test_native_mjx_plant_step_hessian_matches_oracle(go2_floating, it_name):
     """2nd-ORDER STATE-TRANSITION class (the last derivative surface): d2AB = d2 x_{k+1}/dz2
     mjx (composes fdsva_so + retract hessian). Validated vs the RBDReference oracle."""

@@ -1805,7 +1805,8 @@ class RobotHandle:
         Matches ``RBDReference.plant_step_hessian``. Pass-through to
         grid::integrator_hessian_device (composes fdsva_so + dt-scaled assembly).
 
-        Scope (first landing): euler / semi_implicit_euler on a FIXED base.
+        Scope: euler / semi_implicit_euler on fixed and floating bases (multi-stage
+        step Hessians are not generated; those codes return the rc=3 error).
         Floating-base and multi-stage RK are deferred (the C-ABI returns rc=3 /
         raises for any other ``integrator_type``).
         """
@@ -1848,13 +1849,16 @@ class RobotHandle:
         """Centroidal-momentum tracking cost over the 6 momentum components.
 
         q is (B, NUM_POS); qd is (B, NUM_VEL); h_des / W are (B, 6). Returns:
-          value (B,), grad_x (B, NX) = [0; A^T (W·r)], GN hess_x (B, NX, NX)
-          with the bottom-right NV×NV qd-block = A^T diag(W) A.
+          value (B,), grad (B, 2*NV) = Jᵀ (W·r), GN hess (B, 2*NV, 2*NV) = Jᵀ diag(W) J
+          in tangent [dq | dv] order with J = [(∂A/∂q)·qd | A] — configuration and
+          cross blocks included (the kernel evaluates dccrba once). An exact cost
+          Hessian is not implied.
 
         Matches ``RBDReference.momentum_cost(q, qd, h_des, W)``.
 
         With ``output_convention="mujoco"`` (floating base) the centroidal momentum h
-        (and value) is invariant; the qd-block grad/hess are reframed in-kernel."""
+        (and value) is invariant; the derivatives are pulled back through the full
+        input-state Jacobian in-kernel."""
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         h_des = np.ascontiguousarray(h_des, dtype=self._dt)

@@ -181,7 +181,8 @@ class AbiSpec:
     # (NOT grid_plant_*_mujoco like the plant_step family) — referee override.
     mjx_twin_symbol: str | None = None
     # Ordered (buffer, per-item dims) of a multi-output plant op's returns;
-    # dim tokens: "1", "3", "6", "nq", "nv", "nx" (nx = nq + nv). The buffer
+    # dim tokens: "1", "3", "6", "nq", "nv", "nx" (nx = nq + nv), "2nv" (tangent
+    # state, the full-state momentum cost). The buffer
     # names must match the C out-param names (referee-checked).
     plant_returns: tuple = ()
     # ── escape hatch ────────────────────────────────────────────────────
@@ -695,8 +696,8 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_mjx_twin=True, mjx_omits_tier=True,
         py_out_dims=('6 * num_vel_ * num_vel_',),
         out_layout=("dccrba",),
-        py_rc3_msg='dccrba not available for this robot: it is not generated for mimic robots (the per-body Jacobian fold is not yet mimic-reduced)',
-        py_twin_guard='dccrba_mujoco unavailable: floating-base non-mimic .so only',
+        py_rc3_msg='dccrba not generated for this robot .so (reduced codegen profile or missing centroidal family) — add \'dccrba\' to algorithm_list in register_robot() and rebuild',
+        py_twin_guard='dccrba_mujoco unavailable: floating-base .so only',
     ),
     "cmm_time_variation": AbiSpec(
         "cmm_time_variation",
@@ -919,9 +920,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
                 ("hess", "T*"), ("batch", "int")),
         has_mjx_twin=True,
         mjx_twin_symbol="grid_rbd_momentum_cost_mujoco",
-        plant_returns=(("out", ("1",)), ("grad", ("nx",)), ("hess", ("nx", "nx"))),
-        body_override=True,   # h_des/W pack d_in_c halves; smem proxy = CCRBA
-                              # bytes; clamp (register-heavy, ~140 regs/thread)
+        plant_returns=(("out", ("1",)), ("grad", ("2nv",)), ("hess", ("2nv", "2nv"))),
+        body_override=True,   # h_des/W pack d_in_c halves; fused dccrba kernel: DCCRBA
+                              # arena at dccrba's tier + shared workspace; clamp (register-heavy)
     ),
 }
 

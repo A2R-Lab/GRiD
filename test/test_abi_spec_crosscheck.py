@@ -564,7 +564,7 @@ def test_plant_returns_match_out_params(key):
     assert outs == want, f"{key}: out params {outs} != plant_returns {want}"
     for _b, dims in spec.plant_returns:
         for d in dims:
-            assert d in ("1", "3", "6", "nq", "nv", "nx"), (
+            assert d in ("1", "3", "6", "nq", "nv", "nx", "2nv"), (
                 f"{key}: unknown plant_returns dim token {d!r}")
 
 

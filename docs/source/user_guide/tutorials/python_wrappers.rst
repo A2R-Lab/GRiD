@@ -602,9 +602,9 @@ All take/return 2D arrays with axis 0 = batch; cost methods return
    * - ``com_cost(q, p_des, W)``
      - ``value (B,)``, ``grad (B, NX)``, Gauss-Newton ``hess (B, NX, NX)`` (CoM tracking)
    * - ``momentum_cost(q, qd, h_des, W)``
-     - ``value (B,)``, ``grad (B, NX)``, ``hess (B, NX, NX)``;
-       configuration derivatives are dropped, leaving only the velocity
-       gradient and velocity–velocity Gauss–Newton block
+     - ``value (B,)``, ``grad (B, 2*NV)``, Gauss-Newton ``hess (B, 2*NV, 2*NV)``
+       in tangent ``[dq | dv]`` order, configuration and cross blocks included
+       (built on ``dccrba``; an exact cost Hessian is not implied)
    * - ``joint_position_barrier(var, lower, upper, mu)``
      - ``value (B,)``, ``grad (B, NP)``, ``hess_diag (B, NP)``
    * - ``joint_velocity_barrier(var, lower, upper, mu)``

@@ -527,9 +527,10 @@ def gen_mjx_body(spec: AbiSpec) -> str:
         L.append(_MJX_QDD_COPY)
 
     if spec.it_dispatch or spec.mjx_it_dispatch:
-        macro = ("GRID_RBD_IT_DISPATCH_HESSIAN" if spec.mjx_it_dispatch == "HESSIAN"
-                 else "GRID_RBD_IT_DISPATCH")
-        L.append(f"    {macro}(it, {IT_LAUNCHER[spec.key]}_mujoco, batch, gravity, dt);")
+        # Every MuJoCo-convention integration path (values and gradients) is
+        # single-stage: Euler / semi-implicit Euler only (2026-09-26 contract; the
+        # generated mjx kernels static_assert the multi-stage schemes out).
+        L.append(f"    GRID_RBD_IT_DISPATCH_SS(it, {IT_LAUNCHER[spec.key]}_mujoco, batch, gravity, dt);   // MuJoCo: Euler / SI only")
     else:
         grav = "gravity, " if spec.takes_gravity else ""
         trail = "".join(", " + a for a in spec.trailing_runtime_args)

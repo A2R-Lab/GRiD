@@ -59,12 +59,11 @@ def _Qw(nx):     return np.array([1.0 + 0.5 * i for i in range(nx)], dtype=np.fl
 def _u_des(nu):  return np.array([-0.05 * i for i in range(nu)], dtype=np.float64)
 def _Rw(nu):     return np.array([2.0 + 0.1 * i for i in range(nu)], dtype=np.float64)
 def _Ww():       return np.array([10.0 + r for r in range(3)], dtype=np.float64)
-# Centroidal CoM-cost setup (3 axes) and momentum-cost setup (6 components),
-# mirroring com_pdes_val/com_W_val/mom_hdes_val/mom_W_val in the runner exactly.
+# Centroidal CoM-cost setup (3 axes), mirroring com_pdes_val/com_W_val in the runner
+# exactly. (The full tangent-state momentum cost is covered by
+# test_cuda_momentum_contract.py, which drives the fused dccrba kernel directly.)
 def _com_pdes(): return np.array([0.2 + 0.1 * r for r in range(3)], dtype=np.float64)
 def _com_W():    return np.array([3.0 + 0.5 * r for r in range(3)], dtype=np.float64)
-def _mom_hdes(): return np.array([-0.3 + 0.15 * r for r in range(6)], dtype=np.float64)
-def _mom_W():    return np.array([2.0 + 0.25 * r for r in range(6)], dtype=np.float64)
 
 
 def _comma_env(name, default):
@@ -469,14 +468,14 @@ def test_cuda_plant_step_hessian_matches_reference(tmp_path, robot_id, base_mode
     ids=lambda v: str(v),
 )
 def test_cuda_plant_centroidal_costs_match_reference(tmp_path, robot_id, base_mode):
-    """CUDA `grid_plant::com_cost` / `momentum_cost` vs the RBDReference oracle.
+    """CUDA `grid_plant::com_cost` vs the RBDReference oracle.
 
-    These centroidal plant costs compose grid::com_device / grid::ccrba_device
-    and are emitted NON-MIMIC ONLY, so we validate on iiwa14:fixed and
-    go2:floating. The runner drives the device cost kernels (value + gradient +
-    GN hessian) with a DETERMINISTIC p_des/h_des/W setup (mirrored here); the
-    oracle is the numpy `RBDReference` plant reference (`reference.com_cost` /
-    `reference.momentum_cost`), the same path the numpy plant suite uses.
+    The CoM cost composes grid::com_device; validated on iiwa14:fixed and
+    go2:floating. The runner drives the device cost kernel (value + gradient +
+    GN hessian) with a DETERMINISTIC p_des/W setup (mirrored here); the oracle
+    is the numpy `RBDReference` plant reference (`reference.com_cost`), the same
+    path the numpy plant suite uses. The momentum cost (full tangent-state GN,
+    fused dccrba) is covered by `test_cuda_momentum_contract.py`.
     """
     spec = _robot_spec(robot_id, base_mode)
     try:
@@ -505,7 +504,6 @@ def test_cuda_plant_centroidal_costs_match_reference(tmp_path, robot_id, base_mo
         )
 
     p_des = _com_pdes(); cW = _com_W()
-    h_des = _mom_hdes(); mW = _mom_W()
 
     for sample in samples:
         q, qd = np.asarray(sample.q, np.float64), np.asarray(sample.qd, np.float64)
@@ -538,16 +536,6 @@ def test_cuda_plant_centroidal_costs_match_reference(tmp_path, robot_id, base_mo
             f"{tag} com grad qd-block not exactly zero"
         close(out["com_cost_hess"].reshape(nx, nx, order="F"), com_hess,
               f"{tag} com GN hess (J_com^T W J_com; top-left q-block)")
-
-        # ---------- centroidal-momentum-tracking cost (value + grad_x + GN hess_x) ----------
-        mom_val, mom_grad, mom_hess = ref.momentum_cost(q, qd, h_des, mW)
-        close(out["momentum_cost_value"].reshape(-1)[0], mom_val, f"{tag} momentum value")
-        close(out["momentum_cost_grad"].reshape(-1), mom_grad, f"{tag} momentum grad (A^T W r; q-block zero)")
-        # q-block of the momentum-cost gradient must be EXACTLY zero (GN drop).
-        assert np.all(np.asarray(out["momentum_cost_grad"]).reshape(-1)[:nq] == 0.0), \
-            f"{tag} momentum grad q-block not exactly zero"
-        close(out["momentum_cost_hess"].reshape(nx, nx, order="F"), mom_hess,
-              f"{tag} momentum GN hess (A^T W A; bottom-right qd-block)")
 
 
 @pytest.mark.cuda_equivalence

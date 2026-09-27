@@ -1378,8 +1378,9 @@ public:
         py::array_t<CT> out({batch, 6 * num_vel_ * num_vel_});
         int rc = fn_dccrba_(ctx_id_, q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "dccrba",
-            "dccrba not available for this robot: it is not generated for mimic "
-            "robots (the per-body Jacobian fold is not yet mimic-reduced)"));
+            "dccrba not generated for this robot .so (reduced codegen profile "
+            "or missing centroidal family) — add 'dccrba' to algorithm_list in "
+            "register_robot() and rebuild"));
         return out;
     }
 
@@ -1388,7 +1389,7 @@ public:
     py::array_t<CT> dccrba_mujoco(arr_t q)
     {
         if (!fn_dccrba_mujoco_) throw std::runtime_error(
-            "dccrba_mujoco unavailable: floating-base non-mimic .so only");
+            "dccrba_mujoco unavailable: floating-base .so only");
         int batch = check_q(q, "dccrba_mujoco");
         py::array_t<CT> out({batch, 6 * num_vel_ * num_vel_});
         int rc = fn_dccrba_mujoco_(ctx_id_, q.data(), out.mutable_data(), batch);
@@ -1667,7 +1668,8 @@ public:
     { return plant_point_cost(fn_plant_com_cost_, "com_cost", q, p_des, W); }
 
     // momentum_cost: q (batch, NQ), qd (batch, NV), h_des (batch, 6), W (batch, 6)
-    // -> (value (batch,), grad_x (batch, NX), hess_x (batch, NX, NX)). Centroidal-momentum tracking.
+    // -> (value (batch,), grad (batch, 2*NV), GN hess (batch, 2*NV, 2*NV)) in tangent
+    // [dq | dv] order, configuration and cross blocks included. Centroidal-momentum tracking.
     std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
     momentum_cost(
         arr_t q,
@@ -1676,14 +1678,14 @@ public:
         arr_t W)
     {
         require_plant((void*)fn_plant_mom_cost_, "momentum_cost");
-        int nx = num_joints_ + num_vel_;
+        int nt = 2 * num_vel_;   // tangent state [dq | dv]
         int batch = check_q(q, "momentum_cost");
         check_array_2d(qd, batch, num_vel_, "qd");
         check_array_2d(h_des, batch, 6, "h_des");
         check_array_2d(W, batch, 6, "W");
         py::array_t<CT> out({batch});
-        py::array_t<CT> grad({batch, nx});
-        py::array_t<CT> hess({batch, nx, nx});
+        py::array_t<CT> grad({batch, nt});
+        py::array_t<CT> hess({batch, nt, nt});
         int rc = fn_plant_mom_cost_(ctx_id_, q.data(), qd.data(), h_des.data(), W.data(),
                                     out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "momentum_cost", nullptr));
@@ -1708,12 +1710,12 @@ public:
     momentum_cost_mujoco(arr_t q, arr_t qd, arr_t h_des, arr_t W)
     {
         require_plant((void*)fn_plant_mom_cost_mujoco_, "momentum_cost_mujoco");
-        int nx = num_joints_ + num_vel_;
+        int nt = 2 * num_vel_;   // tangent state [dq | dv]
         int batch = check_q(q, "momentum_cost_mujoco");
         check_array_2d(qd, batch, num_vel_, "qd");
         check_array_2d(h_des, batch, 6, "h_des");
         check_array_2d(W, batch, 6, "W");
-        py::array_t<CT> out({batch}); py::array_t<CT> grad({batch, nx}); py::array_t<CT> hess({batch, nx, nx});
+        py::array_t<CT> out({batch}); py::array_t<CT> grad({batch, nt}); py::array_t<CT> hess({batch, nt, nt});
         int rc = fn_plant_mom_cost_mujoco_(ctx_id_, q.data(), qd.data(), h_des.data(), W.data(),
                                            out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "momentum_cost_mujoco", nullptr));
