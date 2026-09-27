@@ -74,6 +74,14 @@ gradients are not available for spherical joints. MuJoCo-output integration
 values and gradients currently support Euler and semi-implicit Euler only.
 See :doc:`../../tutorials/python_wrappers` for backend coverage.
 
+.. note::
+
+   **Planned after this release.** Step Hessians for the multi-stage schemes,
+   multi-stage gradients on spherical joints, MuJoCo-convention multi-stage and
+   constant-acceleration integration, and the momentum cost on the largest
+   humanoids (its fused ``dccrba`` evaluation runs through the spill tiers).
+   Each of these currently raises a clear error rather than silently degrading.
+
 Weights are diagonal, supplied as vectors: state ``x_des`` and ``Q`` have
 shape ``(B, NX)``, input ``u_des`` and ``R`` have ``(B, NV)``, and tracking
 targets and weights have ``(B, 3)`` for position or ``(B, 6)`` for momentum.
