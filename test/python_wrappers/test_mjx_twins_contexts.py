@@ -36,7 +36,8 @@ def test_numpy_mujoco_twins_run_and_differ_from_pinocchio(go2):
     mjx = go2.mujoco.forward_dynamics(q, qd, u)
     assert mjx.shape == pin.shape and np.isfinite(mjx).all()
     assert not np.allclose(mjx, pin, atol=1e-5), "mjx twin returned the pinocchio-convention value"
-    assert np.isfinite(go2.mujoco.inverse_dynamics(q, qd, np.zeros_like(q))).all()
+    tau = go2.mujoco.inverse_dynamics(q, qd, np.zeros_like(qd))
+    assert tau.shape == qd.shape and np.isfinite(tau).all()
     assert np.isfinite(go2.mujoco.minv(q)).all()
 
 
