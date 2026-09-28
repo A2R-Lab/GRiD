@@ -94,8 +94,11 @@ fold into one serial job). `GRID_SPLIT_COMPILE_JOBS` sizes the pool (default 5;
 `0` = legacy serial inline warm).
 **Receipt policies (two-tier, user decision 2026-08-20).** The committed
 `gpu-proof.json` goes stale — and CI's verify-receipt job goes RED — the
-moment a push touches fingerprinted test files (`test/cuda_equivalents/`,
-`test/python_wrappers/`). That red is by design, and the fix is a refresh:
+moment a push touches the correctness inputs listed in `pyproject.toml`
+(generator, bindings, peer gitlinks, configuration, and GPU harness). Website
+wording/figures are excluded: committed documentation-only descendants retain
+the evidence. Do not edit or commit anything during an active split pass.
+That red is by design, and the fix is a refresh or a full pass:
 - **Everyday** (`test/gpu-proof-policy.yaml`, `allow_carried: true`):
   `SPLIT=1 SPLIT_REFRESH=1 test/run_gpu_proof.sh` re-runs ONLY the shards
   whose narrow fingerprints changed vs the committed receipt and CARRIES the

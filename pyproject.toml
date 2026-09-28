@@ -141,11 +141,17 @@ mode = "local"
 output = "gpu-proof.json"
 github_username = "plancherb1"     # org remotes (A2R-Lab) carry no SSH keys — sign as the keyholder
 required_marker = "gpu_proof"
-# Fingerprint the test harness only. The code-under-test (codegen + GLASS) lives in
-# submodules whose exact commits are pinned by the parent tree; the verifier's
-# commit-SHA check invalidates the receipt on any pin bump, so a submodule change
-# forces a re-run without needing to hash gitlink content (which the fingerprinter
-# cannot descend into anyway).
-fingerprint_paths = ["test/cuda_equivalents", "test/python_wrappers"]
+# Bind evidence to correctness inputs, including peer gitlinks. Commit ancestry
+# alone does NOT detect changed code. Docs/figures stay outside this scope so
+# presentation-only descendant commits can reuse a completed receipt.
+fingerprint_paths = [
+    "grid_codegen", "bindings/grid_rbd", "bindings/src",
+    "external/GLASS", "external/RBDReference", "external/URDFParser",
+    "config", "pyproject.toml", "setup.py",
+    "test/cuda_equivalents", "test/python_wrappers", "test/conftest.py",
+    "test/helpers.py", "test/run_gpu_proof.sh", "test/run_split_suite.py",
+    "test/compile_sched.py", "test/prewarm_cuda_flagship.py",
+    "test/codegen_neutrality.py", "test/header_key_replay.py",
+]
 max_age_days = 30
 require_gpu = true

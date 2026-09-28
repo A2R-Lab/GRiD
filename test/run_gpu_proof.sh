@@ -78,13 +78,13 @@ esac
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# Refuse to sign a dirty tree: the fingerprint can't see submodule content, so a
-# clean tree is what makes the receipt's commit SHA an honest description of the
-# code under test (mirrors gpu-proof-policy.yaml allow_dirty:false).
+# Refuse to sign a dirty tree: peer gitlinks pin commits, not uncommitted peer
+# content. Correctness paths are fingerprinted; commit ancestry is not a
+# substitute for those hashes (mirrors allow_dirty:false in both policies).
 if [[ -n "$(git status --porcelain)" ]]; then
     echo "ERROR: working tree is dirty. Commit or stash before signing a receipt" >&2
-    echo "       (the fingerprint cannot descend into the codegen/GLASS submodules;" >&2
-    echo "        a clean tree is what pins them via the receipt's commit SHA)." >&2
+    echo "       (peer gitlinks cannot attest uncommitted peer content;" >&2
+    echo "        commit all correctness inputs before recording)." >&2
     exit 1
 fi
 

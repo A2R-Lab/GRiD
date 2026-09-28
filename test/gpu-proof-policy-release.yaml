@@ -11,9 +11,31 @@
 #       --policy test/gpu-proof-policy-release.yaml \
 #       --expected-skips test/gpu-proof-expected-skips.txt
 #
-# allow_dirty:false rationale is identical to the everyday policy: the
-# fingerprint covers the test harness only; the clean tree + commit SHA are
-# what pin the codegen/GLASS/RBDReference submodules actually exercised.
+# Require the complete correctness scope. The verifier accepts descendants of
+# the tested commit, but code/bindings/peer-pin changes must invalidate evidence.
+# Docs/website edits are intentionally excluded and do not require new GPU runs.
 allow_dirty: false
 max_age_days: 30
 allow_carried: false
+required_fingerprint_paths:
+  - grid_codegen
+  - bindings/grid_rbd
+  - bindings/src
+  - external/GLASS
+  - external/RBDReference
+  - external/URDFParser
+  - config
+  - pyproject.toml
+  - setup.py
+  - test/cuda_equivalents
+  - test/python_wrappers
+  - test/conftest.py
+  - test/helpers.py
+  - test/run_gpu_proof.sh
+  - test/run_split_suite.py
+  - test/compile_sched.py
+  - test/prewarm_cuda_flagship.py
+  - test/codegen_neutrality.py
+  - test/header_key_replay.py
+required_fingerprint_extra_paths: []
+required_fingerprint_excluded_paths: [gpu-proof.json]

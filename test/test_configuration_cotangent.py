@@ -87,9 +87,9 @@ def test_each_quaternion_pullback_matches_ambient_difference(name, floating, sca
     np.testing.assert_allclose(result, ambient, rtol=2e-7, atol=2e-8)
     # Exercise the actual recipe dispatch too: nq>nv is not a floating flag.
     G = np.zeros((1, nv, 2*nv)); G[0, 0, :nv] = tangent
-    ct = np.zeros((1, nq)); ct[0, 0] = 1
+    ct = np.zeros((1, nv)); ct[0, 0] = 1
     got = vjp_backward(ABI_SPECS["inverse_dynamics"].vjp, ct, {"grad": lambda: G},
-                       nv=nv, nj=nq, q=q[None], configuration_layout=layout)
+                       nv=nv, nq=nq, q=q[None], configuration_layout=layout)
     np.testing.assert_allclose(got["q"][0], ambient, rtol=2e-7, atol=2e-8)
 
 

@@ -113,9 +113,9 @@ def speedup_core(rows, out, purpose):
     import matplotlib.pyplot as plt
     lookup = {(r["robot"], r["operation"], r["backend"], r["batch"]): r for r in rows}
     batches = sorted({r["batch"] for r in rows})
-    columns = [("pinocchio", "grid_cuda", "host_us", "host_us", "vs Pinocchio codegen\nGRiD host call incl. copies"),
-               ("pinocchio_plain", "grid_cuda", "host_us", "host_us", "vs Pinocchio standard API\nGRiD host call incl. copies"),
-               ("mujoco_cpu", "grid_cuda", "host_us", "host_us", "vs MuJoCo CPU\nGRiD host call incl. copies"),
+    columns = [("pinocchio", "grid_cuda", "host_us", "host_us", "vs Pinocchio codegen\nGRiD Host Call Including I/O"),
+               ("pinocchio_plain", "grid_cuda", "host_us", "host_us", "vs Pinocchio standard API\nGRiD Host Call Including I/O"),
+               ("mujoco_cpu", "grid_cuda", "host_us", "host_us", "vs MuJoCo CPU\nGRiD Host Call Including I/O"),
                ("mjx", "grid_cuda", "resident_us", "resident_us", "vs MJX resident\nGRiD compute-only call"),
                ("mujoco_warp", "grid_cuda", "resident_us", "resident_us", "vs MuJoCo Warp resident\nGRiD compute-only call"),
                ("bard", "grid_cuda", "resident_us", "resident_us", "vs BARD resident\nGRiD compute-only call"),

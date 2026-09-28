@@ -52,10 +52,12 @@ doc.
       policy only — a release receipt refuses carries).
 
    fingerprint
-      The content hash over ``test/cuda_equivalents/`` +
-      ``test/python_wrappers/`` files that decides whether a receipt shard is
-      stale. Codegen/bindings edits do NOT stale shards (their correctness is
-      re-proven by the content-keyed compile caches + the next full pass).
+      A content hash binding GPU evidence to its inputs. The global receipt
+      covers the generator, bindings, peer-library gitlinks, configuration,
+      and GPU test harness. Narrow shard fingerprints support the separately
+      guarded everyday refresh workflow. Website wording and figures are
+      outside the global scope, so committed presentation-only changes can
+      retain a completed receipt; code changes cannot silently reuse it.
 
    GLASS
       The first-party GPU linear-algebra header library
