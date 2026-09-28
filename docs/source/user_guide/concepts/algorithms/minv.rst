@@ -6,7 +6,7 @@ Minv (Direct Mass-Matrix Inverse)
 Overview
 --------
 The Direct Inverse of the Mass Matrix from
-`Carpentier <https://www.researchgate.net/publication/343098270_Analytical_Inverse_of_the_Joint_Space_Inertia_Matrix>`__
+`Carpentier <https://hal.science/hal-01790934>`__
 computes :math:`M(q)^{-1}` directly without first forming :math:`M` on
 the scalar-joint non-mimic path. Mimic and spherical models instead form
 the reduced :doc:`crba` matrix and invert it densely.
@@ -37,7 +37,7 @@ The Python reference is ``RBDReference.minv`` in
 `RBDReference/RBDReference.py
 <https://github.com/A2R-Lab/RBDReference>`__. CUDA codegen lives in
 `grid_codegen/algorithms/_minv.py
-<https://github.com/A2R-Lab/GRiDCodeGenerator>`__.
+<https://github.com/A2R-Lab/GRiD/tree/modernizing-tests/grid_codegen>`__.
 
 In GRiD
 -------

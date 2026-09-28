@@ -83,6 +83,13 @@ class SiteTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "Wrong legacy redirect"):
             check(self.output)
 
+    def test_invalid_documentation_fragment_detected(self):
+        self.assemble()
+        (self.output / "docs/index.html").write_text(
+            '<a href="guide/topic.html#absent">Bad documentation anchor</a>')
+        with self.assertRaisesRegex(SystemExit, "missing anchor"):
+            check(self.output)
+
     def test_project_home_cannot_link_to_docs_itself(self):
         self.assemble()
         (self.output / "docs/index.html").write_text('<a data-grid-home href="#">Project home</a>')

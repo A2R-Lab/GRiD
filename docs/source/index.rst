@@ -75,12 +75,10 @@ What you get per robot
 * **Conventions**: Pinocchio by default; MuJoCo/mjx-convention twins of
   values and derivatives on floating-base robots (``handle.mujoco.<op>``).
 
-Every algorithm exists on two surfaces that are tested for numerical
-agreement — the numpy oracle (validated against Pinocchio) and the generated
-CUDA — and the GPU outcomes are captured in a signed receipt that CPU-only CI
-verifies against the committed test fingerprints (the receipt-verify job goes
-red when fingerprinted tests change without a refreshed receipt; a release
-requires one fresh full receipt at the release tip under the release policy).
+The test suites compare generated CUDA with CPU references and record GPU
+results in signed receipts. See :doc:`validation <user_guide/tutorials/cuda_validation>`
+for the test workflow and :doc:`backend coverage <user_guide/tutorials/backend_coverage>`
+for operation-specific support.
 
 Performance and release measurements
 ------------------------------------------------------------
@@ -236,7 +234,7 @@ Citation
 
 The original ICRA 2022 paper describes the implementation preserved at
 `robot-acceleration/GRiD <https://github.com/robot-acceleration/GRiD>`_.
-Ongoing development and the upcoming release live at
+Ongoing development lives at
 `A2R-Lab/GRiD <https://github.com/A2R-Lab/GRiD>`_. The paper does not describe
 all current features or establish their performance. If you use GRiD in your
 research, cite the original paper and record the software commit or release:

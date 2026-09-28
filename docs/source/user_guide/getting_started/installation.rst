@@ -9,23 +9,20 @@ wrapper together (see the :doc:`../../index` quick-start for the extras).
 
 .. code-block:: shell
 
-    git clone --recursive https://github.com/A2R-Lab/GRiD.git
+    git clone --recursive --branch modernizing-tests https://github.com/A2R-Lab/GRiD.git
     cd GRiD
 
 If you already cloned without ``--recursive``, populate the submodules with
 ``git submodule update --init --recursive``.
 
-Supported installation mode (read this first)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Source installation
+~~~~~~~~~~~~~~~~~~~
 
-GRiD is distributed as an **editable install from a git checkout** and
-nothing else. There is no wheel or sdist on PyPI: the code generator, the
-wrapper template, the launch-config profiles, the vendored GLASS headers and
-the model assets are resolved **relative to the repository root** next to the
-installed module, so ``pip install grid-rbd`` from an index, or moving the
-installed package out of its checkout, is not supported. A standalone
-distribution is a registered product decision (audit W17), not an
-unfinished feature you can work around.
+Use an **editable install from a Git checkout**. The generator, wrapper
+template, launch profiles, GLASS headers and model assets are resolved
+relative to the repository root, so keep the checkout in place. The commands
+above select ``modernizing-tests``, which contains the implementation
+documented here.
 
 What each activity needs:
 
@@ -49,7 +46,7 @@ What each activity needs:
        matching your GPU arch** (the extras pin the CPU packages only; the
        CUDA wheel is your choice, e.g. ``pip install "jax[cuda12]"`` or
        ``"jax[cuda13]"``, and a ``cu1xx`` torch wheel — see the
-       `bindings README <https://github.com/A2R-Lab/GRiD/blob/main/bindings/README.md>`_).
+       `bindings README <https://github.com/A2R-Lab/GRiD/blob/modernizing-tests/bindings/README.md>`_).
        A missing framework, or a CPU-only jax, is reported at
        ``register_robot`` time, not deep inside a call.
    * - Equivalence tests / the Pinocchio oracle / docs
@@ -58,7 +55,7 @@ What each activity needs:
 
 Platform: Linux x86_64 with CUDA 12.x/13.x is what is built and tested
 (the committed GPU-proof receipt names the exact GPU and toolkit). Windows
-and macOS are not supported and are not incidental scope. The submodules
+and macOS are not supported. The submodules
 must be populated before the first **generation** (not before the editable
 install itself): ``install/base_install.sh`` runs ``pip install -e .`` and
 then ``git submodule update --init --recursive``; a bare editable install on
@@ -143,4 +140,3 @@ Add the following to ``~/.bashrc``
     (``-std=c++20`` from torch 2.14 on, detected from the header guard), so
     a torch-enabled build needs an nvcc and host compiler that accept C++20
     (CUDA 12+, ``g++ >= 10``). ``GRID_RBD_CXX_STD`` forces the standard.
-

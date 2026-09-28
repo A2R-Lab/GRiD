@@ -35,7 +35,7 @@ The tier is determined at codegen time from
 ``GRID_CUDA_TARGET_SHARED_MEM_BYTES`` and the robot's NB / NV; no runtime
 selection is required. The selector lives next to the other generated-size
 helpers in
-`GRiDCodeGenerator.py <https://github.com/A2R-Lab/GRiDCodeGenerator>`_.
+`GRiDCodeGenerator.py <https://github.com/A2R-Lab/GRiD/tree/modernizing-tests/grid_codegen>`_.
 
 Implementation
 --------------
@@ -44,7 +44,7 @@ The reference implementation is ``RBDReference.fdsva_so`` in
 <https://github.com/A2R-Lab/RBDReference>`__. The CUDA kernel codegen
 lives in
 `grid_codegen/algorithms/_fdsva_so.py
-<https://github.com/A2R-Lab/GRiDCodeGenerator>`__.
+<https://github.com/A2R-Lab/GRiD/tree/modernizing-tests/grid_codegen>`__.
 
 Example Usage
 -------------

@@ -54,7 +54,7 @@ figcaption { margin-top:1rem; }
 .card li { margin:.3rem 0; color:var(--dim); font-size:.94rem; }
 .results-grid { grid-template-columns:1fr; }
 .results-grid figure { margin:0; padding:1.2rem 1.4rem 1rem; border:1px solid var(--border); border-radius:12px; background:white; }
-.results-grid img { display:block; width:100%; height:auto; border-radius:6px; }
+#measurements img { display:block; width:100%; height:auto; border-radius:6px; }
 .results-grid h3 { margin:0 0 .5rem; }
 .results-grid p { color:var(--dim); font-size:.94rem; margin:0 0 1rem; }
 .results-grid figcaption { border-top:1px solid var(--border); padding-top:.8rem; }

@@ -1,156 +1,88 @@
 Library Overview
 =================
 
-Each submodule of GRiD is an essential component to getting the most out of GRiD as a whole. Here we will discuss how each module relates to each other. 
+GRiD combines its own robot-specific CUDA generator and Python bindings with
+three peer libraries. URDFParser, RBDReference and GLASS are Git submodules
+under ``external/``. GRiD's code generator is in ``grid_codegen/`` in this
+repository, not a separate submodule; the bindings are in ``bindings/``.
 
 .. contents::
    :local:
    :depth: 1
 
-I. RBDReference 
-----------------
+.. _id1:
 
-RBDReference is composed of ``RBDReference.py`` plus a set of topic mixins
-(``_energy.py``, ``_centroidal.py``, ``_regressor.py``, ``_plant.py``) which
-together host a class of functions responsible for the easy-to-read rigid body
-dynamics algorithms in Python.
+I. RBDReference
+--------------------
 
-It currently supports the following algorithmic functions which can be viewed from the function glossary:
+RBDReference supplies NumPy reference algorithms for dynamics, kinematics,
+derivatives, state integration and optimization costs. Its equivalence tests
+compare against Pinocchio and other numerical checks. Generated CUDA uses
+these CPU implementations as validation references, not runtime dependencies.
 
-* ``apply_external_forces`` and an ``f_ext=`` kwarg on ``inverse_dynamics`` / ``inverse_dynamics_fpass`` / ``aba`` — opt-in per-body external forces (body-local frame, subtracted from the per-body force; an empty/``None`` value is a no-op)
-* ``inverse_dynamics`` (RNEA / Recursive Newton-Euler Algorithm)
-* ``inverse_dynamics_gradient``
-* ``minv``
-* ``aba``
-* ``crba``
-* ``forward_dynamics_gradient``
+See the :doc:`RBDReference API <../../api_reference/rbd>` for a runnable
+example, method families and state conventions.
 
-In addition, the mixins provide numpy reference oracles validated against
-Pinocchio:
-
-* Energy / forces (``_energy.py``): ``generalized_gravity``, ``nonlinear_effects``, ``kinetic_energy``, ``potential_energy``, ``mechanical_energy``, ``coriolis_matrix``, ``kinetic_energy_regressor``, ``potential_energy_regressor``
-* Centroidal (``_centroidal.py``): ``com``, ``jacobian_com``, ``ccrba``, ``centroidal_momentum``, ``dccrba`` (analytic ∂A/∂q tensor — replaces the prior finite-difference oracle), ``cmm_time_variation`` (Ȧ)
-* Regressor (``_regressor.py``): ``inverse_dynamics_regressor``
-* Plant / costs / barriers (``_plant.py``): ``plant_step`` (+ ``plant_step_gradient`` / ``plant_step_hessian``), ``quadratic_state_cost``, ``quadratic_input_cost``, ``ee_pos_cost``, ``com_cost``, ``momentum_cost``, and the joint position/velocity/torque log-barriers — the reference for the generated ``grid_plant`` CUDA layer
-
-Each of these functions and more included within the file call upon getters from URDFParser which initializes a convenient ``robotObj``.
-Here is a list of relevant and helpful getters which can also be viewed from the function glossary for ``URDFParser``:
-
-* ``self.robot.get_num_bodies()``
-* ``self.robot.get_parent_id()``
-* ``self.robot.get_joint_index_q()``
-* ``self.robot.get_Xmat_Func_by_id()()`` 
-* ``self.robot.get_Imat_by_id()``
-* ``self.robot.get_subtree_by_id()``
-* ``self.robot.get_num_vel()``
-* ``self.robot.get_S_by_id()``
-
-This is just a short list, please look to the function glossary for ``URDFParser`` for more detailed usage instructions and guidelines.
+.. _id2:
 
 II. URDFParser
 --------------
 
-URDFParser reads a URDF file and builds the ``robot`` object that both
-RBDReference and the dynamics code generator consume. Joint ordering, motion
-subspaces, spatial inertias and joint-frame transforms come from this object;
-geometry workflows may also read the URDF's visual and collision elements.
+URDFParser builds the robot model consumed by the reference and generator:
+joint ordering, motion subspaces, spatial inertias, transforms and limits.
 
-.. code:: python
+* The default ``pinocchio_order`` uses depth-first ordering with Pinocchio's
+  sibling sorting.
+* ``floating_base=True`` adds a free-flyer root. Its default configuration is
+  ``[x, y, z, qx, qy, qz, qw]`` and tangent ordering is ``[linear; angular]``.
+* ``strict_inertial=True`` rejects missing or degenerate inertials on real
+  moving bodies, with exemptions for root/base and dummy links.
+* Planar and translation joints are decomposed into scalar joints; spherical
+  joints retain quaternion configurations; mimic joints reduce independent
+  coordinates while retaining their bodies. Closed kinematic loops are unsupported.
 
-   from URDFParser import URDFParser
+See the :doc:`parser tutorial <../tutorials/urdf_parser>` and
+:doc:`parser API <../../api_reference/urdf>` for joint support, dimensions,
+getters and errors.
 
-   robot = URDFParser().parse("iiwa14.urdf", floating_base=False)
+.. _id3:
 
-Parsing choices that matter for GRiD:
+III. GRiD's code generator and bindings
+------------------------------------------
 
-* **Joint ordering.** ``joint_ordering="pinocchio_order"`` (the default)
-  orders joints by a depth-first walk with Pinocchio's sibling sorting, so the
-  input vectors of the generated code line up with Pinocchio's. The other
-  options keep the raw URDF sibling order or sort siblings by name.
-* **Floating base.** ``floating_base=True`` adds a free-flyer root.
-  ``floating_base_convention="pinocchio"`` (the default) uses
-  ``q = [x, y, z, qx, qy, qz, qw]`` and ``v = [vx, vy, vz, wx, wy, wz]``; the
-  parser normalises the legacy ordering to this convention internally.
-* **Strictness.** ``strict_inertial=True`` rejects missing or degenerate
-  inertials on real moving bodies. Root/base and dummy links are exempt.
+The generator emits ``grid.cuh`` and derives wrapper entry points from a
+shared ABI specification. It specializes algorithms to a robot's topology
+and provides resource tiers for shared-memory and global-workspace use.
 
-Supported joint types: revolute, continuous, prismatic, fixed, helical (screw),
-planar, translation (alias cartesian), spherical and mimic. Chained mimic
-relations resolve to an independent driver; their bodies remain in the tree.
-An arbitrary ``<axis>`` direction is parsed into a dense 6-vector
-motion subspace; cardinal axes keep the compact form. Closed kinematic loops
-are not supported.
+``grid_rbd`` exposes the generated computations through NumPy, JAX and
+PyTorch. Robot registration selects algorithms, compiles an architecture-specific
+artifact and caches it. Runtime contexts hold model parameters, buffers and
+streams; supported model updates do not require regenerating the robot.
 
-The getters that the dynamics code relies on are listed above under
-RBDReference (``get_num_bodies``, ``get_parent_id``, ``get_S_by_id``, the
-``Xmat`` functions, ``get_Imat_by_id`` and the subtree and ancestor queries),
-and the joint-limit, origin-table and spherical helpers are part of the same
-API. The full method list is on the :doc:`URDFParser API page
-<../../api_reference/urdf>`, and the parser's own README in
-``external/URDFParser`` is the reference for its options and errors.
+* :doc:`Generate CUDA <../tutorials/codegen>` or
+  :doc:`call GRiD from Python <../tutorials/python_wrappers>`.
+* :doc:`Explore algorithms <../concepts/algorithms/index>` for dynamics,
+  kinematics, centroidal quantities and plant costs.
+* :doc:`Check backend coverage <../tutorials/backend_coverage>` and
+  :doc:`compatibility` before choosing a joint/model/operation combination.
 
-III. GRiDCodeGenerator
------------------------
+.. _id4:
 
-GRiDCodeGenerator emits the per-robot ``grid.cuh``. Beyond the core dynamics
-and kinematics algorithms (and their analytical gradients), recent additions
-include:
+IV. GLASS
+---------
 
-* **External forces (``f_ext``):** an optional ``T *d_f_ext`` argument on RNEA,
-  forward dynamics, ABA, and the inverse-/forward-dynamics gradients. It is
-  GLOBAL, body-major (``6*NUM_BODIES``), body-local-frame, and subtracted from
-  the per-body force; passing ``nullptr`` (the default) reproduces the
-  no-force path byte-for-byte.
-* **``grid_plant`` layer:** a sibling ``namespace grid_plant { ... }`` emitted
-  after the ``grid`` namespace, providing ``plant_step`` (+ gradient and
-  ``plant_step_hessian`` for Euler/semi-implicit Euler on fixed and floating
-  bases), quadratic state/input costs,
-  end-effector-position / CoM / centroidal-momentum costs (Gauss-Newton
-  Hessian), and joint position/velocity/torque log-barriers.
-* **Resource tiers:** every emitted kernel and inline-CUDA ``_device`` /
-  ``_inner`` surface takes a ``RESOURCE_TIER`` template parameter defaulting to
-  ``TIER_SHARED`` (the old ``TIER_PERF`` alias has been removed). See
-  :doc:`../concepts/resource_tier_system`.
-* **Mimic joints:** non-gradient algorithms support mimic robots, and **every**
-  gradient codegen now folds correctly to the reduced coordinates on both bases —
-  ``inverse_dynamics_gradient`` / ``forward_dynamics_gradient``,
-  ``end_effector_pose_gradient`` / ``end_effector_pose_hessian``, the second-order
-  ``idsva_so`` / ``fdsva_so``, the external-force gradients (``f_ext_gradient``),
-  and the integrator gradients. No mimic gradient raises ``NotImplementedError``
-  anymore. The centroidal kinematics family (``com`` / ``ccrba`` / ``energy``)
-  and the centroidal derivatives (``dccrba`` / ``cmm_time_variation``) are now
-  mimic-reduced too: the per-body world Jacobian and per-unit motion columns
-  carry the mimic multiplier (α), validated against the mimic-aware
-  RBDReference oracle on fixed-base mimic robots. ``dccrba`` /
-  ``cmm_time_variation`` additionally emit on big floating-base robots
-  (e.g. ``g1`` / ``h1_2``-floating) via the sweep-pool spill path, so
-  per-robot gating of the centroidal family is now essentially eliminated.
-* **Coriolis matrix + energy regressors:** ``coriolis_matrix`` ``C(q,q̇)``
-  (with ``C·q̇ + g = nonlinear_effects``) and the kinetic / potential
-  inertial-parameter energy regressors (each length ``10·NB``), all
-  CUDA-validated against the RBDReference oracle.
-* **Runtime arbitrary multi-EE:** ``end_effector_pose_runtime`` and
-  ``end_effector_pose_gradient_runtime`` take the target joint id and a
-  per-target offset as RUNTIME arguments (rather than codegen-baked), so one
-  compiled robot serves any leaf/target frame.
-* **Runtime-mutable inertial parameters (flag-gated):** an opt-in
-  ``d_inertia_params`` table plus a ``set_inertia_params`` device entry let
-  sysID / domain-randomization mutate the per-link inertial parameters with no
-  recompile; the baked default path is byte-identical.
-* **Runtime-mutable joint-frame origins (flag-gated):** the ``runtime_transform``
-  option adds a ``d_transform_params`` table + ``set_transform_params`` so each
-  joint's ``<origin>`` xyz+rpy can be mutated at runtime with no recompile (mirrors
-  ``runtime_inertia``; opt-in, baked default byte-identical, the dense-rpy pattern
-  is baked so rpy can move). The constant ``Xfixed`` is rebuilt on-device once per
-  launch from the table; the default (unmutated) path is float-identical to baked.
-* **Joint types:** an arbitrary/skew ``<axis>`` (non-cardinal) is supported via a
-  dense 6-vector motion subspace ``S`` across all algorithms (cardinal-axis robots
-  stay byte-identical, gated on ``robot_has_skew_axis()``). The ``helical`` /
-  ``planar`` / ``translation`` joint types are also landed (planar decomposes to a
-  prismatic+prismatic+continuous chain). ``spherical`` (ball) emits value +
-  gradient paths, with method-specific restrictions (in particular no
-  multi-stage integrator gradients for spherical joints). CUDA ``minv`` on
-  spherical or mimic robots uses dense ``inv(crba)``. Joint
-  ``<dynamics damping/friction>`` is landed
-  behind the ``use_joint_dynamics`` flag (default off, byte-identical). See
-  ``docs/open-tasks/design_urdf_features_audit.md`` for the full feature matrix.
+`GLASS <https://a2r-lab.org/GLASS/>`_ supplies device-side linear and spatial
+algebra, including dot products, matrix-vector products and matrix-matrix
+products. GRiD builds its robot-specific CUDA algorithms on these primitives.
+Generated headers embed GLASS by default; CUDA applications can instead use
+an external ``glass.cuh`` via ``vendor_glass=False``.
+
+.. _id5:
+
+V. Validation tooling
+---------------------
+
+`pytest-GPU-proof <https://a2r-lab.org/pytest-gpu-proof/>`_ records signed
+GPU-test results and source fingerprints for verification by CPU-only CI.
+It is a development dependency, not a GRiD submodule or a runtime dependency
+of generated kernels. See :doc:`../tutorials/cuda_validation` for the workflow.

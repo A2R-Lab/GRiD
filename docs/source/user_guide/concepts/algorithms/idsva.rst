@@ -27,13 +27,8 @@ Dispatcher
 Both variants are correct on either base type. The choice is a pure
 performance optimization, baked in at codegen time:
 
-* **Fixed-base** → ``idsva_so_body_frame``: multi-pass subtree-broadcast
-  amortizes when the chain is short and the tree is fixed (e.g. iiwa14
-  fixed: ~27 µs vs ~830 µs on GPU).
-* **Floating-base** → ``idsva_so_world_frame``: single-pass cost is flat
-  in chain depth and the formulation avoids the body-frame gravity shim,
-  winning 2–4× as DOF grows under floating base (e.g. iiwa14_floating
-  ~1.7×, g1_floating ~3.6× on GPU).
+* **Fixed-base** → ``idsva_so_body_frame``.
+* **Floating-base** → ``idsva_so_world_frame``.
 
 In Python, both variants stay publicly callable; the meta dispatcher
 ``rbd.idsva_so(q, qd, qdd)`` forwards based on ``robot.floating_base``.
@@ -50,7 +45,7 @@ The reference implementations live in
 ``idsva_so`` dispatcher. The codegen for the corresponding CUDA kernels
 lives in
 `grid_codegen/algorithms/_idsva_so.py
-<https://github.com/A2R-Lab/GRiDCodeGenerator>`__.
+<https://github.com/A2R-Lab/GRiD/tree/modernizing-tests/grid_codegen>`__.
 
 Example Usage
 -------------
@@ -68,9 +63,9 @@ Example Usage
 
 Performance Characteristics
 ---------------------------
-GPU benchmarks above are from ``test/benchmarks/run_multi_version.py``
-on sm_120 (RTX 5090). See the benchmark report for current numbers across
-the full robot manifest.
+The :doc:`release measurements <../../../release_measurements>` report the
+dispatched path on the stated robots, batches and hardware. The dispatcher
+does not establish a universal speed ranking between variants.
 
 See Also
 --------

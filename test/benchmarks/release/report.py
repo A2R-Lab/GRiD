@@ -184,7 +184,7 @@ def aggregate(rows):
                 res = [r["resident_us"] for r in group]
                 row.update(resident_us=statistics.median(res), resident_min_us=min(res), resident_max_us=max(res))
                 if any(overhead(r["host_us"], r["resident_us"]) is None for r in group):
-                    row["boundary_flag"] = "negative total-minus-resident in at least one repeat; recollect"
+                    row["boundary_flag"] = "negative total-minus-resident in at least one repeat; decomposition unavailable"
                 else:
                     row["overhead_us"] = overhead(row["host_us"], row["resident_us"])
         output.append(row)
@@ -232,8 +232,13 @@ def decompose(rows):
                 continue
             base = lookup.get((robot, op, base_backend, batch), {}).get(base_field)
             row[name] = overhead(value, base)
+            source = lookup.get((robot, op, backend, batch), {})
+            if backend == base_backend and source.get("boundary_flag"):
+                row[name] = None
+                row["flags"].append(f"{name}: inconsistent per-repeat boundaries; unavailable")
+                continue
             if value is not None and base is not None and row[name] is None:
-                row["flags"].append(f"{name}: negative difference ({value:.1f} < {base:.1f}); recollect")
+                row["flags"].append(f"{name}: negative difference ({value:.1f} < {base:.1f}); unavailable")
         row["flags"] = "; ".join(row["flags"])
         output.append(row)
     return output
@@ -310,13 +315,20 @@ def plot(rows, directory, kind, purpose):
 # is stacked from the CUDA host-call boundaries: compute (kernel), memory
 # (with-memory minus compute) and wrapper (API full call minus with-memory),
 # in three ordinal steps of the same hue. Competitors with a resident boundary
-# show resident (solid) plus host round trip (hatched, same hue, lighter).
+# show resident (solid) plus a gray hatched full-call increment when reliable.
+# Pinocchio modes are separate full-call bars, not an inferred API-overhead stack.
 # (BACKEND_HUE is defined near the top of the module.)
 SEGMENT_HUE = {"compute": "#184f95", "memory": "#3987e5", "wrapper": "#86b6ef"}
-COMPETITOR_ORDER = ("pinocchio", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax")
-PINOCCHIO_CODEGEN_OPS = {"inverse_dynamics", "inverse_dynamics_gradient", "minv", "forward_dynamics",
-                         "forward_dynamics_gradient", "crba", "nonlinear_effects", "generalized_gravity"}
+COMPETITOR_ORDER = ("pinocchio", "pinocchio_plain", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax")
 SURFACE_LABELS = {"grid_native": "C ABI", "grid_numpy": "NumPy", "grid_jax": "JAX", "grid_torch": "PyTorch"}
+HOMEPAGE_SEGMENTS = {"compute": "#00693e", "memory": "#e2e2e2", "wrapper": "#707070"}
+HOMEPAGE_BASELINES = (
+    ("pinocchio", "Pinocchio Codegen - CPU", "#d94415"),
+    ("pinocchio_plain", "Pinocchio Standard API - CPU", "#9d162e"),
+    ("mujoco_cpu", "Mujoco - CPU", "#a1d6ff"),
+    ("mujoco_warp", "Mujoco Warp - GPU", "#003c73"),
+    ("mjx", "Mujoco XLA (MJX) - GPU", "#267aba"),
+)
 
 
 def grid_stack(lookup, robot, op, batch, api):
@@ -326,6 +338,8 @@ def grid_stack(lookup, robot, op, batch, api):
     surface = lookup.get((robot, op, api, batch), {})
     compute, with_mem, full = cuda.get("resident_us"), cuda.get("host_us"), surface.get("host_us")
     memory = overhead(with_mem, compute)
+    if cuda.get("boundary_flag"):
+        memory = None
     wrapper = overhead(full, with_mem)
     flags = []
     if with_mem is not None and compute is not None and memory is None:
@@ -333,6 +347,28 @@ def grid_stack(lookup, robot, op, batch, api):
     if full is not None and with_mem is not None and wrapper is None:
         flags.append("wrapper")
     return compute, memory, wrapper, flags
+
+
+def draw_grid_stack(ax, x, width, parts, surface, *, palette=None, show_whiskers=True):
+    """Never display an incomplete decomposition as the measured full call."""
+    compute, memory, wrapper, flags = parts
+    colors = palette or {"compute": SEGMENT_HUE["compute"], "memory": ".80", "wrapper": ".92"}
+    total = surface.get("host_us")
+    if total is None:
+        return None
+    outline = dict(edgecolor=colors["compute"], linewidth=.4) if palette else {}
+    if any(v is None for v in (compute, memory, wrapper)):
+        ax.bar(x, total, width, color=colors["compute"], **outline)
+        ax.plot(x, total, "v", color="#d03b3b", markersize=5)
+    else:
+        ax.bar(x, compute, width, color=colors["compute"], **outline)
+        ax.bar(x, memory, width, bottom=compute, facecolor=colors["memory"], edgecolor=".4", hatch="////", linewidth=.4)
+        ax.bar(x, wrapper, width, bottom=compute+memory, facecolor="white" if palette else colors["wrapper"],
+               edgecolor=colors["wrapper"] if palette else ".4", hatch="....", linewidth=.4)
+    lo, hi = surface.get("host_min_us"), surface.get("host_max_us")
+    if show_whiskers and lo is not None and hi is not None:
+        ax.errorbar(x, total, yerr=[[total-lo], [hi-total]], color="black", capsize=2, linewidth=.7)
+    return total
 
 
 BANNER = {"smoke": "SMOKE TEST — NOT PERFORMANCE EVIDENCE", "collection": "DRAFT — UNREVIEWED COLLECTION"}
@@ -355,11 +391,16 @@ def _panel_grid(ops, robots, purpose, title):
     return plt, fig, axes
 
 
-def plot_stacked_comparison(rows, directory, purpose, api="grid_jax", ops=CORE, stem="comparison_stacked"):
+def plot_stacked_comparison(rows, directory, purpose, api="grid_jax", ops=CORE, stem="comparison_stacked", *, show_title=True, homepage_style=False):
     """The given operations (core by default): GRiD (one API surface) as a
     compute/memory/wrapper stack beside every competitor that has data, per
     batch size, log axis."""
     from matplotlib.patches import Patch
+    order = tuple(b for b, _, _ in HOMEPAGE_BASELINES) if homepage_style else COMPETITOR_ORDER
+    hues = dict(BACKEND_HUE)
+    if homepage_style:
+        hues.update({b: color for b, _, color in HOMEPAGE_BASELINES})
+    used_competitors = set()
     # a panel needs the GRiD stack (the CUDA host call) to exist for that operation
     ops = [op for op in ops if any(r["operation"] == op and r["backend"] == "grid_cuda" and r["host_us"] for r in rows)]
     robots = [r for r in ROBOTS if any(x["robot"] == r for x in rows)]
@@ -368,12 +409,16 @@ def plot_stacked_comparison(rows, directory, purpose, api="grid_jax", ops=CORE, 
     batches = sorted({r["batch"] for r in rows})
     lookup = {(r["robot"], r["operation"], r["backend"], r["batch"]): r for r in rows}
     plt, fig, axes = _panel_grid(ops, robots, purpose,
-        f"GRiD ({LABELS[api]}) stacked as kernel compute + memory traffic + wrapper overhead, competitors as resident + host round trip · medians of run means, log scale")
+        f"{LABELS[api]} and baselines · measured full calls and boundary differences · medians of run means")
+    if not show_title:
+        fig._suptitle.remove()
+        fig._suptitle = None
     for oi, op in enumerate(ops):
-        # Pinocchio has a bar when either API measured the operation (the standard
-        # API alone for the operations without a codegen class)
+        # Keep API modes separate, including their independently measured ranges.
         has = lambda b: any(r["operation"] == op and r["backend"] == b and r["host_us"] for r in rows)
-        competitors = [b for b in COMPETITOR_ORDER if has(b) or (b == "pinocchio" and has("pinocchio_plain"))]
+        competitors = [b for b in order if has(b)
+                       and not (homepage_style and b == "pinocchio" and op in {"idsva_so", "fdsva_so", "end_effector_pose_hessian"})]
+        used_competitors.update(competitors)
         backends = ["grid"] + competitors
         values = []
         for ri, robot in enumerate(robots):
@@ -385,20 +430,16 @@ def plot_stacked_comparison(rows, directory, purpose, api="grid_jax", ops=CORE, 
                     if backend == "grid":
                         compute, memory, wrapper, flags = grid_stack(lookup, robot, op, batch, api)
                         if compute is None:
-                            ax.text(x, .025, "N/C", rotation=90, ha="center", va="bottom", fontsize=5.5, transform=ax.get_xaxis_transform())
+                            if not homepage_style:
+                                ax.text(x, .025, "N/C", rotation=90, ha="center", va="bottom", fontsize=5.5, transform=ax.get_xaxis_transform())
                             continue
-                        bottom = 0.
-                        for name, value in (("compute", compute), ("memory", memory), ("wrapper", wrapper)):
-                            if value is None:
-                                break
-                            ax.bar(x, value, width*.85, bottom=bottom or None, color=SEGMENT_HUE[name], edgecolor="white", linewidth=.6)
-                            bottom += value
-                            values.append(bottom)
-                        if flags:
-                            ax.plot(x, bottom, "v", color="#d03b3b", markersize=5)
                         api_row = lookup.get((robot, op, api, batch), {})
-                        if wrapper is not None and api_row.get("host_min_us") and api_row.get("host_max_us"):
-                            ax.errorbar(x, api_row["host_us"], yerr=[[api_row["host_us"] - api_row["host_min_us"]], [api_row["host_max_us"] - api_row["host_us"]]], color="black", capsize=2, linewidth=.7)
+                        bottom = draw_grid_stack(ax, x, width*.85, (compute, memory, wrapper, flags), api_row,
+                                                 palette=HOMEPAGE_SEGMENTS if homepage_style else None,
+                                                 show_whiskers=not homepage_style)
+                        if bottom is None:
+                            continue
+                        values += [bottom, api_row.get("host_max_us", bottom), compute]
                         marks = "".join(m for m, hit in (("*", any(lookup.get((robot, op, b, batch), {}).get("dtype") == "float64" for b in ("grid_cuda", api))),
                                                           ("†", any(lookup.get((robot, op, b, batch), {}).get("status") == "accuracy_warning" for b in ("grid_cuda", api)))) if hit)
                         if marks:
@@ -406,38 +447,21 @@ def plot_stacked_comparison(rows, directory, purpose, api="grid_jax", ops=CORE, 
                         continue
                     row = lookup.get((robot, op, backend, batch), {})
                     total, resident = row.get("host_us"), row.get("resident_us")
-                    standard_only = False
-                    if backend == "pinocchio":
-                        # codegen full call as the base, the standard API's extra
-                        # time as the cap (same robot, inputs and thread policy).
-                        # Where no codegen path exists (second-order, kinematics,
-                        # centroidal) both modes run the same standard analytical
-                        # code: the whole bar is the standard API and is hatched.
-                        plain = lookup.get((robot, op, "pinocchio_plain", batch), {}).get("host_us")
-                        codegen_op = op in PINOCCHIO_CODEGEN_OPS
-                        if not codegen_op:
-                            total, resident, standard_only = (plain if plain is not None else total), None, True
-                        elif total is None and plain is not None:
-                            total, resident, standard_only = plain, None, True
-                        elif total is not None and plain is not None:
-                            resident, total = total, plain
                     if total is None:
-                        ax.text(x, .025, "N/C" if not row else row.get("status", "N/A").replace("_", " "),
-                                rotation=90, ha="center", va="bottom", fontsize=5.5, transform=ax.get_xaxis_transform())
+                        if not homepage_style:
+                            ax.text(x, .025, "N/C" if not row else row.get("status", "N/A").replace("_", " "),
+                                    rotation=90, ha="center", va="bottom", fontsize=5.5, transform=ax.get_xaxis_transform())
                         continue
-                    cap = overhead(total, resident) if resident is not None else None
+                    cap = overhead(total, resident) if resident is not None and not row.get("boundary_flag") else None
                     if cap is not None:
-                        ax.bar(x, resident, width*.85, color=BACKEND_HUE[backend], edgecolor="white", linewidth=.6)
-                        ax.bar(x, cap, width*.85, bottom=resident, facecolor=BACKEND_HUE[backend], alpha=.45, hatch="////", edgecolor="white", linewidth=.6)
-                    elif standard_only:
-                        ax.bar(x, total, width*.85, facecolor=BACKEND_HUE[backend], alpha=.45, hatch="////", edgecolor="white", linewidth=.6)
+                        ax.bar(x, resident, width*.85, color=hues[backend],
+                               edgecolor=hues[backend] if homepage_style else "white", linewidth=.4 if homepage_style else .6)
+                        ax.bar(x, cap, width*.85, bottom=resident, facecolor=HOMEPAGE_SEGMENTS["memory"] if homepage_style else ".80", hatch="////", edgecolor=".4", linewidth=.4)
                     else:
-                        ax.bar(x, total, width*.85, color=BACKEND_HUE[backend], edgecolor="white", linewidth=.6)
+                        ax.bar(x, total, width*.85, color=hues[backend],
+                               edgecolor=hues[backend] if homepage_style else "white", linewidth=.4 if homepage_style else .6)
                     lo, hi = row.get("host_min_us"), row.get("host_max_us")
-                    if backend == "pinocchio" and (cap is not None or standard_only) and lookup.get((robot, op, "pinocchio_plain", batch), {}).get("host_us") is not None:
-                        plain_row = lookup.get((robot, op, "pinocchio_plain", batch), {})
-                        lo, hi = plain_row.get("host_min_us"), plain_row.get("host_max_us")
-                    if lo and hi:
+                    if lo and hi and not homepage_style:
                         ax.errorbar(x, total, yerr=[[max(total - lo, 0.)], [max(hi - total, 0.)]], color="black", capsize=2, linewidth=.7)
                     if resident is not None and cap is None:
                         ax.plot(x, total, "v", color="#d03b3b", markersize=5)
@@ -445,7 +469,7 @@ def plot_stacked_comparison(rows, directory, purpose, api="grid_jax", ops=CORE, 
                         ax.annotate("*", (x, total), xytext=(0, 3), textcoords="offset points", ha="center")
                     if row.get("status") == "accuracy_warning":
                         ax.annotate("†", (x, total), xytext=(0, 3), textcoords="offset points", ha="center")
-                    values.append(total)
+                    values += [total, hi]
             ax.set(title=f"{robot} · {OP_LABELS[op]}", xticks=range(len(batches)), xticklabels=batches, xlabel="Batch size", ylabel="µs / complete batch")
             ax.set_xlim(-.5, len(batches) - .5)
             ax.grid(axis="y", alpha=.15)
@@ -456,18 +480,42 @@ def plot_stacked_comparison(rows, directory, purpose, api="grid_jax", ops=CORE, 
             for ri in range(len(robots)):
                 axes[oi, ri].set_yscale("log")
                 axes[oi, ri].set_ylim(min(finite)*.5, max(finite)*1.6)
-    handles = [Patch(color=SEGMENT_HUE["compute"], label="GRiD kernel compute (CUDA host call, compute-only)"),
-               Patch(color=SEGMENT_HUE["memory"], label="GRiD memory traffic (with-memory host call − compute)"),
-               Patch(color=SEGMENT_HUE["wrapper"], label=f"GRiD wrapper overhead ({LABELS[api]} full call − with-memory)")]
-    handles += [Patch(color=BACKEND_HUE[b], label=f"{LABELS[b]} (resident or full call)" if b != "pinocchio" else "Pinocchio CPU codegen full call")
+    handles = [Patch(color=SEGMENT_HUE["compute"], label="GRiD CUDA compute-only call (includes launch + sync)"),
+               Patch(facecolor=".80", edgecolor=".4", hatch="////", label="Full-call − resident wall time (GRiD CUDA: transfer increment)"),
+               Patch(facecolor=".92", edgecolor=".4", hatch="....", label=f"GRiD {SURFACE_LABELS[api]} full call − CUDA full call")]
+    handles += [Patch(color=BACKEND_HUE[b], label=LABELS[b])
                 for b in COMPETITOR_ORDER if any(r["backend"] == b and r["host_us"] for r in rows)]
-    handles.append(Patch(facecolor=".7", alpha=.45, hatch="////", edgecolor="white",
-                         label="Competitor host round trip (full call − resident); for Pinocchio: the standard API's time over codegen, or the whole bar where no codegen path exists"))
-    fig.legend(handles=handles, loc="lower center", ncol=2, fontsize=8, bbox_to_anchor=(.5, .01))
+    if homepage_style:
+        columns = [
+            [Patch(color=HOMEPAGE_SEGMENTS["compute"], label="GRiD CUDA Device - GPU")],
+            [Patch(color=color, label=label) for b, label, color in HOMEPAGE_BASELINES
+             if b in used_competitors and b.startswith("pinocchio")],
+            [Patch(color=color, label=label) for b, label, color in HOMEPAGE_BASELINES
+             if b in used_competitors and not b.startswith("pinocchio")],
+            [Patch(facecolor=HOMEPAGE_SEGMENTS["memory"], edgecolor=".4", hatch="////", label="GPU-CPU I/O Overhead"),
+             Patch(facecolor="white", edgecolor=HOMEPAGE_SEGMENTS["wrapper"], hatch="....", label="GRiD Jax Wrapper Overhead")],
+        ]
+        # Matplotlib fills columns first; padding keeps families top-aligned.
+        height = max(map(len, columns))
+        handles = [handle for column in columns for handle in
+                   column + [Patch(facecolor="none", edgecolor="none", label=" ")
+                             for _ in range(height - len(column))]]
+    fig.legend(handles=handles, loc="lower center", ncol=4 if homepage_style else 2,
+               fontsize=9 if homepage_style else 8, bbox_to_anchor=(.5, .055 if homepage_style else .01))
     tall = len(ops) > 3
-    fig.text(.5, .045 if tall else .13, "Log axis: stacked segment heights are not proportional; read the composition figure or the decomposition table for shares. "
-             "Whiskers: range of the three run means of the full call. * fp64 arithmetic exception. † accuracy warning. Red triangle: a negative difference, segment omitted. N/C: not collected.", ha="center", fontsize=7.5)
-    fig.tight_layout(rect=(0, .06 if tall else .19, 1, .97 if tall else .93))
+    if homepage_style:
+        from matplotlib.offsetbox import AnchoredOffsetbox, HPacker, TextArea
+        note = HPacker(children=[TextArea("* fp64 required by the evaluated library path/build.   ", textprops={"fontsize": 8}),
+                                 TextArea("▼", textprops={"color": "#d03b3b", "fontsize": 9}),
+                                 TextArea("I/O overhead not resolved reliably from wrapper effects and timing jitter.",
+                                          textprops={"fontsize": 8})], align="center", pad=0, sep=4)
+        fig.add_artist(AnchoredOffsetbox(loc="lower center", child=note, frameon=False,
+                                        bbox_to_anchor=(.5, .025), bbox_transform=fig.transFigure, borderpad=0))
+    else:
+        fig.text(.5, .045 if tall else .13, "Log axis: stacked segment heights are not proportional; read the composition figure or the decomposition table for shares. "
+             "Whiskers: range of three run means. * fp64. † accuracy warning. Red triangle: decomposition unavailable; full-call total shown.\n"
+             "Both Pinocchio modes use its standard analytical Hessian path (fp64); no codegen Hessian is implied. N/C: not collected.", ha="center", fontsize=7.5)
+    fig.tight_layout(rect=(0, .06 if tall else .19, 1, (.97 if tall else .93) if show_title else 1))
     fig.savefig(directory / f"{stem}.svg")
     fig.savefig(directory / f"{stem}.png", dpi=140)
     plt.close(fig)
@@ -486,7 +534,7 @@ def plot_grid_composition(rows, directory, purpose):
     batches = sorted({r["batch"] for r in rows})
     lookup = {(r["robot"], r["operation"], r["backend"], r["batch"]): r for r in rows}
     plt, fig, axes = _panel_grid(ops, robots, purpose,
-        "GRiD surfaces: kernel compute + memory traffic + wrapper overhead per full call · medians of run means, linear")
+        "GRiD surfaces · compute-only CUDA call + transfer increment + API increment · full-call run ranges")
     width = .8/len(surfaces)
     for oi, op in enumerate(ops):
         for ri, robot in enumerate(robots):
@@ -498,15 +546,11 @@ def plot_grid_composition(rows, directory, purpose):
                     if compute is None:
                         ax.text(x, .025, "N/C", rotation=90, ha="center", va="bottom", fontsize=5.5, transform=ax.get_xaxis_transform())
                         continue
-                    bottom = 0.
-                    for name, value in (("compute", compute), ("memory", memory), ("wrapper", wrapper)):
-                        if value is None:
-                            break
-                        ax.bar(x, value, width*.85, bottom=bottom, color=SEGMENT_HUE[name], edgecolor="white", linewidth=.6)
-                        bottom += value
+                    bottom = draw_grid_stack(ax, x, width*.85, (compute, memory, wrapper, flags),
+                                             lookup.get((robot, op, surface, batch), {}))
+                    if bottom is None:
+                        continue
                     ax.text(x, bottom, SURFACE_LABELS[surface], rotation=90, ha="center", va="bottom", fontsize=5.5, color="#52514e")
-                    if flags:
-                        ax.plot(x, bottom, "v", color="#d03b3b", markersize=5)
             ax.set(title=f"{robot} · {OP_LABELS[op]}", xticks=range(len(batches)), xticklabels=batches, xlabel="Batch size", ylabel="µs / complete batch")
             ax.set_xlim(-.5, len(batches) - .5)
             ax.set_ylim(0, None)
@@ -514,11 +558,11 @@ def plot_grid_composition(rows, directory, purpose):
             ax.grid(axis="y", alpha=.15)
             for side in ("top", "right"):
                 ax.spines[side].set_visible(False)
-    handles = [Patch(color=SEGMENT_HUE["compute"], label="Kernel compute (CUDA host call, compute-only)"),
-               Patch(color=SEGMENT_HUE["memory"], label="Memory traffic (with-memory host call − compute)"),
-               Patch(color=SEGMENT_HUE["wrapper"], label="Wrapper overhead (surface full call − with-memory)")]
+    handles = [Patch(color=SEGMENT_HUE["compute"], label="CUDA compute-only call (includes launch + sync)"),
+               Patch(facecolor=".80", edgecolor=".4", hatch="////", label="CUDA full call − compute-only"),
+               Patch(facecolor=".92", edgecolor=".4", hatch="....", label="API full call − CUDA full call")]
     fig.legend(handles=handles, loc="lower center", ncol=3, fontsize=8, bbox_to_anchor=(.5, .02))
-    fig.text(.5, .095, "Bars per batch: " + ", ".join(SURFACE_LABELS[s] for s in surfaces) + ". Red triangle: a negative difference, segment omitted.", ha="center", fontsize=8)
+    fig.text(.5, .095, "Bars per batch: " + ", ".join(SURFACE_LABELS[s] for s in surfaces) + ". Red triangle: decomposition unavailable; full-call total shown.", ha="center", fontsize=8)
     fig.tight_layout(rect=(0, .14, 1, .93))
     fig.savefig(directory / "grid_composition.svg")
     fig.savefig(directory / "grid_composition.png", dpi=140)
@@ -537,8 +581,11 @@ SHORT_OP = {"inverse_dynamics": "RNEA", "inverse_dynamics_gradient": "∇RNEA", 
             "forward_dynamics": "FD", "forward_dynamics_gradient": "∇FD", "fdsva_so": "∇²FD",
             "end_effector_pose": "EE pose", "end_effector_pose_gradient": "∇EE", "end_effector_pose_hessian": "∇²EE",
             "crba": "M", "nonlinear_effects": "C·q̇+g", "generalized_gravity": "g", "ccrba": "A_G", "coriolis_matrix": "C"}
-# diverging blue <-> gray <-> red (reference palette poles), centred on 1x
-SPEEDUP_CMAP = LinearSegmentedColormap.from_list("grid_speedup", ["#d03b3b", "#ec835a", "#f0efec", "#86b6ef", "#2a78d6", "#0d366b"])
+# Explicit symmetric stops: every ratio below 1 is red, 1 is exactly white,
+# and every ratio above 1 is blue. An odd LUT size includes the exact midpoint.
+SPEEDUP_CMAP = LinearSegmentedColormap.from_list("grid_speedup", [
+    (0., "#b52626"), (.25, "#efaaa0"), (.5, "#ffffff"),
+    (.75, "#85b7dc"), (1., "#12538d")], N=257)
 
 
 UNSTABLE_SPREAD = 1.5   # largest / smallest run mean across the repeats
@@ -564,7 +611,7 @@ def cell_marks(grid_row, grid_field, comp_row, comp_field):
 def _ratio_heatmap(ax, matrix, row_labels, col_labels, title, vmax=100., marks=None):
     import numpy as np
     m = np.array(matrix, float)
-    ax.imshow(np.log10(np.where(np.isfinite(m), m, np.nan)), cmap=SPEEDUP_CMAP,
+    im = ax.imshow(np.log10(np.where(np.isfinite(m), m, np.nan)), cmap=SPEEDUP_CMAP,
               norm=TwoSlopeNorm(vmin=-math.log10(vmax), vcenter=0., vmax=math.log10(vmax)), aspect="auto")
     ax.set_xticks(range(len(col_labels))); ax.set_xticklabels(col_labels, fontsize=8)
     ax.set_yticks(range(len(row_labels))); ax.set_yticklabels(row_labels, fontsize=8)
@@ -572,14 +619,18 @@ def _ratio_heatmap(ax, matrix, row_labels, col_labels, title, vmax=100., marks=N
         for j in range(m.shape[1]):
             v = m[i, j]
             if np.isfinite(v):
+                rgb = im.cmap(im.norm(math.log10(v)))[:3]
+                linear = [c/12.92 if c <= .04045 else ((c+.055)/1.055)**2.4 for c in rgb]
+                luminance = sum(c*w for c, w in zip(linear, (.2126, .7152, .0722)))
                 ax.text(j, i, (f"{v:.0f}×" if v >= 10 else f"{v:.1f}×") + (marks[i][j] if marks else ""), ha="center", va="center", fontsize=7,
-                        color="white" if abs(math.log10(v)) > 0.9 else "#0b0b0b")
+                        color="white" if luminance < .179 else "#0b0b0b")
             else:
                 ax.text(j, i, "–", ha="center", va="center", fontsize=7, color="#9a9994")
     ax.set_title(title, fontsize=9, wrap=True)
     for side in ("top", "right", "left", "bottom"):
         ax.spines[side].set_visible(False)
     ax.tick_params(length=0)
+    return im
 
 
 def _ratio_rows(rows, grid_backend):

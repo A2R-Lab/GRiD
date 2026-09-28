@@ -1,7 +1,7 @@
 API Reference
 =============
 
-The API reference is organized around GRiD's three Python-facing packages:
+GRiD exposes the following Python interfaces:
 
 * :doc:`grid_rbd <grid_rbd>` is the Python package users actually call:
   ``register_robot(...)`` → cached per-robot ``.so`` → numpy / JAX / torch
@@ -10,7 +10,7 @@ The API reference is organized around GRiD's three Python-facing packages:
   kinematics algorithms used for validation.
 * :doc:`URDFParser <urdf>` parses robot descriptions into the internal model
   consumed by the reference algorithms and code generator.
-* :doc:`GRiDCodeGenerator <gridcodegen>` emits CUDA C++ headers, host wrappers,
+* :doc:`GRiD's code generator <gridcodegen>` emits CUDA C++ headers, host wrappers,
   shared-memory layouts, and generated helper APIs.
 
 Start with :doc:`grid_rbd` to call GRiD from Python, :doc:`gridcodegen` when you want to generate CUDA, :doc:`rbd` when

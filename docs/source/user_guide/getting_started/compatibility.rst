@@ -1,12 +1,6 @@
 Compatibility and known limitations
 ===================================
 
-What this release supports, what changed for existing users, and what it does
-not do. The receipt in ``gpu-proof.json`` records GPU evidence for its
-specific source revision and test scope; CPU-only CI verifies that receipt.
-A fresh receipt matching the final release revision is a release gate,
-not a consequence of this page building successfully.
-
 Platforms and toolchain
 -----------------------
 
@@ -27,10 +21,10 @@ Platforms and toolchain
 * **Backends:** the ``[jax]`` / ``[torch]`` extras pin the CPU packages; install
   the CUDA wheel yourself (``pip install "jax[cuda12]"`` or ``"jax[cuda13]"``, a
   ``cu1xx`` torch). A CPU-only jax is refused at handle construction with that
-  hint. Editable-checkout installation only; no wheels are published.
+  hint. Use the :doc:`source installation <installation>` instructions.
 
-Runtime contexts (new in this release)
---------------------------------------
+Runtime contexts
+----------------
 
 * Every native call resolves a **runtime context** by id; ``handle.context()``
   gives an isolated one (own arena, tables, streams, launch overrides). A handle
@@ -55,9 +49,8 @@ Captured CUDA graphs (torch)
   epoch: a replay after a mutation is refused (recapture) and a replay after the
   context was closed is refused (never a launch into freed memory). Replays of
   one graph are serialized; ``static_out`` is overwritten by the next replay.
-* **Limitation:** capturing a backward is unsupported; the per-call lease and
-  graph-reservation machinery that would let graphs and eager calls share a
-  context safely is a later increment.
+* Capturing a backward is unsupported. Do not mix graph replay and concurrent
+  eager calls on the same context.
 
 Operands
 --------
@@ -69,8 +62,10 @@ Operands
   tensors; JAX checks in Python and again in every FFI handler.
 * numpy accepts a per-sample 1D input (batch of one); JAX returns an empty
   result for an empty batch (XLA elides the call); the JAX methods materialize a
-  supported ``f_ext`` broadcast before the call. Floating-base inputs are
-  ``num_joints``-wide (an ``nv``-wide velocity is refused by name).
+  supported ``f_ext`` broadcast before the call. Configuration inputs have
+  width ``nq``; velocities, accelerations and generalized forces have width
+  ``nv``. Floating and spherical quaternions make these widths different.
+  See :doc:`../concepts/input_output_abi` for layouts.
 
 Native interface stability
 --------------------------

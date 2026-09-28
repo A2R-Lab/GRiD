@@ -38,9 +38,8 @@ Fixed-base CUDA coverage includes the core dynamics and kinematics paths:
 * Inverse- and forward-dynamics gradients.
 * End-effector pose, gradient, and Hessian.
 * Fixed-base forced-fallback coverage for oversized gradient kernels.
-* IDSVA-SO (body-frame and world-frame variants) and FDSVA-SO. Body-frame
-  is selected by the dispatcher for fixed-base because it wins by a wide
-  margin (multi-pass amortizes when the tree is fixed).
+* IDSVA-SO (body-frame and world-frame variants) and FDSVA-SO. The dispatcher
+  selects body-frame IDSVA-SO for fixed-base models.
 * Optional per-body external forces (``d_f_ext``) on RNEA, forward
   dynamics, ABA, and the inverse-/forward-dynamics gradients (opt-in;
   ``nullptr`` reproduces the no-force path).
@@ -77,10 +76,6 @@ Floating-base CUDA coverage includes:
 * End-effector pose.
 * Opt-in end-effector pose gradient and Hessian checks.
 * IDSVA-SO (world-frame variant, dispatcher-selected) and FDSVA-SO.
-  World-frame wins by 2–4× on floating-base because the single-pass
-  formulation avoids the body-frame gravity shim and the floating chain
-  is deep enough that the body-frame subtree-broadcast no longer
-  amortizes.
 * The centroidal family ``com`` / ``ccrba`` / ``energy`` and the centroidal
   derivatives ``dccrba`` / ``cmm_time_variation``. The two derivatives also
   emit on big floating-base robots (e.g. ``g1`` / ``h1_2``-floating) via the
@@ -156,13 +151,13 @@ Algorithm catalog
 
 - Inverse Dynamics via the Recursive Newton Euler Algorithm (RNEA) from `Featherstone <https://link.springer.com/book/10.1007/978-1-4899-7560-7>`__
 - Composite Rigid Body Algorithm (CRBA) for the joint-space mass matrix and the Articulated Body Algorithm (ABA) for forward dynamics, both from `Featherstone <https://link.springer.com/book/10.1007/978-1-4899-7560-7>`__
-- The Direct Inverse of Mass Matrix from `Carpentier <https://www.researchgate.net/publication/343098270_Analytical_Inverse_of_the_Joint_Space_Inertia_Matrix>`__
-- Forward Dynamics by combining the above algorithms as qdd = -M^{-1}(u-RNEA(q,qd,0))
+- The Direct Inverse of Mass Matrix from `Carpentier <https://hal.science/hal-01790934>`__
+- Forward dynamics: ``qdd = Minv @ (u - RNEA(q, qd, 0))``
 - Analytical Gradients of Inverse Dynamics from `Carpentier <https://hal.archives-ouvertes.fr/hal-01790971>`__
 - Analytical Gradient of Forward Dynamics from `Carpentier <https://hal.archives-ouvertes.fr/hal-01790971>`__
 - End-effector pose, pose gradient (Jacobian), and pose Hessian
 - General-frame geometric Jacobian for an arbitrary target frame in any of the three Pinocchio reference frames (``LOCAL``, ``WORLD``, ``LOCAL_WORLD_ALIGNED``). The numpy reference additionally provides the Jacobian time-variation J̇ and the operational-space (OSC) inertia Λ = (J·M⁻¹·Jᵀ)⁻¹ — all validated against Pinocchio's ``getFrameJacobian``/``getJointJacobian``, ``computeJointJacobiansTimeVariation``, and ``(J·M⁻¹·Jᵀ)⁻¹``. CUDA codegen emits all three as opt-in keys — J (``frame_jacobian``), J̇ (``frame_jacobian_dot``), and Λ (``osc_inertia``) — each validated on-device against the numpy reference across the three frames (Λ is self-contained: it composes M⁻¹ on-device). All three additionally have the full launchable surface (batched ``*_kernel`` + 3-mode host writing the ``gridData`` ``d_frame_jacobian`` / ``d_frame_jacobian_dot`` / ``d_osc_inertia`` buffers), so they are benchmarkable + bindable; the launchable surface bakes the leaf-EE target + ``LOCAL_WORLD_ALIGNED`` frame, while the ``*_device`` functions stay the arbitrary-target/-frame entry points
-- Second-Order Inverse Dynamics (IDSVA-SO) from `Singh, Russell, & Wensing <https://arxiv.org/abs/2302.06001>`__ — both body-frame and world-frame variants. A codegen-time dispatcher picks body-frame for fixed-base (multi-pass amortizes, ~30× faster) and world-frame for floating-base (single-pass + no gravity shim, 2–4× faster)
+- Second-Order Inverse Dynamics (IDSVA-SO) from `Singh, Russell, & Wensing <https://arxiv.org/abs/2302.06001>`__ — the dispatcher selects body-frame for fixed-base and world-frame for floating-base models. See :doc:`../../release_measurements` for measured performance.
 - Second-Order Forward Dynamics (FDSVA-SO) from `Singh, Russell, & Wensing <https://arxiv.org/abs/2302.06001>`__ on both fixed and floating bases
 - A **time-integrator** family: the discrete step ``x_{k+1}`` plus its gradient ``∂x_{k+1}/∂(x,u)`` and a fused value-and-gradient variant
 - Optional per-body **external forces** (``f_ext``), threaded through RNEA, forward dynamics, ABA, and the inverse-/forward-dynamics gradients. Opt-in (a ``nullptr``/empty default reproduces the no-force path exactly), supplied in the body-local frame (``6*NUM_BODIES``, body-major) and subtracted from the per-body force.

@@ -79,7 +79,7 @@ other algorithms' ``_inner`` (the placement-free math) directly to reuse one
 expensive ``XImats`` load.
 
 For example, second-order forward dynamics
-(`_fdsva_so.py <https://github.com/A2R-Lab/GRiD/blob/main/grid_codegen/algorithms/_fdsva_so.py>`_)
+(`_fdsva_so.py <https://github.com/A2R-Lab/GRiD/blob/modernizing-tests/grid_codegen/algorithms/_fdsva_so.py>`_)
 needs both forward dynamics and direct inverse-mass-matrix outputs internally.
 ``fdsva_so_device`` loads XImats once at the top, then calls the placement-free
 ``_inner`` variants:

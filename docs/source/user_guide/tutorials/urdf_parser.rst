@@ -14,8 +14,6 @@ Parse and look around
    from URDFParser import URDFParser
 
    robot = URDFParser().parse("config/robot_assets/iiwa14.urdf", floating_base=False)
-   if robot is None:
-       raise ValueError("URDF parsing failed; inspect the file and parser warnings")
 
    robot.get_num_pos(), robot.get_num_vel(), robot.get_num_bodies()
    [j.get_name() for j in robot.get_joints_ordered_by_id()]   # the input-vector order
@@ -24,7 +22,8 @@ Parse and look around
    robot.get_Imat_by_id(3)                                     # spatial inertia of body 3
    robot.get_Xmat_Func_by_id(3)(0.7)                           # joint transform at q3 = 0.7
 
-For this scalar-joint, non-mimic robot, joint order is coordinate order and
+Parse failures raise ``URDFParseError`` with the underlying cause instead of
+returning ``None``. For this scalar-joint, non-mimic robot, joint order is coordinate order and
 matches Pinocchio's by default (``joint_ordering="pinocchio_order"``).
 For general models use ``get_joint_index_q(jid)`` and
 ``get_joint_index_v(jid)``: spherical joints occupy multiple coordinates,

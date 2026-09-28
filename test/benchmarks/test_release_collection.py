@@ -355,6 +355,87 @@ def test_negative_delta_is_flagged_not_clipped():
     assert out["overhead_us"] is None and out["boundary_flag"]
 
 
+def test_positive_aggregate_delta_does_not_erase_bad_repeat():
+    from test.benchmarks.release.report import decompose, grid_stack
+    rows = [dict(robot="iiwa14", operation="inverse_dynamics", batch=16,
+                 backend="grid_cuda", host_us=12., resident_us=4.,
+                 boundary_flag="negative total-minus-resident in one repeat"),
+            dict(robot="iiwa14", operation="inverse_dynamics", batch=16,
+                 backend="grid_jax", host_us=20., resident_us=10., boundary_flag="")]
+    d = decompose(rows)[0]
+    assert d["memory_traffic_us"] is None
+    assert "inconsistent per-repeat boundaries" in d["flags"]
+    lookup = {(r["robot"], r["operation"], r["backend"], r["batch"]): r for r in rows}
+    assert grid_stack(lookup, "iiwa14", "inverse_dynamics", 16, "grid_jax") == (4., None, 8., ["memory"])
+
+
+def test_incomplete_stack_draws_actual_total_not_partial_sum():
+    import matplotlib.pyplot as plt
+    from test.benchmarks.release.report import draw_grid_stack
+    fig, ax = plt.subplots()
+    try:
+        total = draw_grid_stack(ax, 0., .5, (4., 8., None, ["wrapper"]),
+                                dict(host_us=10., host_min_us=9., host_max_us=11.))
+        assert total == 10.
+        assert [p.get_height() for p in ax.patches] == [10.]
+        assert ax.lines[0].get_ydata()[0] == 10.
+    finally:
+        plt.close(fig)
+
+
+def test_speedup_palette_white_at_parity_red_below_blue_above():
+    import math
+    from matplotlib.colors import TwoSlopeNorm
+    from test.benchmarks.release.report import SPEEDUP_CMAP
+    norm = TwoSlopeNorm(vmin=-2., vcenter=0., vmax=2.)
+    assert SPEEDUP_CMAP(norm(0.))[:3] == (1., 1., 1.)
+    for ratio in (.01, .1, .5, .9):
+        red, _, blue, _ = SPEEDUP_CMAP(norm(math.log10(ratio)))
+        assert red > blue
+    for ratio in (1.1, 2., 10., 100.):
+        red, _, blue, _ = SPEEDUP_CMAP(norm(math.log10(ratio)))
+        assert blue > red
+
+
+def test_heatmap_annotation_contrast_tracks_actual_palette():
+    import matplotlib.pyplot as plt
+    from test.benchmarks.release.report import _ratio_heatmap
+    fig, ax = plt.subplots()
+    try:
+        _ratio_heatmap(ax, [[.5, 1., 10., 100.]], ["cell"], [1, 2, 3, 4], "")
+        assert [t.get_color() for t in ax.texts] == ["#0b0b0b", "#0b0b0b", "#0b0b0b", "white"]
+    finally:
+        plt.close(fig)
+
+
+def test_website_api_plot_uses_requested_boundaries_and_palette(tmp_path, monkeypatch):
+    def reject_whiskers(*args, **kwargs):
+        raise AssertionError("The homepage API figure must not draw whiskers")
+    from matplotlib.axes import Axes
+    monkeypatch.setattr(Axes, "errorbar", reject_whiskers)
+    from docs.plot_release_figures import API_BOUNDARIES, api_boundaries
+    assert [x[0] for x in API_BOUNDARIES] == ["CUDA Device", "C++ Host", "NumPy", "PyTorch", "JAX"]
+    assert [x[3] for x in API_BOUNDARIES] == ["#00693e", "#c4dd88", "#267aba", "#d94415", "#8a6996"]
+    rows = []
+    for op in p.WRAPPER_OPS:
+        for backend, host in (("grid_cuda", 20.), ("grid_native", 25.), ("grid_numpy", 30.),
+                              ("grid_torch", 40.), ("grid_jax", 50.)):
+            rows.append(dict(robot="iiwa14", operation=op, backend=backend, batch=16,
+                             host_us=host, host_min_us=host-1, host_max_us=host+1,
+                             resident_us=10., resident_min_us=9., resident_max_us=11.))
+    original = Axes.bar
+    heights = []
+    def capture(ax, x, height, *args, **kwargs):
+        heights.append(height)
+        assert "bottom" not in kwargs  # these are measured totals, not stacks
+        return original(ax, x, height, *args, **kwargs)
+    monkeypatch.setattr(Axes, "bar", capture)
+    path = api_boundaries(rows, tmp_path)
+    assert heights == [10., 20., 30., 40., 50.]*2
+    svg = path.read_text()
+    assert "C ABI" not in svg and "DRAFT" not in svg
+
+
 def test_different_backend_capture_contracts_do_not_make_a_comparison():
     a,b=row(),row(); b.update(backend="mjx",contract="different machine")
     assert all(r["host_us"] is None and r["status"] == "contract_mismatch" for r in aggregate([a,b]))
@@ -479,6 +560,58 @@ def test_stacked_and_composition_figures_from_synthetic_rows(tmp_path):
     assert plot_stacked_comparison([r for r in rows if r["backend"]!="grid_cuda" and r["operation"]=="minv"],tmp_path,"smoke") is None
 
 
+def test_homepage_core_palette_and_hessian_baseline_selection(tmp_path, monkeypatch):
+    from collections import defaultdict
+    from matplotlib.axes import Axes
+    from matplotlib.figure import Figure
+    from test.benchmarks.release.report import plot_stacked_comparison
+    def reject_whiskers(*args, **kwargs):
+        raise AssertionError("The homepage core figure must not draw whiskers")
+    monkeypatch.setattr(Axes, "errorbar", reject_whiskers)
+    rows=[]
+    for op in ("inverse_dynamics", "idsva_so"):
+        for b in ("grid_cuda", "grid_jax", "pinocchio", "pinocchio_plain", "mujoco_cpu", "mjx", "mujoco_warp", "bard", "frax"):
+            if op == "idsva_so" and b in ("mujoco_cpu", "mjx", "mujoco_warp"):
+                continue
+            h = 12. if b == "grid_cuda" else 40.
+            rows.append(dict(robot="iiwa14", operation=op, backend=b, batch=16,
+                             host_us=h, resident_us=4. if b in ("grid_cuda", "grid_jax", "mjx", "mujoco_warp") else None,
+                             host_min_us=h-1, host_max_us=h+1, status="validated", dtype="float32"))
+    colors = defaultdict(list)
+    original = Axes.bar
+    def capture(ax, *args, **kwargs):
+        assert kwargs["linewidth"] == .4
+        if kwargs.get("color"):
+            assert kwargs["edgecolor"] == kwargs["color"]
+        if kwargs.get("facecolor") == "white":
+            assert kwargs["hatch"] == "...." and kwargs["edgecolor"] == "#707070"
+        colors[ax.get_subplotspec().rowspan.start].append(kwargs.get("color", kwargs.get("facecolor")))
+        return original(ax, *args, **kwargs)
+    monkeypatch.setattr(Axes, "bar", capture)
+    legends = []
+    original_legend = Figure.legend
+    def capture_legend(fig, *args, **kwargs):
+        legends.append(kwargs)
+        return original_legend(fig, *args, **kwargs)
+    monkeypatch.setattr(Figure, "legend", capture_legend)
+    path = plot_stacked_comparison(rows, tmp_path, "collection", ops=("inverse_dynamics", "idsva_so"),
+                                   show_title=False, homepage_style=True)
+    assert set(colors[0]) == {"#00693e", "#e2e2e2", "white", "#d94415", "#9d162e", "#a1d6ff", "#267aba", "#003c73"}
+    assert set(colors[1]) == {"#00693e", "#e2e2e2", "white", "#9d162e"}
+    assert colors[0].index("#003c73") < colors[0].index("#267aba")
+    assert legends[0]["ncol"] == 4
+    labels = [h.get_label() for h in legends[0]["handles"]]
+    assert labels == ["GRiD CUDA Device - GPU", " ", " ",
+                      "Pinocchio Codegen - CPU", "Pinocchio Standard API - CPU", " ",
+                      "Mujoco - CPU", "Mujoco Warp - GPU", "Mujoco XLA (MJX) - GPU",
+                      "GPU-CPU I/O Overhead", "GRiD Jax Wrapper Overhead", " "]
+    svg=path.read_text()
+    assert all(label not in svg for label in ("BARD", "Frax", "N/C", "DRAFT", "Whiskers"))
+    assert "GPU-CPU I/O Overhead" in svg and "GRiD Jax Wrapper Overhead" in svg
+    assert "fp64 required by the evaluated library path/build" in svg
+    assert "I/O overhead not resolved reliably" in svg and "▼" in svg
+
+
 def test_report_earlier_capture_supersedes_same_cell(tmp_path):
     """core and wrappers both plan the GRiD CUDA/JAX RNEA cells; the first capture
     listed wins, later duplicates are recorded as superseded, never as extra repeats."""
@@ -575,3 +708,30 @@ def test_forward_dynamics_rows_are_labelled_fd_not_aba():
     assert (OP_LABELS["forward_dynamics"], OP_LABELS["forward_dynamics_gradient"], OP_LABELS["fdsva_so"]) == ("FD", "grad FD", "Hessian FD")
     assert (SHORT_OP["forward_dynamics"], SHORT_OP["forward_dynamics_gradient"], SHORT_OP["fdsva_so"]) == ("FD", "∇FD", "∇²FD")
     assert not any("ABA" in v for v in (*OP_LABELS.values(), *SHORT_OP.values()))
+
+
+@pytest.mark.parametrize('batch,expected', [
+    (16, [1, 2, 4, 8, 16]),
+    (32, [1, 2, 4, 8, 16, 24]),
+    (64, [1, 2, 4, 8, 16, 24]),
+    (128, [1, 2, 4, 8, 16, 24]),
+    (256, [1, 2, 4, 8, 16, 24]),
+    (1024, [1, 2, 4, 8, 16, 24]),
+])
+def test_pinocchio_full_machine_thread_candidates(batch, expected):
+    from test.benchmarks.release.pin_adapter import PinAdapter
+    adapter = PinAdapter.__new__(PinAdapter)  # policy test: no native build
+    adapter.ceiling = 24
+    assert adapter.candidates(batch) == expected
+    # The expanded sweep still evaluates every formerly tested count.
+    old = {n for n in (1, max(1, batch // 16), 8) if n <= min(8, batch)}
+    assert old <= set(expected)
+
+
+def test_pinocchio_candidates_respect_small_ceiling():
+    from test.benchmarks.release.pin_adapter import PinAdapter
+    adapter = PinAdapter.__new__(PinAdapter)
+    adapter.ceiling = 1
+    assert adapter.candidates(1024) == [1]
+    adapter.ceiling = 6
+    assert adapter.candidates(128) == [1, 2, 4, 6]

@@ -46,6 +46,6 @@ Geometry coverage and correctness
 * Correctness tests live under ``test/cuda_equivalents/test_cuda_collision_*``;
   they cover geometry, pairs, tiering, costs, and native representations.
 
-Collision timings are a separate follow-up to the :doc:`release measurements
-<../../release_measurements>`: latency will be reported beside coverage and
-fine-tier verdict agreement, never alone.
+The :doc:`release measurements <../../release_measurements>` do not include
+collision timings. When benchmarking collisions, report latency alongside
+geometry coverage and fine-tier verdict agreement.

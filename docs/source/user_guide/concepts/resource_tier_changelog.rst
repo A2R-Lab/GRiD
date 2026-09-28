@@ -395,7 +395,7 @@ run:
       existing ``baselines/pinocchio/run.py`` harness already drives
       this).
     - Frax CPU + Frax GPU (JAX reference at
-      https://github.com/danielpmorton/frax — already wired in
+      https://github.com/StanfordASL/frax — already wired in
       ``baselines/frax/``; emits ``frax_cpu`` and ``frax_gpu`` columns
       that ``generate_report.py`` knows how to render).
 * **Timing modes**: single-call AND multi-call (batch) sweeps. Both

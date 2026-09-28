@@ -1,0 +1,102 @@
+{
+  "publication_approved": true,
+  "commit": "e92477857b0ca53fb307a8fa4799a4afd5757177",
+  "raw_manifest_sha256": "c82b2cd6c0142567480ba71f467a69cabaf5a6e6123fd8953b8d4e7ad16efd14",
+  "workers": 210,
+  "measurements": 1260,
+  "status_counts": {
+    "excluded_method": 90,
+    "validated": 420,
+    "model_mismatch": 24,
+    "adapter_pending": 60
+  },
+  "variability": [
+    {
+      "backend": "bard",
+      "cells": 18,
+      "host_flags": 0,
+      "resident_flags": 0,
+      "boundary_flags": 0
+    },
+    {
+      "backend": "frax",
+      "cells": 6,
+      "host_flags": 0,
+      "resident_flags": 0,
+      "boundary_flags": 0
+    },
+    {
+      "backend": "grid_cuda",
+      "cells": 54,
+      "host_flags": 0,
+      "resident_flags": 0,
+      "boundary_flags": 0
+    },
+    {
+      "backend": "grid_jax",
+      "cells": 54,
+      "host_flags": 3,
+      "resident_flags": 9,
+      "boundary_flags": 0
+    },
+    {
+      "backend": "grid_native",
+      "cells": 36,
+      "host_flags": 0,
+      "resident_flags": 0,
+      "boundary_flags": 0
+    },
+    {
+      "backend": "grid_numpy",
+      "cells": 36,
+      "host_flags": 0,
+      "resident_flags": 0,
+      "boundary_flags": 0
+    },
+    {
+      "backend": "grid_torch",
+      "cells": 36,
+      "host_flags": 0,
+      "resident_flags": 0,
+      "boundary_flags": 0
+    },
+    {
+      "backend": "mjx",
+      "cells": 36,
+      "host_flags": 5,
+      "resident_flags": 14,
+      "boundary_flags": 3
+    },
+    {
+      "backend": "mujoco_cpu",
+      "cells": 18,
+      "host_flags": 0,
+      "resident_flags": 0,
+      "boundary_flags": 0
+    },
+    {
+      "backend": "mujoco_warp",
+      "cells": 18,
+      "host_flags": 0,
+      "resident_flags": 0,
+      "boundary_flags": 0
+    },
+    {
+      "backend": "pinocchio",
+      "cells": 54,
+      "host_flags": 4,
+      "resident_flags": 0,
+      "boundary_flags": 0
+    },
+    {
+      "backend": "pinocchio_plain",
+      "cells": 54,
+      "host_flags": 5,
+      "resident_flags": 0,
+      "boundary_flags": 0
+    }
+  ],
+  "sample_counts_and_means_verified": true,
+  "hashes_and_contracts_verified": true,
+  "comparison_definition": "Ratios of medians of three run means; envelopes are observed ranges, not confidence intervals"
+}

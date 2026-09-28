@@ -1,8 +1,7 @@
-# GRiD website draft
+# GRiD website
 
-The cover page will live at `/GRiD/`, with Sphinx at `/GRiD/docs/`.
-Work starts on `modernizing-tests`. This is not a published release and the
-website does not trigger GPU runs or collect benchmark data.
+The cover page lives at `/GRiD/`, with Sphinx at `/GRiD/docs/`.
+Building the website does not trigger GPU runs or collect benchmark data.
 
 ## Build and review locally
 
@@ -41,11 +40,11 @@ absolute timings, speedup against Pinocchio, speedup against the GPU libraries)
 and the full table with every cell's status. The homepage embeds the figures from
 `docs/source/_static/release/`, which `docs/plot_release_figures.py --approve`
 writes from an audited report directory (`python -m test.benchmarks.release.report`);
-`check_site.py` verifies the manifest hashes. Collisions are a separate follow-up.
+`check_site.py` verifies the manifest hashes and local page anchors.
+Run `docs/export_release_tables.py` after plotting to export the pinned full
+tables, their audit, and provenance. This dataset excludes collision timings.
 
-Before publication, agree on that matrix, collect and review the data, replace or
-remove unfilled slots, validate the release tip, and change the preview clone
-command and banner. The original paper remains tied to the archival
+The original paper remains tied to the archival
 `robot-acceleration/GRiD`; current development points to `A2R-Lab/GRiD`.
 
 The workflow builds pull requests and pushes to `modernizing-tests` without

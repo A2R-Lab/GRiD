@@ -90,8 +90,8 @@ Parse options and errors
   are exempt; the default keeps parsing and warns.
 * The typed exceptions live in ``errors.py``: ``URDFParseError``,
   ``UnsupportedJointTypeError`` and ``MimicResolutionError``.
-  Other parse failures can still return ``None`` under the legacy catch-all;
-  check the return value before using the model.
+  Missing files, malformed model fields, and invalid options also raise
+  ``URDFParseError``; wrapped failures preserve their cause in ``__cause__``.
 * Joint limits from the URDF ``<limit>`` tags are available through
   ``get_joint_limits_by_id``, ``get_velocity_limit_by_id`` and
   ``get_effort_limit_by_id``.

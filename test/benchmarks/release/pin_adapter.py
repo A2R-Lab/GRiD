@@ -2,7 +2,7 @@
 
 Threading: one persistent C++ pool (release_pool.h) with an independent
 model/data/codegen context per thread. Every cell is timed at each candidate
-thread count — 1, the B//16 heuristic and the ceiling — and the BEST run mean
+thread count — powers of two, the B//16 heuristic and the ceiling — and the BEST run mean
 is the reported full-call time; every variant is kept in the capture. The
 first collector split the batch from a Python executor, which cost 100-900 us
 per call and made Pinocchio look 20x slower between B=16 and B=32.
@@ -120,7 +120,7 @@ class PinAdapter:
                       "codegen RNEA at zero acceleration/velocity" if index in {9, 10} else "analytical direct/composed")
         self.metadata = {"backend": "pinocchio_plain" if plain else "pinocchio", "cpu_thread_ceiling": cpu_threads,
             "hardware_threads": os.cpu_count(),
-            "thread_policy": "best run mean over candidate thread counts {1, B//16, ceiling}; persistent C++ pool, "
+            "thread_policy": "best run mean over powers of two plus {B//16, ceiling}, capped by batch and ceiling; persistent C++ pool, "
                              "slice 0 on the caller; independent native contexts; every variant recorded",
             "method": method, "mode": "plain" if plain else "codegen",
             "dtype": "float32" if index in FP32_OPS else "float64",
@@ -136,7 +136,13 @@ class PinAdapter:
             "note": "Warm full-call wall time includes batch submission; not a claim of optimal CPU threading."}
 
     def candidates(self, batch):
-        return sorted({n for n in (1, max(1, batch // 16), self.ceiling) if 1 <= n <= min(self.ceiling, batch)})
+        limit = min(self.ceiling, batch)
+        counts = {1, max(1, batch // 16), self.ceiling}
+        n = 2
+        while n <= limit:
+            counts.add(n)
+            n *= 2
+        return sorted(n for n in counts if 1 <= n <= limit)
 
     def prepare(self, batch):
         f = self.f

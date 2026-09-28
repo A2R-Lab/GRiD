@@ -59,9 +59,9 @@ def check(root):
                 target /= "index.html"
             if not target.is_relative_to(root) or not target.exists():
                 errors.append(f"{page.relative_to(root)}: missing local target {link}")
-            elif page == root / "index.html" and url.fragment and target.suffix == ".html":
+            elif url.fragment and target.suffix == ".html":
                 if unquote(url.fragment) not in parse(target).ids:
-                    errors.append(f"Homepage link has missing anchor: {link}")
+                    errors.append(f"{page.relative_to(root)}: missing anchor: {link}")
     routes = {p.relative_to(root / "docs").as_posix(): p.relative_to(root / "docs").as_posix()
               for p in pages if p.is_relative_to(root / "docs")
               and p != root / "docs/index.html"}
@@ -88,7 +88,7 @@ def check(root):
             path = assets / name
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
                 raise SystemExit(f"Release figure asset hash mismatch: {name}")
-    print(f"PASS: {len(pages)} pages; local links/assets, homepage anchors, {len(routes)} redirects")
+    print(f"PASS: {len(pages)} pages; local links/assets and anchors, {len(routes)} redirects")
 
 
 if __name__ == "__main__":
