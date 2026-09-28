@@ -274,12 +274,15 @@ def test_fdsva_so_shape(handle, samples):
         assert np.all(np.isfinite(t))
 
 
-_INTEGRATOR_TYPES = ("euler", "semi_implicit_euler", "midpoint", "rk3", "rk4")
+_INTEGRATOR_TYPES = (
+    "euler", "semi_implicit_euler", "midpoint", "rk4",
+    "trapezoidal", "constant_acceleration",
+)
 
 
 @pytest.mark.parametrize("it_name", _INTEGRATOR_TYPES)
 def test_integrator(handle, ref, samples, it_name):
-    """Integrator value matches RBDReference for all 5 types."""
+    """Integrator value matches RBDReference for all six supported types."""
     dt = 0.01
     NJ, NV = handle.num_joints, handle.num_vel
     grid = handle.integrator(samples["q"], samples["qd"], samples["u"], dt,
@@ -293,7 +296,7 @@ def test_integrator(handle, ref, samples, it_name):
 
 @pytest.mark.parametrize("it_name", _INTEGRATOR_TYPES)
 def test_integrator_gradient(handle, ref, samples, it_name):
-    """Integrator gradient (dAB) matches RBDReference for all 5 types."""
+    """Integrator gradient matches RBDReference for all six supported types."""
     dt = 0.01
     NV = handle.num_vel
     grid = handle.integrator_gradient(samples["q"], samples["qd"], samples["u"], dt,
