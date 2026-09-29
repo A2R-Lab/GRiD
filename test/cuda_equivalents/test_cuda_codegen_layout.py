@@ -1018,8 +1018,8 @@ def test_joint_limits_land_at_true_q_offsets(tmp_path):
     tu.write_text('#include "go2_floating_default.cuh"\n'
                   'template float* grid::init_joint_limits<float>();\n'
                   'int main() { return 0; }\n')
-    arch = os.environ.get("GRID_CUDA_ARCH", "sm_120")
-    proc = subprocess.run([nvcc, "-std=c++17", f"-arch={arch}", f"-I{tmp_path}",
+    arch = _detect_cuda_arch()
+    proc = subprocess.run([nvcc, "-std=c++17", f"-arch=sm_{arch}", f"-I{tmp_path}",
                            "-c", str(tu), "-o", str(tu.with_suffix(".o"))],
                           capture_output=True, text=True, timeout=1200)
     assert proc.returncode == 0, f"go2 limits TU failed to compile:\n{proc.stderr[-3000:]}"
@@ -1081,8 +1081,8 @@ __global__ void fc_probe(T *out, const T *x, const T *u, const grid::robotModel<
 }
 int main() { return 0; }
 ''')
-    arch = os.environ.get("GRID_CUDA_ARCH", "sm_120")
-    proc = _sp.run([nvcc, "-std=c++17", f"-arch={arch}", f"-I{fc_header.parent}",
+    arch = _detect_cuda_arch()
+    proc = _sp.run([nvcc, "-std=c++17", f"-arch=sm_{arch}", f"-I{fc_header.parent}",
                     "-c", str(tu), "-o", str(tu.with_suffix(".o"))],
                    capture_output=True, text=True, timeout=1200)
     assert proc.returncode == 0, f"fc TU failed to compile:\n{proc.stderr[-3000:]}"

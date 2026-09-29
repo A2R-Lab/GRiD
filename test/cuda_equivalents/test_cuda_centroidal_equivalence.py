@@ -11,9 +11,9 @@ The RBDReference numpy oracles match Pinocchio to ~1e-14, so they are the
 double-precision ground truth here (the CUDA path is float32, so the comparison
 uses a float32-scale tolerance, like the other CUDA smoke tests).
 
-D1c validates the grid_plant CoM / centroidal-momentum tracking costs
-(value / gradient over x=[q;qd] / Gauss-Newton hessian) against a NumPy
-recompute from the double-precision reference CoM-Jacobian / CMM.
+D1c validates the grid_plant CoM / centroidal-momentum tracking costs.
+CoM retains the padded NQ+NV layout; momentum uses the full 2NV tangent
+state [dq|dv], including configuration derivatives and mixed GN blocks.
 
 Gravity convention: unified at -9.81. The runner passes gravity = -9.81 to GRiD,
 matching the RBDReference oracles' default GRAVITY = -9.81 — both sides now use
@@ -353,13 +353,13 @@ def test_cuda_centroidal_matches_reference(tmp_path, robot_id, base_mode):
               f"{tag} energy [KE, PE, mechanical]")
 
         # ================= D1c: grid_plant CoM / momentum costs =================
-        # The emitted gradient/hessian layout is over x = [q (nq); qd (nv)],
+        # CoM's gradient/hessian layout is over x = [q (nq); qd (nv)],
         # size NX = nq + nv. For a floating base nq > nv (the quaternion uses 4
         # position slots for 3 velocity DOFs), so the gradient's tangent ("q")
         # block occupies the FIRST nv entries (d/dv), entries [nv:nq] are zero
         # padding for the surplus position slots, and the qd block [nq:nx] is
-        # zero (com) or carries A^T W r (momentum). The GN hessian is NX x NX
-        # with the active block in [0:nv, 0:nv] (com) / [nq:nx, nq:nx] (momentum).
+        # zero. Its GN hessian is NX x NX with the active block in [0:nv, 0:nv].
+        # Momentum below uses a distinct, unpadded 2NV tangent-state layout.
         #
         # p_des / h_des are realized value + fixed offset (mirrors the runner).
         p_des = p_com + com_off
@@ -369,19 +369,16 @@ def test_cuda_centroidal_matches_reference(tmp_path, robot_id, base_mode):
         H_com = np.zeros((nx, nx)); H_com[:nv, :nv] = Jcom.T @ np.diag(comW) @ Jcom
         close(out["com_cost_value"].reshape(-1)[0], com_val, f"{tag} com_cost value")
         close(out["com_cost_grad"].reshape(-1), com_grad, f"{tag} com_cost grad")
-        # the qd block (entries [nq:nx]) must be EXACTLY zero
-        assert np.all(np.asarray(out["com_cost_grad"]).reshape(-1)[nq:] == 0.0), \
-            f"{tag} com_cost grad qd-block not exactly zero"
+        # Both the surplus position slot and the velocity block must be zero.
+        assert np.all(np.asarray(out["com_cost_grad"]).reshape(-1)[nv:] == 0.0), \
+            f"{tag} com_cost grad non-q tail not exactly zero"
         close(out["com_cost_hess"].reshape(nx, nx, order="F"), H_com, f"{tag} com_cost GN hess")
 
         h_des = h_ref + mom_off
-        rm = h_ref - h_des
-        mom_val = 0.5 * np.sum(momW * rm * rm)
-        mom_grad = np.zeros(nx); mom_grad[nq:] = A_ref.T @ (momW * rm)   # [q-block=0 ; A^T W r]
-        H_mom = np.zeros((nx, nx)); H_mom[nq:, nq:] = A_ref.T @ np.diag(momW) @ A_ref
+        # The full residual Jacobian is [(dA/dq)v | A]. Gauss-Newton omits
+        # residual curvature, not the configuration dependence of momentum.
+        mom_val, mom_grad, H_mom = ref.momentum_cost(q, qd, h_des, momW)
         close(out["mom_cost_value"].reshape(-1)[0], mom_val, f"{tag} momentum_cost value")
         close(out["mom_cost_grad"].reshape(-1), mom_grad, f"{tag} momentum_cost grad")
-        # the q block (entries [0:nq]) must be EXACTLY zero (GN drops dA/dq)
-        assert np.all(np.asarray(out["mom_cost_grad"]).reshape(-1)[:nq] == 0.0), \
-            f"{tag} momentum_cost grad q-block not exactly zero"
-        close(out["mom_cost_hess"].reshape(nx, nx, order="F"), H_mom, f"{tag} momentum_cost GN hess")
+        close(out["mom_cost_hess"].reshape(2*nv, 2*nv, order="F"), H_mom,
+              f"{tag} momentum_cost GN hess")

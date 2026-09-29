@@ -23,8 +23,8 @@
 //   com_cost_grad   1 x NX                      [J_com^T W r ; 0]   (NX = NQ+NV)
 //   com_cost_hess   NX x NX                     J_com^T W J_com (q-block only)
 //   mom_cost_value  1 x 1
-//   mom_cost_grad   1 x NX                      [0 ; A^T W r]
-//   mom_cost_hess   NX x NX                     A^T W A (qd-block only)
+//   mom_cost_grad   1 x NM                      J^T W r (NM = 2*NV)
+//   mom_cost_hess   NM x NM                     J^T W J, J=[(dA/dq)v | A]
 //
 // The deterministic cost setup (p_des / h_des / weights) is mirrored exactly in
 // the Python test.
@@ -67,6 +67,8 @@ void print_vector(const std::string &name, const T *data, int count) {
 constexpr int NQ = grid::NUM_POS;
 constexpr int NV = grid::NUM_VEL;
 constexpr int NX = NQ + NV;
+constexpr int NM = 2 * NV;
+static_assert(NM <= NX, "shared output buffers must fit both cost layouts");
 
 // ---- deterministic cost setup (MUST match the Python test exactly) ----
 template <typename T> __host__ __device__ T comW_val(int r)  { return static_cast<T>(5.0) + r; }
@@ -119,6 +121,7 @@ __global__ void centroidal_kernel(const T *g_q, const T *g_qd,
 template <typename T>
 __global__ void cost_kernel(const T *g_q, const T *g_qd,
                             const grid::robotModel<T> *d_robotModel,
+                            unsigned char *d_workspace,
                             T *o_cv, T *o_cg, T *o_ch,
                             T *o_mv, T *o_mg, T *o_mh) {
     __shared__ T s_q[NQ], s_qd[NV];
@@ -126,6 +129,8 @@ __global__ void cost_kernel(const T *g_q, const T *g_qd,
     __shared__ T s_out[1], s_grad[NX], s_hess[NX * NX];
     __shared__ T s_com[3 + 3 * NV];
     __shared__ T s_ccrba[6 * NV + 6];
+    // Cost inners require their full caller-owned arena, not just value output.
+    extern __shared__ __align__(16) T s_cost_scratch[];
 
     const int tid = threadIdx.x + threadIdx.y * blockDim.x;
     const int nth = blockDim.x * blockDim.y;
@@ -146,34 +151,32 @@ __global__ void cost_kernel(const T *g_q, const T *g_qd,
     __syncthreads();
 
     // ---- com cost ----
-    grid_plant::com_cost<T>(s_out, s_q, s_pdes, s_cW, s_com, d_robotModel);
+    grid_plant::com_cost<T>(s_out, s_q, s_pdes, s_cW, s_cost_scratch, d_robotModel);
     __syncthreads(); if (tid == 0) o_cv[0] = s_out[0]; __syncthreads();
-    // Zero s_grad first: com_cost_gradient writes the tangent block [0,NV) and
-    // the qd block [NQ,NX), but for a floating base the surplus position slots
-    // [NV,NQ) are not written, so initialize them to zero deterministically.
-    for (int i = tid; i < NX; i += nth) s_grad[i] = static_cast<T>(0);
+    // Poison the destination: the CoM API must overwrite the entire padded tail.
+    for (int i = tid; i < NX; i += nth) s_grad[i] = static_cast<T>(12345);
     __syncthreads();
-    grid_plant::com_cost_gradient<T, false>(s_grad, s_q, s_pdes, s_cW, s_com, d_robotModel);
+    grid_plant::com_cost_gradient<T, false>(s_grad, s_q, s_pdes, s_cW, s_cost_scratch, d_robotModel);
     __syncthreads();
     for (int i = tid; i < NX; i += nth) o_cg[i] = s_grad[i];
     __syncthreads();
-    grid_plant::com_cost_hessian<T, false>(s_hess, s_q, s_cW, s_com, d_robotModel);
+    grid_plant::com_cost_hessian<T, false>(s_hess, s_q, s_cW, s_cost_scratch, d_robotModel);
     __syncthreads();
     for (int i = tid; i < NX * NX; i += nth) o_ch[i] = s_hess[i];
     __syncthreads();
 
     // ---- momentum cost ----
-    grid_plant::momentum_cost<T>(s_out, s_q, s_qd, s_hdes, s_mW, s_ccrba, d_robotModel);
+    grid_plant::momentum_cost<T>(s_out, s_q, s_qd, s_hdes, s_mW, s_cost_scratch, d_robotModel, d_workspace);
     __syncthreads(); if (tid == 0) o_mv[0] = s_out[0]; __syncthreads();
-    for (int i = tid; i < NX; i += nth) s_grad[i] = static_cast<T>(0);
+    for (int i = tid; i < NM; i += nth) s_grad[i] = static_cast<T>(12345);
     __syncthreads();
-    grid_plant::momentum_cost_gradient<T, false>(s_grad, s_q, s_qd, s_hdes, s_mW, s_ccrba, d_robotModel);
+    grid_plant::momentum_cost_gradient<T, false>(s_grad, s_q, s_qd, s_hdes, s_mW, s_cost_scratch, d_robotModel, d_workspace);
     __syncthreads();
-    for (int i = tid; i < NX; i += nth) o_mg[i] = s_grad[i];
+    for (int i = tid; i < NM; i += nth) o_mg[i] = s_grad[i];
     __syncthreads();
-    grid_plant::momentum_cost_hessian<T, false>(s_hess, s_q, s_qd, s_mW, s_ccrba, d_robotModel);
+    grid_plant::momentum_cost_hessian<T, false>(s_hess, s_q, s_qd, s_mW, s_cost_scratch, d_robotModel, d_workspace);
     __syncthreads();
-    for (int i = tid; i < NX * NX; i += nth) o_mh[i] = s_hess[i];
+    for (int i = tid; i < NM * NM; i += nth) o_mh[i] = s_hess[i];
     __syncthreads();
 }
 
@@ -208,7 +211,10 @@ void run() {
     T *o_com = dmalloc<T>(3), *o_jcom = dmalloc<T>(3 * NV);
     T *o_A = dmalloc<T>(6 * NV), *o_h = dmalloc<T>(6), *o_energy = dmalloc<T>(3);
     T *o_cv = dmalloc<T>(1), *o_cg = dmalloc<T>(NX), *o_ch = dmalloc<T>(NX * NX);
-    T *o_mv = dmalloc<T>(1), *o_mg = dmalloc<T>(NX), *o_mh = dmalloc<T>(NX * NX);
+    T *o_mv = dmalloc<T>(1), *o_mg = dmalloc<T>(NM), *o_mh = dmalloc<T>(NM * NM);
+    unsigned char *workspace = nullptr;
+    gpuErrchk(cudaMalloc(&workspace, grid::GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()));
+    gpuErrchk(cudaMemset(workspace, 0, grid::GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()));
 
     const int nthreads = grid::MAX_PERF_LEVEL_THREADS;
     // The centroidal device functions compose the grid:: XmatsHom kinematics
@@ -220,6 +226,7 @@ void run() {
     if (grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>() > dyn) dyn = grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>();
     if (grid::ENERGY_DYNAMIC_SHARED_MEM_BYTES<T>() > dyn) dyn = grid::ENERGY_DYNAMIC_SHARED_MEM_BYTES<T>();
     if (grid::INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>() > dyn) dyn = grid::INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>();
+    if (grid::DCCRBA_DYNAMIC_SHARED_MEM_BYTES<T>() > dyn) dyn = grid::DCCRBA_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(centroidal_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)dyn);
     cudaFuncSetAttribute(cost_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)dyn);
 
@@ -231,7 +238,7 @@ void run() {
     // cudaPeekAtLastError() + cudaDeviceSynchronize() and aborts on any error.
     gpuErrchkKernel();
 
-    cost_kernel<T><<<1, nthreads, dyn>>>(g_q, g_qd, d_robotModel,
+    cost_kernel<T><<<1, nthreads, dyn>>>(g_q, g_qd, d_robotModel, workspace,
         o_cv, o_cg, o_ch, o_mv, o_mg, o_mh);
     gpuErrchkKernel();
 
@@ -248,9 +255,10 @@ void run() {
     dcopy_out("com_cost_grad", o_cg, 1, NX);
     dcopy_out("com_cost_hess", o_ch, NX, NX);
     dcopy_out("mom_cost_value", o_mv, 1, 1);
-    dcopy_out("mom_cost_grad", o_mg, 1, NX);
-    dcopy_out("mom_cost_hess", o_mh, NX, NX);
+    dcopy_out("mom_cost_grad", o_mg, 1, NM);
+    dcopy_out("mom_cost_hess", o_mh, NM, NM);
 
+    gpuErrchk(cudaFree(workspace));
     grid::close_grid<T>(streams, d_robotModel, hd_data);
 }
 
