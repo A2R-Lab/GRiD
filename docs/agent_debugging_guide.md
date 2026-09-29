@@ -2531,3 +2531,26 @@ TIER_MINIMAL if the SHARED arena exceeds the cap; ~7 min, not the full hour). Co
 RBDReference and a Pinocchio full-URDF model reduced by hand with G from `<mimic>`. Use unit
 velocities one joint at a time: the error appears only on bodies whose parent moves, and
 patching the header by hand proves each cause before touching the generator.
+
+### 7.z33 Never invert a transform with `invert_matrix` (2026-09-29, floating ABA)
+
+**Symptom.** Recursive floating ABA returned all-NaN qdd at sample `floating_quat_positive`
+(quat xyzw 0.5·(1,1,1,1)) on every non-mimic floating robot. FD at the same state was fine.
+Quats perturbed by 1e-7, and rounded poses such as yaw 90° or roll 90°, were fine.
+
+**Cause.** The second forward pass computed base-frame gravity as −X0⁻¹[:,5]·g by
+inverting the root transform X0 with `invert_matrix` (glass `inv_dense`: Gauss-Jordan,
+**no pivoting**). At axis-permutation orientations R has an exactly zero diagonal, so
+the first pivot is 0.
+
+**Fix.** Use the closed form. For X = [[E,0],[−E r×,E]], X⁻¹[:,5] = [0; X(5,3:6)ᵀ]. That is
+the same root term `inverse_dynamics` already emits:
+`row < 3 ? 0 : −X[6*row+5]·g`.
+
+**Rules.**
+- `invert_matrix` is only for SPD (or diagonally dominant) inputs: D, M, and the Ia blocks.
+- Spatial transforms have analytic inverses; use them.
+- Guard test: `test/test_floating_aba_codegen.py`.
+
+**Why it hid.** Same as §7.z32. The floating flagship compared only the `zero` sample
+(quat identity), and the permutation quat lives in the corner samples.

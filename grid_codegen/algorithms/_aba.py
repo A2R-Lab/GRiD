@@ -399,14 +399,13 @@ def gen_aba_inner_floating(self):
         inds = self.robot.get_ids_by_bfs_level(bfs_level)
         if bfs_level == 0:
             self.gen_add_code_line("// root acceleration from gravity, then solve root qdd")
-            self.gen_add_parallel_loop("ind", "36")
-            self.gen_add_code_line("s_temp[" + str(tempMatOffset) + " + ind] = s_XImats[ind];")
-            # No Ainv=I pre-init (or row/col): glass::inv_dense seeds Ainv internally.
-            self.gen_add_end_control_flow()
-            self.gen_add_sync()
-            self.gen_add_code_line("invert_matrix(6, &s_temp[" + str(tempMatOffset) + "], &s_temp[" + str(tempVecOffset) + "], &s_fb_cold[" + str(fbInvTempOffset) + "]);")
+            # a0 = -X0^{-1}[:,5]*g in closed form: for X = [[E,0],[-E rx,E]] that
+            # column is [0; E(2,:)^T] = [0; X(5,3:6)^T] -- the same root term
+            # inverse_dynamics emits. Never invert X0 numerically: invert_matrix
+            # does not pivot and X0's diagonal is exactly 0 at axis-permutation
+            # orientations (quat 0.5*(1,1,1,1) -> all-NaN qdd).
             self.gen_add_parallel_loop("row", "6")
-            self.gen_add_code_line("s_va[" + str(6 * NJ) + " + row] = -s_temp[" + str(tempVecOffset) + " + row + 6*5] * gravity;")
+            self.gen_add_code_line("s_va[" + str(6 * NJ) + " + row] = (row < 3 ? static_cast<T>(0) : -s_XImats[6*row + 5] * gravity);")
             self.gen_add_end_control_flow()
             self.gen_add_sync()
             self.gen_add_parallel_loop("row", "6")
