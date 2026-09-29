@@ -42,6 +42,7 @@ from test.cuda_equivalents.cuda_harness import (
     _parse_runner_output,
     _run_runner,
 )
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec
 from RBDReference.equivalents.reference_backend import build_project_adapter
@@ -153,26 +154,14 @@ def _generate_header(project_model, build_dir):
 
 
 def _compile_runner(build_dir):
-    nvcc = shutil.which("nvcc")
-    if nvcc is None:
-        pytest.skip("nvcc not found; install CUDA Toolkit to run CUDA tests.")
-    runner_copy = build_dir / RUNNER_SOURCE.name
-    shutil.copyfile(RUNNER_SOURCE, runner_copy)
     arch = _detect_cuda_arch()
-    executable = build_dir / "cuda_plant_smoke_runner.exe"
     glass_inc = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
-    cmd = [
-        nvcc, "-std=c++17", "-O0",
-        "-gencode", f"arch=compute_{arch},code=sm_{arch}",
-        f"-I{glass_inc}", "-o", str(executable), str(runner_copy),
-    ]
-    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
-    if result.returncode != 0:
-        pytest.fail(
-            "CUDA plant smoke runner compilation failed.\n"
-            f"Command: {' '.join(cmd)}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-        )
-    return executable, cmd
+    return cached_nvcc_executable(
+        [RUNNER_SOURCE, build_dir / "grid.cuh"],
+        ["-std=c++17", "-O0", "-gencode", f"arch=compute_{arch},code=sm_{arch}"],
+        exe_name="cuda_plant_smoke_runner.exe", fallback_dir=build_dir,
+        include_dirs=[glass_inc], what="CUDA plant smoke runner",
+    )
 
 
 def _stdin(q, qd, u, dt):

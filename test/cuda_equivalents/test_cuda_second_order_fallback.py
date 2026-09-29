@@ -17,6 +17,7 @@ from test.cuda_equivalents.cuda_harness import (
     _run_runner,
     _sample_to_stdin,
 )
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import (
     iter_robot_cases,
@@ -140,26 +141,7 @@ def _generate_second_order_header(
 
 
 def _compile_second_order_runner(build_dir: Path, *, enable_fdsva=True):
-    nvcc = shutil.which("nvcc")
-    if nvcc is None:
-        pytest.skip("nvcc was not found; install CUDA Toolkit to run CUDA tests.")
-
-    runner_copy = build_dir / RUNNER_SOURCE.name
-    shutil.copyfile(RUNNER_SOURCE, runner_copy)
     arch = _detect_cuda_arch()
-    executable = build_dir / "cuda_second_order_smoke_runner.exe"
-    cmd = [
-        nvcc,
-        "-std=c++11",
-        "-O0",
-        "-gencode",
-        f"arch=compute_{arch},code=sm_{arch}",
-        "-gencode",
-        f"arch=compute_{arch},code=compute_{arch}",
-        "-o",
-        str(executable),
-        str(runner_copy),
-    ]
     threads = os.environ.get("GRID_CUDA_SECOND_ORDER_TEST_THREADS")
     if threads:
         try:
@@ -177,17 +159,18 @@ def _compile_second_order_runner(build_dir: Path, *, enable_fdsva=True):
         # are probed across warp counts over time, catching thread-count races
         # that a fixed block size hides. Override with the env var to reproduce.
         thread_count = _random_thread_count()
-    cmd.insert(-1, f"-DGRID_CUDA_SECOND_ORDER_TEST_THREADS={thread_count}")
-    cmd.insert(-1, f"-DGRID_CUDA_SECOND_ORDER_ENABLE_FDSVA={int(enable_fdsva)}")
-    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
-    if result.returncode != 0:
-        pytest.fail(
-            "CUDA second-order smoke runner compilation failed.\n"
-            f"Command: {' '.join(cmd)}\n"
-            f"stdout:\n{result.stdout}\n"
-            f"stderr:\n{result.stderr}"
-        )
-    return executable, cmd
+    flags = [
+        "-std=c++11", "-O0",
+        "-gencode", f"arch=compute_{arch},code=sm_{arch}",
+        "-gencode", f"arch=compute_{arch},code=compute_{arch}",
+        f"-DGRID_CUDA_SECOND_ORDER_TEST_THREADS={thread_count}",
+        f"-DGRID_CUDA_SECOND_ORDER_ENABLE_FDSVA={int(enable_fdsva)}",
+    ]
+    return cached_nvcc_executable(
+        [RUNNER_SOURCE, build_dir / "grid.cuh"], flags,
+        exe_name="cuda_second_order_smoke_runner.exe", fallback_dir=build_dir,
+        what="CUDA second-order smoke runner",
+    )
 
 
 def _build_second_order_case(
