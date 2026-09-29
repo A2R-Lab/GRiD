@@ -21,6 +21,132 @@ def _fid(robot, base, cell, threads):
     return (f"{_P}/{FLAGSHIP}.py::test_x[{robot}-{base}-{cell}-threads{threads}]")
 
 
+def _dispatch_spec(name):
+    return rss.ShardSpec(name, "cuda", [f"test/{name}.py::test_one"],
+                         [f"test/{name}.py"], apply_marker=True)
+
+
+def test_cuda_prewarm_and_test_environment_share_defaults(monkeypatch):
+    monkeypatch.delenv("GRID_CUDA_CACHE_DIR", raising=False)
+    monkeypatch.delenv("GRID_ENABLE_MUJOCO_KERNELS", raising=False)
+    assert rss.cuda_worker_env() == {
+        "GRID_CUDA_CACHE_DIR": rss.CUDA_CACHE_DIR_DEFAULT,
+        "GRID_ENABLE_MUJOCO_KERNELS": "0",
+    }
+    monkeypatch.setenv("GRID_CUDA_CACHE_DIR", "/tmp/explicit-cache")
+    monkeypatch.setenv("GRID_ENABLE_MUJOCO_KERNELS", "1")
+    assert rss.cuda_worker_env() == {
+        "GRID_CUDA_CACHE_DIR": "/tmp/explicit-cache",
+        "GRID_ENABLE_MUJOCO_KERNELS": "1",
+    }
+
+
+def test_compile_priority_follows_first_consumer():
+    from types import SimpleNamespace
+    jobs = [SimpleNamespace(name=n) for n in ("h1", "iiwa", "shared", "unused")]
+    ordered = rss.prioritize_compile_jobs(jobs, ["first", "second"],
+        {"first": ["iiwa", "shared"], "second": ["h1", "shared"]})
+    assert [j.name for j in ordered] == ["iiwa", "shared", "h1", "unused"]
+    assert {id(j) for j in ordered} == {id(j) for j in jobs}
+
+
+def test_ready_shard_waits_for_all_writers_and_keeps_failed_jobs():
+    from threading import Event
+    from types import SimpleNamespace
+    a, b = Event(), Event()
+    pool = SimpleNamespace(done_events={"a": a, "b": b})
+    first, later = _dispatch_spec("first"), _dispatch_spec("later")
+    prereqs = {"first": ["a", "b"]}
+    assert rss.next_ready_shard([first, later], pool, prereqs) is later
+    a.set()
+    assert rss.next_ready_shard([first], pool, prereqs) is None
+    b.set()  # also what a failed prewarm does: allow the real test to retry
+    assert rss.next_ready_shard([first, later], pool, prereqs) is first
+    assert rss.next_ready_shard([first, later], None, prereqs) is first
+
+
+def test_phase_run_dispatches_ready_shards_once_without_gpu(tmp_path, monkeypatch):
+    from threading import Event
+    from types import SimpleNamespace
+    first, second, third = map(_dispatch_spec, ("first", "second", "third"))
+    a, b = Event(), Event()
+    pool = SimpleNamespace(done_events={"a": a, "b": b}, raise_floor=lambda _: None)
+    launched = []
+    def launch(command, **kwargs):
+        # Only one shard can be active; its compile writer must have finished.
+        name = next(s.name for s in (first, second, third) if s.targets[0] in command)
+        assert name != "first" or a.is_set()
+        assert name != "second" or b.is_set()
+        launched.append(name)
+        return SimpleNamespace(name=name)
+    def finish(proc, *args):
+        if proc.name == "third":
+            b.set()  # second becomes ready before first
+        elif proc.name == "second":
+            a.set()
+        return 0
+    monkeypatch.setattr(rss.subprocess, "Popen", launch)
+    monkeypatch.setattr(rss.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout="0\n"))
+    monkeypatch.setattr(rss, "_wait_progress_aware", finish)
+    monkeypatch.setattr(rss, "parse_junit", lambda _: (1, 0, 0, 0, []))
+    results, paused = rss.phase_run([first, second, third], tmp_path, True, [], [],
+                                  pool, {"first": ["a"], "second": ["b"]})
+    assert not paused and launched == ["third", "second", "first"]
+    assert [r["shard"] for r in results] == launched
+    assert all(r['rc'] == 0 for r in results)
+    assert len(json.loads((tmp_path / "results.json").read_text())) == 3
+    assert [s.name for s in (first, second, third)] == ["first", "second", "third"]
+
+
+def test_phase_run_pause_is_checked_while_all_shards_wait(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    class PausingEvent:
+        def is_set(self):
+            return False
+        def wait(self, timeout):
+            assert 0 < timeout <= 1
+            (tmp_path / "PAUSE").touch()
+    pool = SimpleNamespace(done_events={"a": PausingEvent()}, raise_floor=lambda _: None)
+    def no_launch(*args, **kwargs):
+        raise AssertionError("must not start a blocked shard")
+    monkeypatch.setattr(rss.subprocess, "Popen", no_launch)
+    results, paused = rss.phase_run([_dispatch_spec("first")], tmp_path, False, [], [],
+                                  pool, {"first": ["a"]})
+    assert paused and results == []
+
+
+def test_phase_run_rescans_all_shards_after_bounded_wait(tmp_path, monkeypatch):
+    from threading import Event
+    from types import SimpleNamespace
+    later_done = Event()
+    class EarlierEvent:
+        done = False
+        def is_set(self):
+            return self.done
+        def wait(self, timeout):
+            assert 0 < timeout <= 1
+            later_done.set()  # later compile completes while earlier is blocked
+    earlier = EarlierEvent()
+    pool = SimpleNamespace(done_events={"a": earlier, "b": later_done}, raise_floor=lambda _: None)
+    launched = []
+    def launch(command, **kwargs):
+        name = "first" if "test/first.py::test_one" in command else "second"
+        assert (earlier.is_set() if name == "first" else later_done.is_set())
+        launched.append(name)
+        return SimpleNamespace()
+    def finish(*args):
+        earlier.done = True
+        return 0
+    monkeypatch.setattr(rss.subprocess, "Popen", launch)
+    monkeypatch.setattr(rss.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout="0\n"))
+    monkeypatch.setattr(rss, "_wait_progress_aware", finish)
+    monkeypatch.setattr(rss, "parse_junit", lambda _: (1, 0, 0, 0, []))
+    results, paused = rss.phase_run([_dispatch_spec("first"), _dispatch_spec("second")],
+        tmp_path, False, [], [], pool, {"first": ["a"], "second": ["b"]})
+    assert not paused and launched == ["second", "first"]
+    assert len(results) == 2
+
+
 def test_atom_key_shapes():
     # flagship: (module, robot, base, cell) — thread token excluded
     assert rss._atom_key(_fid("iiwa14", "fixed", "crba", 96)) == (
@@ -532,3 +658,19 @@ def test_aggregate_header_keys_folds_and_carries(tmp_path, monkeypatch):
                                 "content_sha256": "old01"}]
     # shard absent from the ledger is dropped
     assert "cuda_gone" not in data
+
+
+def test_fingerprint_follows_named_runners_and_local_helpers():
+    """Runner sources outside the same-stem convention and local helper modules
+    must stale the shards that use them (2026-09-28: the integrator/plant/
+    second-order smoke runners and executable_cache.py were unfingerprinted)."""
+    from test import run_split_suite as R
+
+    paths = R._shard_fingerprint_paths({"test_cuda_integrator_equivalence"})
+    assert "test/cuda_equivalents/cuda_integrator_smoke_runner.cu" in paths
+    assert "test/cuda_equivalents/executable_cache.py" in paths
+    assert "test/cuda_equivalents/cuda_harness.py" in paths
+    assert len(paths) == len(set(paths))
+    # A module that uses neither keeps its narrow fingerprint.
+    narrow = R._shard_fingerprint_paths({"test_cuda_kinematics_thread_invariance"})
+    assert "test/cuda_equivalents/executable_cache.py" not in narrow

@@ -70,6 +70,7 @@ import argparse
 import ast
 import glob
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -293,6 +294,30 @@ def collect_cuda_node_ids(cuda_k: str | None) -> list[str]:
     return ids
 
 
+_LOCAL_CUDA_SOURCE = re.compile(r"""["']([A-Za-z0-9_]+\.(?:cu|cuh))["']""")
+_LOCAL_HELPER_IMPORT = re.compile(r"^from test\.cuda_equivalents\.([A-Za-z0-9_]+) import", re.MULTILINE)
+
+
+def _module_local_dependencies(mod: str, exclude: set[str]) -> list[str]:
+    """Runner sources a module names outside the same-stem convention (e.g.
+    cuda_integrator_smoke_runner.cu) and the local helper modules it imports
+    (e.g. executable_cache.py). cuda_harness is fingerprinted for every shard
+    below; everything else must follow its importers, or an edit to it would
+    leave their receipts carried against stale bytes."""
+    source_path = CUDA_DIR / f"{mod}.py"
+    if not source_path.exists():
+        return []
+    source = source_path.read_text(encoding="utf-8")
+    found = []
+    for name in _LOCAL_CUDA_SOURCE.findall(source):
+        if (CUDA_DIR / name).is_file():
+            found.append(f"test/cuda_equivalents/{name}")
+    for helper in _LOCAL_HELPER_IMPORT.findall(source):
+        if helper != "cuda_harness" and (CUDA_DIR / f"{helper}.py").is_file():
+            found.append(f"test/cuda_equivalents/{helper}.py")
+    return [path for path in dict.fromkeys(found) if path not in exclude]
+
+
 def _shard_fingerprint_paths(member_mods: set[str]) -> list[str]:
     """Member module files + their same-stem runner .cu (test_cuda_X.py ↔
     cuda_X_runner.cu convention) — finer than the whole-directory fingerprint
@@ -304,6 +329,7 @@ def _shard_fingerprint_paths(member_mods: set[str]) -> list[str]:
         runner = mod.removeprefix("test_") + "_runner.cu"
         if (CUDA_DIR / runner).exists():
             paths.append(f"test/cuda_equivalents/{runner}")
+        paths.extend(_module_local_dependencies(mod, exclude=set(paths)))
     # Wave D harness split (2026-09-09): every cuda module imports the shared
     # harness, so EVERY cuda shard fingerprints it — a harness edit stales the
     # whole domain honestly, while a flagship-TEST edit stales only the
@@ -1008,6 +1034,19 @@ CUDA_CACHE_DIR_DEFAULT = str(REPO_ROOT / ".grid_build_cache" / "cuda")
 GPU_PHASE_FLOOR_KB = 14 * 1024 * 1024
 
 
+def cuda_worker_env() -> dict[str, str]:
+    """Match the CUDA suite's pin-only default outside pytest as well.
+
+    Prewarm workers do not execute the conftest fixture. Without this explicit
+    default they build different floating headers, which the tests cannot reuse.
+    Honor an explicitly requested MuJoCo-enabled sweep on both paths.
+    """
+    return {
+        "GRID_CUDA_CACHE_DIR": os.environ.get("GRID_CUDA_CACHE_DIR", CUDA_CACHE_DIR_DEFAULT),
+        "GRID_ENABLE_MUJOCO_KERNELS": os.environ.get("GRID_ENABLE_MUJOCO_KERNELS", "0"),
+    }
+
+
 def build_compile_pool(out_dir: Path, *, warm: bool, cuda_shards: list,
                        modules: list[str], max_jobs: int):
     """Build the RAM-aware compile pool covering BOTH compile populations
@@ -1055,8 +1094,7 @@ def build_compile_pool(out_dir: Path, *, warm: bool, cuda_shards: list,
         flagship_ids = [t for s in cuda_shards for t in s.targets
                         if "test_cuda_executable_equivalence" in t]
         if flagship_ids:
-            cache_env = {"GRID_CUDA_CACHE_DIR":
-                         os.environ.get("GRID_CUDA_CACHE_DIR", CUDA_CACHE_DIR_DEFAULT)}
+            cache_env = cuda_worker_env()
             ids_file = cdir / "flagship_ids.txt"
             ids_file.write_text("\n".join(flagship_ids))
             plan_path = cdir / "prewarm_plan.json"
@@ -1096,7 +1134,36 @@ def build_compile_pool(out_dir: Path, *, warm: bool, cuda_shards: list,
     ledger = compile_sched.Ledger(
         REPO_ROOT / "test" / ".split_suite" / "compile_rss.json")
     pool = compile_sched.RamScheduler(ledger, max_jobs=max_jobs, label="pool")
+    # Unblock earlier shards before warming unrelated robots alphabetically.
+    ordered_names = list(modules) + [s.name for s in cuda_shards]
+    jobs = prioritize_compile_jobs(jobs, ordered_names, prereqs)
     return pool, jobs, prereqs
+
+
+def prioritize_compile_jobs(jobs, shard_names: list[str], prereqs: dict):
+    """Stable order by each job's earliest consumer; never split cache groups."""
+    rank = {}
+    for index, name in enumerate(shard_names):
+        for job in prereqs.get(name, []):
+            rank.setdefault(job, index)
+    return sorted(jobs, key=lambda job: rank.get(job.name, len(shard_names)))
+
+
+def pending_compile_jobs(spec: ShardSpec, pool, prereqs: dict) -> list[str]:
+    """Only the compile pool owns these keys until its completion events fire."""
+    if pool is None:
+        return []
+    return [name for name in prereqs.get(spec.name, [])
+            if name in pool.done_events and not pool.done_events[name].is_set()]
+
+
+def next_ready_shard(shards: list[ShardSpec], pool, prereqs: dict):
+    """Choose the earliest ready shard without changing membership or names.
+
+    Failed prewarms also signal completion: their tests retry compilation inline
+    and report the actual outcome. They are never silently omitted.
+    """
+    return next((s for s in shards if not pending_compile_jobs(s, pool, prereqs)), None)
 
 
 def report_pool(pool, out_dir: Path) -> int:
@@ -1145,19 +1212,29 @@ def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
         # GPU shards need host RAM too — tighten the pool's live floor for the
         # rest of the run (admissions only; running compiles finish).
         pool.raise_floor(GPU_PHASE_FLOOR_KB)
-    for spec in shards:
-        if pool is not None and prereqs:
-            need = [n for n in prereqs.get(spec.name, [])
-                    if n in pool.done_events and not pool.done_events[n].is_set()]
-            if need:
-                print(f"[{datetime.now():%H:%M:%S}] {spec.name}: waiting on "
-                      f"{len(need)} compile job(s) …", flush=True)
-                pool.wait(need)
+    pending = list(shards)
+    prereqs = prereqs or {}
+    waiting = False
+    while pending:
         if (out_dir / "PAUSE").exists():
             print(f"[{datetime.now():%H:%M:%S}] PAUSE file present — stopping "
-                  f"cleanly before {spec.name} (rm it, then --resume {out_dir})",
+                  f"cleanly with {len(pending)} shard(s) pending "
+                  f"(rm it, then --resume {out_dir})",
                   flush=True)
             return results, True
+        spec = next_ready_shard(pending, pool, prereqs)
+        if spec is None:
+            if not waiting:
+                print(f"[{datetime.now():%H:%M:%S}] all {len(pending)} pending "
+                      "shards are waiting on compile jobs …", flush=True)
+                waiting = True
+            # A bounded wait lets a later shard become runnable first and keeps
+            # PAUSE responsive. Never launch two GPU shards concurrently.
+            need = pending_compile_jobs(pending[0], pool, prereqs)
+            pool.done_events[need[0]].wait(timeout=0.25)
+            continue
+        waiting = False
+        pending.remove(spec)
         xml_path = out_dir / f"{spec.name}.xml"
         log_path = out_dir / f"{spec.name}.log"
         cmd = [PYTHON, "-m", "pytest", *spec.targets,
@@ -1179,7 +1256,7 @@ def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
             # absolute so every shard (incl. nested pytest processes) shares
             # ONE warm cache. NOTE the cache writers have no file locking:
             # shards must stay SERIAL (they are — one GPU, one at a time).
-            env.setdefault("GRID_CUDA_CACHE_DIR", CUDA_CACHE_DIR_DEFAULT)
+            env.update(cuda_worker_env())
             if receipts:
                 # A4: per-shard header content-key sidecar (recorded by the
                 # cuda conftest; consumed by Wave A' refresh planning). Fresh
