@@ -2501,3 +2501,33 @@ predictor here: g1 high_velocity at 8.9 is well-conditioned.
 `cuda_X_runner.cu`, so the `*_smoke_runner.cu` files were never fingerprinted.
 `_module_local_dependencies` now adds named runner sources and local helper modules
 (e.g. `executable_cache.py`) to the importing shards.
+
+### 7.z32 Floating base × mimic: every "floating first" branch is suspect (2026-09-29, h1_2)
+
+**Symptom.** h1_2 floating integrator Euler at dt=0.001 off by ~90% (norm), in both tiers and
+in a double build. Velocity-dependent: exact at qd=0, and exactly quadratic in qd. Fixed-base
+h1_2 and every non-mimic floating robot are fine.
+
+**Causes (all generator ordering; mimic joints are bodies without a velocity slot):**
+1. ID `a += (v×S)·qd` chose `s_qd[jid + 5]` because `floating_base` was checked before
+   `HAS_MIMIC`. `jid + 5` is the v-slot only until the first mimic joint. Use `_id_qd(jid)`.
+2. The signed S index was read at `s_topology_helpers[nv + jid]`, but the table is
+   `parent_inds[NJ] | S_inds[NJ + 5 (floating root = 6 entries)]`. It agreed only while
+   nv == NJ + 5 (no mimic). Use `_s_inds_stride()`.
+3. `gen_aba_inner` sent floating robots to the recursion before the mimic check. The recursion
+   cannot fold mimic joints, so only the Minv·(τ − c) decomposition is valid. It is also
+   un-split, so its surgical rung must keep the whole arena, in BOTH the kernel
+   (`_aba_surgical_inner_smem_size`) and the launch size (`ArenaCtx.aba_surgical_inner`).
+   Otherwise the kernel runs off its dynamic smem (illegal memory access at TIER_LITE).
+
+**Why it hid.**
+- The floating flagship suite compared only the `zero` sample: its non-zero defaults are
+  corner samples, but it passes `include_corner_samples=False`.
+- h1_2 FD/ABA had 1% norm guards blamed on conditioning.
+- `codegen_neutrality.MATRIX` has no mimic robot.
+
+**How it was found fast.** Build a value-only / ABA-only header in double (`run<double>()`,
+TIER_MINIMAL if the SHARED arena exceeds the cap; ~7 min, not the full hour). Compare against
+RBDReference and a Pinocchio full-URDF model reduced by hand with G from `<mimic>`. Use unit
+velocities one joint at a time: the error appears only on bodies whose parent moves, and
+patching the header by hand proves each cause before touching the generator.

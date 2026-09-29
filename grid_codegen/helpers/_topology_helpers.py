@@ -1467,6 +1467,22 @@ def gen_init_topology_helpers(self):
     self.gen_checked_table_tail("h_topology_helpers", "d_topology_helpers", str(self.gen_topology_helpers_size()), "int", host_freed=False)
     self.gen_legacy_init_wrapper("init_topology_helpers", "int")
 
+def _s_inds_stride(self):
+    """Offset of body ``jid``'s signed S index in the topology-helper table,
+    read as ``s_topology_helpers[stride + jid]``.
+
+    gen_init_topology_helpers builds parent_inds NJ-wide, then S_inds via
+    get_S_inds(NJ), where a floating root contributes six entries (one per base
+    DoF) before one entry per remaining body. Body jid's entry therefore sits at
+    NJ + 5 + jid on a floating base and NJ + jid on a fixed one. That equals
+    get_num_vel() for every non-mimic robot (byte-identical to the historic
+    ``n + jid``) and NJ for fixed-base mimic (the existing special case). For a
+    floating mimic robot nv is smaller by the number of mimic joints, so the
+    historic nv stride read another body's axis and sign (h1_2, 2026-09-29).
+    """
+    NJ = self.robot.get_num_joints()
+    return NJ + 5 if self.robot.floating_base else NJ
+
 def gen_topology_helpers_pointers_for_cpp(self, inds = None, updated_var_names = None, NO_GRAD_FLAG = False, OFFSET = True):
     """
     Floating-base correct as-is: the 'OFFSET' input shifts the helper-pointer
@@ -1531,7 +1547,7 @@ def gen_topology_helpers_pointers_for_cpp(self, inds = None, updated_var_names =
             parent_ind = var_names["s_topology_helpers_name"] + "[" + var_names["jid_name"] + "]"
             if not IDENTICAL_S_FLAG_INDS: # this set of inds can be optimized if all S are the same
                 if OFFSET:
-                    S_id = var_names["s_topology_helpers_name"] + "[" + str(n) + " + " + var_names["jid_name"] +  "]"
+                    S_id = var_names["s_topology_helpers_name"] + "[" + str(self._s_inds_stride()) + " + " + var_names["jid_name"] +  "]"
                 else: S_id = var_names["s_topology_helpers_name"] + "[" + str(NJ) + " + " + var_names["jid_name"] +  "]"
                 S_ind = "((" + S_id + ") > 0 ? (" + S_id + ") - 1 : -(" + S_id + ") - 1)"
             if not IDENTICAL_S_FLAG_GLOBAL: # ofset is based on any S different at all
@@ -1605,7 +1621,7 @@ def gen_topology_S_sign_for_cpp(self, inds = None, updated_var_names = None, OFF
         return "((" + S_id + ") > 0 ? 1 : -1)"
 
     if OFFSET:
-        S_id = var_names["s_topology_helpers_name"] + "[" + str(n) + " + " + var_names["jid_name"] + "]"
+        S_id = var_names["s_topology_helpers_name"] + "[" + str(self._s_inds_stride()) + " + " + var_names["jid_name"] + "]"
     else:
         S_id = var_names["s_topology_helpers_name"] + "[" + str(NJ) + " + " + var_names["jid_name"] + "]"
     return "((" + S_id + ") > 0 ? 1 : -1)"

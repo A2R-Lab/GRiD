@@ -564,6 +564,11 @@ class ArenaCtx:
 
     @property
     def aba_surgical_inner(self) -> int:   # aba surgical rung hot-band inner (cold sub-band -> d_cold)
+        # Mirrors _aba._aba_surgical_inner_smem_size (the kernel layout); the
+        # launch smem must match it. Mimic ABA is the Minv*(tau - c)
+        # decomposition, which has no cold band and keeps its whole arena.
+        if self.has_mimic:
+            return self.aba_inner
         return (self.aba_inner - 138) if self.floating else (98 * self.NJ)
 
 

@@ -559,8 +559,12 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
                     S_desc = self._id_S_desc(jid)
                     S_arr = "{" + ", ".join(
                         ((_id_S_row_coeff(S_desc, r) or "static_cast<T>(0)")) for r in range(6)) + "}"
-                    qd_term = ("s_qd[" + str(jid + 5) + "]" if self.robot.floating_base
-                               else (_id_qd(jid) if HAS_MIMIC else "s_qd[" + str(jid) + "]"))
+                    # Mimic first: the v-slot/alpha tables already carry the
+                    # floating offset, while jid+5 is only the v-slot of a body
+                    # when no mimic joint precedes it (mimic joints have no slot).
+                    qd_term = (_id_qd(jid) if HAS_MIMIC
+                               else ("s_qd[" + str(jid + 5) + "]" if self.robot.floating_base
+                                     else "s_qd[" + str(jid) + "]"))
                     self.gen_add_code_line("{ const T S_skew[6] = " + S_arr + ";")
                     self.gen_add_code_line("  mxS_general_peq_scaled<T>(&s_vaf[" + str(6*n + 6*jid) + "], &s_vaf[" + str(6*jid) + "], S_skew, " + qd_term + "); }")
                 self.gen_add_end_control_flow()
@@ -574,15 +578,16 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
                 self.gen_add_multi_threaded_select("ind", "==", [str(i) for i in range(len(inds))], select_var_vals)
                 dst_name = "&s_vaf[" + str(6*n) + " + 6*jid]"
                 src_name = "&s_vaf[6*jid]"
-                if self.robot.floating_base: scale_name = "(" + S_sign_cpp + ") * s_qd[jid + 5]" # dof offset for fb
-                elif HAS_MIMIC: scale_name = "(" + S_sign_cpp + ") * " + _id_qd("jid")
+                # Mimic first (see qd_term above): jid+5 is wrong after the first mimic joint.
+                if HAS_MIMIC: scale_name = "(" + S_sign_cpp + ") * " + _id_qd("jid")
+                elif self.robot.floating_base: scale_name = "(" + S_sign_cpp + ") * s_qd[jid + 5]" # dof offset for fb
                 else: scale_name = "(" + S_sign_cpp + ") * s_qd[jid]"
             else:
                 jid = inds[0]
                 dst_name = "&s_vaf[" + str(6*n + 6*jid) + "]"
                 src_name = "&s_vaf[" + str(6*jid) + "]"
-                if self.robot.floating_base: scale_name = "(" + S_sign_cpp + ") * s_qd[" + str(jid + 5) + "]" # dof offset due to fb
-                elif HAS_MIMIC: scale_name = "(" + S_sign_cpp + ") * " + _id_qd(jid)
+                if HAS_MIMIC: scale_name = "(" + S_sign_cpp + ") * " + _id_qd(jid)
+                elif self.robot.floating_base: scale_name = "(" + S_sign_cpp + ") * s_qd[" + str(jid + 5) + "]" # dof offset due to fb
                 elif HAS_SPHERICAL: scale_name = "(" + S_sign_cpp + ") * s_qd[" + str(_v_idx(jid)) + "]"
                 else: scale_name = "(" + S_sign_cpp + ") * s_qd[" + str(jid) + "]"
             updated_var_names = dict(S_ind_name = S_ind_cpp, s_dst_name = dst_name, s_src_name = src_name, s_scale_name = scale_name)

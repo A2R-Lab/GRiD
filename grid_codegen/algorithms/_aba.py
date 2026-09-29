@@ -449,8 +449,8 @@ def gen_aba_inner_floating(self):
     self.gen_add_end_function()
 
 
-def _gen_aba_inner_mimic_fixed(self, NB):
-    """Mimic fixed-base aba_inner = ID(bias) + Minv + qdd = Minv*(tau - bias).
+def _gen_aba_inner_mimic(self, NB):
+    """Mimic aba_inner (fixed or floating base) = ID(bias) + Minv + qdd = Minv*(tau - bias).
 
     Composes the already-mimic-aware inverse_dynamics_inner (compute_c) and
     minv_inner (= inv(CRBA)). s_temp layout (sized in
@@ -497,7 +497,11 @@ def _gen_aba_inner_mimic_fixed(self, NB):
 
 
 def gen_aba_inner(self):
-    if self.robot.floating_base:
+    # Mimic first, on either base: the recursive ABA cannot fold mimic joints,
+    # so mimic robots take the algebraic decomposition below. Checking
+    # floating_base first sent floating mimic robots through the plain
+    # recursion (h1_2 floating: off by 20-1000x, 2026-09-29).
+    if self.robot.floating_base and not self.robot_has_mimic_joints():
         return gen_aba_inner_floating(self)
     n = self.robot.get_num_joints()
     n_bfs_levels = self.robot.get_max_bfs_level() + 1 # starts at 0
@@ -549,7 +553,7 @@ def gen_aba_inner(self):
         # fast path): qdd = Minv * (tau - rnea(q, qd, 0)). The per-body U/d ABA
         # recursion does not fold for mimic joints (Ia += U U^T / d scales by
         # alpha^2), so compose the already-mimic-aware ID bias + Minv instead.
-        _gen_aba_inner_mimic_fixed(self, n)
+        _gen_aba_inner_mimic(self, n)
         self.gen_add_end_function()
         return
 
@@ -1345,6 +1349,12 @@ def _aba_surgical_inner_smem_size(self):
                 is reclaimed from smem (the interior vcross slot still spills to
                 d_cold but its smem hole cannot be compacted byte-identically)."""
     n = self.robot.get_num_joints()
+    if self.robot_has_mimic_joints():
+        # The mimic decomposition (ID bias + Minv) has no hot/cold split and
+        # never touches d_cold, so it needs its whole arena in smem at this rung
+        # too. The recursion sizes below under-sized it (h1_2 fixed: 4998 of
+        # 14001 floats at TIER_LITE, 2026-09-29).
+        return self.gen_aba_inner_temp_mem_size()
     if self.robot.floating_base:
         return self.gen_aba_inner_temp_mem_size() - 138
     if self.robot.robot_has_spherical():
