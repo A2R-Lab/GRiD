@@ -17,6 +17,7 @@ timestep (default 0.01).
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import os
 import shutil
 import subprocess
@@ -34,6 +35,7 @@ from test.cuda_equivalents.cuda_harness import (
     _sample_to_stdin,
     _thread_counts,
 )
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import (
     iter_robot_cases,
@@ -114,6 +116,27 @@ def _samples(project_model):
     return _build_cuda_samples(project_model, random_count=3, include_corner_samples=True)
 
 
+def _torque_driven(project_model, sample):
+    """The sample with its third vector replaced by the torque that produces its qdd.
+
+    ``DynamicsSample.qdd`` is an acceleration. Fed in directly as the control torque,
+    a torque of up to 50 on a light distal link gives a first-stage acceleration near
+    1e5, and a dt=0.1 explicit step then diverges through its stages (G1 RK4 at
+    high_acceleration: stage-4 qdd ~2e22, x_kp1 ~4e20). No float32 kernel can track
+    the float64 reference through that: relative noise of one float32 ulp on each
+    forward-dynamics evaluation already moves the result past rtol, so the comparison
+    measured the step's conditioning rather than the kernel. u = ID(q, qd, qdd) makes
+    the first-stage acceleration exactly the sample's qdd, so "high_acceleration"
+    means 50 rad/s^2 as intended. A CPU noise model then keeps every value cell
+    within float32 reach; a few dt=0.1 RK4 gradient cells on floating robots stay
+    ill-conditioned (test/test_integrator_sample_conditioning.py covers values).
+    """
+    u = np.asarray(
+        project_model.inverse_dynamics(sample.q, sample.qd, sample.qdd), dtype=np.float64,
+    ).reshape(-1)
+    return dataclasses.replace(sample, qdd=u)
+
+
 # Value-only integrator algorithm list (no integrator_gradient): used for the BIG
 # floating-base MIMIC cell (h1_2-floating). The floating-mimic gradient is now
 # SUPPORTED (B3 resolved), but the BIG floating-mimic gradient header is a very
@@ -173,23 +196,9 @@ def _generate_header(project_model, build_dir: Path, value_only: bool = False) -
 
 
 def _compile_runner(build_dir: Path, tier: str | None = None):
-    nvcc = shutil.which("nvcc")
-    if nvcc is None:
-        pytest.skip("nvcc was not found; install CUDA Toolkit to run CUDA tests.")
-    runner_copy = build_dir / RUNNER_SOURCE.name
-    shutil.copyfile(RUNNER_SOURCE, runner_copy)
     arch = _detect_cuda_arch()
-    executable = build_dir / "cuda_integrator_smoke_runner.exe"
     glass_inc = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
-    cmd = [
-        nvcc,
-        "-std=c++17",
-        "-O0",
-        "-gencode", f"arch=compute_{arch},code=sm_{arch}",
-        f"-I{glass_inc}",
-        "-o", str(executable),
-        str(runner_copy),
-    ]
+    flags = ["-std=c++17", "-O0", "-gencode", f"arch=compute_{arch},code=sm_{arch}"]
     # Tier override so the suite exercises the LITE/MINIMAL SPILL path (the
     # integrator gradient's FD-grad inner s_temp / s_D_qdd_stage band routes to
     # d_workspace / d_temp_spill) in addition to PERF. The math is tier-independent,
@@ -200,16 +209,12 @@ def _compile_runner(build_dir: Path, tier: str | None = None):
     if tier and tier != "TIER_SHARED":
         if tier not in ("TIER_SHARED", "TIER_LITE", "TIER_MINIMAL"):
             pytest.fail("GRID_CUDA_INTEGRATOR_TIER must be TIER_SHARED, TIER_LITE, or TIER_MINIMAL.")
-        cmd.insert(-1, f"-DGRID_DEFAULT_RESOURCE_TIER={tier}")
-    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
-    if result.returncode != 0:
-        pytest.fail(
-            "CUDA integrator smoke runner compilation failed.\n"
-            f"Command: {' '.join(cmd)}\n"
-            f"stdout:\n{result.stdout}\n"
-            f"stderr:\n{result.stderr}"
-        )
-    return executable, cmd
+        flags.append(f"-DGRID_DEFAULT_RESOURCE_TIER={tier}")
+    return cached_nvcc_executable(
+        [RUNNER_SOURCE, build_dir / "grid.cuh"], flags,
+        exe_name="cuda_integrator_smoke_runner.exe", fallback_dir=build_dir,
+        include_dirs=[glass_inc], what="CUDA integrator smoke runner",
+    )
 
 
 def _build_case(project_model, tmp_path, label, tier=None, value_only=False):
@@ -336,7 +341,7 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode,
     executable, compile_cmd = _build_case(
         project_model, tmp_path, label, tier=tier, value_only=value_only
     )
-    samples = _samples(project_model)
+    samples = [_torque_driven(project_model, s) for s in _samples(project_model)]
     dts = _dts()
     nv = project_model.nv
     nq = project_model.nq
@@ -372,8 +377,8 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode,
     for num_threads in _thread_counts():
       for dt in dts:
         for sample in samples:
-            # The shared `DynamicsSample` carries q, qd, qdd — for the integrator
-            # the third vector serves as the control torque u.
+            # The third vector of each sample is the control torque u (see
+            # _torque_driven).
             actual = _run_sample(executable, compile_cmd, sample, dt, num_threads=num_threads)
             u = sample.qdd
             for prefix, integrator_type, has_gradient, fixed_base_only in _INTEGRATORS:
@@ -513,7 +518,7 @@ def test_cuda_integrator_fext_matches_python_reference(tmp_path, monkeypatch):
     executable, compile_cmd = _build_case(
         project_model, tmp_path, f"{robot_id}_{base_mode}_fext_cuda_integrator", tier="TIER_SHARED"
     )
-    samples = _samples(project_model)
+    samples = [_torque_driven(project_model, s) for s in _samples(project_model)]
     dts = _dts()
 
     # Deterministic NONZERO body-major local-frame f_ext ([angular; linear] per body),
@@ -529,7 +534,7 @@ def test_cuda_integrator_fext_matches_python_reference(tmp_path, monkeypatch):
 
     for dt in dts:
         for sample in samples:
-            u = sample.qdd  # the shared sample's third vector is the control torque
+            u = sample.qdd  # the control torque (see _torque_driven)
             stdin = _sample_stdin_with_dt(sample, dt) + f_ext_str
             actual = _parse_runner_output(_run_runner(executable, stdin, compile_cmd))
             # The runner must have actually received the f_ext we fed it.

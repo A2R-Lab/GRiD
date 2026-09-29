@@ -2472,3 +2472,32 @@ keep genuine fp32 algorithms on their existing float path, and record input
 storage precision separately from arithmetic/output precision. Validate the
 rebuilt bridge and the entire failing batch before accepting replacement data;
 a tiny initial-prefix smoke never reaches these samples.
+
+### 7.z31 An fp32-vs-fp64 test can measure the step, not the kernel (2026-09-28, RK4 integrator)
+
+**Symptom.** Integrator RK4 CUDA equivalence fails at dt=0.1 on go2, fr3 and g1, and at
+dt=0.01 on h1_2, with identical diagnostics in every memory tier. Outputs are enormous
+(G1 x_kp1 ~4e20, go2 dAB ~8e12). The first failing sample is always an energetic one.
+
+**Cause.** The test fed `DynamicsSample.qdd`, an acceleration of up to 50, in as the
+control torque. On light distal links that is a first-stage acceleration near 1e5. An
+explicit step then diverges through its stages (G1 stage-4 qdd ~2e22), and the step map
+becomes so ill-conditioned that fp32 round-off alone exceeds rtol.
+
+**How it was proven (CPU only).**
+1. Inject relative noise into every forward-dynamics evaluation of the fp64 reference.
+   One fp32 ulp already reproduces the observed violation counts, and fitting the
+   logged GPU entries gives 3e-7..1e-6 per evaluation.
+2. Re-implement RK4 with plausible stage-algebra mutations. Every mutant fails cells the
+   GPU passed, so the kernel's algebra is exonerated.
+
+**Fix.** Drive with `u = ID(q, qd, qdd)` (`_torque_driven`) so the stage-1 acceleration
+is the sample's qdd. `test/test_integrator_sample_conditioning.py` guards the
+float32-reachability of every value sample. Do NOT widen tolerances or skip samples.
+Measure the reference's own noise sensitivity first. dt·ρ(J) is not a usable
+predictor here: g1 high_velocity at 8.9 is well-conditioned.
+
+**Related gap.** The narrow shard fingerprint only knew the same-stem
+`cuda_X_runner.cu`, so the `*_smoke_runner.cu` files were never fingerprinted.
+`_module_local_dependencies` now adds named runner sources and local helper modules
+(e.g. `executable_cache.py`) to the importing shards.
