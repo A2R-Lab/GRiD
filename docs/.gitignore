@@ -1,0 +1,7 @@
+# Local working/session/results docs — kept on disk for reference, NOT tracked
+# for users. Tracked reference docs (Sphinx source/, agent_debugging_guide.md,
+# analytic derivations, READMEs) are intentionally NOT ignored.
+open-tasks/
+customer-reviews/
+notes/
+STARTUP_PROMPT.md

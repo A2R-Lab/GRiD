@@ -3,6 +3,10 @@
 # Generated GRiD header
 grid.cuh
 
+# Generated documentation output
+docs/build/
+docs/_build/
+
 # Custom debug files
 t.txt
 t2.txt
@@ -13,6 +17,9 @@ t6.txt
 t7.txt
 t8.txt
 t9.txt
+
+# AI Tool Helpers
+handoff.md
 
 # Prerequisites
 *.d
@@ -87,3 +94,46 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Developer-only external robot assets
+.external_test_assets/
+
+# IDE settings
+.vscode/
+
+# Test cache
+.pytest_cache/
+.grid_build_cache/
+
+# Developer install scratch (CppADCodeGen clone, etc.)
+.cache/
+
+# Benchmark sweep artifacts (regenerable; commit explicitly to archive)
+test/benchmarks/benchmark_*.md
+test/benchmarks/benchmark_*.json
+
+# Internal handoff/debugging docs — keep local-only
+docs/handoff-*.md
+
+# Generated benchmark figures — track the PLOT CODE, not its dated output.
+# Final figure design is a backlog item (decide together); regenerate via plot_benchmarks.py.
+docs/imgs/*_2026*.png
+
+# Local agent worktrees + Claude Code state
+.claude/
+
+# Local, per-machine session helpers (not project artifacts)
+docs/STARTUP_PROMPT.md
+test/benchmarks/overnight_batch.sh
+
+# Scratch working dir (agent temp files; never tracked)
+scratchpad/
+
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store
+test/.split_suite/
+test/.split-suite-state.json
+# dated one-off night scripts are scratch (durable harness scripts are tracked)
+test/benchmarks/run_overnight_2*.sh
+test/benchmarks/probe_*.sh

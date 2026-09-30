@@ -1,0 +1,308 @@
+"""Python-wrapper smoke tests for the `grid-rbd` package.
+
+Registers iiwa14 (fixed-base) at session scope, exercises every bound
+method, and asserts numerical agreement with `RBDReference` at float32
+precision. The session-scoped registration takes ~30-60s for the
+first run; subsequent runs hit the cache and start in <1s.
+
+Skip conditions:
+  * `grid_rbd` not importable (pip install python/ skipped).
+  * `nvcc` not on PATH (would fail at register time anyway).
+  * iiwa14 URDF fixture not present.
+
+Run with:
+    pytest test/python_wrappers/ -m python_wrappers -v
+or as part of the full suite:
+    pytest -v
+"""
+from __future__ import annotations
+
+import shutil
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+
+# Repo root is parent of `test/`.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_REPO_ROOT))
+
+
+# ─── skip preconditions ─────────────────────────────────────────────────────
+
+_grid_rbd = pytest.importorskip("grid_rbd", reason="grid-rbd not installed (pip install python/)")
+
+_URDF = (
+    Path.home()
+    / ".cache/robot_descriptions/drake/manipulation/models/iiwa_description/urdf/iiwa14_primitive_collision.urdf"
+)
+if not _URDF.exists():
+    pytest.skip(f"iiwa14 URDF fixture not present at {_URDF}", allow_module_level=True)
+
+if shutil.which("nvcc") is None:
+    pytest.skip("nvcc not on PATH; grid-rbd register_robot requires it", allow_module_level=True)
+
+
+pytestmark = pytest.mark.python_wrappers
+
+
+_TOL = 5e-3   # float32 vs float64 cross-precision; some algos drift ~1e-4
+
+
+# ─── fixtures ───────────────────────────────────────────────────────────────
+
+
+@pytest.fixture(scope="module")
+def handle():
+    return _grid_rbd.register_robot(
+        name="iiwa14_pytest_smoke",
+        urdf_path=str(_URDF),
+        floating_base=False,
+        max_batch_size=8,
+    )
+
+
+@pytest.fixture(scope="module")
+def ref():
+    from URDFParser import URDFParser
+    from RBDReference import RBDReference
+    return RBDReference(URDFParser().parse(str(_URDF), floating_base=False))
+
+
+@pytest.fixture(scope="module")
+def samples(handle):
+    rng = np.random.default_rng(0)
+    NJ = handle.num_joints
+    B = 4
+    return {
+        "q":  rng.standard_normal((B, NJ)).astype(np.float32),
+        "qd": rng.standard_normal((B, NJ)).astype(np.float32),
+        "u":  rng.standard_normal((B, NJ)).astype(np.float32),
+    }
+
+
+def _max_err(out_grid, out_ref):
+    return float(np.max(np.abs(out_grid - out_ref)))
+
+
+# ─── tests ──────────────────────────────────────────────────────────────────
+
+
+def test_metadata(handle):
+    assert handle.num_joints == 7
+    assert handle.num_vel == 7
+    # W11 dimension aliases: nq (configuration width) / nv (tangent) / nb (bodies)
+    assert (handle.nq, handle.nv, handle.nb) == (handle.num_joints, handle.num_vel, handle.num_bodies) == (7, 7, 7)
+    assert handle.num_ees == 1
+    assert handle.floating_base is False
+    assert handle.max_batch == 8
+
+
+def test_inverse_dynamics(handle, ref, samples):
+    grid = handle.inverse_dynamics(samples["q"], samples["qd"])
+    for i, (q, qd) in enumerate(zip(samples["q"], samples["qd"])):
+        c_ref, *_ = ref.inverse_dynamics(q.astype(np.float64), qd.astype(np.float64), GRAVITY=-9.81)
+        assert _max_err(grid[i], c_ref) < _TOL
+
+
+def test_inverse_dynamics_honors_qdd(handle, ref, samples):
+    """Regression: inverse_dynamics must USE qdd (the binding once hardcoded
+    USE_QDD_FLAG=false and silently dropped it). Assert (a) the full RNEA torque
+    matches RBDReference at a nonzero qdd, (b) qdd=None == qdd=zeros (no stale
+    device buffer), (c) a nonzero qdd actually shifts τ away from the bias."""
+    q, qd = samples["q"], samples["qd"]
+    qdd = samples["u"]  # reuse as a nonzero acceleration
+    tau = handle.inverse_dynamics(q, qd, qdd)
+    for i, (qi, qdi, ai) in enumerate(zip(q, qd, qdd)):
+        tau_ref, *_ = ref.inverse_dynamics(qi.astype(np.float64), qdi.astype(np.float64),
+                                           ai.astype(np.float64), GRAVITY=-9.81)
+        assert _max_err(tau[i], tau_ref) < _TOL, f"RNEA τ mismatch at sample {i}"
+    # qdd=None must equal qdd=zeros (and match the bias), even right after a
+    # nonzero-qdd call (no stale buffer reuse).
+    bias_none = handle.inverse_dynamics(q, qd, None)
+    bias_zero = handle.inverse_dynamics(q, qd, np.zeros_like(q))
+    assert _max_err(bias_none, bias_zero) < 1e-6
+    # nonzero qdd genuinely changes τ vs the bias.
+    assert _max_err(tau, bias_none) > 1e-2, "inverse_dynamics ignored qdd"
+
+
+def test_minv(handle, ref, samples):
+    grid = handle.minv(samples["q"])
+    for i, q in enumerate(samples["q"]):
+        assert _max_err(grid[i], ref.minv(q.astype(np.float64))) < _TOL
+
+
+def test_forward_dynamics(handle, ref, samples):
+    grid = handle.forward_dynamics(samples["q"], samples["qd"], samples["u"])
+    for i, (q, qd, u) in enumerate(zip(samples["q"], samples["qd"], samples["u"])):
+        ref_qdd = ref.forward_dynamics(q.astype(np.float64), qd.astype(np.float64), u.astype(np.float64))
+        assert _max_err(grid[i], ref_qdd) < _TOL
+
+
+def test_aba(handle, ref, samples):
+    grid = handle.aba(samples["q"], samples["qd"], samples["u"])
+    for i, (q, qd, u) in enumerate(zip(samples["q"], samples["qd"], samples["u"])):
+        ref_qdd = ref.aba(q.astype(np.float64), qd.astype(np.float64), u.astype(np.float64), GRAVITY=-9.81)
+        assert _max_err(grid[i], ref_qdd) < _TOL
+
+
+def test_crba(handle, ref, samples):
+    grid = handle.crba(samples["q"])
+    for i, q in enumerate(samples["q"]):
+        assert _max_err(grid[i], ref.crba(q.astype(np.float64))) < _TOL
+
+
+def test_end_effector_pose(handle, ref, samples):
+    grid = handle.end_effector_pose(samples["q"])
+    for i, q in enumerate(samples["q"]):
+        ee_ref = ref.end_effector_pose(q.astype(np.float64))[0].flatten()
+        assert _max_err(grid[i][: 6 * handle.num_ees], ee_ref) < _TOL
+
+
+def test_end_effector_pose_gradient(handle, ref, samples):
+    grid = handle.end_effector_pose_gradient(samples["q"])
+    for i, q in enumerate(samples["q"]):
+        dee_ref = ref.end_effector_pose_gradient(q.astype(np.float64))[0]
+        assert _max_err(grid[i], dee_ref) < _TOL
+
+
+def test_inverse_dynamics_gradient(handle, ref, samples):
+    grid = handle.inverse_dynamics_gradient(samples["q"], samples["qd"])
+    for i, (q, qd) in enumerate(zip(samples["q"], samples["qd"])):
+        dc_ref = ref.inverse_dynamics_gradient(q.astype(np.float64), qd.astype(np.float64), GRAVITY=-9.81)
+        assert _max_err(grid[i], dc_ref) < _TOL
+
+
+def test_forward_dynamics_gradient(handle, ref, samples):
+    grid = handle.forward_dynamics_gradient(samples["q"], samples["qd"], samples["u"])
+    NJ = handle.num_joints
+    for i, (q, qd, u) in enumerate(zip(samples["q"], samples["qd"], samples["u"])):
+        dq, dqd = ref.forward_dynamics_gradient(q.astype(np.float64), qd.astype(np.float64), u.astype(np.float64))
+        assert _max_err(grid[i][:, :NJ], dq)  < _TOL
+        assert _max_err(grid[i][:, NJ:], dqd) < _TOL
+
+
+def test_register_idempotent(handle):
+    """Re-registering the same robot reuses the cache (cache hit ⇒ fast)."""
+    import time
+    t0 = time.time()
+    h2 = _grid_rbd.register_robot(
+        name="iiwa14_pytest_smoke",
+        urdf_path=str(_URDF),
+        floating_base=False,
+        max_batch_size=8,
+    )
+    elapsed = time.time() - t0
+    assert h2.num_joints == handle.num_joints
+    # Cache hit should be well under a second (no nvcc invocation).
+    assert elapsed < 5.0, f"cache hit took {elapsed:.1f}s — should be <1s"
+
+
+def test_get_robot_roundtrip(handle):
+    h2 = _grid_rbd.get_robot("iiwa14_pytest_smoke")
+    assert h2.num_joints == handle.num_joints
+
+
+def test_get_robot_missing_raises():
+    with pytest.raises(_grid_rbd.RobotNotRegisteredError):
+        _grid_rbd.get_robot("does_not_exist_xyz")
+
+
+# ─── Phase-C extension: hessian + SO ───────────────────────────────────────
+
+def test_end_effector_pose_hessian_shape(handle, samples):
+    """Smoke: hessian returns the right shape. Numerical agreement requires
+    a Pinocchio reference; RBDReference's d2ee_pose isn't a 1:1 layout match,
+    so we only assert shape + finiteness here.
+    """
+    d2ee = handle.end_effector_pose_hessian(samples["q"])
+    NJ = handle.num_joints
+    assert d2ee.shape == (samples["q"].shape[0], 6 * handle.num_ees, NJ, NJ)
+    assert np.all(np.isfinite(d2ee))
+
+
+def test_idsva_so_shape(handle, samples):
+    """Smoke: idsva_so returns 4 tensors of shape (B, NV, NV, NV). Numerical
+    agreement vs RBDReference's idsva_so is covered by the existing CUDA
+    equivalence suite (test_cuda_idsva_so_*)."""
+    out = handle.idsva_so(samples["q"], samples["qd"])
+    assert isinstance(out, tuple) and len(out) == 4
+    NV = handle.num_vel
+    for t in out:
+        assert t.shape == (samples["q"].shape[0], NV, NV, NV)
+        assert np.all(np.isfinite(t))
+
+
+def test_idsva_so_honors_qdd(handle, ref, samples):
+    """Regression: idsva_so must USE the qdd argument. The binding once dropped
+    it (`(void)qdd` in the wrapper), so d2tau_dq was silently computed at qdd=0.
+    Assert (a) every block matches RBDReference at a nonzero qdd, (b) qdd=None
+    means qdd=0 (never a stale device buffer), (c) the qdd-dependent block
+    actually changes with qdd."""
+    NV = handle.num_vel
+    q, qd = samples["q"], samples["qd"]
+    qdd = samples["u"]  # reuse as a nonzero acceleration
+    names = ("d2tau_dq", "d2tau_dqd", "d2tau_cross", "dM_dq")
+    out = handle.idsva_so(q, qd, qdd)
+    for name, t in zip(names, out):
+        for i in range(q.shape[0]):
+            ref_block = np.asarray(
+                ref.idsva_so(q[i].astype(np.float64), qd[i].astype(np.float64),
+                             qdd[i].astype(np.float64), GRAVITY=-9.81)[names.index(name)],
+                dtype=np.float64)
+            scale = max(1.0, float(np.max(np.abs(ref_block))))
+            assert _max_err(t[i].astype(np.float64), ref_block) / scale < 5e-3, \
+                f"idsva_so {name} mismatch at sample {i}"
+    # qdd=None ⇒ qdd=0 even right after a nonzero-qdd call (no stale buffer reuse).
+    zero = handle.idsva_so(q, qd, None)[0]
+    ref0 = np.asarray(ref.idsva_so(q[0].astype(np.float64), qd[0].astype(np.float64),
+                                   np.zeros(handle.num_joints), GRAVITY=-9.81)[0], np.float64)
+    assert _max_err(zero[0].astype(np.float64), ref0) / max(1.0, np.abs(ref0).max()) < 5e-3
+    # and the qdd-dependent block (d2tau_dq) genuinely depends on qdd.
+    assert _max_err(out[0], zero) > 1e-2, "idsva_so d2tau_dq ignored qdd"
+
+
+def test_fdsva_so_shape(handle, samples):
+    """Smoke: fdsva_so returns 4 tensors of shape (B, NV, NV, NV)."""
+    out = handle.fdsva_so(samples["q"], samples["qd"], samples["u"])
+    assert isinstance(out, tuple) and len(out) == 4
+    NV = handle.num_vel
+    for t in out:
+        assert t.shape == (samples["q"].shape[0], NV, NV, NV)
+        assert np.all(np.isfinite(t))
+
+
+_INTEGRATOR_TYPES = (
+    "euler", "semi_implicit_euler", "midpoint", "rk4",
+    "trapezoidal", "constant_acceleration",
+)
+
+
+@pytest.mark.parametrize("it_name", _INTEGRATOR_TYPES)
+def test_integrator(handle, ref, samples, it_name):
+    """Integrator value matches RBDReference for all six supported types."""
+    dt = 0.01
+    NJ, NV = handle.num_joints, handle.num_vel
+    grid = handle.integrator(samples["q"], samples["qd"], samples["u"], dt,
+                             integrator_type=it_name)
+    assert grid.shape == (samples["q"].shape[0], NJ + NV)
+    for i, (q, qd, u) in enumerate(zip(samples["q"], samples["qd"], samples["u"])):
+        x_ref = ref.integrator(q.astype(np.float64), qd.astype(np.float64),
+                               u.astype(np.float64), dt, integrator_type=it_name)
+        assert _max_err(grid[i], x_ref) < _TOL
+
+
+@pytest.mark.parametrize("it_name", _INTEGRATOR_TYPES)
+def test_integrator_gradient(handle, ref, samples, it_name):
+    """Integrator gradient matches RBDReference for all six supported types."""
+    dt = 0.01
+    NV = handle.num_vel
+    grid = handle.integrator_gradient(samples["q"], samples["qd"], samples["u"], dt,
+                                      integrator_type=it_name)
+    assert grid.shape == (samples["q"].shape[0], 2 * NV, 3 * NV)
+    for i, (q, qd, u) in enumerate(zip(samples["q"], samples["qd"], samples["u"])):
+        dAB_ref = ref.integrator_gradient(q.astype(np.float64), qd.astype(np.float64),
+                                          u.astype(np.float64), dt, integrator_type=it_name)
+        assert _max_err(grid[i], dAB_ref) < _TOL

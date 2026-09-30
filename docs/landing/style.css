@@ -1,0 +1,85 @@
+/* A2R cover-page family, adapted from GLASS / GATO / Nerfies (CC BY-SA 4.0). */
+:root { --bg:#f6f7f9; --card:#fff; --text:#1a1d25; --dim:#4b5060; --accent:#087c58; --border:#dde0e6; --serif:Georgia,'Times New Roman',serif; --sans:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; --mono:ui-monospace,SFMono-Regular,Consolas,monospace; }
+* { box-sizing:border-box; }
+html { scroll-behavior:smooth; scroll-padding-top:6rem; }
+body { margin:0; background:var(--bg); color:var(--text); font-family:var(--sans); line-height:1.75; }
+a { color:var(--accent); text-underline-offset:3px; }
+a:hover { text-decoration-thickness:2px; }
+:focus-visible { outline:3px solid #2778c4; outline-offset:4px; }
+.skip { position:absolute; left:1rem; top:-5rem; background:white; padding:.5rem; z-index:200; }
+.skip:focus { top:1rem; }
+.container { max-width:1080px; margin:auto; padding:0 1.5rem; }
+.topbar { position:sticky; top:0; z-index:100; background:rgba(246,247,249,.97); border-bottom:1px solid var(--border); }
+.topbar nav { display:flex; justify-content:space-between; align-items:center; gap:1rem; min-height:62px; }
+.brand { font-family:var(--mono); font-weight:700; text-decoration:none; white-space:nowrap; }
+.brand span { color:var(--dim); font-size:.78rem; font-weight:400; }
+.navlinks { display:flex; gap:1.3rem; font-size:.85rem; }
+.navlinks a { color:var(--dim); text-decoration:none; }
+.hero { text-align:center; padding:4.5rem 0 0; margin-bottom:2rem; }
+.badge,.eyebrow,.placeholder-label { font-family:var(--mono); font-size:.72rem; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--accent); }
+.badge { display:inline-block; border:1px solid #b7ddcc; border-radius:30px; background:#e8f7f1; padding:.3rem .9rem; }
+h1,h2,h3 { font-family:var(--serif); line-height:1.2; text-wrap:balance; }
+h1 { font-size:clamp(2.2rem,4.6vw,3.4rem); margin:1.3rem auto; }
+h1 span { color:var(--accent); }
+h2 { font-size:clamp(1.7rem,3vw,2.1rem); margin:.65rem 0 1.3rem; }
+h3 { font-size:1.35rem; margin:.4rem 0 .8rem; }
+.hero-sub { max-width:760px; margin:1.5rem auto; color:var(--dim); font-size:1.12rem; }
+.links { display:flex; flex-wrap:wrap; justify-content:center; gap:.65rem; }
+.button { display:inline-block; padding:.6rem 1.1rem; border:1px solid var(--border); border-radius:8px; background:white; color:var(--text); text-decoration:none; font-family:var(--mono); font-size:.8rem; }
+.button.primary { color:white; background:var(--accent); border-color:var(--accent); }
+.button:hover { border-color:var(--accent); }
+.note,figcaption { color:var(--dim); font-size:.88rem; }
+.review-note { text-align:left; max-width:840px; margin:2rem auto 0; border-left:3px solid #b38732; background:#fbf4e5; padding:1rem 1.25rem; font-size:.85rem; }
+.highlights { display:grid; grid-template-columns:repeat(4,1fr); gap:1rem; margin:2rem 0 4rem; }
+.card { min-width:0; padding:1.5rem; border:1px solid var(--border); border-radius:12px; background:var(--card); }
+.highlights .card { padding:1.25rem; }
+.highlights h2 { font-size:1.35rem; margin:.6rem 0 1rem; }
+.highlights p { color:var(--dim); font-size:.95rem; }
+.card p:last-child { margin-bottom:0; }
+section { margin-bottom:4.5rem; }
+p { margin:.7rem 0 1.1rem; }
+.intro { font-size:1.06rem; color:var(--dim); }
+.grid { display:grid; grid-template-columns:1fr 1fr; gap:1.25rem; }
+.workflow { margin:1.8rem 0 0; }
+.flow { display:grid; grid-template-columns:repeat(3,1fr); list-style:none; padding:0; margin:0; border:1px solid var(--border); border-radius:12px; background:white; }
+.flow li { position:relative; padding:1.5rem 1.7rem; min-width:0; }
+.flow li + li { border-left:1px solid var(--border); }
+.flow li + li::before { content:'→'; position:absolute; left:-.7rem; top:45%; background:white; color:var(--accent); }
+.flow strong,.flow span { display:block; }
+.flow strong { margin:.4rem 0; }
+.flow span:not(.step) { color:var(--dim); font-size:.88rem; }
+.step { color:var(--accent); font-family:var(--mono); font-size:.8rem; }
+figcaption { margin-top:1rem; }
+.card ul { margin:.4rem 0 0; padding-left:1.2rem; }
+.card li { margin:.3rem 0; color:var(--dim); font-size:.94rem; }
+.results-grid { grid-template-columns:1fr; }
+.results-grid figure { margin:0; padding:1.2rem 1.4rem 1rem; border:1px solid var(--border); border-radius:12px; background:white; }
+#measurements img { display:block; width:100%; height:auto; border-radius:6px; }
+.results-grid h3 { margin:0 0 .5rem; }
+.results-grid p { color:var(--dim); font-size:.94rem; margin:0 0 1rem; }
+.results-grid figcaption { border-top:1px solid var(--border); padding-top:.8rem; }
+.method { margin-top:1.4rem; background:#eaf3ef; border-left:3px solid var(--accent); padding:1.2rem 1.4rem; border-radius:0 8px 8px 0; font-size:.9rem; }
+.start-links { justify-content:flex-start; }
+details { margin:1.5rem 0; }
+summary { cursor:pointer; color:var(--accent); font-weight:600; }
+code,pre { font-family:var(--mono); font-size:.85em; }
+code { overflow-wrap:anywhere; }
+pre { overflow:auto; padding:1.2rem; background:white; border:1px solid var(--border); border-radius:10px; line-height:1.7; }
+pre code { font-size:inherit; overflow-wrap:normal; }
+footer { border-top:1px solid var(--border); padding:2rem 0; color:var(--dim); font-size:.8rem; }
+footer p { max-width:800px; }
+@media(min-width:701px) and (max-width:1000px) {
+  .highlights { grid-template-columns:repeat(2,1fr); }
+}
+@media(max-width:700px) {
+  .container { padding:0 1.1rem; }
+  .hero { padding-top:2.5rem; }
+  .highlights,.grid,.flow { grid-template-columns:1fr; }
+  .topbar nav { flex-wrap:wrap; justify-content:center; padding-top:.7rem; padding-bottom:.7rem; gap:.4rem; }
+  .navlinks { flex-wrap:wrap; justify-content:center; gap:.5rem 1rem; font-size:.78rem; }
+  .flow li + li { border-left:0; border-top:1px solid var(--border); }
+  .flow li + li::before { content:'↓'; top:-1rem; left:50%; padding:0 .4rem; }
+  section { margin-bottom:3rem; }
+  .highlights { margin-bottom:3rem; }
+}
+@media(prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }

@@ -1,0 +1,7 @@
+<nav class="bd-docs-nav bd-links" aria-label="Documentation navigation">
+  <p class="bd-links__title">Documentation</p>
+  <div class="bd-toc-item navbar-nav">
+    {{ generate_toctree_html("sidebar", startdepth=0, show_nav_level=1,
+         maxdepth=3, collapse=True, includehidden=True, titles_only=True) }}
+  </div>
+</nav>

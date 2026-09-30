@@ -2,7 +2,7 @@
     "projectName": "GRiD",
     "projectOwner": "A2R-Lab",
     "files": [
-        "contents/contributors.qmd",
+        "docs/contributors.qmd",
         "README.md"
     ],
     "contributors": [

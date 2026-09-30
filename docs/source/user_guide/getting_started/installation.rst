@@ -1,53 +1,101 @@
 Installation
 ============
 
-It is recommended when installing GRiD to use git clone on the main library `GRiD <https://github.com/robot-acceleration/GRiD>`.
-In the case that the linked submodules :doc:`URDFParser <../tutorials/urdf_parser>`, :doc:`GRiDCodeGenerator <../tutorials/codegen>`, :doc:`RBDReference <../tutorials/python_algorithms>` and are empty folders,
-one can individually popoulate each submodule using its git link as needed. 
-
-Run the following script to install GRiD and its related submodules.
-`URDFParser <https://github.com/robot-acceleration/URDFParser>`__,
-`GRiDCodeGenerator <https://github.com/robot-acceleration/GRiDCodeGenerator>`__,
-and
-`RBDReference <https://github.com/robot-acceleration/RBDReference>`__
-
-.. code:: shell
-
-    # In the root of your desired project directory
-    git clone https://github.com/A2R-Lab/GRiD.git
-    cd RBDReference
-    git clone https://github.com/A2R-Lab/RBDReference.git
-    cd ..
-    cd URDFParser
-    git clone https://github.com/A2R-Lab/URDFParser.git
-    cd ..
-    cd GRiDCodeGenerator
-    git clone https://github.com/A2R-Lab/GRiDCodeGenerator.git
-
-.. note::
-    
-    Alternatively, can directly download the zips from these links: `URDFParser <https://github.com/robot-acceleration/URDFParser>`__, `GRiDCodeGenerator <https://github.com/robot-acceleration/GRiDCodeGenerator>`__, and `RBDReference <https://github.com/robot-acceleration/RBDReference>`__.
-    Note that directory setup in this manner requires adjustment of python ``import`` statements such that ``from URDFParser import URDFParser`` becomes ``from URDFParser.URDFParser import URDFParser``. Thus, each import statement from submodules will require an additional call for correct directory linking. 
-
-
-It is also recommended to create a virtual environment for each external dependency for ease of access. Run the following script to list and update the requirements tab if other dependencies are needed during the installation process.
+GRiD is a single repository with its peer products (``GLASS``, ``RBDReference``,
+``URDFParser``) vendored as git submodules under ``external/``. Clone with
+``--recursive`` so those populate, then run the install script — a single
+``pip install -e .`` installs the codegen toolkit and the ``grid_rbd`` Python
+wrapper together (see the :doc:`../../index` quick-start for the extras).
 
 .. code-block:: shell
 
-    # Run in virtual enviornment
-    pip3 list # list all pip modules
-    pip freeze > requirements.txt
+    git clone --recursive --branch modernizing-tests https://github.com/A2R-Lab/GRiD.git
+    cd GRiD
+
+If you already cloned without ``--recursive``, populate the submodules with
+``git submodule update --init --recursive``.
+
+Source installation
+~~~~~~~~~~~~~~~~~~~
+
+Use an **editable install from a Git checkout**. The generator, wrapper
+template, launch profiles, GLASS headers and model assets are resolved
+relative to the repository root, so keep the checkout in place. The commands
+above select ``modernizing-tests``, which contains the implementation
+documented here.
+
+What each activity needs:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Activity
+     - Requirements
+   * - Import ``grid_codegen`` / generate ``grid.cuh``
+     - Python ≥ 3.10, the ``external/`` submodules populated. No GPU, no
+       ``nvcc``.
+   * - ``grid_rbd.register_robot`` / ``warm_robot`` (first call per robot)
+     - the CUDA Toolkit's ``nvcc`` on ``PATH`` (the toolkit that matches your
+       driver), a host C++ compiler, and an NVIDIA GPU present (the compute
+       capability is read from ``nvidia-smi`` unless you pass ``cuda_arch=``).
+   * - Warm loads and every numeric method
+     - a GPU with the arch the ``.so`` was built for; no ``nvcc``.
+   * - ``backend="jax"`` / ``backend="torch"``
+     - the ``[jax]`` / ``[torch]`` extra **plus a CUDA build of that framework
+       matching your GPU arch** (the extras pin the CPU packages only; the
+       CUDA wheel is your choice, e.g. ``pip install "jax[cuda12]"`` or
+       ``"jax[cuda13]"``, and a ``cu1xx`` torch wheel — see the
+       `bindings README <https://github.com/A2R-Lab/GRiD/blob/modernizing-tests/bindings/README.md>`_).
+       A missing framework, or a CPU-only jax, is reported at
+       ``register_robot`` time, not deep inside a call.
+   * - Equivalence tests / the Pinocchio oracle / docs
+     - ``install/developer_install.sh`` (apt build deps, ``pin``,
+       robot-description fixtures, the Pinocchio second-order extension).
+
+Platform: Linux x86_64 with CUDA 12.x/13.x is what is built and tested
+(the committed GPU-proof receipt names the exact GPU and toolkit). Windows
+and macOS are not supported. The submodules
+must be populated before the first **generation** (not before the editable
+install itself): ``install/base_install.sh`` runs ``pip install -e .`` and
+then ``git submodule update --init --recursive``; a bare editable install on
+a non-recursive clone succeeds and then fails at first generation with a
+"GLASS submodule is missing" error naming the fix.
 
 Install Python Dependencies
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-In order to support the wrapped packages there are 4 required external
-packages ``beautifulsoup4, lxml, numpy, sympy`` which can be
-automatically installed by running:
+The simplest path is to use the provided install scripts, which create a
+local ``.venv`` and register the ``grid-generate`` CLI.
+
+For end-user installs (just the runtime + CLI):
 
 .. code-block:: shell
 
-   pip3 install -r requirements.txt
+   bash install/base_install.sh
+   source .venv/bin/activate
+
+For developer installs (adds Pinocchio, robot-description fixtures,
+documentation tooling, and the Pinocchio second-order pybind11 extension
+used as the golden oracle in the equivalence tests):
+
+.. code-block:: shell
+
+   bash install/developer_install.sh
+
+The developer script will, on Debian/Ubuntu, install the system build
+deps needed by the Pinocchio pybind11 extension via ``apt-get``:
+``pkg-config``, ``g++``, ``libeigen3-dev``, ``liburdfdom-headers-dev``.
+The ``pin`` wheel ships its own ``pinocchio.pc`` inside the venv via
+``cmeel``, and ``install/developer_install.sh`` computes the right
+``PKG_CONFIG_PATH`` automatically for the extension build — no manual
+configuration is required.
+
+You can also install manually with:
+
+.. code-block:: shell
+
+   pip3 install -e .
 
 Install CUDA Dependencies
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -60,17 +108,18 @@ Install CUDA Dependencies
 Download and Install CUDA
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Note: for Ubuntu 20.04 see https://developer.nvidia.com/cuda-downloads
-for other distros
+Note: the commands below are for Ubuntu 24.04 (``ubuntu2404``) —
+substitute your release in the repo URL, and see
+https://developer.nvidia.com/cuda-downloads for other distros. NVIDIA's
+repos now use the ``cuda-keyring`` package (the old ``apt-key`` method
+was removed in Ubuntu 22.04+):
 
 ::
 
-   wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-ubuntu2004.pin
-   sudo mv cuda-ubuntu2004.pin /etc/apt/preferences.d/cuda-repository-pin-600
-   sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/7fa2af80.pub
-   sudo add-apt-repository "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/ /"
+   wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+   sudo dpkg -i cuda-keyring_1.1-1_all.deb
    sudo apt-get update
-   sudo apt-get -y install cuda
+   sudo apt-get -y install cuda-toolkit
 
 Add the following to ``~/.bashrc``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -79,22 +128,15 @@ Add the following to ``~/.bashrc``
 
    export PATH="/usr/local/cuda/bin:$PATH"
    export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
-   export PATH="opt/nvidia/nsight-compute/:$PATH"
-
+   export PATH="/opt/nvidia/nsight-compute/:$PATH"
 
 .. note::
 
-    This is an example of how to do a "note". Good luck with the rest of the setup! 
-
-.. warning::
-
-    Example of a warning.
-
-.. tip:: 
-
-    Here is a tip!
-
-.. caution:: 
-
-    And proceed with caution!
-
+    GRiD requires a C++17-capable host compiler (e.g. ``g++ >= 7`` or
+    ``clang++ >= 5``). The benchmark and codegen runtime compile with
+    ``-std=c++17``, needed for inline variables in the bench common
+    header. With the ``[torch]`` extra the per-robot ``.so`` is compiled
+    with whatever standard the installed torch's ATen headers demand
+    (``-std=c++20`` from torch 2.14 on, detected from the header guard), so
+    a torch-enabled build needs an nvcc and host compiler that accept C++20
+    (CUDA 12+, ``g++ >= 10``). ``GRID_RBD_CXX_STD`` forces the standard.

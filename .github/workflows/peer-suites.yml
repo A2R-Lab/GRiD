@@ -1,0 +1,72 @@
+name: Peer Suites (opt-in)
+
+# OPT-IN lane (user decision 2026-09-17): runs the peer-product submodule
+# suites — external/RBDReference (Pinocchio equivalence, CPU) and
+# external/URDFParser (parser units) — AT THEIR PINNED SHAs. Deliberately NOT
+# part of the default cpu-lane in verify-gpu-proof.yml: each peer repo now has
+# its own CI on push, and this lane exists to prove the exact pinned
+# combination inside GRiD on demand (e.g. before/after a pin bump).
+#
+# Triggers: manual dispatch, plus a self-validation run when this workflow
+# file itself changes. (workflow_dispatch is only offered by GitHub once the
+# file exists on the default branch — until the branch merges, the
+# paths-filtered push trigger is what exercises it.)
+
+on:
+  workflow_dispatch:
+    inputs:
+      runslow:
+        description: "RBDReference: also run the @slow big-robot cells (--runslow)"
+        type: boolean
+        default: false
+  push:
+    branches: [modernizing-tests, main]
+    paths: [".github/workflows/peer-suites.yml"]
+
+jobs:
+  rbdreference-suite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache downloaded robot descriptions
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/robot_descriptions
+          key: robot-descriptions-${{ hashFiles('external/RBDReference/tests/robot_manifest.json') }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r external/RBDReference/requirements-dev.txt
+          pip install -r external/URDFParser/requirements.txt
+
+      - name: Run RBDReference equivalence suite
+        env:
+          PYTHONPATH: ${{ github.workspace }}/external
+        run: |
+          RUNSLOW=""
+          if [[ "${{ inputs.runslow }}" == "true" ]]; then RUNSLOW="--runslow"; fi
+          python -m pytest external/RBDReference/tests -q $RUNSLOW
+
+  urdfparser-suite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r external/URDFParser/requirements.txt pytest
+
+      - name: Run URDFParser tests
+        run: python -m pytest external/URDFParser/tests -q

@@ -1,0 +1,47 @@
+{
+  "approved": true,
+  "purpose": "release",
+  "report": "test/benchmarks/results/release-final-report-20260927",
+  "table_json_sha256": "99cc0a34d79011f130aeed2f8e422d6e947d5df1ea0d219ffc348436bd4704e0",
+  "commits": [
+    "e92477857b0ca53fb307a8fa4799a4afd5757177"
+  ],
+  "capture_order": [
+    "test/benchmarks/results/release-final-core-20260927-nevcJ2"
+  ],
+  "accepted_source_drift": [],
+  "superseded_cells": 0,
+  "status_counts": {
+    "excluded_method": 90,
+    "validated": 420,
+    "model_mismatch": 24,
+    "adapter_pending": 60
+  },
+  "outputs": {
+    "audit.json": "39dbe7b900029cfa2fb28bafc774aa467c5fa7b205a8c33048a7e0b631f47d5f",
+    "comparisons.json": "75c1e9f4d83db426e7e4dfab59bb912edc53f17f54948abf602a599186569157",
+    "decomposition.csv": "0b43ec2af26c5cd88600cc134f1a3e15b8b4ba92480074283b66ee6847963890",
+    "grid_composition.png": "f772810107f835119a18f2678e54391fdd8ee0ea24f6d06e0fbb12bd7a370a9e",
+    "grid_composition.svg": "25523c2281ee88b13146d99b02294c3031909cc5809235c4ddc9a15c6ceb6744",
+    "secondary_provenance.json": "685ba52dd034715a50587d138c7b49bad0022decbb28fbef2455cd2ccd794845",
+    "secondary_table.csv": "606faf82acc886b8b5de9650d475058856d0848d5337daee9190ab70f991c49a",
+    "speedup_core.png": "6f99202d1dfa92d4eec8ca6e5dbc6994749f3d05028aae2d6b4890f61b209bda",
+    "speedup_core.svg": "931a180f80e5812632e41fc4ca8c29dfabe69fb98983d0229a1322b60431891d",
+    "speedup_gpu_full.png": "e554baf2a0cd6ce70ebdc13e7045d3c3c484d4ca31dfbc46f13c009308fc2737",
+    "speedup_gpu_full.svg": "f6639d14135b8f2d8060d31e65dcc75ee950e73eacba36774243a3c25992e7cb",
+    "speedup_gpu_jax_resident.png": "695582a1ce5487834ab2edbf1e9c5a47f8ecd8789a3554940b64011a80afe374",
+    "speedup_gpu_jax_resident.svg": "efe9948cc832c5d3088c3966a6af3cadcb84a0ec591854fccce0a3ed91970b6d",
+    "speedup_gpu_resident.png": "4a0c700fa1a5db1aedfd734cb2848686580c33d4db9a5b3ecbac86028b269e28",
+    "speedup_gpu_resident.svg": "5592d74e5d6358f4b14d558cc6f0f40614e1ff36268cc509a01f5fb213bd6f06",
+    "speedup_pinocchio.png": "fdbafeb191ec43597053c73a6e8b0aa3278859ebdd1c71a88fe21641eed63245",
+    "speedup_pinocchio.svg": "a962c3c5f8b57ddeb6c2c070a481cb104f7e1073e4e6d8b37712cd6c261d80ed",
+    "stacked_all.png": "15343c31df5286fecce6734729a6369855bce9589bde2e23306b6820f4c249e3",
+    "stacked_all.svg": "7f317bce27d666a13c5fb5016f1f6644155d3b55ba1c692deee16ce05af593f0",
+    "stacked_core.png": "96ae66e25f861585b878857bd67cfb46bbe1c37df5835b1cc660059f9b3de27b",
+    "stacked_core.svg": "f48efe32f382507966d8565f0ee88fd2da32c60d5fd56ebe4636e7237b7d4d46",
+    "table.csv": "aacaf99a3e7a474091f51baf8413eaf7a25041f56d5eb5d27bfd35e44f806291",
+    "tables.html": "32bbbe93a9971616d8bf09d6105e3d16b6b35af8ed9d502c5d08548dce713555",
+    "wrappers.png": "efba394bfef10eb825f65615f6852a79a25c83f912cc40073e5f48b273e5f580",
+    "wrappers.svg": "b216cf902f9def617ce64dc2a440642549aca4f613eb811b154028d537ea0b19"
+  }
+}

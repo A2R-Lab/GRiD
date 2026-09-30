@@ -7,16 +7,24 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'GRiD'
-copyright = '2024, Kwamena Awotwi, Zachary Pestrikov, Danelle Tuchman, Abhinav Sharma, Brian Plancher'
+copyright = '2026, A²R Lab'
 author = 'Kwamena Awotwi, Zachary Pestrikov, Danelle Tuchman, Abhinav Sharma, Brian Plancher'
-release = '1.0.0'
+release = '0.5.0'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
-import sys
 import os
-sys.path.insert(0, os.path.abspath('/Users/kwam/POST_GRAD/GRiD')) # change as needed
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+# grid_rbd (the pip package the users call) lives under bindings/; its _core
+# pybind extension and the jax/torch frameworks are imported LAZILY, so the
+# numpy-surface autodoc works in the docs CI without a compiled extension.
+sys.path.insert(0, str(REPO_ROOT / "bindings"))
+sys.path.insert(0, str(REPO_ROOT / "external"))
 
 extensions = [
 	'sphinx.ext.autodoc',
@@ -24,8 +32,13 @@ extensions = [
 	'sphinx.ext.napoleon',
 	'sphinx.ext.viewcode',
     'sphinx.ext.autosectionlabel',
-    'sphinx.ext.intersphinx',
+    'sphinx_design',
 ]
+
+# Keep section labels useful without generating duplicate labels for repeated
+# low-level API headings such as "Parameters", "Returns", and "Example".
+autosectionlabel_prefix_document = True
+autosectionlabel_maxdepth = 2
 
 #myst parser
 myst_enable_extensions = ["colon_fence", "dollarmath"]
@@ -80,15 +93,16 @@ html_theme = 'pydata_sphinx_theme'
 html_favicon = '_static/favicon/favicon.ico'
 # html_theme = 'furo'
 html_theme_options = {
-    'navigation_depth': 4,
+    'navigation_depth': 3,
     "github_url": "https://github.com/A2R-Lab/GRiD", # Link to github
     "use_edit_page_button": True, # Enables edit button
         "logo": {
-        "image_light": "_static/a2r_lab.jpg",
-        "image_dark": "_static/a2r_lab.jpg",
+        "image_light": "_static/a2r_lab.png",
+        "image_dark": "_static/a2r_lab.png",
     },
     "collapse_navigation": True,
-    "header_links_before_dropdown": 6,
+    "navbar_start": ["navbar-logo"],
+    "navbar_center": ["project-home"],
     # Add light/dark mode and documentation version switcher:
     "navbar_end": [
         "search-button",
@@ -101,6 +115,9 @@ html_theme_options = {
 html_static_path = ['_static']
 html_css_files = ['custom.css']
 html_logo = "_static/favicon/favicon.ico"
+# A useful primary tree replaces the duplicate top-level header links.
+html_sidebars = {"**": ["search-field.html", "docs-navigation.html"]}
+html_theme_options["secondary_sidebar_items"] = ["page-toc", "edit-this-page"]
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
@@ -109,11 +126,17 @@ html_context = {
     "display_github": True,
     "github_user": "A2R-Lab",
     "github_repo": "GRiD",
-    "github_version": "main",
+    "github_version": os.environ.get("GRID_DOCS_REF", "modernizing-tests"),
     "conf_py_path": "/source/",
     "doc_path": "docs/source"
 }
 
 
-# What is this for?
-intersphinx_mapping = {'gymnasium': ('https://gymnasium.farama.org/', None)}
+def configure_page(app, pagename, templatename, context, doctree):
+    context["grid_cover_href"] = "../" * (pagename.count("/") + 1)
+    if pagename == "index":
+        context["theme_secondary_sidebar_items"] = []
+
+
+def setup(app):
+    app.connect("html-page-context", configure_page)

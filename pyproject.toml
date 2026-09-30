@@ -1,3 +1,101 @@
+[build-system]
+requires = ["setuptools>=61", "pybind11>=2.11"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# Single distribution for the whole repo. `GRiD-RBD` (the codegen toolkit) and
+# `grid-rbd` (the runtime Python wrapper) normalize to the SAME PEP 503 name and
+# the wrapper hard-imports the codegen tree at register_robot time, so they were
+# always one distribution — now folded into one editable install.
+name = "grid-rbd"
+version = "0.5.0"
+description = "GPU-Accelerated Rigid Body Dynamics"
+readme = "README.md"
+# 3.10 floor: the runtime wrapper + its pybind11 _core ext require it; codegen
+# is 3.9-compatible but there is no reason to ship the split floor.
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "A2R Lab"},
+]
+keywords = ["robotics", "rigid-body-dynamics", "cuda", "gpu", "code-generation", "trajectory-optimization"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Environment :: GPU :: NVIDIA CUDA",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: C++",
+    "Topic :: Scientific/Engineering",
+    "Environment :: GPU :: NVIDIA CUDA",
+]
+
+dependencies = [
+    # codegen / reference toolkit
+    "numpy>=1.23",
+    "sympy>=1.7.1",
+    "beautifulsoup4>=4.9.3",
+    "lxml>=4.2.1",
+    # collision codegen: mesh <collision> elements are voxel-filled into spheres
+    # (grid_codegen/algorithms/_spherize.py); iiwa14 and most robot assets have them
+    "trimesh>=4",
+    # runtime wrapper (cache dirs; nvcc invoked at register_robot time)
+    "platformdirs>=4.0",
+]
+
+[project.optional-dependencies]
+# Backend extras mirror the jax-vs-jax[cuda] pattern: the user picks the GPU
+# wheel (jax[cuda] / a torch cu1xx build) matching their arch; we only pin the
+# minimum API version. No upper cap — an over-tight cap just blocks users.
+jax = [
+    "jax>=0.4.40",
+]
+torch = [
+    "torch>=2.1",
+]
+# Both backend surfaces in one shot (recursive self-extras). NO dev/benchmark
+# weight here, and NO cuRobo — cuRobo installs last via the bench channel.
+all = [
+    "grid-rbd[jax]",
+    "grid-rbd[torch]",
+]
+# Test deps for the bindings suite (imports grid_rbd.jax / grid_rbd.torch to
+# exercise the jax<->torch parity + autograd paths). The optional real-MuJoCo
+# cross-check is importorskip-guarded, so `mujoco` stays optional. The heavy
+# comparator/oracle stack (pinocchio/mjx/frax) lives in install/requirements-dev.txt.
+dev = [
+    "grid-rbd[all]",
+    "pytest>=7.0",
+]
+
+[project.scripts]
+grid-generate = "grid_codegen.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/A2R-Lab/GRiD"
+Repository = "https://github.com/A2R-Lab/GRiD"
+Documentation = "https://a2r-lab.github.io/GRiD/"
+
+[tool.setuptools]
+# The runtime wrapper ships a C++ extension (grid_rbd._core); a minimal root
+# setup.py owns the Extension declaration. include-package-data ships the
+# wrapper template + py.typed markers below.
+include-package-data = true
+
+[tool.setuptools.packages.find]
+# grid_codegen at ./, grid_rbd under ./bindings, peer products under ./external.
+where = [".", "bindings", "external"]
+include = ["grid_codegen*", "grid_rbd*", "URDFParser*", "RBDReference*"]
+
+[tool.setuptools.package-data]
+# py.typed (PEP 561): ship inline type annotations so consumers' type checkers /
+# IDEs honor them (grid_rbd is a typed package, no separate .pyi).
+grid_rbd = ["wrapper_template.cu", "py.typed"]
+"grid_rbd.jax" = ["py.typed"]
+"grid_rbd.torch" = ["py.typed"]
+
 [tool.black]
 line-length = 88  # Sets the maximum line length; default is 88, but you can adjust it if needed.
 target-version = ['py39']  # Specify the Python version(s) you're targeting, e.g., 'py39' for Python 3.9.
@@ -19,3 +117,41 @@ exclude = '''
 )/
 '''
 
+[tool.pytest.ini_options]
+# pytest's defaults plus the gitignored local scratch dir at the repo root (a stray
+# scratchpad/*/_test.py produced 10 collection errors in a full-tree run, 2026-09-24).
+norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "scratchpad"]
+markers = [
+    "pinocchio_equivalence: Pinocchio equivalence coverage for GRiD reference code.",
+    "developer_only: Optional developer-only tests that require extra dependencies.",
+    "floating_base: Tests that exercise floating-base model paths.",
+    "robot_smoke: Smoke-tier robot coverage.",
+    "robot_curated: Curated-tier robot coverage.",
+    "robot_nightly: Nightly-tier robot coverage.",
+    "cuda_equivalence: CUDA executable equivalence coverage for generated GRiD code.",
+    "python_wrappers: grid-rbd Python wrapper coverage; requires CUDA + grid-rbd installed.",
+    "notebooks: Executable example notebooks (run via nbval-lax); requires CUDA + grid-rbd installed.",
+    "gpu_proof: Test outcomes recorded in the signed pytest-gpu-proof receipt (auto-applied to cuda_equivalence + python_wrappers by test/conftest.py).",
+]
+
+[tool.gpu_proof]
+# GPU tests run locally on a real GPU; the signed receipt (gpu-proof.json) is
+# verified in CPU-only CI via github.com/plancherb1.keys. See test/run_gpu_proof.sh.
+mode = "local"
+output = "gpu-proof.json"
+github_username = "plancherb1"     # org remotes (A2R-Lab) carry no SSH keys — sign as the keyholder
+required_marker = "gpu_proof"
+# Bind evidence to correctness inputs, including peer gitlinks. Commit ancestry
+# alone does NOT detect changed code. Docs/figures stay outside this scope so
+# presentation-only descendant commits can reuse a completed receipt.
+fingerprint_paths = [
+    "grid_codegen", "bindings/grid_rbd", "bindings/src",
+    "external/GLASS", "external/RBDReference", "external/URDFParser",
+    "config", "pyproject.toml", "setup.py",
+    "test/cuda_equivalents", "test/python_wrappers", "test/conftest.py",
+    "test/helpers.py", "test/run_gpu_proof.sh", "test/run_split_suite.py",
+    "test/compile_sched.py", "test/prewarm_cuda_flagship.py",
+    "test/codegen_neutrality.py", "test/header_key_replay.py",
+]
+max_age_days = 30
+require_gpu = true

@@ -1,0 +1,948 @@
+{
+  "autotune_N": 256,
+  "bases": {
+    "fixed": {
+      "aba": {
+        "threads": 320,
+        "tier": "shared",
+        "us_at_optimal": 519.21
+      },
+      "crba": {
+        "threads": 48,
+        "tier": "shared",
+        "us_at_optimal": 232.85
+      },
+      "ee_pose": {
+        "threads": 224,
+        "tier": "shared",
+        "us_at_optimal": 13.59
+      },
+      "ee_pose_gradient": {
+        "threads": 96,
+        "tier": "lite",
+        "us_at_optimal": 51.36
+      },
+      "ee_pose_hessian": {
+        "threads": 192,
+        "tier": "minimal",
+        "us_at_optimal": 463.67
+      },
+      "fd": {
+        "threads": 320,
+        "tier": "lite",
+        "us_at_optimal": 646.19
+      },
+      "fd_du": {
+        "threads": 192,
+        "tier": "shared",
+        "us_at_optimal": 1141.32
+      },
+      "fdsva_so": {
+        "threads": 384,
+        "tier": "shared",
+        "us_at_optimal": 25223.88
+      },
+      "id": {
+        "threads": 80,
+        "tier": "shared",
+        "us_at_optimal": 51.49
+      },
+      "id_du": {
+        "threads": 64,
+        "tier": "shared",
+        "us_at_optimal": 308.12
+      },
+      "idsva_so": {
+        "threads": 384,
+        "tier": "shared",
+        "us_at_optimal": 5378.02
+      },
+      "idsva_so_body_frame": {
+        "threads": 384,
+        "tier": "shared",
+        "us_at_optimal": 5389.02
+      },
+      "idsva_so_world_frame": {
+        "threads": 384,
+        "tier": "minimal",
+        "us_at_optimal": 5051.84
+      },
+      "integrator": {
+        "threads": 192,
+        "tier": "minimal",
+        "us_at_optimal": 329.56
+      },
+      "integrator_gradient": {
+        "threads": 256,
+        "tier": "minimal",
+        "us_at_optimal": 1281.87
+      },
+      "integrator_with_gradient": {
+        "threads": 192,
+        "tier": "minimal",
+        "us_at_optimal": 1307.58
+      },
+      "minv": {
+        "threads": 448,
+        "tier": "shared",
+        "us_at_optimal": 461.07
+      }
+    },
+    "floating": {
+      "aba": {
+        "threads": 160,
+        "tier": "minimal",
+        "us_at_optimal": 165.66
+      },
+      "ccrba": {
+        "threads": 352,
+        "tier": "minimal",
+        "us_at_optimal": 639.83
+      },
+      "cmm_time_variation": {
+        "threads": 512,
+        "tier": "minimal",
+        "us_at_optimal": 3234.47
+      },
+      "com": {
+        "threads": 320,
+        "tier": "lite",
+        "us_at_optimal": 647.2
+      },
+      "coriolis_matrix": {
+        "threads": 192,
+        "tier": "minimal",
+        "us_at_optimal": 359.27
+      },
+      "crba": {
+        "threads": 48,
+        "tier": "shared",
+        "us_at_optimal": 291.01
+      },
+      "dccrba": {
+        "threads": 512,
+        "tier": "minimal",
+        "us_at_optimal": 3261.74
+      },
+      "ee_pose": {
+        "threads": 224,
+        "tier": "shared",
+        "us_at_optimal": 26.78
+      },
+      "ee_pose_gradient": {
+        "threads": 384,
+        "tier": "lite",
+        "us_at_optimal": 40.01
+      },
+      "ee_pose_hessian": {
+        "threads": 1024,
+        "tier": "minimal",
+        "us_at_optimal": 452.79
+      },
+      "energy": {
+        "threads": 352,
+        "tier": "minimal",
+        "us_at_optimal": 674.3
+      },
+      "f_ext_gradient": {
+        "threads": 256,
+        "tier": "shared",
+        "us_at_optimal": 611.94
+      },
+      "f_ext_gradient_dq": {
+        "threads": 112,
+        "tier": "minimal",
+        "us_at_optimal": 2289.84
+      },
+      "fd": {
+        "threads": 320,
+        "tier": "minimal",
+        "us_at_optimal": 456.02
+      },
+      "fd_du": {
+        "threads": 256,
+        "tier": "shared",
+        "us_at_optimal": 635.82
+      },
+      "fdsva_so": {
+        "threads": 512,
+        "tier": "shared",
+        "us_at_optimal": 47224.07
+      },
+      "frame_jacobian": {
+        "threads": 192,
+        "tier": "minimal",
+        "us_at_optimal": 61.66
+      },
+      "frame_jacobian_dot": {
+        "threads": 384,
+        "tier": "lite",
+        "us_at_optimal": 80.35
+      },
+      "generalized_gravity": {
+        "threads": 160,
+        "tier": "lite",
+        "us_at_optimal": 45.29
+      },
+      "id": {
+        "threads": 192,
+        "tier": "shared",
+        "us_at_optimal": 44.53
+      },
+      "id_du": {
+        "threads": 192,
+        "tier": "shared",
+        "us_at_optimal": 259.03
+      },
+      "idsva_so": {
+        "threads": 384,
+        "tier": "lite",
+        "us_at_optimal": 7862.41
+      },
+      "integrator": {
+        "threads": 320,
+        "tier": "lite",
+        "us_at_optimal": 406.87
+      },
+      "integrator_gradient": {
+        "threads": 640,
+        "tier": "minimal",
+        "us_at_optimal": 1185.39
+      },
+      "integrator_with_gradient": {
+        "threads": 320,
+        "tier": "shared",
+        "us_at_optimal": 1148.45
+      },
+      "inverse_dynamics_regressor": {
+        "threads": 384,
+        "tier": "lite",
+        "us_at_optimal": 88.87
+      },
+      "kinetic_energy_regressor": {
+        "threads": 192,
+        "tier": "shared",
+        "us_at_optimal": 45.76
+      },
+      "minv": {
+        "threads": 192,
+        "tier": "minimal",
+        "us_at_optimal": 383.57
+      },
+      "nonlinear_effects": {
+        "threads": 192,
+        "tier": "lite",
+        "us_at_optimal": 46.57
+      },
+      "osc_inertia": {
+        "threads": 320,
+        "tier": "minimal",
+        "us_at_optimal": 431.54
+      },
+      "potential_energy_regressor": {
+        "threads": 224,
+        "tier": "shared",
+        "us_at_optimal": 26.53
+      }
+    }
+  },
+  "cuda_arch": "sm_120",
+  "ffi_bases": {
+    "fixed": {
+      "aba": {
+        "threads": 512,
+        "tier": "shared"
+      },
+      "crba": {
+        "threads": 384,
+        "tier": "shared"
+      },
+      "ee_pose": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "ee_pose_gradient": {
+        "threads": 128,
+        "tier": "lite"
+      },
+      "fd": {
+        "threads": 512,
+        "tier": "lite"
+      },
+      "fd_du": {
+        "threads": 256,
+        "tier": "shared"
+      },
+      "fdsva_so": {
+        "threads": 384,
+        "tier": "shared"
+      },
+      "id": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "id_du": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "idsva_so": {
+        "threads": 640,
+        "tier": "minimal"
+      },
+      "minv": {
+        "threads": 384,
+        "tier": "shared"
+      }
+    },
+    "floating": {
+      "aba": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "crba": {
+        "threads": 256,
+        "tier": "shared"
+      },
+      "ee_pose": {
+        "threads": 256,
+        "tier": "shared"
+      },
+      "ee_pose_gradient": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "fd": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "fd_du": {
+        "threads": 256,
+        "tier": "shared"
+      },
+      "fdsva_so": {
+        "threads": 384,
+        "tier": "shared"
+      },
+      "id": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "id_du": {
+        "threads": 384,
+        "tier": "shared"
+      },
+      "idsva_so": {
+        "threads": 384,
+        "tier": "shared"
+      },
+      "minv": {
+        "threads": 512,
+        "tier": "shared"
+      }
+    }
+  },
+  "ffi_meta": {
+    "autotune_N": 16,
+    "metric": "batch_to_land_median_us",
+    "note": "jax launch-path optimum; tier read from the kernel's REAL compiled launch_bounds (cudaFuncGetAttributes, E1 tier contract). Regenerated by test/benchmarks/autotune_ffi.py --surface jax",
+    "tier_source": [
+      "kernel"
+    ]
+  },
+  "gpu": "rtx5090_sm120",
+  "gpu_name": "NVIDIA GeForce RTX 5090",
+  "matrix": {
+    "floating": {
+      "aba": {
+        "lite": {
+          "batch_N": 256,
+          "max_threads": 768,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 236.61
+          }
+        },
+        "minimal": {
+          "batch_N": 256,
+          "max_threads": 1024,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 281.64
+          }
+        },
+        "shared": {
+          "batch_N": 256,
+          "max_threads": 512,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 402.85
+          }
+        }
+      },
+      "crba": {
+        "lite": {
+          "batch_N": 256,
+          "max_threads": 768,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 702.85
+          }
+        },
+        "minimal": {
+          "batch_N": 256,
+          "max_threads": 1024,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 756.8
+          }
+        },
+        "shared": {
+          "batch_N": 256,
+          "max_threads": 512,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 566.02
+          }
+        }
+      },
+      "ee_pose": {
+        "lite": {
+          "batch_N": 256,
+          "max_threads": 768,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 59.76
+          }
+        },
+        "minimal": {
+          "batch_N": 256,
+          "max_threads": 1024,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 384
+          },
+          "us_at_optimal": {
+            "ffi": 59.81
+          }
+        },
+        "shared": {
+          "batch_N": 256,
+          "max_threads": 512,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 68.85
+          }
+        }
+      },
+      "ee_pose_gradient": {
+        "lite": {
+          "batch_N": 256,
+          "max_threads": 768,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 384
+          },
+          "us_at_optimal": {
+            "ffi": 76.5
+          }
+        },
+        "minimal": {
+          "batch_N": 256,
+          "max_threads": 1024,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 74.86
+          }
+        },
+        "shared": {
+          "batch_N": 256,
+          "max_threads": 512,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 65.38
+          }
+        }
+      },
+      "fd": {
+        "lite": {
+          "batch_N": 256,
+          "max_threads": 768,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 1139.31
+          }
+        },
+        "minimal": {
+          "batch_N": 256,
+          "max_threads": 1024,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 512
+          },
+          "us_at_optimal": {
+            "ffi": 720.3
+          }
+        },
+        "shared": {
+          "batch_N": 256,
+          "max_threads": 512,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 1140.51
+          }
+        }
+      },
+      "fd_du": {
+        "lite": {
+          "batch_N": 256,
+          "max_threads": 768,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 1124.3
+          }
+        },
+        "minimal": {
+          "batch_N": 256,
+          "max_threads": 1024,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 1674.4
+          }
+        },
+        "shared": {
+          "batch_N": 256,
+          "max_threads": 512,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 1140.23
+          }
+        }
+      },
+      "fdsva_so": {
+        "lite": {
+          "batch_N": 256,
+          "max_threads": 768,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 51930.0
+          }
+        },
+        "minimal": {
+          "batch_N": 256,
+          "max_threads": 1024,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 384
+          },
+          "us_at_optimal": {
+            "ffi": 51533.93
+          }
+        },
+        "shared": {
+          "batch_N": 256,
+          "max_threads": 512,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 52723.29
+          }
+        }
+      },
+      "id": {
+        "lite": {
+          "batch_N": 256,
+          "max_threads": 768,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 97.76
+          }
+        },
+        "minimal": {
+          "batch_N": 256,
+          "max_threads": 1024,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 98.57
+          }
+        },
+        "shared": {
+          "batch_N": 256,
+          "max_threads": 512,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 104.95
+          }
+        }
+      },
+      "id_du": {
+        "lite": {
+          "batch_N": 256,
+          "max_threads": 768,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 511.43
+          }
+        },
+        "minimal": {
+          "batch_N": 256,
+          "max_threads": 1024,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 665.01
+          }
+        },
+        "shared": {
+          "batch_N": 256,
+          "max_threads": 512,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 695.85
+          }
+        }
+      },
+      "minv": {
+        "lite": {
+          "batch_N": 256,
+          "max_threads": 768,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 1081.23
+          }
+        },
+        "minimal": {
+          "batch_N": 256,
+          "max_threads": 1024,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 729.13
+          }
+        },
+        "shared": {
+          "batch_N": 256,
+          "max_threads": 512,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 384
+          },
+          "us_at_optimal": {
+            "ffi": 897.32
+          }
+        }
+      }
+    }
+  },
+  "matrix_meta": {
+    "autotune_N": 256,
+    "metric": "batch_to_land_median_us",
+    "note": "per-tier probe sweep (E5 schema); regenerated by test/benchmarks/autotune_tier_matrix.py"
+  },
+  "pybind_bases": {
+    "fixed": {
+      "aba": {
+        "threads": 384,
+        "tier": "shared"
+      },
+      "crba": {
+        "threads": 384,
+        "tier": "shared"
+      },
+      "ee_pose": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "ee_pose_gradient": {
+        "threads": 128,
+        "tier": "lite"
+      },
+      "fd": {
+        "threads": 512,
+        "tier": "lite"
+      },
+      "fd_du": {
+        "threads": 256,
+        "tier": "shared"
+      },
+      "fdsva_so": {
+        "threads": 384,
+        "tier": "shared"
+      },
+      "id": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "id_du": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "idsva_so": {
+        "threads": 256,
+        "tier": "minimal"
+      },
+      "minv": {
+        "threads": 384,
+        "tier": "shared"
+      }
+    },
+    "floating": {
+      "aba": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "crba": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "ee_pose": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "ee_pose_gradient": {
+        "threads": 256,
+        "tier": "shared"
+      },
+      "fd": {
+        "threads": 384,
+        "tier": "shared"
+      },
+      "fd_du": {
+        "threads": 256,
+        "tier": "shared"
+      },
+      "fdsva_so": {
+        "threads": 384,
+        "tier": "shared"
+      },
+      "id": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "id_du": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "idsva_so": {
+        "threads": 384,
+        "tier": "shared"
+      },
+      "minv": {
+        "threads": 256,
+        "tier": "shared"
+      }
+    }
+  },
+  "pybind_meta": {
+    "autotune_N": 16,
+    "metric": "batch_to_land_median_us",
+    "note": "numpy launch-path optimum; tier read from the kernel's REAL compiled launch_bounds (cudaFuncGetAttributes, E1 tier contract). Regenerated by test/benchmarks/autotune_ffi.py --surface numpy",
+    "tier_source": [
+      "kernel"
+    ]
+  },
+  "source": "GRiD autotune sweep 2026-09-15",
+  "torch_bases": {
+    "fixed": {
+      "aba": {
+        "threads": 384,
+        "tier": "shared"
+      },
+      "crba": {
+        "threads": 384,
+        "tier": "shared"
+      },
+      "ee_pose": {
+        "threads": 256,
+        "tier": "shared"
+      },
+      "ee_pose_gradient": {
+        "threads": 256,
+        "tier": "lite"
+      },
+      "fd": {
+        "threads": 512,
+        "tier": "lite"
+      },
+      "fd_du": {
+        "threads": 256,
+        "tier": "shared"
+      },
+      "fdsva_so": {
+        "threads": 384,
+        "tier": "shared"
+      },
+      "id": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "id_du": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "idsva_so": {
+        "threads": 640,
+        "tier": "minimal"
+      },
+      "minv": {
+        "threads": 384,
+        "tier": "shared"
+      }
+    },
+    "floating": {
+      "aba": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "crba": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "ee_pose": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "ee_pose_gradient": {
+        "threads": 256,
+        "tier": "shared"
+      },
+      "fd": {
+        "threads": 384,
+        "tier": "shared"
+      },
+      "fd_du": {
+        "threads": 256,
+        "tier": "shared"
+      },
+      "fdsva_so": {
+        "threads": 384,
+        "tier": "shared"
+      },
+      "id": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "id_du": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "idsva_so": {
+        "threads": 512,
+        "tier": "shared"
+      },
+      "minv": {
+        "threads": 384,
+        "tier": "shared"
+      }
+    }
+  },
+  "torch_meta": {
+    "autotune_N": 16,
+    "metric": "batch_to_land_median_us",
+    "note": "torch launch-path optimum; tier read from the kernel's REAL compiled launch_bounds (cudaFuncGetAttributes, E1 tier contract). Regenerated by test/benchmarks/autotune_ffi.py --surface torch",
+    "tier_source": [
+      "kernel"
+    ]
+  }
+}

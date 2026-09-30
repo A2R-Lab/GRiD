@@ -1,85 +1,231 @@
-# PyGRiD: Python Bindings for GRiD
+# grid-rbd
 
-This package provides Python bindings for the CUDA-based GRiD (**G**PU-Accelerated **Ri**gid Body **D**ynamics) library using pybind11.
+Python wrappers for GPU-accelerated rigid body dynamics on top of
+[GRiD](https://github.com/A2R-Lab/GRiD). Two-tier UX:
 
-GRiD is a library of functions that computes physics quantities needed for trajectory planning algorithms by generating CUDA kernels for your specific robot. Read more about this in the repository's main [README](../README.md).
-
-**Example GRiD Usage: Trajectory Planning**
-1. A target pose is defined using joint angles or end-effector positions and converted into a series of waypoints from the current pose.
-2. A motor control algorithm is used to calculate the torques needed to move the robot to the next waypoint.
-3. GRiD is invoked and `forward_dynamics` is called to convert the calculated torques into accelerations
-4. An integrator is used to convert the accelerations into updated velocities and positions.
-5. The robot moves to the next waypoint, and steps 2-4 is repeated until the final target position is reached.
-
-An example of this use case can be found in the implementation of KKT systems solvers in [MPCGPU](https://github.com/A2R-Lab/MPCGPU/tree/0efde8c63c38465bba630ba569c4f8a30c1b009c).
-
-## Installation
-**Option 1: Install using pip**
-
-    pip3 install .
-
-For editable install, add the `-e` flag to the command above.
-
-**Option 2: Manual build and install (for developers)**
-
-    cmake -B build
-    cmake --build build -j
-    pip3 install -e .
-
-
-## Quick Start
-To use PyGRiD, you will first need a grid.cuh file generated from your URDF file. This is a one-time generation for your robot configuration. See the [GRiD README](../README.md) for more information about what this does and how this works.
-
-    generateGRiD.py PATH_TO_URDF
-
-The grid.cuh file contains optimized CUDA C++ code for parallel RBD calculation computations. The Python bindings invoke the CUDA kernels defined in grid.cuh to maintain the efficiency of the computations.
-
-Example Python API usage:
 ```python
-import numpy as np
-import gridCuda
+import grid_rbd
 
-# generate random joint positions, velocities, and controls as input
-np.random.seed(0)
-q = np.random.normal(0, 1, gridCuda.NUM_JOINTS).astype(np.float32) # positions
-qd = np.random.normal(0, 1, gridCuda.NUM_JOINTS).astype(np.float32) # velocities
-u = np.random.normal(0, 1, gridCuda.NUM_JOINTS).astype(np.float32) # torques
+# One-time per (robot, options, GRiD version, CUDA arch): ~30s-15min.
+# Generates grid.cuh, compiles to .so, caches under ~/.cache/grid-rbd/.
+handle = grid_rbd.register_robot(
+    name="iiwa14",
+    urdf_path="iiwa.urdf",      # or urdf_string="<inline URDF text>"
+    floating_base=False,
+    max_batch_size=256,
+    backend="numpy",            # "numpy" (default) | "jax" | "torch"
+)
 
-# Create a GRiD instance with default gravity (9.81)
-grid = gridCuda.GRiDDataFloat(q, qd, u) # or GRidDataDouble for double precision
-
-# Calculate inverse dynamics
-c = grid.inverse_dynamics()
-print(c)
+# Many times, fast. All methods are 2D-batched on axis 0.
+qdd = handle.forward_dynamics(q, qd, u)
+M   = handle.crba(q)
 ```
-See [test_grid_cuda.py](tests/test_grid_cuda.py) for a more detailed example.
 
-## API Reference
-[Full API Reference and Documentation](#api-reference)
+Full reference (gravity convention, cache layout, EE-target selection,
+JAX FFI, etc.) lives in the
+[main docs](https://a2r-lab.github.io/GRiD/).
 
-### Classes
-- `GRiDDataFloat(q, qd, u)`: Single-precision (float) implementation of RBD functions
-- Note that the double implementation caused errors
+## Status — v0.5
 
-### Functions
-- `load_joint_info(q, qd, u)`: Update the input parameters for RBD calculations
-- `get_end_effector_positions()`: Calculates end-effector poses
-- `get_end_effector_position_gradients()`: Calculates end-effector pose gradients
-- `inverse_dynamics()`: Calculates the RNEA torque vector
-- `minv()`: Calculates the inverse of the mass matrix
-- `forward_dynamics()`: Calculates joint accelerations
-- `inverse_dynamics_gradient()`: Calculates Jacobian of inverse dynamics w.r.t *q* and *qd*
-- `forward_dynamics_gradient()`: Calculates Jacobian of forward dynamics w.r.t *q* and *qd*
+The full method surface — core dynamics/kinematics, analytical gradients, the
+second-order derivatives, the centroidal / energy / general-frame value ops
+(`com`, `ccrba`, `dccrba`, `cmm_time_variation`, `coriolis_matrix`, `energy`,
+`generalized_gravity`, `nonlinear_effects`, the KE/PE regressors,
+`frame_jacobian`/`_dot`, `osc_inertia`, and the runtime-target EE pose /
+gradient), the inertial-parameter (π) regressor family
+(`inverse_dynamics_regressor`, the differentiable
+`inverse_dynamics_wrt_params` / `forward_dynamics_wrt_params`, and
+`forward_dynamics_parameter_gradient` = ∂q̈/∂π), runtime welded tools
+(`attach_tool` / `tool_fext`), and multi-contact wrench mapping
+(`contact_fext` / `register_robot(contact_frames=...)`) — is bound and
+validated against
+[`RBDReference`](https://github.com/A2R-Lab/RBDReference) at float32 precision,
+and is available on **all three backends** (numpy / jax / torch; the value ops
+are forward-only on jax/torch). The per-method table (shapes, arguments,
+conventions) lives in the
+[Python wrappers docs](https://a2r-lab.github.io/GRiD/user_guide/tutorials/python_wrappers.html)
+(`docs/source/user_guide/tutorials/python_wrappers.rst` in-repo).
 
-### Variables
-- `NUM_JOINTS`: Number of joints defined in the URDF
-- `NUM_EES`: Number of end-effectors based on the URDF specification
+Shape legend: `NJ = num_joints (== num_pos == nq)`, `NV = num_vel (tangent /
+velocity space)`, `NB = num_bodies`. Every handle also exposes the unambiguous
+read-only aliases `h.nq` / `h.nv` / `h.nb`. `q` is `NJ`-wide; `qd`, `qdd`, `u`,
+the value outputs (`c`, `qdd`) and every matrix/Jacobian axis are `NV`-wide
+(tangent space, Pinocchio / MuJoCo convention) on every surface. For a
+**FIXED base `NV == NJ`**. The per-method differentiability table (VJP inputs, fixed-base
+restrictions, output representations) lives in the Python wrappers docs and is
+cross-checked against the ABI specification by a CPU test.
 
+> **Breaking change (v0.5) — floating-base only.** `crba`/`minv` now return
+> `(B, NV, NV)` and `inverse_dynamics_gradient`/`forward_dynamics_gradient` return
+> `(B, NV, 2*NV)` instead of the previous `NJ`-sized shapes. The CUDA kernels have
+> always written these as `NV`-dimensioned (`NUM_VEL*NUM_VEL`); the old binding
+> over-sized the copy-out to `NUM_JOINTS*NUM_JOINTS`, which (a) appended garbage
+> padding rows/cols and (b) **corrupted every matrix after the first for
+> `batch > 1`** via a per-timestep stride mismatch (324 written vs 361 read). The
+> new shapes match `RBDReference` / pinocchio's `nv`-space mass matrix and
+> Jacobians and fix the binding-side `batch > 1` corruption. Fixed-base robots
+> are unaffected (`NV == NJ`). The JAX-FFI and torch backends
+> completed the same migration — all three surfaces expose the corrected
+> `NV`-sized floating shapes.
+>
+> Previously-noted floating-base CRBA batch issue — **RESOLVED**. The floating-base
+> CRBA kernel used to return inconsistent mass matrices across `batch > 1` slots for
+> an identical-`q` batch (a warp-scheduling-order shared-parent `atomicAdd` in the
+> composite-inertia fold). Fixed in codegen by a deterministic parent-major
+> fixed-order reduction (`grid_codegen/algorithms/_crba.py`, ~L571). Verified
+> 2026-07-24 on go2-floating: a 64-wide identical-`q` batch returns bit-identical `M`
+> across all slots (`max |M[b]−M[0]| = 0`) and is bit-identical run-to-run.
+
+## JAX FFI (`grid_rbd[jax]`)
+
+The `[jax]` extra (see the [install matrix](#install-editable-from-a-grid-checkout))
+enables the JAX-side bridge, which shares the same per-robot `.so` cache.
+Methods are exposed via `jax.ffi.ffi_call` and run device-resident on
+JAX-supplied CUDA streams — no host round-trip — so they slot directly into
+`jax.jit` graphs:
+
+```python
+import grid_rbd.jax as grid_jax, jax
+handle = grid_jax.register_robot(name="iiwa14", urdf_path="iiwa.urdf")
+
+@jax.jit
+def step(q, qd, u):
+    return handle.forward_dynamics(q, qd, u)
+```
+
+See the [Python wrappers docs](https://a2r-lab.github.io/GRiD/user_guide/tutorials/python_wrappers.html)
+for the JAX surface details (autograd-aware methods, `f_ext` parity, the
+π-regressor VJP path, and the forward-only value ops).
+
+## PyTorch backend (`backend="torch"`)
+
+The `[torch]` extra (see the [install matrix](#install-editable-from-a-grid-checkout))
+enables the torch backend. `register_robot(..., backend="torch")` returns a
+`TorchRobotHandle` whose methods return `torch.Tensor`; `inverse_dynamics` /
+`forward_dynamics` / `aba` / `integrator` are autograd-aware (analytic backward
+passes), and CUDA-Graphs capture is available via `h.capture(...)`. The `.so`
+is shared with the numpy/JAX surfaces (same content-addressed cache):
+
+```python
+import grid_rbd, torch
+
+h = grid_rbd.register_robot("iiwa14", urdf_path="iiwa.urdf", backend="torch")
+
+q  = torch.randn(64, h.num_joints, device="cuda", requires_grad=True)
+qd = torch.randn(64, h.num_joints, device="cuda", requires_grad=True)
+u  = torch.randn(64, h.num_joints, device="cuda", requires_grad=True)
+
+qdd = h.forward_dynamics(q, qd, u)   # autograd-aware torch.Tensor
+qdd.sum().backward()                 # gradients flow to q, qd, u
+```
+
+> **GPU/torch compatibility:** the backward VJP contractions run torch's
+> own CUDA kernels, so the installed torch build must support the GPU's
+> compute capability. On an RTX 5090 (sm_120) you need a torch **cu128**
+> (or newer) build — a cu124 wheel (max sm_90) cannot launch on sm_120.
+> The `grid` / `grid_plant` kernels themselves are always nvcc-built for
+> the detected arch and are unaffected.
+
+## Everything else — see the docs
+
+The full reference for the rest of the surface lives in the
+[Python wrappers docs](https://a2r-lab.github.io/GRiD/user_guide/tutorials/python_wrappers.html)
+(`docs/source/user_guide/tutorials/python_wrappers.rst` in-repo):
+
+* the per-method table (shapes, `qdd=`-aware gradients, `ee_joint_names`,
+  `allow_fp64`),
+* the π-regressor family (`inverse_dynamics_regressor`,
+  `inverse_dynamics_wrt_params` / `forward_dynamics_wrt_params`,
+  `forward_dynamics_parameter_gradient`),
+* welded tools (`attach_tool` / `tool_fext`, via `enable_tool=True`) and
+  multi-contact (`contact_fext`, via `register_robot(contact_frames=...)`),
+* the `grid_plant` cost / barrier / plant-step methods,
+* per-body external forces (`f_ext=`),
+* build cost on big floating-base robots and the `enable_mujoco_kernels`
+  flag (pin-only builds; the flag enters the `.so` cache key only when
+  `False`, so existing caches stay valid),
+* the cache layout and runtime-mutable model parameters.
 
 ## Requirements
 
-    C++11 compatible compiler
-    CUDA Toolkit >= 11.1 (compatible with compute capability 8.6)
-    CMake >= 3.10
-    Python >= 3.6
-    pybind11
+* Python ≥ 3.10
+* CUDA Toolkit (`nvcc` on PATH) at `register_robot` time. Not needed
+  for `pip install grid-rbd` itself.
+* numpy ≥ 1.23
+
+## Install (editable, from a GRiD checkout)
+
+`grid_rbd` ships as part of the single repo distribution, so `pip install -e .`
+installs the codegen toolkit and the wrapper together; each GPU backend is an
+opt-in extra on top of the numpy base. Pick the row for the wrapper surface you want:
+
+```bash
+cd path/to/GRiD
+pip install -e "."          # base: numpy backend only
+pip install -e ".[jax]"     # + JAX FFI surface (grid_rbd.jax)
+pip install -e ".[torch]"   # + torch backend (backend="torch")
+pip install -e ".[all]"     # jax + torch (both backends)
+pip install -e ".[dev]"     # all backends + pytest (run the bindings' tests)
+```
+
+| Extra | Pulls in | Unlocks |
+|---|---|---|
+| *(base)* | numpy, platformdirs | numpy handle (`register_robot(..., backend="numpy")`) + `grid_plant` |
+| `[jax]` | + jax | JAX FFI surface — `import grid_rbd.jax` (device-resident, `jax.jit`-able) |
+| `[torch]` | + torch | torch backend — `register_robot(..., backend="torch")`, autograd + CUDA-Graphs |
+| `[all]` | jax + torch | both backend surfaces (recursive self-extra; no dev/bench weight) |
+| `[dev]` | jax + torch + pytest | run the bindings' own test suite (which exercises both backends; the real-MuJoCo cross-check is optional/skipped if `mujoco` is absent) |
+
+Notes:
+
+* **`nvcc` is needed at `register_robot()` / `precompile()` time, not at
+  `pip install` time** — pip only stages Python deps; the per-robot `.so` is
+  built (and cached) on first use.
+* **The GPU wheels are the user's choice**, mirroring `jax` vs `jax[cuda]`: we
+  pin only the minimum API version, never a CUDA-variant. For `[torch]` you must
+  install a torch **CUDA wheel matching the GPU arch** (e.g. a **cu128** build
+  for sm_120 / RTX 5090 — a cu124 wheel maxes at sm_90 and cannot launch on
+  sm_120). For `[jax]`, install `jax[cuda12]` for your platform.
+* The heavy comparator/oracle stack (Pinocchio / mjx / frax / bard) is **not**
+  in any extra here — that's a developer concern carried by
+  `install/requirements-dev.txt` / `install/developer_install.sh`.
+
+A PyPI release will follow once the surface is feature-complete.
+
+### Precompile (AOT cache-warming)
+
+`register_robot()` compiles the per-robot `.so` on first use; subsequent runs
+are instant cache hits. To do that build offline — e.g. in a Docker image build
+or CI step, so production never pays the one-time nvcc cost — call
+`grid_rbd.precompile()`:
+
+```python
+import grid_rbd
+
+# Build + cache one or more tiers ahead of time. Each tier dict overrides the
+# codegen-affecting options; warm whichever backend surfaces you ship.
+grid_rbd.precompile(
+    name="iiwa14",
+    urdf_path="iiwa.urdf",
+    tiers=[{}, {"floating_base": True}],   # fixed- and floating-base .so
+    backends=("numpy", "jax", "torch"),
+    max_batch_size=256,
+)
+```
+
+A tier already in the cache is a no-op (no nvcc); a missing tier compiles once.
+The `numpy` backend is warmed WITHOUT constructing a handle (no dlopen, no CUDA
+context), so a build box with `nvcc` but no usable GPU can populate the cache —
+pass `cuda_arch=` (e.g. `120`) since there is no `nvidia-smi` to ask; only the
+`jax` / `torch` backends need the device at warm time. To see what a
+registration would key on and whether the cache already holds it, without
+building anything, call `grid_rbd.build_plan(name, urdf_path, cuda_arch=...)`.
+Build the cache offline, ship/keep the cache dir, and every later
+`register_robot` / `get_robot` / `jax.jit` starts in well under a second.
+
+Registration failures (a failed device allocation, a bad toolkit) raise a Python
+exception naming the failed operation; the generated initializers never
+`exit()` or reset the CUDA context inside the interpreter (they use the
+library-safe `*_checked` path — see the *Library-safe initialization* page). On a
+successful build the `build.log` path is reported too (not just on failure), so
+you can inspect nvcc/ptxas output for warnings.

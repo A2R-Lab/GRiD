@@ -1,0 +1,105 @@
+// Test runner for the CUDA world-frame IDSVA-SO kernel.
+//
+// Mirrors `cuda_second_order_smoke_runner.cu` but invokes
+// `idsva_so_world_frame` instead of `idsva_so_body_frame`. Used by the new
+// `test_cuda_idsva_so_world_frame` to validate the CUDA emission against
+// `RBDReference.idsva_so_world_frame` (the verified Python reference).
+
+#include <cmath>
+#include <cstdlib>
+#include <iomanip>
+#include <iostream>
+#include <string>
+
+#include "grid.cuh"
+
+#ifndef GRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS
+#define GRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS 64
+#endif
+
+template <typename T>
+void read_vector(T *dst, int count) {
+    for (int i = 0; i < count; ++i) {
+        double value;
+        if (!(std::cin >> value)) {
+            std::cerr << "Failed to read input value " << i << std::endl;
+            std::exit(2);
+        }
+        dst[i] = static_cast<T>(value);
+    }
+}
+
+template <typename T>
+void print_flat(const std::string &name, const T *data, int count) {
+    std::cout << "BEGIN " << name << " 1 " << count << "\n";
+    std::cout << std::setprecision(10);
+    for (int i = 0; i < count; ++i) {
+        if (i) {
+            std::cout << " ";
+        }
+        std::cout << static_cast<double>(data[i]);
+    }
+    std::cout << "\nEND " << name << "\n";
+}
+
+template <typename T>
+int run() {
+    const T gravity = static_cast<T>(-9.81);
+    const dim3 block_dimms(1, 1, 1);
+    // Clamp to the robot's MAX_PERF_LEVEL_THREADS (the kernels' __launch_bounds__ cap,
+    // resolved dynamically from the generated header) so a swept count above the
+    // bound doesn't fail with cudaErrorInvalidValue.
+    const int _req_threads = GRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS;
+    const int _nthreads = _req_threads < grid::MAX_PERF_LEVEL_THREADS ? _req_threads : grid::MAX_PERF_LEVEL_THREADS;
+    const dim3 thread_dimms(_nthreads, 1, 1);
+
+    cudaStream_t *streams = grid::init_grid<T>();
+    grid::robotModel<T> *d_robot_model = grid::init_robotModel<T>();
+    grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();
+
+    // Canonical per-timestep input layout (matches the binding pack_q_qd_u and the
+    // q_qd_u kernel slots): each field gets a NUM_POS(=nq)-wide slot -> q@0, qd@nq,
+    // qdd@2*nq, stride 3*nq. (Fixed-base nq==nv makes this byte-identical to the old
+    // nv-based qdd@nq+nv; floating nq>nv needs the nq-based 2*NUM_POS offset.)
+    read_vector(hd_data->h_q_qd_u, grid::NUM_POS);
+    read_vector(&hd_data->h_q_qd_u[grid::NUM_POS], grid::NUM_VEL);
+    read_vector(&hd_data->h_q_qd_u[2 * grid::NUM_POS], grid::NUM_VEL);
+
+    grid::idsva_so_world_frame<T>(
+        hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
+    );
+    gpuErrchk(cudaPeekAtLastError());
+
+    const int tensor_count = grid::SECOND_ORDER_TENSOR_SIZE;
+    int first_bad = -1;
+    for (int i = 0; i < tensor_count; ++i) {
+        if (first_bad < 0 &&
+            !std::isfinite(static_cast<double>(hd_data->h_idsva_so[i]))) {
+            first_bad = i;
+        }
+    }
+    if (first_bad >= 0) {
+        std::cerr << "Non-finite idsva_so_world_frame output at "
+                  << first_bad << std::endl;
+    }
+
+    T config[8];
+    config[0] = static_cast<T>(grid::IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES<T>());
+    config[1] = static_cast<T>(grid::GRID_IDSVA_SO_USES_GLOBAL_OUTPUT);
+    config[2] = static_cast<T>(grid::GRID_GENERATES_IDSVA_SO_BODY_FRAME);
+    config[3] = static_cast<T>(grid::NUM_POS);
+    config[4] = static_cast<T>(grid::NUM_VEL);
+    config[5] = static_cast<T>(grid::NUM_BODIES);
+    config[6] = static_cast<T>(grid::Q_QD_U_STRIDE);
+    config[7] = static_cast<T>(tensor_count);
+
+    print_flat("world_frame_config", config, 8);
+    print_flat("idsva_so_body_frame", hd_data->h_idsva_so, tensor_count);
+
+    grid::close_grid<T>(streams, d_robot_model, hd_data);
+    return 0;
+}
+
+int main() {
+    return run<float>();
+}

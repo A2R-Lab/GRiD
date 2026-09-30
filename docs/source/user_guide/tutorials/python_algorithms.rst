@@ -1,84 +1,56 @@
 RBDReference
 ============
 
-A Python reference implementation of rigid body dynamics algorithms.
+RBDReference is a CPU reference implementation for inspecting and validating
+rigid-body algorithms. It consumes the same parsed model as GRiD's generator;
+it is not the batched GPU handle.
 
-This package is designed to enable rapid prototyping and testing of new
-algorithms and algorithmic optimizations. If your favorite rigid body
-dynamics algorithm is not yet implemented please submit a PR with the
-implementation. We'll then try to get a GPU, FPGA, and/or accelerator
-implementation designed as soon as possible.
-
-Usage and API:
---------------
-
-This package relies on an already parsed ``robot`` object from our
-`URDFParser <https://github.com/robot-acceleration/URDFParser>`__
-package.
-
-.. code:: python
-
-   RBDReference = RBDReference(robot)
-   outputs = RBDReference.ALGORITHM(inputs)
-
-Currently implemented algorithms include the: + Recursive Newton Euler
-Algorithm (RNEA):
-``(c,v,a,f) = rbdReference.rnea(q, qd, qdd = None, GRAVITY = -9.81)`` +
-The Gradient of the RNEA:
-``dc_du = rnea_grad(q, qd, qdd = None, GRAVITY = -9.81)`` where
-``dc_du = np.hstack((dc_dq,dc_dqd))`` + The Direct Inverse of the Mass
-Matrix Algorithm: ``Minv = rbdReference.minv(q, output_dense = True)`` +
-The Composite Rigid Body Algorithm: ``M = rbdReference.crba(q,qd)``
-
-We also include functions that break these algorithms down into there
-different passes and by their output types (dq vs dqd) to enable easier
-testing of downstream GPU, FPGA, and accelerator implementations.
-
-Testing Algorithms on URDFs
+Run a reference calculation
 ---------------------------
 
-Run the following in terminal from forked repo here at base of the GRiD
-working directory in the floating base branch. Run any URDF tests by
-replacing the desired urdf with the terminal scripts below.
+After installing GRiD from its recursive source checkout, run this from the
+repository root:
 
-iiwa14.urdf testing ``python printReferenceValues.py iiwa.urdf -f``
+.. code-block:: python
 
-This runs the print printReferenceValues.py script located
-https://github.com/A2R-Lab/GRiD/blob/floating-base/printReferenceValues.py.
-This will output values for ``RNEA``, ``Minv``, ``CRBA``, ``RNEA_grad``,
-and more.
+   import numpy as np
+   from URDFParser import URDFParser
+   from RBDReference import RBDReference
 
-Once can test algorithm outputs using Matlab Spatial V2 using the
-following sequence: 
-1. Run ``python compare_rnea_fb_spatial.py INSERT_URDF.urdf -f`` which will
-print the exact q, qd, qdd inputs for Spatial V2 floating base
-algorithms. (Matlab expects floating base joint to input quaternion xyzw
-and xyz location of Fb joint) 
+   robot = URDFParser().parse("config/robot_assets/iiwa14.urdf")
+   if robot is None:
+       raise ValueError("URDF parsing failed")
+   rbd = RBDReference(robot)
+   q = np.zeros(robot.get_num_pos())
+   qd = np.zeros(robot.get_num_vel())
+   qdd = np.zeros_like(qd)
+   tau, v, a, f = rbd.inverse_dynamics(q, qd, qdd, GRAVITY=-9.81)
+   M = rbd.crba(q)
+   Minv = rbd.minv(q, output_dense=True)
+   print(tau.shape, M.shape, Minv.shape)
 
-2. After generating compatible inputs with
-Matlab, create a floating base URDF.m file by running
-``python generate_spatial_model.py INSERT_URDF.urdf -f``. 
+This example is fixed-base and uses one state, not a batch. For quaternion
+models initialize a valid configuration (a zero quaternion is not a valid
+orientation) and use the model's position/tangent coordinate maps. The
+reference's ``crba`` takes ``q``; a second positional argument is a
+normalization flag, not joint velocity.
 
-3. Place the
-newly generated ``URDF.m`` file in the working directory of
-spatial_v2_extended. 
+Methods and validation
+-----------------------
 
-4. Run the script after ensuring spatial
-directories are sourced correctly. 
+The reference includes inverse dynamics and its derivatives, CRBA, Minv,
+ABA, forward-dynamics derivatives, kinematics, centroidal quantities and
+plant/cost operations. The :doc:`algorithm pages <../concepts/algorithms/index>`
+distinguish reference calls from the generated GPU handle calls.
 
-5. Suggested testing includes
-``RNEA (ID)``, ``HandC``, ``Hinverse``, and more.
+For the maintained correctness workflows, see :doc:`cuda_validation` and
+``external/RBDReference/tests``. Historical root-level scripts such as
+``printReferenceValues.py`` are not part of this checkout's supported workflow.
 
-Instalation Instructions::
---------------------------
+Dependencies
+------------
 
-The only external dependency is ``numpy`` which can be automatically
-installed by running:
-
-.. code:: shell
-
-   pip3 install -r requirements.txt
-
-This package also depends on our
-`URDFParser <https://github.com/robot-acceleration/URDFParser>`__
-package.
+The pure-Python reference requires NumPy, SymPy and URDFParser. Optional
+Pinocchio-backed validation and second-order extensions have additional
+dependencies; follow the repository installation and validation instructions
+rather than treating NumPy alone as a complete oracle environment.

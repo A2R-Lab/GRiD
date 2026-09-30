@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GRiD · GPU Dynamics, Kinematics, and Collisions with Analytical Derivatives</title>
+  <meta name="description" content="Robot-specific GPU dynamics, kinematics, and collisions with analytical derivatives and Hessians. Generate CUDA from your URDF and integrate with NumPy, JAX, PyTorch, or CUDA C++.">
+  <link rel="canonical" href="https://a2r-lab.org/GRiD/">
+  <link rel="icon" href="docs/_static/favicon/favicon.ico">
+  <link rel="stylesheet" href="landing/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar"><nav class="container" aria-label="Main navigation">
+  <a class="brand" href="#main">GRiD <span> / A²R Lab</span></a>
+  <div class="navlinks"><a href="#capabilities">Capabilities</a><a href="#measurements">Benchmarks</a><a href="#get-started">Get started</a><a href="docs/">Docs</a></div>
+</nav></header>
+<main id="main" class="container">
+  <section class="hero" aria-labelledby="hero-title">
+    <span class="badge">GPU-Accelerated Robot Dynamics</span>
+    <h1 id="hero-title"><span>GRiD</span><br>GPU Dynamics, Kinematics, and Collisions with Analytical Derivatives and Hessians</h1>
+    <p class="hero-sub">Turn your URDF into robot-specific CUDA kernels with analytical derivatives and Hessians.<br>Interfaces in CUDA C++, NumPy, JAX, and PyTorch.</p>
+    <div class="links"><a class="button primary" href="#get-started">Get started</a><a class="button" href="https://github.com/A2R-Lab/GRiD">Code on GitHub</a><a class="button" href="docs/">Documentation</a></div>
+    <p class="note">Developed at <a href="https://a2r-lab.org/">A²R Lab</a> · <a href="#research">Original ICRA 2022 paper and project history</a></p>
+    <aside class="review-note"><strong>GRiD++</strong> Robot-specific CUDA for dynamics, kinematics, collisions, and analytical derivatives.</aside>
+  </section>
+
+  <div id="capabilities" class="highlights" aria-label="Core capabilities">
+    <article class="card"><div class="eyebrow">Dynamics</div><h2>Compute how your robot moves</h2><p>Batched inverse and forward dynamics, inertia matrices, and centroidal quantities for fixed- and floating-base robots.</p></article>
+    <article class="card"><div class="eyebrow">Kinematics</div><h2>Connect joints to task space</h2><p>End-effector poses, frame Jacobians, and runtime targets for task-space computation.</p></article>
+    <article class="card"><div class="eyebrow">Collisions</div><h2>Check configurations on the GPU</h2><p>Generate self- and environment-collision routines from robot geometry, with coarse-to-fine checks in CUDA.</p></article>
+    <article class="card"><div class="eyebrow">Gradients &amp; Hessians</div><h2>Use analytical derivatives</h2><p>Analytical gradients and Hessians for supported dynamics, kinematics, and optimization operations.</p></article>
+  </div>
+
+  <section id="support">
+    <div class="eyebrow">What GRiD supports</div><h2>Joints and algorithms.</h2>
+    <div class="grid">
+      <article class="card"><h3>Joint types</h3><ul><li>Revolute and continuous, prismatic, fixed</li><li>Floating base (free-flyer) and fixed base</li><li>Mimic joints, including chained mimics</li><li>Arbitrary (skew) joint axes</li><li>Helical, planar, and translation joints</li><li>Spherical (ball) joints</li><li>Optional joint damping and friction</li></ul></article>
+      <article class="card"><h3>Algorithms</h3><ul><li>Inverse dynamics (RNEA), forward dynamics (ABA and via the mass-matrix inverse), mass matrix (CRBA)</li><li>Analytical gradients and Hessians of inverse and forward dynamics</li><li>End-effector pose, Jacobian, and Hessian; frame Jacobians in local, world, or local-world-aligned coordinates</li><li>Centroidal momentum matrix and its derivatives; Coriolis matrix; gravity and bias terms</li><li>External forces and their gradients; inertial-parameter regressors and parameter gradients</li><li>Time integrators with gradients, Euler and semi-implicit Euler step Hessians, and a trajectory-optimization plant layer</li><li>Two-tier collision checking on spherized geometry</li></ul></article>
+    </div>
+    <p class="note">Joint support is operation-specific. Mimic and spherical models use a dense CRBA-based Minv path; spherical joints do not support multi-stage integrator gradients. Step Hessians are a NumPy/CUDA surface, not a JAX or PyTorch handle method. See <a href="docs/user_guide/tutorials/cuda_support_status.html">support and restrictions</a> and the <a href="docs/user_guide/getting_started/library_overview.html">library overview</a>.</p>
+  </section>
+
+  <section id="approach">
+    <div class="eyebrow">From model to computation</div><h2>Your robot model becomes reusable GPU code.</h2>
+    <figure class="workflow">
+      <ol class="flow"><li><span class="step">01</span><strong>Describe your robot</strong><span>URDF, geometry, and the operations you need</span></li><li><span class="step">02</span><strong>Generate and compile</strong><span>Robot-specific CUDA and a cache per GPU architecture</span></li><li><span class="step">03</span><strong>Build your application</strong><span>NumPy · JAX · PyTorch · CUDA C++</span></li></ol>
+      <figcaption>Keep supported JAX and PyTorch computations on the device, or call generated CUDA from your own application. Add integrators, costs, external wrenches, and runtime model parameters as needed. <a href="docs/user_guide/tutorials/cuda_support_status.html">Browse supported operations →</a></figcaption>
+    </figure>
+    <p class="note">Collision routines use the <a href="docs/user_guide/tutorials/collisions.html">generated CUDA interface</a> and require complete geometry coverage. Analytical Hessians are explicit outputs, not nested higher-order autograd; see <a href="docs/user_guide/getting_started/compatibility.html#differentiation">differentiation support</a>.</p>
+  </section>
+
+  <section id="measurements">
+    <div class="eyebrow">Measurements · 27 September 2026</div><h2>Benchmark Results</h2>
+    <p>GRiD provides fast robot-specific CUDA computations for GPU-resident solvers and libraries. In this study, its compute-only CUDA call is faster than every evaluated GPU baseline on matched RNEA and gradient cases. The gains also carry through host–device transfers and, in many comparisons, Python dispatch. GRiD's full host-to-host JAX calls are 1.8–4.7× faster than MJX across all 36 matched cases, with every comparison separated across the observed repeat ranges.</p>
+    <p>We measure RNEA, its gradient, and its Hessian on iiwa14, go2, and G1, at batch sizes 16 through 1024 on an RTX 5090. The main comparison and wrapper study contain 1,260 measurements, all passing strict numerical checks. <a href="docs/release_measurements.html">Read the protocol and the full results →</a></p>
+    <div class="grid results-grid">
+      <figure id="figure-core"><h3 id="figure-derivatives">Where the time goes</h3><p>At batch 1024, GRiD's compute-only CUDA calls for RNEA gradients are 11.7× faster on iiwa14 and 5.6× faster on go2 than Pinocchio codegen. Including host–device transfers, its C++ host calls remain 6.1× and 2.6× faster, respectively. At that batch, GRiD's C++ host call beats Pinocchio in 8 of 9 robot/operation cases, including all three analytical Hessians. Even with full JAX overhead, iiwa14's RNEA gradient is 1.2× faster than Pinocchio codegen. Pinocchio wins many small-batch comparisons, particularly the lighter RNEA workload when GRiD's transfer costs are included.</p><p>Green shows GRiD's CUDA compute-only call, gray diagonal hatching its GPU–CPU I/O increment, and gray dots its JAX wrapper increment. Overheads are differences of measured call times, not isolated component timings. Pinocchio's codegen and standard APIs are shown separately for RNEA and its gradient; Hessians use its standard analytical fp64 path. BARD and Frax remain in the full tables. A red triangle marks a full-call total whose decomposition is unavailable.</p><a href="docs/_static/release/stacked_core.svg"><img src="docs/_static/release/stacked_core.png" alt="Clustered GRiD, Pinocchio and MuJoCo timing bars on three robots; Hessians compare GRiD with Pinocchio's standard API only." loading="lazy"></a><figcaption><a href="docs/release_measurements.html#figure-1-where-the-time-goes">Timing boundaries and precision exceptions →</a></figcaption></figure>
+      <figure id="figure-workflows"><h3>Speedup against the baselines</h3><p>GRiD's compute-only CUDA calls are 4.3–38.6× faster than the matched MuJoCo Warp and MJX resident calls. This highlights the opportunity for solvers and libraries that can call GRiD directly with data already on the GPU. Pinocchio's CPU paths are strong at small batches, especially for RNEA. Transfers can favor CPU execution even when GRiD's compute-only call is faster.</p><p>Blue is GRiD faster, red is the baseline faster. GPU comparisons use resident calls: GRiD includes native launch and synchronization, while competitors also include framework dispatch. CPU comparisons include GRiD's host–device copies. Missing cells reflect this study's adapter coverage and method choices, not a claim that a library cannot perform the operation.</p><a href="docs/_static/release/speedup_core.svg"><img src="docs/_static/release/speedup_core.png" alt="Core-operation speedups against seven baseline modes, with timing boundaries and fp64 exceptions labeled." loading="lazy"></a><figcaption><a href="docs/release_measurements.html#figure-3-speedup-against-the-gpu-libraries">Compare like-for-like JAX API boundaries →</a></figcaption></figure>
+    </div>
+    <figure><h3>Choose the API boundary your application uses</h3><p>Use CUDA directly for the lowest measured call overhead, or access the same robot computations through C++ Host, NumPy, PyTorch, and JAX. The choice lets you balance integration convenience with performance in your application.</p><p>Each bar is the measured wall time for RNEA or its gradient. CUDA Device excludes host–device transfers but includes native launch and synchronization. C++ Host uses prepared host buffers and includes transfers; the Python calls include their full host-to-host API cost.</p><a href="docs/_static/release/wrappers.svg"><img src="docs/_static/release/wrappers.png" alt="Call wall times for CUDA Device, C++ Host, NumPy, PyTorch, and JAX, in that order, for RNEA and its gradient on three robots." loading="lazy"></a></figure>
+    <p id="figure-collisions" class="note"><a href="docs/_static/release/tables.html">Browse every planned cell</a> or <a href="docs/release_measurements.html#downloads-and-reproduction">download the data and provenance</a>. The main figures use 300 samples per repeat; secondary operations retain their separately labeled 30-sample collection and numerical warnings. This dataset does not include collision timings.</p>
+  </section>
+
+  <section id="get-started">
+    <div class="eyebrow">Get started</div><h2>Start with one robot and one computation.</h2>
+    <p>Install from source on a machine with a compatible NVIDIA GPU, CUDA toolkit, and C++ compiler. These commands use the <code>modernizing-tests</code> branch:</p>
+    <pre><code>git clone --recursive --branch modernizing-tests https://github.com/A2R-Lab/GRiD.git
+cd GRiD
+bash install/base_install.sh
+source .venv/bin/activate</code></pre>
+    <p>Run this from the repository root. Building only the operation you need keeps the first example focused.</p>
+    <pre><code>import numpy as np
+import grid_rbd
+
+robot = grid_rbd.load_robot(
+    "config/robot_assets/iiwa14.urdf",
+    algorithm_list=["forward_dynamics"],
+    enable_mujoco_kernels=False,
+)
+q = np.zeros((8, robot.nq), dtype=np.float32)
+qd, tau = (np.zeros((8, robot.nv), dtype=np.float32) for _ in range(2))
+qdd = robot.forward_dynamics(q, qd, tau)
+print(qdd.shape)  # (8, 7)
+robot.close()</code></pre>
+    <p class="note">The first load generates and compiles code; it can take minutes. Later loads reuse compatible cached artifacts. This NumPy example moves inputs and outputs through host memory. JAX and PyTorch require separately installed CUDA-enabled frameworks.</p>
+    <div class="links start-links"><a class="button" href="docs/user_guide/getting_started/installation.html">Installation</a><a class="button" href="docs/user_guide/tutorials/python_wrappers.html">Python examples</a><a class="button" href="docs/user_guide/tutorials/codegen.html">CUDA integration</a><a class="button" href="docs/user_guide/tutorials/collisions.html">Collision codegen</a></div>
+    <details><summary>Platform and interface scope</summary><p>Current validation targets Linux x86_64 with NVIDIA CUDA. Generated code can be rebuilt for different GPU architectures; compiled robot binaries are architecture-specific. This dataset does not cover Jetson. Use the source installation instructions above.</p><p>See <a href="docs/user_guide/getting_started/compatibility.html">compatibility and known limitations</a> for joint types, operation coverage, runtime contexts, differentiation, and graph-capture restrictions.</p></details>
+  </section>
+
+  <section id="research">
+    <div class="eyebrow">Research and continuity</div><h2 id="citation">Cite GRiD.</h2>
+    <p>The original ICRA 2022 paper describes the implementation preserved at <a href="https://github.com/robot-acceleration/GRiD">robot-acceleration/GRiD</a>. Ongoing development lives at <a href="https://github.com/A2R-Lab/GRiD">A2R-Lab/GRiD</a>. The paper does not describe all current features or establish their performance. If you use GRiD in your research, cite the original paper and record the software commit or release:</p>
+    <pre><code>@inproceedings{plancher2022grid,
+  title={GRiD: GPU-Accelerated Rigid Body Dynamics with Analytical Gradients},
+  author={Brian Plancher and Sabrina M. Neuman and Radhika Ghosal and
+          Scott Kuindersma and Vijay Janapa Reddi},
+  booktitle={IEEE International Conference on Robotics and Automation (ICRA)},
+  year={2022},
+  month={May}
+}</code></pre>
+    <p><a href="https://a2r-lab.org/publication/grid/">Original paper, PDF, and arXiv →</a></p>
+    <p class="note">Built with <a href="https://github.com/A2R-Lab/URDFParser">URDFParser</a>, <a href="https://github.com/A2R-Lab/RBDReference">RBDReference</a>, and <a href="https://a2r-lab.org/GLASS/">GLASS</a>. GPU validation records use <a href="https://a2r-lab.org/pytest-gpu-proof/">pytest-GPU-proof</a>.</p>
+  </section>
+</main>
+<footer><div class="container"><p>© 2026 A²R Lab · <a href="https://a2r-lab.org/">A²R Lab</a> · <a href="https://github.com/A2R-Lab/GRiD">GRiD on GitHub</a> · <a href="docs/">Documentation</a></p><p>Design follows the A²R <a href="https://a2r-lab.org/GLASS/">GLASS</a> and <a href="https://a2r-lab.org/GATO/">GATO</a> pages, adapted from <a href="https://github.com/nerfies/nerfies.github.io">Nerfies</a> under <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>. GRiD software is MIT licensed.</p></div></footer>
+</body>
+</html>
