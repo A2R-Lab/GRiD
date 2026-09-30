@@ -80,6 +80,12 @@ MATRIX = (
     ("iiwa14-fixed-contact", "iiwa14", False,
      {"algorithm_list": ["f_ext_gradient", "end_effector_pose"],
       "contact_frame_names": ["iiwa_joint_ee", "tool0_joint"]}),
+    # mimic family (2026-09-30): HAS_MIMIC reroutes ID's v-slot reads, the
+    # S-index stride and ABA (Minv*(tau-c) decomposition + whole-arena spill);
+    # the floating x mimic cross-product hid three generator bugs because no
+    # row emitted it (agent_debugging_guide 7.z32). fr3 is the cheap mimic robot.
+    ("fr3-fixed-full", "fr3", False, {}),
+    ("fr3-floating-full", "fr3", True, {}),
 )
 
 _GEN_SCRIPT = textwrap.dedent("""\

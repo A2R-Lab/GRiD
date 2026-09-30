@@ -430,6 +430,15 @@ CUDA_ROBOT_ALGORITHM_TOLERANCES = {
 }
 
 
+FLOATING_DEFAULT_SAMPLE_NAMES = (
+    "zero",
+    "velocity_only",
+    "mixed_sign",
+    "floating_quat_mixed",
+    "floating_quat_positive",
+)
+
+
 class SampleSelection(NamedTuple):
     names: set[str] | None
     include_corner_samples: bool
@@ -1128,10 +1137,13 @@ def _sample_name_selection(base_mode: str) -> SampleSelection:
             # 2026-07-30). Keep a deterministic non-zero set in the default so
             # a tau/qd-dependent break can never hide behind the zero state
             # again: velocity_only (qd path), mixed_sign (tau path),
-            # floating_quat_mixed (non-identity base quaternion).
+            # floating_quat_mixed (non-identity base quaternion),
+            # floating_quat_positive (axis-permutation base rotation: exact-zero
+            # X0 diagonal, 7.z33). These are CORNER samples, so the selection
+            # must build them: with include_corner_samples=False every name but
+            # "zero" silently matched nothing (2026-09-30; 7.z32 hid behind it).
             return SampleSelection(
-                {"zero", "velocity_only", "mixed_sign", "floating_quat_mixed"},
-                False, False,
+                set(FLOATING_DEFAULT_SAMPLE_NAMES), True, False,
             )
         return SampleSelection(_parse_sample_names(raw), True, True)
     return SampleSelection(None, False, False)
