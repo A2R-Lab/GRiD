@@ -2554,3 +2554,38 @@ the same root term `inverse_dynamics` already emits:
 
 **Why it hid.** Same as §7.z32. The floating flagship compared only the `zero` sample
 (quat identity), and the permutation quat lives in the corner samples.
+
+### 7.z34 Re-measure tolerance overrides after a bug fix: "ill-conditioning" was the bugs (2026-09-30)
+
+**What happened.** After the floating×mimic fixes (§7.z32) and the X0-inversion fix (§7.z33),
+every per-robot override in `CUDA_ROBOT_ALGORITHM_TOLERANCES` and the integrator scopes were
+re-measured.
+- **Method:** a throwaway harness patch (`docs/open-tasks/diag-tolerance-audit-20260930.patch`,
+  never committed) logged every comparison's error against the strict default and never raised.
+  It ran over both bases, every robot, all samples plus random samples, and the integrator
+  with scopes removed.
+- **Result:** 18 of 25 overrides were unneeded.
+  - h1_2's "cond ~5e6" guards (2.5e-2 per entry, 1e-2 norm) now pass the strict default at
+    2.8% of the allowance.
+  - g1 CRBA's atol 1.25 and the go2/g1/fr3 ABA guards: same story.
+  - The h1_2-floating integrator "value-only, rest-state-only, rel ~0.27 conditioning floor"
+    now matches entrywise on every sample and dt, gradient included.
+  - RBDReference's fp64 h1_2 buckets (e.g. ABA atol 6e-2, Minv atol 1.0) cover a
+    RBDReference-vs-Pinocchio gap that is now ~1e-15.
+- **A skip that hid the same bug:** the harness also excused a non-finite floating ABA as
+  "float32 ABA fragility" whenever FD matched. That was §7.z33's NaN, and the excuse is
+  deleted.
+- **What stays:** only the floating-base FD-gradient norm guards (iiwa14, g1, fr3, gen3, rizon4).
+  That residual is float32 rounding through the floating Minv (cond ~3e4–6e4 floating,
+  ~5e3 fixed). Proven with an fp64 build of the same cell: norm_rel ≤ 8e-8. The ~1e-8 floor
+  there is the harness writing samples to stdin as float32.
+
+**Rules.**
+- A tolerance note's condition-number story must match arithmetic. In fp64, cond 5e6 gives
+  ~1e-9 relative, never percent-level. If the note claims more, suspect a bug.
+- When a fix lands in a path an override covers, re-measure the override.
+- Guards are full-matrix norm bounds at ≤ ~3× the measured worst, applied only after the
+  entrywise check fails. Never loosen one without the numbers.
+- Tools: `probes/audit_summary.py` (per robot × base, worst default excess), the fp64 plugin
+  (generator `dtype="double"` + `GRID_EQUIV_T=double`), and `probes/fdgrad_noise.py`
+  (fp32 noise model).

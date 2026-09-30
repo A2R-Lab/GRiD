@@ -277,138 +277,42 @@ CUDA_DEFAULT_TOLERANCE = {
     "atol": 2e-4,
 }
 CUDA_ROBOT_ALGORITHM_TOLERANCES = {
-    # h1_2 (mimic humanoid): forward_dynamics + aba go through the
-    # algebraic-decomposition mimic path (qdd = Minv*(u - c)) whose reduced mass
-    # matrix is ill-conditioned (cond ~5e6 floating / ~7e5 fixed), so the float32
-    # generated kernel leaves low-percent per-entry residuals on the 1e6-scale
-    # noise. Mirror go2/g1's ABA norm-relative guard. (RBDReference applies the
-    # matching float64 tolerance overrides; this is the CUDA-side analogue.)
-    ("h1_2", "aba"): {
-        "rtol": 2.5e-2,
-        "atol": 2e-4,
-        "norm_rtol": 1e-2,
-        "note": "H1_2 CUDA ABA uses the mimic algebraic-decomposition path on an ill-conditioned reduced mass matrix; float32 leaves low-percent per-entry residuals while the vector norm stays tight.",
-    },
-    ("h1_2", "forward_dynamics"): {
-        "rtol": 2.5e-2,
-        "atol": 2e-4,
-        "norm_rtol": 1e-2,
-        "note": "H1_2 CUDA forward dynamics (mimic decomposition qdd = Minv*(u-c)) reaches low-percent float32 residuals on the ill-conditioned reduced mass matrix; keep the full-vector norm guard.",
-    },
-    # h1_2 mimic ID/FD gradients: the dense reduced-space fold (id_du) and the
-    # -Minv*dc_du compose (fd_du) run in float32 on an ill-conditioned reduced
-    # mass matrix (cond ~7e5). Near-zero entries show milliscale residuals while
-    # the full-matrix norm stays tight — mirror the existing iiwa14/g1/fr3
-    # FD-gradient norm-relative guards.
-    ("h1_2", "inverse_dynamics_gradient_q"): {
-        "rtol": 2e-4, "atol": 2e-4, "norm_rtol": 5e-4,
-        "note": "H1_2 mimic dense id_du float32 cancellation on near-zero entries; full-matrix norm guard.",
-    },
-    ("h1_2", "inverse_dynamics_gradient_qd"): {
-        "rtol": 2e-4, "atol": 2e-4, "norm_rtol": 5e-4,
-        "note": "H1_2 mimic dense id_du (qd) float32 cancellation on near-zero entries; full-matrix norm guard.",
-    },
-    ("h1_2", "forward_dynamics_gradient_q"): {
-        "rtol": 2e-4, "atol": 2e-4, "norm_rtol": 5e-3,
-        "note": "H1_2 mimic fd_du = -Minv*dc_du float32 on cond~7e5 reduced mass matrix; full-matrix norm guard.",
-    },
-    ("h1_2", "forward_dynamics_gradient_qd"): {
-        "rtol": 2e-4, "atol": 2e-4, "norm_rtol": 5e-3,
-        "note": "H1_2 mimic fd_du (qd) float32 on cond~7e5 reduced mass matrix; full-matrix norm guard.",
-    },
-    ("go2", "aba"): {
-        "rtol": 2.5e-2,
-        "atol": 2e-4,
-        "norm_rtol": 1e-2,
-        "note": "GO2 CUDA ABA is a float32 generated-kernel path and currently reaches low-percent per-entry residuals against the Python float64 reference on the random smoke samples.",
-    },
-    ("go2", "crba"): {
-        "rtol": 2e-4,
-        "atol": 5e-2,
-        "note": "GO2 CUDA CRBA differs from the Python float64 reference by a few hundredths on near-zero off-diagonal entries while the rest of the dynamics stack remains strict.",
-    },
-    ("g1", "aba"): {
-        "rtol": 2.5e-2,
-        "atol": 2e-4,
-        "norm_rtol": 1e-2,
-        "note": "G1 CUDA ABA is a large generated float32 kernel and currently reaches sub-percent to low-percent per-entry residuals against the Python float64 reference.",
-    },
-    ("g1", "crba"): {
-        "rtol": 2e-4,
-        "atol": 1.25,
-        "note": "G1 CUDA CRBA has about unit-scale residuals on selected off-diagonal entries in this smoke path; keep this override scoped to G1 CRBA.",
-    },
+    # Every override was re-measured on 2026-09-30 (docs/agent_debugging_guide.md 7.z34):
+    # both bases, every robot, all samples + random, logging each comparison's error
+    # against the strict default. Overrides the default already met with >= 2x margin
+    # were deleted -- including every h1_2 guard and the go2/g1/fr3 ABA ones, which
+    # had blamed "ill-conditioning" for what were the floating-mimic generator bugs
+    # (7.z32) and the unpivoted X0 inversion (7.z33). What remains is the floating-base
+    # FD-gradient class: float32 rounding through the floating Minv. Each guard is a
+    # full-matrix norm bound at <= ~3x the measured worst (never loosened); the
+    # entrywise check still runs first. fetch keeps its structural-zero atol.
     ("g1", "forward_dynamics_gradient_q"): {
-        "rtol": 2e-4,
-        "atol": 2e-4,
-        "norm_rtol": 5e-4,
-        "note": "G1 floating FD-gradient-q is a large float32 generated-kernel path and uses selective spill; near-zero entries can show milliscale absolute residuals while the full-matrix norm remains tight.",
+        "rtol": 2e-4, "atol": 2e-4, "norm_rtol": 5e-4,
+        "note": "g1 floating forward_dynamics_gradient_q: float32 rounding through the floating-base Minv (cond(M) ~3e4-6e4 floating vs ~5e3 fixed) misses the entrywise check on some samples; the kernel is exact in fp64 (rizon4 fp64 build: norm_rel <= 8e-8, the float32 stdin floor). Audit 2026-09-30 worst norm_rel 4.5e-4.",
     },
     ("iiwa14", "forward_dynamics_gradient_q"): {
-        "rtol": 2e-4,
-        "atol": 2e-4,
-        "norm_rtol": 5e-4,
-        "note": "IIWA14 floating FD-gradient-q has float32 cancellation on deterministic corner samples; enforce the full-matrix norm while keeping entrywise checks strict for non-cancelled cases.",
-    },
-    ("iiwa14", "forward_dynamics_gradient_qd"): {
-        "rtol": 2e-4,
-        "atol": 2e-4,
-        "norm_rtol": 5e-5,
-        "note": "IIWA14 floating FD-gradient-qd can leave sub-milliscale residuals on entries whose double-reference value is effectively zero; keep a tight full-matrix norm guard.",
-    },
-    ("fr3", "aba"): {
-        "rtol": 2.5e-2,
-        "atol": 2e-4,
-        "norm_rtol": 1e-2,
-        "note": "FR3 CUDA ABA is checked with a norm-relative guard because the hand branch and float32 generated-kernel path produce sub-percent vector residuals.",
+        "rtol": 2e-4, "atol": 2e-4, "norm_rtol": 5e-4,
+        "note": "iiwa14 floating forward_dynamics_gradient_q: float32 rounding through the floating-base Minv (cond(M) ~3e4-6e4 floating vs ~5e3 fixed) misses the entrywise check on some samples; the kernel is exact in fp64 (rizon4 fp64 build: norm_rel <= 8e-8, the float32 stdin floor). Audit 2026-09-30 worst norm_rel 2.4e-4.",
     },
     ("fr3", "forward_dynamics_gradient_q"): {
-        "rtol": 2e-4,
-        "atol": 2e-4,
-        "norm_rtol": 2e-2,
-        "note": "FR3 FD-gradient-q (fd_du = -Minv*dc_du). Floating-base mimic (B1): the root angular dc_dq columns are O(2e2) and fold through the ill-conditioned free-flyer+mimic Minv (cond ~1e4), so the deterministic floating_quat_identity corner sample reaches ~1.6%% float32 norm-relative cancellation while id_du (dc_dq) and the float64 compose stay exact and random samples stay sub-milli; full-matrix norm guard. Fixed-base/random stay tight.",
+        "rtol": 2e-4, "atol": 2e-4, "norm_rtol": 2e-3,
+        "note": "fr3 floating forward_dynamics_gradient_q: float32 rounding through the floating-base Minv (cond(M) ~3e4-6e4 floating vs ~5e3 fixed) misses the entrywise check on some samples; the kernel is exact in fp64 (rizon4 fp64 build: norm_rel <= 8e-8, the float32 stdin floor). Audit 2026-09-30 worst norm_rel 4.5e-4.",
     },
     ("fr3", "forward_dynamics_gradient_qd"): {
-        "rtol": 2e-4,
-        "atol": 2e-4,
-        "norm_rtol": 5e-3,
-        "note": "FR3 FD-gradient-qd (fd_du = -Minv*dc_du) float32 cancellation; floating-base mimic (B1) full-matrix norm guard (the qd half lacks the large root-angular columns so stays tighter than q).",
-    },
-    ("fr3", "forward_dynamics"): {
-        "rtol": 2e-4,
-        "atol": 2e-4,
-        "norm_rtol": 1e-5,
-        "note": "FR3 floating forward dynamics can show sub-milliscale float32 solve residuals on quaternion corner samples while the vector norm remains tight.",
+        "rtol": 2e-4, "atol": 2e-4, "norm_rtol": 7e-4,
+        "note": "fr3 floating forward_dynamics_gradient_qd: float32 rounding through the floating-base Minv (cond(M) ~3e4-6e4 floating vs ~5e3 fixed) misses the entrywise check on some samples; the kernel is exact in fp64 (rizon4 fp64 build: norm_rel <= 8e-8, the float32 stdin floor). Audit 2026-09-30 worst norm_rel 1.8e-4.",
     },
     ("gen3", "forward_dynamics_gradient_q"): {
-        "rtol": 2e-4,
-        "atol": 2e-4,
-        "norm_rtol": 7e-3,
-        "note": "Gen3 floating FD-gradient-q is sensitive to the internally computed float32 qdd on high-acceleration quaternion samples; recomposing with CUDA qdd collapses the residual to a tight norm.",
+        "rtol": 2e-4, "atol": 2e-4, "norm_rtol": 5e-3,
+        "note": "gen3 floating forward_dynamics_gradient_q: float32 rounding through the floating-base Minv (cond(M) ~3e4-6e4 floating vs ~5e3 fixed) misses the entrywise check on some samples; the kernel is exact in fp64 (rizon4 fp64 build: norm_rel <= 8e-8, the float32 stdin floor). Audit 2026-09-30 worst norm_rel 1.3e-3.",
     },
     ("gen3", "forward_dynamics_gradient_qd"): {
-        "rtol": 2e-4,
-        "atol": 2e-4,
-        "norm_rtol": 5e-4,
-        "note": "Gen3 floating FD-gradient-qd has near-zero-entry float32 residuals; keep the full-matrix norm guard tight.",
+        "rtol": 2e-4, "atol": 2e-4, "norm_rtol": 5e-4,
+        "note": "gen3 floating forward_dynamics_gradient_qd: float32 rounding through the floating-base Minv (cond(M) ~3e4-6e4 floating vs ~5e3 fixed) misses the entrywise check on some samples; the kernel is exact in fp64 (rizon4 fp64 build: norm_rel <= 8e-8, the float32 stdin floor). Audit 2026-09-30 worst norm_rel 2.9e-4.",
     },
-    ("gen3", "forward_dynamics"): {
-        "rtol": 2e-4,
-        "atol": 2e-4,
-        "norm_rtol": 1e-5,
-        "note": "Gen3 floating forward dynamics can show milliscale float32 solve residuals on quaternion corner samples while the vector norm remains tight.",
-    },
-    ("baxter", "forward_dynamics_gradient_qd"): {
-        "rtol": 2e-4,
-        "atol": 2e-4,
-        "norm_rtol": 5e-4,
-        "note": "Baxter floating FD-gradient-qd has near-zero-entry float32 residuals in the broad deterministic CUDA sweep; keep the full-matrix norm guard tight.",
-    },
-    ("baxter", "forward_dynamics_gradient_q"): {
-        "rtol": 2e-4,
-        "atol": 2e-4,
-        "norm_rtol": 5e-4,
-        "note": "Baxter floating FD-gradient-q has isolated float32 Minv/gradient residuals on random samples while the full-matrix norm remains tight.",
+    ("rizon4", "forward_dynamics_gradient_q"): {
+        "rtol": 2e-4, "atol": 2e-4, "norm_rtol": 2e-3,
+        "note": "rizon4 floating forward_dynamics_gradient_q: float32 rounding through the floating-base Minv (cond(M) ~3e4-6e4 floating vs ~5e3 fixed) misses the entrywise check on some samples; the kernel is exact in fp64 (rizon4 fp64 build: norm_rel <= 8e-8, the float32 stdin floor). Audit 2026-09-30 worst norm_rel 1.6e-3.",
     },
     ("fetch", "forward_dynamics_gradient_q"): {
         "rtol": 2e-4,
@@ -1446,33 +1350,6 @@ def _has_invertible_project_mass_matrix(reference_model, q, min_singular_value=1
     )
 
 
-def _forward_dynamics_float32_matches(reference_model, project_model, sample, cuda, robot_id) -> bool:
-    """True if the CUDA Minv-based forward_dynamics for this sample is finite and
-    matches the float64 reference within the FD tolerance.
-
-    Used to recognize a known float32 limitation: the O(n) Articulated-Body
-    recursion (`aba`) can produce non-finite values on moderately ill-conditioned
-    floating-base configs where the robust CRBA+solve path (`forward_dynamics`)
-    still gives the correct answer. We only excuse a non-finite `aba` when this
-    robust path is demonstrably correct, so a non-finite that coincides with a
-    genuinely broken FD path is never masked."""
-    if "forward_dynamics" not in cuda:
-        return False
-    actual = np.asarray(cuda["forward_dynamics"], dtype=np.float64)
-    if not np.all(np.isfinite(actual)):
-        return False
-    expected = _expected_output(reference_model, project_model, sample, "forward_dynamics")
-    tol = _cuda_tolerance(robot_id, "forward_dynamics")
-    return bool(
-        np.allclose(actual, expected, rtol=tol["rtol"], atol=tol["atol"])
-        or (
-            tol.get("norm_rtol") is not None
-            and np.linalg.norm(actual - expected) / max(np.linalg.norm(expected), 1e-12)
-            <= tol["norm_rtol"]
-        )
-    )
-
-
 def _expected_output(reference_model, project_model, sample, name: str):
     # reference_model is the oracle (default pinocchio, exact) for every algorithm
     # EXCEPT d2ee. `end_effector_pose_hessian` always comes from project_model
@@ -2024,25 +1901,6 @@ def _run_cuda_equivalence_case(
                     skipped.append(
                         f"{spec.robot_id}/{sample.name}/{name} "
                         "(reference undefined at this config: non-finite, e.g. rpy gimbal lock)"
-                    )
-                    continue
-                # Known float32 limitation: the ABA recursion can go non-finite
-                # on moderately ill-conditioned floating-base configs (e.g. the
-                # quaternion corner samples) where the robust Minv-based
-                # forward_dynamics path still computes the correct result. ABA is
-                # correct in float64 (it matches Pinocchio), so this is numerical,
-                # not a codegen bug. Excuse it ONLY when the reference is finite
-                # and the robust FD path matched — never mask a non-finite that
-                # coincides with a broken FD path. See test/TESTING_STRATEGY.md.
-                if (
-                    name == "aba"
-                    and not np.all(np.isfinite(np.asarray(cuda[name], dtype=np.float64)))
-                    and np.all(np.isfinite(np.asarray(expected_value, dtype=np.float64)))
-                    and _forward_dynamics_float32_matches(reference_model, project_model, sample, cuda, spec.robot_id)
-                ):
-                    skipped.append(
-                        f"{spec.robot_id}/{sample.name}/aba "
-                        "(float32 ABA recursion non-finite; Minv forward_dynamics path correct)"
                     )
                     continue
                 gimbal_lock_leaves = (
