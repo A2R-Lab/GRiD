@@ -230,20 +230,29 @@ To cite GRiD in your research, please use the following bibtex for our paper ["G
 ```
 
 ## Performance
-Measured on one NVIDIA RTX 5090 with an Intel Core Ultra 9 285K for RNEA, its analytical gradient (∇RNEA), and its
-analytical Hessian (∇²RNEA) on iiwa14 (fixed base), go2, and G1 (floating base) at batch sizes 16–1024.
+Release measurements from the 27 September 2026 run on one NVIDIA RTX 5090 with an Intel Core Ultra 9 285K cover RNEA,
+its analytical gradient (∇RNEA), and its analytical Hessian (∇²RNEA) on iiwa14 (fixed base, 7 velocities), go2
+(floating base, 18), and G1 (floating base, 35) at batch sizes 16–1024. The
+[release measurements](docs/source/release_measurements.rst) page gives the method, every timing boundary, and the
+caveats; the [benchmark harness](test/benchmarks/) reproduces the collection.
 
-![Speedup heatmaps (baseline time divided by GRiD time) for RNEA, its gradient, and its Hessian on iiwa14, go2, and G1 across batch sizes 16 to 1024, against Pinocchio codegen on the CPU and against MJX and MuJoCo Warp with data resident on the GPU.](docs/imgs/benchmark_speedups.png)
+![Core-operation speedups against seven baseline modes, with timing boundaries and fp64 exceptions labeled.](docs/source/_static/release/speedup_core.png)
 
-Speedup is baseline time divided by GRiD time (blue: GRiD faster; red: baseline faster), using GRiD's compute-only
-call. The Pinocchio column compares against its code-generated CPU path; the MJX and MuJoCo Warp columns keep data
-resident on the GPU. `*` marks cells where the evaluated baseline path required fp64; `~` marks variable repeats.
+Ratios are baseline time divided by GRiD time; above 1× favors GRiD. Each column names its timing boundary: GRiD host
+calls including copies against the CPU libraries, and GRiD compute-only calls against the GPU libraries' resident
+calls. `*` marks cells where the evaluated baseline path required fp64 and `~` a side whose run means span more than
+1.5×. Colors are clipped at 100×.
 
-![Time per complete batch, log scale, for GRiD's CUDA call with its GPU–CPU I/O and JAX-wrapper overheads stacked on top, next to Pinocchio codegen, the Pinocchio standard API, MuJoCo on the CPU, MuJoCo Warp, and MJX.](docs/imgs/benchmark_timings.png)
+![Clustered GRiD, Pinocchio and MuJoCo timing bars on three robots; Hessians compare GRiD with Pinocchio's standard API only.](docs/source/_static/release/stacked_core.png)
 
-Time per complete batch. GRiD's bars stack the GPU–CPU I/O overhead and the JAX wrapper overhead on top of the CUDA
-compute time, so they show what each calling boundary costs. The [release measurements](docs/source/release_measurements.rst)
-page describes the method, and the [benchmark harness](test/benchmarks/) reproduces the collection.
+Microseconds per complete batch on a log axis. GRiD's bar splits into its CUDA compute-only call, the GPU–CPU I/O
+increment, and the JAX wrapper increment. These are differences of measured call times, not isolated measurements of
+each component.
+
+![Call wall times for CUDA Device, C++ Host, NumPy, PyTorch, and JAX, in that order, for RNEA and its gradient on three robots.](docs/source/_static/release/wrappers.png)
+
+Call wall times through each API boundary: native CUDA, the C++ host call, NumPy, PyTorch, and JAX. Pick the
+boundary your application uses.
 
 ## Installation
 The Quick Start above covers the common-case install. For CUDA Toolkit
