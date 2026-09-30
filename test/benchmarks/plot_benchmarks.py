@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Benchmark figures for GRiD competitive results — matplotlib, styled after the
-hand-made Excel figure docs/imgs/benchmark_multi_fd_grad.png.
+hand-made Excel figure (formerly docs/imgs/benchmark_multi_fd_grad.png, removed 2026-09-30).
 
 Two figure types:
 

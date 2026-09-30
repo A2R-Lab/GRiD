@@ -8,6 +8,8 @@
 
 A GPU-accelerated library for robot dynamics, kinematics, and collisions, with analytical derivatives and Hessians for supported numerical operations.
 
+![The GRiD package ecosystem: a user's URDF goes through URDFParser to the code generator (built on GLASS) and RBDReference, producing CUDA C++ with NumPy, JAX, and PyTorch wrappers; benchmarks and tests, backed by pytest-gpu-proof and external oracles, produce validated outputs and performance benchmarks.](docs/imgs/GRiD.png)
+
 GRiD turns a URDF into optimized, per-robot CUDA C++ for rigid-body dynamics, kinematics, their analytical
 first- and second-order derivatives and a trajectory-optimization plant layer, then hands you that code three
 ways — a numpy handle, a `jax.jit`-able FFI surface, or `torch.autograd`-aware ops — from one content-addressed
@@ -42,8 +44,6 @@ is documented separately.
 **Start-here track:** [`examples/README.md`](examples/README.md) routes the four usage tracks — the [`examples/notebooks/`](examples/notebooks/) Python-bindings tour (01-quickstart → 07-inline-cuda), the runnable [`bindings/examples/`](bindings/examples/) scripts, codegen scripts, and hand-written-CUDA walkthroughs.
 
 **This package contains submodules make sure to run ```git submodule update --init --recursive```** after cloning!
-
-![The GRiD library package ecosystem, showing how a user's URDF file can be transformed into optimized CUDA C++ code which can then be validated against reference outputs and benchmarked for performance.](docs/imgs/GRiD.png)
 
 ## Quick Start
 
@@ -230,14 +230,20 @@ To cite GRiD in your research, please use the following bibtex for our paper ["G
 ```
 
 ## Performance
-Fresh measurements for the rerelease are pending. The [release measurement
-checklist](docs/source/release_measurements.rst) proposes a small first pass over
-dynamics, kinematics, a gradient, a Hessian, and a resident rollout. Collision
-timings and broader comparisons are follow-ups. [Plot-design previews](docs/source/plot_designs.rst)
-use explicitly historical data, not new results. Earlier development reports and
-the original paper are historical evidence, not performance claims for the
-current implementation. The [benchmark harness](test/benchmarks/) is the starting
-point for new collection; no old figure should be relabeled as a new result.
+Measured on one NVIDIA RTX 5090 with an Intel Core Ultra 9 285K for RNEA, its analytical gradient (∇RNEA), and its
+analytical Hessian (∇²RNEA) on iiwa14 (fixed base), go2, and G1 (floating base) at batch sizes 16–1024.
+
+![Speedup heatmaps (baseline time divided by GRiD time) for RNEA, its gradient, and its Hessian on iiwa14, go2, and G1 across batch sizes 16 to 1024, against Pinocchio codegen on the CPU and against MJX and MuJoCo Warp with data resident on the GPU.](docs/imgs/benchmark_speedups.png)
+
+Speedup is baseline time divided by GRiD time (blue: GRiD faster; red: baseline faster), using GRiD's compute-only
+call. The Pinocchio column compares against its code-generated CPU path; the MJX and MuJoCo Warp columns keep data
+resident on the GPU. `*` marks cells where the evaluated baseline path required fp64; `~` marks variable repeats.
+
+![Time per complete batch, log scale, for GRiD's CUDA call with its GPU–CPU I/O and JAX-wrapper overheads stacked on top, next to Pinocchio codegen, the Pinocchio standard API, MuJoCo on the CPU, MuJoCo Warp, and MJX.](docs/imgs/benchmark_timings.png)
+
+Time per complete batch. GRiD's bars stack the GPU–CPU I/O overhead and the JAX wrapper overhead on top of the CUDA
+compute time, so they show what each calling boundary costs. The [release measurements](docs/source/release_measurements.rst)
+page describes the method, and the [benchmark harness](test/benchmarks/) reproduces the collection.
 
 ## Installation
 The Quick Start above covers the common-case install. For CUDA Toolkit
