@@ -498,9 +498,14 @@ def test_release_pool_runs_every_slice_once_on_persistent_threads(tmp_path):
         'extern "C" int pool_probe(int helpers,int active,int rounds,int*hits,int*distinct_threads){\n'
         '  ReleasePool pool((std::size_t)helpers); std::atomic<int> bad{0};\n'
         '  std::mutex m; std::vector<std::thread::id> seen;\n'
+        # run() executes slot 0 on the CALLING thread (helpers take 1..active-1), so
+        # the contract is checked against the caller's id captured up front. (It used
+        # to compare against seen.front(), i.e. whichever slot won the mutex first in
+        # round 0 — a coin flip that CI lost on 2026-10-01.)
+        '  const std::thread::id caller = std::this_thread::get_id();\n'
         '  for(int r=0;r<rounds;++r) pool.run((std::size_t)active,[&](std::size_t slot){\n'
         '    hits[slot]++; std::lock_guard<std::mutex> g(m); seen.push_back(std::this_thread::get_id());\n'
-        '    if(slot==0 && std::this_thread::get_id()!=seen.front()) bad++; });\n'
+        '    if(slot==0 && std::this_thread::get_id()!=caller) bad++; });\n'
         '  std::sort(seen.begin(),seen.end()); *distinct_threads=(int)(std::unique(seen.begin(),seen.end())-seen.begin());\n'
         '  return bad? -1 : (int)pool.capacity(); }\n')
     lib=tmp_path/"pool.so"
