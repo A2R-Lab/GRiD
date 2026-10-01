@@ -531,11 +531,10 @@ class GRiDCodeGenerator:
         # reduced tangent space — the mimic alpha-fold lives entirely inside the FD inner,
         # and the RK chain-rule + SE(3) dIntegrate projection act on already-reduced
         # columns — so no separate refusal exists. Verified vs the RBDReference oracle on
-        # fr3-floating (Euler/SI-Euler/Midpoint/RK3/RK4, value + gradient + both-at-once);
-        # the only large residuals are float32 cancellation through the ill-conditioned
-        # reduced finger Minv (cond ~1.3e4) at extreme energetic+large-dt samples (the same
-        # conditioning floor the fr3-floating FD-gradient tolerance documents), absorbed by
-        # the equivalence test's norm-relative guard — not a code bug.
+        # fr3-floating and h1_2-floating (every integrator, value + gradient + both-at-once,
+        # every sample and dt; audit 2026-09-30). h1_2 matches entrywise everywhere; fr3
+        # misses single entries at high_acceleration / dt=0.1 by float32 rounding through
+        # the floating Minv (worst norm_rel 7.4e-4), covered by the test's 3e-3 norm bound.
         self.generate_inverse_dynamics_gradient = "inverse_dynamics_gradient" in algorithms
         self.generate_forward_dynamics_gradient = "forward_dynamics_gradient" in algorithms
         self.generate_end_effector_pose_hessian = "end_effector_pose_hessian" in algorithms
