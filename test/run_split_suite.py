@@ -13,8 +13,9 @@ every failure after it (three times in the week of 2026-08-03). This driver:
       ``GRID_SPLIT_COMPILE_JOBS``, default 5, 0 = legacy serial) that also
       admits the cuda flagship header/exe pre-warms and OVERLAPS Phase B —
       a shard only waits for its own compile jobs.
-  Phase B (run):  runs each test module in its OWN pytest subprocess (serial on
-      the GPU) with ``--junitxml`` and an explicitly captured exit code. A module
+  Phase B (run):  runs each test module in its OWN pytest subprocess
+      (``GRID_SPLIT_SHARD_JOBS`` at a time on the GPU, default 1 = serial) with
+      ``--junitxml`` and an explicitly captured exit code. A module
       that dies (SIGABRT etc.) is a named CASUALTY row; the driver continues.
   Aggregate:      merges the per-module JUnit XMLs + rcs into one table and one
       overall exit code (nonzero iff any failure/casualty).
@@ -180,7 +181,7 @@ WARM_MANIFEST: dict[str, list[dict]] = {
 
 # 08-13: wall-clock caps RETIRED (they killed a healthy cold-building module on
 # the 08-12 night pass). Phase B now uses PROGRESS-AWARE hang detection — see
-# _wait_progress_aware: kill only after GRID_SPLIT_STALL_SECS (default 900) with
+# _ShardRun.poll: kill only after GRID_SPLIT_STALL_SECS (default 900) with
 # neither log growth nor a live compiler child; an absolute cap is opt-in via
 # GRID_SPLIT_HARD_TIMEOUT. Historical expected COLD durations, for triage only:
 # g1_plant_hessian / joint_dynamics / runtime_joint_dynamics ~1-2h (multi-build,
@@ -982,41 +983,68 @@ def _kill_group(proc: subprocess.Popen) -> None:
     proc.wait()
 
 
-def _wait_progress_aware(proc: subprocess.Popen, mod: str, log_path: Path):
-    """Hang detection by PROGRESS, not wall clock (the no-leg-timeouts rule —
-    the 08-12 night pass killed a healthy module mid-test at a 7200s cap while
-    it was legitimately cold-building 5 robots).
+class _ShardRun:
+    """One in-flight shard: its pytest process + progress-aware stall detection
+    (the no-leg-timeouts rule — the 08-12 night pass killed a healthy module
+    mid-test at a 7200s cap while it was legitimately cold-building 5 robots).
 
-    Progress = the module's log grew OR its process group has a live compiler
-    child. Kill (rc="STALL") only after GRID_SPLIT_STALL_SECS (default 900)
-    with NEITHER. An absolute wall-clock cap is OPT-IN via
-    GRID_SPLIT_HARD_TIMEOUT seconds (unset/0 = none)."""
-    stall_limit = int(os.environ.get("GRID_SPLIT_STALL_SECS", "900"))
-    hard = int(os.environ.get("GRID_SPLIT_HARD_TIMEOUT", "0"))
-    t0 = time.monotonic()
-    last_progress = t0
-    last_size = -1
-    while True:
-        try:
-            return proc.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            pass
+    Progress = the shard's log grew OR its process group has a live compiler
+    child. ``poll()`` returns None while healthy, the rc once it exited,
+    "STALL" after GRID_SPLIT_STALL_SECS (default 900) with NEITHER, or
+    "TIMEOUT" past the OPT-IN GRID_SPLIT_HARD_TIMEOUT wall-clock cap (unset/0 =
+    none). Several of these are polled side by side when GRID_SPLIT_SHARD_JOBS>1.
+    (Tests stub ``poll`` to finish a shard synthetically.)"""
+
+    def __init__(self, spec: ShardSpec, proc: subprocess.Popen, log, log_path: Path,
+                 xml_path: Path):
+        self.spec, self.proc, self.log = spec, proc, log
+        self.log_path, self.xml_path = log_path, xml_path
+        self.t0 = time.monotonic()
+        self._stall_limit = int(os.environ.get("GRID_SPLIT_STALL_SECS", "900"))
+        self._hard = int(os.environ.get("GRID_SPLIT_HARD_TIMEOUT", "0"))
+        self._last_progress = self.t0
+        self._last_size = -1
+
+    def poll(self):
+        rc = self.proc.poll()
+        if rc is not None:
+            return rc
         now = time.monotonic()
         try:
-            size = log_path.stat().st_size
+            size = self.log_path.stat().st_size
         except OSError:
             size = -1
-        if size != last_size:
-            last_size = size
-            last_progress = now
-        elif _compiler_child_alive(proc.pid):
-            last_progress = now
-        if (now - last_progress) > stall_limit:
-            _kill_group(proc)
+        if size != self._last_size:
+            self._last_size = size
+            self._last_progress = now
+        elif _compiler_child_alive(self.proc.pid):
+            self._last_progress = now
+        if (now - self._last_progress) > self._stall_limit:
+            _kill_group(self.proc)
             return "STALL"
-        if hard and (now - t0) > hard:
-            _kill_group(proc)
+        if self._hard and (now - self.t0) > self._hard:
+            _kill_group(self.proc)
             return "TIMEOUT"
+        return None
+
+    def close(self) -> None:
+        self.log.close()
+
+
+def shard_jobs() -> int:
+    """GRID_SPLIT_SHARD_JOBS: GPU shards run at once (default 1 = the historical
+    strictly-serial order). >1 became safe on 2026-10-01 when every cuda cache
+    writer gained a per-key flock (cuda_harness._cache_key_lock; executable_cache
+    already had one) — two shards sharing one cache dir wait for each other's
+    build of a key instead of racing it. Host RAM is the practical bound: a
+    shard's INLINE nvcc builds (integrator / second-order smoke runners on the
+    humanoids, 6-10 GB each) are NOT pool-admitted, so raise it only under a
+    MemoryMax'd unit, and read the pilot's wall time before changing the default."""
+    raw = os.environ.get("GRID_SPLIT_SHARD_JOBS", "1")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        raise SystemExit(f"GRID_SPLIT_SHARD_JOBS must be an integer, got {raw!r}")
 
 
 def _write_ledger(out_dir: Path, results: list[dict]) -> None:
@@ -1202,11 +1230,112 @@ def report_pool(pool, out_dir: Path) -> int:
     return failed
 
 
+def _launch_shard(spec: ShardSpec, out_dir: Path, receipts: bool,
+                  extra_args: list[str]) -> _ShardRun:
+    """Start one shard's pytest in its own session (so a kill takes the WHOLE
+    process group — otherwise pytest dies but its nvcc/cicc grandchildren
+    survive as orphans and poison the next shard's run: bench-orchestration
+    trap, "pkill orphans, GPU/CPU EMPTY before the next leg")."""
+    xml_path = out_dir / f"{spec.name}.xml"
+    log_path = out_dir / f"{spec.name}.log"
+    cmd = [PYTHON, "-m", "pytest", *spec.targets,
+           "-q", "-rf", f"--junitxml={xml_path}"]
+    if spec.apply_marker:
+        cmd += ["-m", "gpu_proof"]
+    cmd += extra_args
+    if receipts:
+        rdir = out_dir / "receipts"
+        rdir.mkdir(exist_ok=True)
+        cmd += ["--gpu-proof-enable",
+                f"--gpu-proof-out={rdir / (spec.name + '.json')}",
+                f"--gpu-proof-shard={spec.name}",
+                "--gpu-proof-shard-fingerprint-paths="
+                + ",".join(spec.fingerprint_paths)]
+    env = os.environ.copy()
+    if spec.domain == "cuda":
+        # The cuda suite's artifact-cache default is CWD-relative — pin it
+        # absolute so every shard (incl. nested pytest processes) shares
+        # ONE warm cache. Its writers are per-key flock'd (2026-10-01), so
+        # GRID_SPLIT_SHARD_JOBS>1 shards may share it.
+        env.update(cuda_worker_env())
+        if receipts:
+            # A4: per-shard header content-key sidecar (recorded by the
+            # cuda conftest; consumed by Wave A' refresh planning). Fresh
+            # file per attempt so a re-run can't append onto stale rows.
+            keys_path = out_dir / "receipts" / f"{spec.name}.header_keys.jsonl"
+            keys_path.unlink(missing_ok=True)
+            env["GRID_HEADER_KEYS_OUT"] = str(keys_path)
+    log = open(log_path, "w")
+    proc = subprocess.Popen(cmd, cwd=REPO_ROOT, stdout=log,
+                            stderr=subprocess.STDOUT,
+                            start_new_session=True, env=env)
+    return _ShardRun(spec, proc, log, log_path, xml_path)
+
+
+def _finish_shard(run: _ShardRun, rc, results: list[dict], out_dir: Path) -> None:
+    spec, xml_path = run.spec, run.xml_path
+    dt = time.monotonic() - run.t0
+    # VRAM watermark AFTER the shard's process exits: per-shard isolation
+    # means memory.used should return to the desktop baseline every time.
+    # A rising floor here = leaked device allocations surviving process
+    # exit (the driver-wedge signature) — the accumulation-probe dataset.
+    try:
+        vram = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.used",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=15).stdout.strip().split("\n")[0]
+    except Exception:
+        vram = "?"
+    junit = parse_junit(xml_path)
+    if junit is None:
+        kind = "CASUALTY" if rc != 0 else "NO-XML"
+        row = dict(shard=spec.name, domain=spec.domain, rc=rc, secs=dt,
+                   kind=kind, vram=vram, tests=0, failures=0, errors=0,
+                   skipped=0, failed=[], fresh=True)
+    else:
+        t, f, e, s, failed = junit
+        if rc == 0:
+            kind = "OK"
+        elif rc == 5 and t == 0 and f + e == 0:
+            # pytest exit 5 = "no tests collected". For a wrappers module
+            # that is a benign -k deselection (SCOPE narrowing). For a
+            # cuda shard the targets are EXPLICIT node ids — all of them
+            # vanishing means the partition is stale vs the tree (e.g. a
+            # --resume across test edits): loud, never clean...unless the
+            # caller really did pass a -k through the pytest passthrough.
+            benign = spec.domain == "wrappers" or "-k" in extra_args
+            kind = "DESELECTED" if benign else "STALE-IDS"
+        elif f + e > 0:
+            kind = "FAILURES"
+        elif s > 0:
+            # SUITE FLOOR: conftest forces rc=1 on env-guard skips on a
+            # capable box; the XML itself is clean.
+            kind = "FLOOR-SKIP"
+        else:
+            kind = "RC!=0"
+        row = dict(shard=spec.name, domain=spec.domain, rc=rc, secs=dt,
+                   kind=kind, vram=vram, tests=t, failures=f, errors=e,
+                   skipped=s, failed=failed, fresh=True)
+    results.append(row)
+    _write_ledger(out_dir, results)
+    est = (f", est {spec.est_secs / 60:.0f}min vs {dt / 60:.0f}min"
+           if spec.domain == "cuda" and spec.est_secs else "")
+    print(f"[{datetime.now():%H:%M:%S}] {spec.name}: {row['kind']} "
+          f"({row['tests']} tests, {row['failures']}F/{row['errors']}E/"
+          f"{row['skipped']}S, rc={rc}, {dt:.0f}s{est}, "
+          f"vram={row['vram']}MiB)", flush=True)
+
+
 def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
               extra_args: list[str],
               prior_results: list[dict],
               pool=None, prereqs: dict | None = None) -> tuple[list[dict], bool]:
-    """Returns (results incl. prior clean rows, paused)."""
+    """Returns (results incl. prior clean rows, paused).
+
+    Runs ``shard_jobs()`` shards at a time (see that docstring for why >1 is
+    safe and what bounds it). PAUSE stops NEW launches and returns once the
+    in-flight shards have finished; Ctrl-C/SIGTERM kills the in-flight groups
+    and leaves them out of the ledger so --resume re-runs them from scratch."""
     results = list(prior_results)
     if pool is not None:
         # GPU shards need host RAM too — tighten the pool's live floor for the
@@ -1214,123 +1343,50 @@ def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
         pool.raise_floor(GPU_PHASE_FLOOR_KB)
     pending = list(shards)
     prereqs = prereqs or {}
+    jobs = shard_jobs()
+    print(f"  shard jobs: {jobs} (GRID_SPLIT_SHARD_JOBS)", flush=True)
+    running: list[_ShardRun] = []
     waiting = False
-    while pending:
-        if (out_dir / "PAUSE").exists():
-            print(f"[{datetime.now():%H:%M:%S}] PAUSE file present — stopping "
-                  f"cleanly with {len(pending)} shard(s) pending "
-                  f"(rm it, then --resume {out_dir})",
-                  flush=True)
-            return results, True
-        spec = next_ready_shard(pending, pool, prereqs)
-        if spec is None:
-            if not waiting:
-                print(f"[{datetime.now():%H:%M:%S}] all {len(pending)} pending "
-                      "shards are waiting on compile jobs …", flush=True)
-                waiting = True
-            # A bounded wait lets a later shard become runnable first and keeps
-            # PAUSE responsive. Never launch two GPU shards concurrently.
-            need = pending_compile_jobs(pending[0], pool, prereqs)
-            pool.done_events[need[0]].wait(timeout=0.25)
-            continue
-        waiting = False
-        pending.remove(spec)
-        xml_path = out_dir / f"{spec.name}.xml"
-        log_path = out_dir / f"{spec.name}.log"
-        cmd = [PYTHON, "-m", "pytest", *spec.targets,
-               "-q", "-rf", f"--junitxml={xml_path}"]
-        if spec.apply_marker:
-            cmd += ["-m", "gpu_proof"]
-        cmd += extra_args
-        if receipts:
-            rdir = out_dir / "receipts"
-            rdir.mkdir(exist_ok=True)
-            cmd += ["--gpu-proof-enable",
-                    f"--gpu-proof-out={rdir / (spec.name + '.json')}",
-                    f"--gpu-proof-shard={spec.name}",
-                    "--gpu-proof-shard-fingerprint-paths="
-                    + ",".join(spec.fingerprint_paths)]
-        env = os.environ.copy()
-        if spec.domain == "cuda":
-            # The cuda suite's artifact-cache default is CWD-relative — pin it
-            # absolute so every shard (incl. nested pytest processes) shares
-            # ONE warm cache. NOTE the cache writers have no file locking:
-            # shards must stay SERIAL (they are — one GPU, one at a time).
-            env.update(cuda_worker_env())
-            if receipts:
-                # A4: per-shard header content-key sidecar (recorded by the
-                # cuda conftest; consumed by Wave A' refresh planning). Fresh
-                # file per attempt so a re-run can't append onto stale rows.
-                keys_path = out_dir / "receipts" / f"{spec.name}.header_keys.jsonl"
-                keys_path.unlink(missing_ok=True)
-                env["GRID_HEADER_KEYS_OUT"] = str(keys_path)
-        t0 = time.monotonic()
-        with open(log_path, "w") as log:
-            # start_new_session so a kill takes the WHOLE process group —
-            # otherwise pytest dies but its nvcc/cicc grandchildren survive as
-            # orphans and poison the next shard's run (bench-orchestration
-            # trap: "pkill orphans, GPU/CPU EMPTY before the next leg").
-            proc = subprocess.Popen(cmd, cwd=REPO_ROOT, stdout=log,
-                                    stderr=subprocess.STDOUT,
-                                    start_new_session=True, env=env)
-            try:
-                rc: int | str = _wait_progress_aware(proc, spec.name, log_path)
-            except (KeyboardInterrupt, SystemExit):
-                # In-flight shard = incomplete: kill its whole group and leave
-                # it OUT of the ledger so --resume re-runs it from scratch.
-                _kill_group(proc)
-                raise
-        dt = time.monotonic() - t0
-        # VRAM watermark AFTER the shard's process exits: per-shard isolation
-        # means memory.used should return to the desktop baseline every time.
-        # A rising floor here = leaked device allocations surviving process
-        # exit (the driver-wedge signature) — the accumulation-probe dataset.
-        try:
-            vram = subprocess.run(
-                ["nvidia-smi", "--query-gpu=memory.used",
-                 "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=15).stdout.strip().split("\n")[0]
-        except Exception:
-            vram = "?"
-        junit = parse_junit(xml_path)
-        if junit is None:
-            kind = "CASUALTY" if rc != 0 else "NO-XML"
-            row = dict(shard=spec.name, domain=spec.domain, rc=rc, secs=dt,
-                       kind=kind, vram=vram, tests=0, failures=0, errors=0,
-                       skipped=0, failed=[], fresh=True)
-        else:
-            t, f, e, s, failed = junit
-            if rc == 0:
-                kind = "OK"
-            elif rc == 5 and t == 0 and f + e == 0:
-                # pytest exit 5 = "no tests collected". For a wrappers module
-                # that is a benign -k deselection (SCOPE narrowing). For a
-                # cuda shard the targets are EXPLICIT node ids — all of them
-                # vanishing means the partition is stale vs the tree (e.g. a
-                # --resume across test edits): loud, never clean...unless the
-                # caller really did pass a -k through the pytest passthrough.
-                benign = spec.domain == "wrappers" or "-k" in extra_args
-                kind = "DESELECTED" if benign else "STALE-IDS"
-            elif f + e > 0:
-                kind = "FAILURES"
-            elif s > 0:
-                # SUITE FLOOR: conftest forces rc=1 on env-guard skips on a
-                # capable box; the XML itself is clean.
-                kind = "FLOOR-SKIP"
-            else:
-                kind = "RC!=0"
-            row = dict(shard=spec.name, domain=spec.domain, rc=rc, secs=dt,
-                       kind=kind, vram=vram, tests=t, failures=f, errors=e,
-                       skipped=s, failed=failed, fresh=True)
-        results.append(row)
-        _write_ledger(out_dir, results)
-        est = (f", est {spec.est_secs / 60:.0f}min vs {dt / 60:.0f}min"
-               if spec.domain == "cuda" and spec.est_secs else "")
-        print(f"[{datetime.now():%H:%M:%S}] {spec.name}: {row['kind']} "
-              f"({row['tests']} tests, {row['failures']}F/{row['errors']}E/"
-              f"{row['skipped']}S, rc={rc}, {dt:.0f}s{est}, "
-              f"vram={row['vram']}MiB)", flush=True)
-    return results, False
+    paused = False
+    try:
+        while pending or running:
+            if not paused and (out_dir / "PAUSE").exists():
+                paused = True
+                print(f"[{datetime.now():%H:%M:%S}] PAUSE file present — no new "
+                      f"launches; {len(running)} in flight, {len(pending)} pending "
+                      f"(rm it, then --resume {out_dir})", flush=True)
+            while not paused and pending and len(running) < jobs:
+                spec = next_ready_shard(pending, pool, prereqs)
+                if spec is None:
+                    break
+                waiting = False
+                pending.remove(spec)
+                running.append(_launch_shard(spec, out_dir, receipts, extra_args))
+            if not running:
+                if paused or not pending:
+                    break
+                if not waiting:
+                    print(f"[{datetime.now():%H:%M:%S}] all {len(pending)} pending "
+                          "shards are waiting on compile jobs …", flush=True)
+                    waiting = True
+                # A bounded wait lets a later shard become runnable first and
+                # keeps PAUSE responsive.
+                need = pending_compile_jobs(pending[0], pool, prereqs)
+                pool.done_events[need[0]].wait(timeout=0.25)
+                continue
+            finished = [(run, rc) for run in running for rc in (run.poll(),) if rc is not None]
+            for run, rc in finished:
+                running.remove(run)
+                run.close()
+                _finish_shard(run, rc, results, out_dir)
+            if not finished:
+                time.sleep(5)
+    except (KeyboardInterrupt, SystemExit):
+        for run in running:
+            _kill_group(run.proc)
+            run.close()
+        raise
+    return results, paused
 
 
 def main() -> int:

@@ -87,7 +87,7 @@ def test_phase_run_dispatches_ready_shards_once_without_gpu(tmp_path, monkeypatc
         return 0
     monkeypatch.setattr(rss.subprocess, "Popen", launch)
     monkeypatch.setattr(rss.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout="0\n"))
-    monkeypatch.setattr(rss, "_wait_progress_aware", finish)
+    monkeypatch.setattr(rss._ShardRun, "poll", lambda self: finish(self.proc, self.spec.name, self.log_path))
     monkeypatch.setattr(rss, "parse_junit", lambda _: (1, 0, 0, 0, []))
     results, paused = rss.phase_run([first, second, third], tmp_path, True, [], [],
                                   pool, {"first": ["a"], "second": ["b"]})
@@ -139,7 +139,7 @@ def test_phase_run_rescans_all_shards_after_bounded_wait(tmp_path, monkeypatch):
         return 0
     monkeypatch.setattr(rss.subprocess, "Popen", launch)
     monkeypatch.setattr(rss.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout="0\n"))
-    monkeypatch.setattr(rss, "_wait_progress_aware", finish)
+    monkeypatch.setattr(rss._ShardRun, "poll", lambda self: finish(self.proc, self.spec.name, self.log_path))
     monkeypatch.setattr(rss, "parse_junit", lambda _: (1, 0, 0, 0, []))
     results, paused = rss.phase_run([_dispatch_spec("first"), _dispatch_spec("second")],
         tmp_path, False, [], [], pool, {"first": ["a"], "second": ["b"]})
