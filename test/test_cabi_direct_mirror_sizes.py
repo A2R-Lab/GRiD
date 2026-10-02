@@ -1,13 +1,21 @@
 """CPU referee for abi_specs.cabi_direct (2026-10-01).
 
 A cabi_direct row makes the C-ABI body aim the generated host wrapper's D2H copy at the
-caller's buffer (GridMirrorRetarget) instead of memcpy-ing the pinned mirror. That is only
-memory-safe when the wrapper copies EXACTLY batch * out_size_expr elements into the mirror.
+caller's buffer (GridMirrorRetarget) instead of copying a second time (a memcpy of the
+pinned mirror, or — the device-direct rows — a second download of the device buffer). That
+is only memory-safe when the wrapper copies EXACTLY batch * out_size_expr elements into the
+mirror.
 Three wrappers copy NUM_JOINTS-strided rows (more than the NUM_VEL public row on a floating
 base) and five copy by another pattern; this test regenerates fixed and floating headers
 and evaluates every cabi_direct wrapper's D2H size against the spec, so flagging a row that
 does not qualify — or a wrapper edit that breaks a flagged one — fails here, not in a user's
 heap.
+
+It also pins the delivery invariant the first cut of this feature broke (2026-10-02): the
+MuJoCo-twin bodies dropped their copy-out but never gained the retarget, so a twin returned
+the caller's buffer UNWRITTEN — and no receipt-path GPU test compared a retargeted numpy
+twin against anything. Every generated C-ABI body, primary and twin, must deliver its
+output: by a retarget guard or by an explicit copy into the out pointer.
 """
 from __future__ import annotations
 
@@ -21,7 +29,8 @@ import pytest
 
 from grid_codegen.abi_specs import ABI_SPECS
 from grid_codegen.GRiDCodeGenerator import GRiDCodeGenerator
-from grid_codegen.wrapper_body_gen import _mirror_swap
+from grid_codegen.wrapper_body_gen import (GENERATED_KEYS, MJX_KEYS, _mirror_name, _mirror_swap,
+                                           gen_body, gen_mjx_body)
 from RBDReference.equivalents.reference_backend import build_project_adapter
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec
@@ -63,11 +72,12 @@ def test_every_cabi_direct_wrapper_copies_exactly_batch_times_out_size(robot, ba
     problems = []
     for key, s in direct.items():
         want = _ev(s.out_size_expr, c, batch) * batch
-        pat = re.compile(r"cudaMemcpy(?:Async)?\(\s*hd_data->" + re.escape(s.out_buffer)
+        mirror = _mirror_name(s)
+        pat = re.compile(r"cudaMemcpy(?:Async)?\(\s*hd_data->" + re.escape(mirror)
                          + r"\s*,\s*[^,]+,\s*(.+?),\s*cudaMemcpyDeviceToHost")
         lines = [m for line in src.splitlines() for m in [pat.search(line)] if m]
         if not lines:
-            problems.append(f"{key}: no D2H into {s.out_buffer} (copy pattern not recognised)")
+            problems.append(f"{key}: no D2H into {mirror} (copy pattern not recognised)")
             continue
         for m in lines:
             size = m.group(1)
@@ -84,3 +94,28 @@ def test_known_over_copying_wrappers_are_not_direct():
                 "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
                 "end_effector_pose_runtime", "end_effector_pose_gradient_runtime"):
         assert not ABI_SPECS[key].cabi_direct, key
+
+
+def _out_name(spec):
+    names = [n for n, _t in spec.inputs]
+    return next(n for n in names if n.endswith("out") or n == "out")
+
+
+def test_every_generated_cabi_body_delivers_its_output():
+    """Primary AND MuJoCo-twin bodies: a retarget guard aimed at the out pointer, or an
+    explicit copy into it. A body with neither returns the caller's buffer unwritten."""
+    bodies = [(k, gen_body(ABI_SPECS[k])) for k in GENERATED_KEYS]
+    bodies += [(k + "_mujoco", gen_mjx_body(ABI_SPECS[k])) for k in MJX_KEYS]
+    problems = []
+    for name, body in bodies:
+        spec = ABI_SPECS[name.removesuffix("_mujoco")]
+        out = re.escape(_out_name(spec))
+        guard = re.search(r"GridMirrorRetarget \w+\(&g_data->" + re.escape(_mirror_name(spec)) + r", " + out + r"\);", body)
+        copy = re.search(r"(?:std::memcpy|unpack_rows|cudaMemcpy(?:2D)?)\(" + out + r",", body)
+        if _mirror_swap(spec) and not guard:
+            problems.append(f"{name}: cabi_direct body has no retarget guard")
+        if not _mirror_swap(spec) and guard:
+            problems.append(f"{name}: retarget guard on a row that is not cabi_direct")
+        if bool(guard) == bool(copy):
+            problems.append(f"{name}: output must be delivered exactly once (guard={bool(guard)}, copy={bool(copy)})")
+    assert not problems, "\n".join(problems)

@@ -63,6 +63,15 @@ static pybind11::array_t<CT> grid_py_out(pybind11::object out_opt, int batch, in
     return py::reinterpret_borrow<py::array_t<CT>>(out);
 }
 
+// Matrix-shaped rows (the gradients): None allocates (batch, rows, cols) as before; a
+// caller-owned `out` is the FLAT per-item buffer (batch, rows*cols) in the C ABI's raw
+// layout — the handle returns the public (batch, rows, cols) array as a view of it.
+template <typename CT>
+static pybind11::array_t<CT> grid_py_out(pybind11::object out_opt, int batch, int rows, int cols, const char* name) {
+    if (out_opt.is_none()) return pybind11::array_t<CT>({batch, rows, cols});
+    return grid_py_out<CT>(out_opt, batch, rows * cols, name);
+}
+
 namespace py = pybind11;
 
 // codex follow-up (2026-09-24): a native wait that can block behind a REPLAY ADMISSION
@@ -841,8 +850,8 @@ public:
         return out;
     }
 
-    // inverse_dynamics_gradient(q, qd, qdd_opt, gravity, f_ext_opt) -> (batch, num_vel_, 2 * num_vel_)
-    py::array_t<CT> inverse_dynamics_gradient(arr_t q, arr_t qd, py::object qdd_opt, CT gravity, py::object f_ext_opt)
+    // inverse_dynamics_gradient(q, qd, qdd_opt, gravity, f_ext_opt, out_opt) -> (batch, num_vel_, 2 * num_vel_)
+    py::array_t<CT> inverse_dynamics_gradient(arr_t q, arr_t qd, py::object qdd_opt, CT gravity, py::object f_ext_opt, py::object out_opt)
     {
         int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
         const CT* qdd_ptr = nullptr;
@@ -853,7 +862,7 @@ public:
         }
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
-        py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
+        py::array_t<CT> out = grid_py_out<CT>(out_opt, batch, num_vel_, 2 * num_vel_, "inverse_dynamics_gradient");
         int rc = fn_inverse_dynamics_gradient_(ctx_id_, q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "inverse_dynamics_gradient",
             "inverse_dynamics_gradient not built into this robot .so — add "
@@ -863,8 +872,8 @@ public:
     }
 
     bool has_inverse_dynamics_gradient_mujoco() const { return fn_inverse_dynamics_gradient_mujoco_ != nullptr; }
-    // inverse_dynamics_gradient_mujoco(q, qd, qdd, gravity, f_ext_opt) -> (batch, num_vel_, 2 * num_vel_)
-    py::array_t<CT> inverse_dynamics_gradient_mujoco(arr_t q, arr_t qd, arr_t qdd, CT gravity, py::object f_ext_opt)
+    // inverse_dynamics_gradient_mujoco(q, qd, qdd, gravity, f_ext_opt, out_opt) -> (batch, num_vel_, 2 * num_vel_)
+    py::array_t<CT> inverse_dynamics_gradient_mujoco(arr_t q, arr_t qd, arr_t qdd, CT gravity, py::object f_ext_opt, py::object out_opt)
     {
         if (!fn_inverse_dynamics_gradient_mujoco_) throw std::runtime_error(
             "inverse_dynamics_gradient_mujoco unavailable: floating-base .so only");
@@ -872,21 +881,21 @@ public:
         check_array_2d(qdd, batch, num_vel_, "qdd");
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
-        py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
+        py::array_t<CT> out = grid_py_out<CT>(out_opt, batch, num_vel_, 2 * num_vel_, "inverse_dynamics_gradient_mujoco");
         int rc = fn_inverse_dynamics_gradient_mujoco_(ctx_id_, q.data(), qd.data(), qdd.data(), out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "inverse_dynamics_gradient_mujoco",
             nullptr));
         return out;
     }
 
-    // forward_dynamics_gradient(q, qd, u, gravity, f_ext_opt) -> (batch, num_vel_, 2 * num_vel_)
-    py::array_t<CT> forward_dynamics_gradient(arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt)
+    // forward_dynamics_gradient(q, qd, u, gravity, f_ext_opt, out_opt) -> (batch, num_vel_, 2 * num_vel_)
+    py::array_t<CT> forward_dynamics_gradient(arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt, py::object out_opt)
     {
         int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
         check_array_2d(u, batch, num_vel_, "u");
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
-        py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
+        py::array_t<CT> out = grid_py_out<CT>(out_opt, batch, num_vel_, 2 * num_vel_, "forward_dynamics_gradient");
         int rc = fn_fd_grad_(ctx_id_, q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "forward_dynamics_gradient",
             "forward_dynamics_gradient not built into this robot .so — add "
@@ -896,8 +905,8 @@ public:
     }
 
     bool has_forward_dynamics_gradient_mujoco() const { return fn_fd_grad_mujoco_ != nullptr; }
-    // forward_dynamics_gradient_mujoco(q, qd, u, gravity, f_ext_opt) -> (batch, num_vel_, 2 * num_vel_)
-    py::array_t<CT> forward_dynamics_gradient_mujoco(arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt)
+    // forward_dynamics_gradient_mujoco(q, qd, u, gravity, f_ext_opt, out_opt) -> (batch, num_vel_, 2 * num_vel_)
+    py::array_t<CT> forward_dynamics_gradient_mujoco(arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt, py::object out_opt)
     {
         if (!fn_fd_grad_mujoco_) throw std::runtime_error(
             "forward_dynamics_gradient_mujoco unavailable: floating-base .so only");
@@ -905,7 +914,7 @@ public:
         check_array_2d(u, batch, num_vel_, "u");
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
-        py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
+        py::array_t<CT> out = grid_py_out<CT>(out_opt, batch, num_vel_, 2 * num_vel_, "forward_dynamics_gradient_mujoco");
         int rc = fn_fd_grad_mujoco_(ctx_id_, q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "forward_dynamics_gradient_mujoco",
             nullptr));
@@ -2422,19 +2431,23 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def("inverse_dynamics_gradient", &R::inverse_dynamics_gradient,
              py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
              py::arg("gravity") = -9.81f,
-             py::arg("f_ext") = py::none())
+             py::arg("f_ext") = py::none(),
+             py::arg("out") = py::none())
         .def_property_readonly("has_inverse_dynamics_gradient_mujoco", &R::has_inverse_dynamics_gradient_mujoco)
         .def("inverse_dynamics_gradient_mujoco", &R::inverse_dynamics_gradient_mujoco,
              py::arg("q"), py::arg("qd"), py::arg("qdd"),
-             py::arg("gravity") = -9.81f, py::arg("f_ext") = py::none())
+             py::arg("gravity") = -9.81f, py::arg("f_ext") = py::none(),
+             py::arg("out") = py::none())
         .def("forward_dynamics_gradient", &R::forward_dynamics_gradient,
              py::arg("q"), py::arg("qd"), py::arg("u"),
              py::arg("gravity") = -9.81f,
-             py::arg("f_ext") = py::none())
+             py::arg("f_ext") = py::none(),
+             py::arg("out") = py::none())
         .def_property_readonly("has_forward_dynamics_gradient_mujoco", &R::has_forward_dynamics_gradient_mujoco)
         .def("forward_dynamics_gradient_mujoco", &R::forward_dynamics_gradient_mujoco,
              py::arg("q"), py::arg("qd"), py::arg("u"),
-             py::arg("gravity") = -9.81f, py::arg("f_ext") = py::none())
+             py::arg("gravity") = -9.81f, py::arg("f_ext") = py::none(),
+             py::arg("out") = py::none())
         .def("end_effector_pose_hessian", &R::end_effector_pose_hessian,
              py::arg("q"))
         .def("pinned_empty", &R::pinned_empty, py::arg("shape"))

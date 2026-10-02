@@ -20,7 +20,8 @@ grid_rbd = pytest.importorskip("grid_rbd")
 from ._subset_artifacts import register_subset, cache_key as _cache_key, random_state as _state  # noqa: E402
 
 pytestmark = pytest.mark.python_wrappers
-ALGOS = ["forward_dynamics", "inverse_dynamics", "forward_dynamics_gradient", "minv"]
+ALGOS = ["forward_dynamics", "inverse_dynamics", "forward_dynamics_gradient", "inverse_dynamics_gradient",
+         "minv", "crba", "energy", "com"]
 
 
 @pytest.fixture(scope="module")
@@ -63,6 +64,35 @@ def test_torch_mujoco_forward_and_backward(go2):
     assert np.allclose(out.detach().cpu().numpy(), go2.mujoco.forward_dynamics(q, qd, u), atol=1e-5)
     out.sum().backward()
     assert tq.grad is not None and torch.isfinite(tq.grad).all()
+
+
+def test_numpy_mujoco_twins_match_the_torch_twins(go2):
+    """The numpy twins download through a retargeted host mirror (GridMirrorRetarget); the
+    torch twins copy device-to-device and never touch it. 2026-10-02: the twin C-ABI bodies
+    had lost their copy-out without gaining the retarget and returned the result array
+    UNWRITTEN — finite garbage that every isfinite check accepted. Compare values."""
+    torch = pytest.importorskip("torch")
+    import grid_rbd.torch as gt
+    tv = gt.TorchRobotHandle(go2, _cache_key(go2), go2._so_path)
+    q, qd, u = _state(go2)
+    tq, tqd, tu = (torch.as_tensor(x, device="cuda") for x in (q, qd, u))
+    leaves = lambda v: [np.asarray(a.detach().cpu() if hasattr(a, "detach") else a)
+                        for a in (v if isinstance(v, tuple) else (v,))]
+    cases = {
+        "minv": (lambda: go2.mujoco.minv(q), lambda: tv.mujoco.minv(tq)),
+        "crba": (lambda: go2.mujoco.crba(q), lambda: tv.mujoco.crba(tq)),
+        "energy": (lambda: go2.mujoco.energy(q, qd), lambda: tv.mujoco.energy(tq, tqd)),
+        "com": (lambda: go2.mujoco.com(q), lambda: tv.mujoco.com(tq)),
+        "forward_dynamics_gradient": (lambda: go2.mujoco.forward_dynamics_gradient(q, qd, u),
+                                      lambda: tv.mujoco.forward_dynamics_gradient(tq, tqd, tu)),
+        "inverse_dynamics_gradient": (lambda: go2.mujoco.inverse_dynamics_gradient(q, qd, u),
+                                      lambda: tv.mujoco.inverse_dynamics_gradient(tq, tqd, tu)),
+    }
+    for name, (numpy_call, torch_call) in cases.items():
+        got, ref = leaves(numpy_call()), leaves(torch_call())
+        assert len(got) == len(ref), name
+        for a, b in zip(got, ref):
+            assert a.shape == b.shape and np.allclose(a, b, rtol=1e-4, atol=1e-4), name
 
 
 def test_jax_mujoco_forward_and_grad(go2):

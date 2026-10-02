@@ -29,8 +29,9 @@ Vocabulary (observed variance, 2026-08-28 wrapper audit):
 - f_ext_mode: none | optional (apply_f_ext + reset epilogue) | produces
 - it_dispatch: None | "FULL" (cases 0-5) | "HESSIAN" (EULER/SI-E only)
 - out_copy:   "memcpy_h" (sync + std::memcpy from h_*) |
-              "cudaMemcpy_d" (device-direct D2H from d_* — the nj-stride
-              workaround sites; see wrapper comments)
+              "cudaMemcpy_d" (device-direct D2H from d_*). A cabi_direct row of
+              either kind emits NO copy: the body retargets the wrapper's own
+              D2H at the caller's buffer (see cabi_direct below)
 - body_override=True: the body is genuinely bespoke (S-cases from the audit);
   P1 keeps it literal and the cross-check only validates identity fields.
 """
@@ -129,11 +130,16 @@ class AbiSpec:
     # py_out_param: the pybind method accepts an optional caller-owned `out`
     # array (shape (batch, *py_out_dims), the .so's dtype, C-contiguous,
     # writeable) that the C ABI fills directly — pair with handle.pinned_empty
-    # for a page-locked destination. Only for ops whose numpy-side out_layout
-    # is a pure view (so_slabs): a host re-layout (grad_concat) would copy anyway.
+    # for a page-locked destination. `out` is the FLAT per-item buffer
+    # (batch, prod(py_out_dims)) in the C ABI's raw layout; the handle returns
+    # views of it, so only rows whose out_layout is a pure view qualify:
+    # so_slabs (slices) and grad_concat (two col-major nv x nv halves ==
+    # one col-major nv x 2nv matrix == a transposed view).
     py_out_param: bool = False
     # cabi_direct: the C-ABI body retargets the generated host wrapper's D2H copy at the
-    # caller's buffer (GridMirrorRetarget) instead of memcpy-ing the pinned mirror. OPT-IN
+    # caller's buffer (GridMirrorRetarget) instead of copying a second time (memcpy_h rows
+    # memcpy'd the pinned mirror; cudaMemcpy_d rows downloaded the device buffer AGAIN
+    # after the wrapper had already downloaded it into the mirror). OPT-IN
     # per row, set only where test/test_cabi_direct_mirror_sizes.py proves the wrapper
     # copies EXACTLY batch * out_size_expr elements into the mirror: three wrappers
     # (generalized_gravity, nonlinear_effects, integrator_gradient) copy NUM_JOINTS-strided
@@ -216,6 +222,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         sig_mjx_macro="GRID_RBD_SIG_MJX_CRBA",
         template_shape="std5",
         out_buffer="d_M", out_copy="cudaMemcpy_d", out_size_expr="grid::NUM_VEL*grid::NUM_VEL",
+        cabi_direct=True,
         has_mjx_twin=True,
         py_out_dims=('num_vel_', 'num_vel_'),
         out_layout=("reshape", ("num_vel_", "num_vel_")),
@@ -288,6 +295,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         pack_mode="q_q_null",     # pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr) — qd/u unused
         sig_mjx_macro="GRID_RBD_SIG_MJX_MINV",
         out_buffer="d_Minv", out_copy="cudaMemcpy_d", out_size_expr="grid::NUM_VEL*grid::NUM_VEL",
+        cabi_direct=True,
         has_mjx_twin=True,
         # NOTE: no gravity param at all (unlike crba, which accepts-but-ignores one).
         py_out_dims=('num_vel_', 'num_vel_'),
@@ -349,6 +357,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         template_shape="qdd6",
         out_buffer="d_dc_du", out_copy="cudaMemcpy_d",
         out_size_expr="2*grid::NUM_VEL*grid::NUM_VEL",  # code: (size_t)batch * 2 * nv * nv * sizeof(T)
+        cabi_direct=True, py_out_param=True,
         has_mjx_twin=True,
         mjx_rejects_f_ext=True, mjx_requires_qdd=True,
         py_out_dims=('num_vel_', '2 * num_vel_'),
@@ -370,6 +379,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         sig_mjx_macro="GRID_RBD_SIG_MJX_FORWARD_DYNAMICS_GRADIENT",
         template_shape="fdgrad5",
         out_buffer="d_df_du", out_copy="cudaMemcpy_d", out_size_expr="2*grid::NUM_VEL*grid::NUM_VEL",
+        cabi_direct=True, py_out_param=True,
         has_mjx_twin=True,
         mjx_rejects_f_ext=True,
         py_out_dims=('num_vel_', '2 * num_vel_'),

@@ -173,7 +173,9 @@ def _signature_and_call(spec, mjx: bool):
         params.insert(params.index("CT dt, int it") + 1, "CT gravity")
     if spec.py_out_param:
         # allocate-once host round trip (2026-10-01): trailing optional caller-owned out
-        assert spec.py_out_dims and len(spec.py_out_dims) == 1, spec.key
+        # 1 dim: grid_py_out(out, batch, n); 2 dims: the (batch, rows, cols) overload,
+        # whose caller-owned form is still the flat (batch, rows*cols) raw buffer.
+        assert spec.py_out_dims and len(spec.py_out_dims) in (1, 2), spec.key
         params.append("py::object out_opt")
     return params, prelude, call
 

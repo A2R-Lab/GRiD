@@ -1,6 +1,7 @@
 """Allocate-once host round trip on the numpy surface (2026-10-01).
 
-`handle.pinned_empty(shape)` + `out=` on idsva_so / fdsva_so: the C ABI retargets the
+`handle.pinned_empty(shape)` + `out=` on the first-order gradients and idsva_so /
+fdsva_so: the C ABI retargets the
 generated host wrapper's D2H copy at the caller's buffer (GridMirrorRetarget), so no
 host-side memcpy follows and a page-locked buffer receives the copy at the PCIe rate.
 Contract pinned here: bit-identical to the default call, the returned tensors are VIEWS
@@ -76,6 +77,38 @@ def test_out_receives_the_result_as_views_and_matches_default(h, inputs, method,
     assert np.array_equal(_flat(fn(q * 0.5, qd, x)), _flat(fn(q * 0.5, qd, x, out=out)))
 
 
+@pytest.mark.parametrize("method", ["inverse_dynamics_gradient", "forward_dynamics_gradient"])
+@pytest.mark.parametrize("pinned", [True, False], ids=["pinned", "pageable"])
+def test_gradient_out_is_a_view_in_the_public_layout_and_matches_default(h, inputs, method, pinned):
+    q, qd, x = inputs
+    B, nv = q.shape[0], h.num_vel
+    fn = getattr(h, method)
+    ref = fn(q, qd, x)
+    out = h.pinned_empty((B, 2 * nv * nv)) if pinned else np.empty((B, 2 * nv * nv), np.float32)
+    out[:] = np.nan                                             # every element must be written
+    got = fn(q, qd, x, out=out)
+    assert got.shape == ref.shape == (B, nv, 2 * nv)
+    assert np.array_equal(got, ref) and np.shares_memory(got, out)
+    # raw layout of `out`: one column-major nv x 2nv matrix per item
+    assert np.array_equal(out.reshape(B, 2 * nv, nv).transpose(0, 2, 1), ref)
+    # mirror restored; reusing the buffer overwrites the view in place
+    assert np.array_equal(fn(q * 0.5, qd, x), fn(q * 0.5, qd, x, out=out))
+    assert np.array_equal(got, fn(q * 0.5, qd, x)), "the view tracks the reused buffer"
+
+
+def test_direct_download_ops_fill_every_element(h, inputs):
+    """minv / crba / the gradients lost their second device download (the wrapper's own
+    D2H is retargeted at the result array): the default calls still return full, finite,
+    repeatable results."""
+    q, qd, x = inputs
+    for call in (lambda: h.minv(q), lambda: h.crba(q), lambda: h.inverse_dynamics_gradient(q, qd, x),
+                 lambda: h.forward_dynamics_gradient(q, qd, x)):
+        a, b = call(), call()
+        assert np.isfinite(a).all() and np.array_equal(a, b)
+    M, Minv = h.crba(q).astype(np.float64), h.minv(q).astype(np.float64)
+    assert np.allclose(M @ Minv, np.eye(h.num_vel), atol=5e-3)
+
+
 def test_bad_out_is_refused(h, inputs):
     q, qd, x = inputs
     B, n = q.shape[0], 4 * h.num_vel ** 3
@@ -88,3 +121,6 @@ def test_bad_out_is_refused(h, inputs):
     ro = np.empty((B, n), np.float32); ro.flags.writeable = False
     with pytest.raises(ValueError, match="writeable"):
         h.idsva_so(q, qd, x, out=ro)
+    nv = h.num_vel
+    with pytest.raises(ValueError, match="shape"):               # the public shape is NOT the buffer shape
+        h.inverse_dynamics_gradient(q, qd, x, out=np.empty((B, nv, 2 * nv), np.float32))

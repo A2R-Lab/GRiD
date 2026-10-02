@@ -89,6 +89,10 @@ For the big outputs (`idsva_so` / `fdsva_so`), allocate a page-locked buffer onc
 copy lands in it directly (no extra host memcpy) and the returned tensors are views of it —
 ~40 ms vs 120 ms per call on g1 @1024 (702 MB), measured 2026-10-01.
 
+`inverse_dynamics_gradient` / `forward_dynamics_gradient` take `out=` as well: allocate
+`h.pinned_empty((B, 2*h.num_vel**2))` once; the returned `(B, NV, 2NV)` array is a view of
+it (column-major per item, so not C-contiguous) — no per-call allocation, no host re-layout.
+
 ## The fast path (JAX): stay resident, compose, differentiate
 
 ```python

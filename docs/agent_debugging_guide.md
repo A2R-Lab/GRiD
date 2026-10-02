@@ -2658,3 +2658,38 @@ PCIe rate.
 - The pybind shim does not link cudart: anything needing the CUDA runtime from Python goes
   through an export in the per-robot `.so` (here `grid_rbd_pinned_alloc/free/is_pinned`),
   and a buffer that outlives the call keeps the Runner alive via its capsule.
+
+### 7.z37 A generator branch that REMOVES code needs its twin: the MuJoCo C-ABI bodies returned unwritten buffers (2026-10-02)
+
+**Symptom.** None in any gate. Found by reading a generated body while extending the
+retarget: `grid_rbd_idsva_so_mujoco` ended `sync_consume(); return 0;` with no copy into
+`out` at all. Fifteen twin bodies were like it.
+
+**Cause.** `_out_copy_lines` is shared by `gen_body` and `gen_mjx_body`; for a
+`cabi_direct` row it returns no copy because the retarget guard delivers the output. Only
+`gen_body` emitted the guard. The twins lost the memcpy and gained nothing, so the numpy
+MuJoCo-convention calls returned the freshly allocated result array unwritten — finite
+garbage. The 11 new GPU tests were fixed-base (twins `#ifdef`'d out); the one receipt-path
+twin module asserted `isfinite` on numpy outputs; the referee's docstring said "the
+mjx-twin bodies retarget too" and nothing checked it.
+
+**Fix.** `gen_mjx_body` emits the same guard. Two gates: a CPU referee over EVERY generated
+body, primary and twin — output delivered exactly once, by a guard or by a copy into the
+out pointer (`test_cabi_direct_mirror_sizes.py`; it reports all 15 on the old generator) —
+and a GPU test comparing numpy twins with the torch twins, which copy device-to-device and
+never touch the mirror (`test_mjx_twins_contexts.py`).
+
+**Same pass, the other direction.** Four C-ABI bodies (`crba`, `minv`, both first-order
+gradients) downloaded the device buffer into the caller's array AFTER the host wrapper had
+already downloaded it into the pinned mirror — a second full D2H per call, left over from a
+mirror-stride workaround the generator has since fixed. They are `cabi_direct` now: one
+download, into the caller's buffer.
+
+**Rules.**
+- When a shared emitter starts returning nothing for some rows, enumerate every caller and
+  show where each one delivers the removed effect instead.
+- `isfinite` is not a value check. Uninitialised memory is usually finite. Compare against
+  an independent path.
+- A feature that changes generated twins needs a floating-base GPU test in the receipt
+  path; fixed-base smokes compile the twins out.
+

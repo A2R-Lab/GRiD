@@ -474,6 +474,22 @@ versus 120 ms through a fresh array; see the torch/JAX sections below for the
 same pattern on those surfaces. Page-locked memory is a limited resource — do
 not allocate it per call.
 
+The first-order gradients take ``out=`` too. Their buffer is the flat
+``(B, 2·NV²)`` block the device writes — one column-major ``NV × 2NV`` matrix
+per item — and the returned ``(B, NV, 2NV)`` array is a *view* of it, so no
+array is allocated and nothing is re-laid-out on the host:
+
+.. code-block:: python
+
+   out = h.pinned_empty((B, 2 * h.num_vel ** 2))            # once
+   for q, qd, qdd in trajectory:                             # many
+       dtau = h.inverse_dynamics_gradient(q, qd, qdd, out=out)   # view of out
+       dtau_dq, dtau_dqd = dtau[..., :h.num_vel], dtau[..., h.num_vel:]
+
+The view is column-major per item (not C-contiguous); wrap it in
+``np.ascontiguousarray`` if a consumer needs C order. Reusing ``out`` on the
+next call overwrites the values the earlier view shows.
+
 JAX FFI (``grid_rbd[jax]``)
 ---------------------------
 
