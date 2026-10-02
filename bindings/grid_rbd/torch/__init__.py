@@ -1240,7 +1240,9 @@ def pinned_host_like(tensors):
     through a pageable staged copy at ~3 GB/s for large outputs."""
     torch = _require_torch()
     if isinstance(tensors, (tuple, list)):
-        return type(tensors)(pinned_host_like(t) for t in tensors)
+        mirrors = [pinned_host_like(t) for t in tensors]
+        # NamedTuple outputs (SecondOrderID / SecondOrderFD) take positional fields
+        return type(tensors)(*mirrors) if hasattr(tensors, "_fields") else type(tensors)(mirrors)
     return torch.empty(tuple(tensors.shape), dtype=tensors.dtype, device="cpu", pin_memory=True)
 
 

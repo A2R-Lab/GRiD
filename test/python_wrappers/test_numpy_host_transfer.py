@@ -67,8 +67,11 @@ def test_out_receives_the_result_as_views_and_matches_default(h, inputs, method,
     ref = _flat(fn(q, qd, x))
     out = h.pinned_empty((B, n)) if pinned else np.empty((B, n), np.float32)
     got = fn(q, qd, x, out=out)
-    assert np.array_equal(_flat(got), ref) and np.array_equal(out.ravel(), ref)
+    assert np.array_equal(_flat(got), ref)
+    # the tensors are VIEWS of out (per-item layout: 4 slabs of nv^3 per batch row)
     assert all(np.shares_memory(t, out) for t in got), "returned tensors must be views of out"
+    nv = h.num_vel
+    assert all(np.array_equal(out.reshape(B, 4, nv, nv, nv)[:, k], np.asarray(got[k])) for k in range(4))
     # the context's mirror is restored: a default call afterwards is unaffected
     assert np.array_equal(_flat(fn(q * 0.5, qd, x)), _flat(fn(q * 0.5, qd, x, out=out)))
 
