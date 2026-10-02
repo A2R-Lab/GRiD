@@ -341,10 +341,13 @@ def _mirror_swap(spec: AbiSpec) -> bool:
     The host wrapper copies the whole slab into g_data->h_<out>; pointing that member at
     `out` for the duration of the call makes the D2H land in the caller's array directly
     (page-locked when it came from handle.pinned_empty), which removes a second
-    full-size host copy (28 ms of a 67 ms g1 idsva_so@1024 call). Only the contiguous
-    mirror ops qualify: the row-pitched vector buffers (h_c/h_qdd behind nv-wide rows)
-    need unpack_rows and stay as they were."""
-    return spec.out_copy == "memcpy_h" and not spec.out_pitch_expr and bool(spec.out_buffer)
+    full-size host copy (28 ms of a 67 ms g1 idsva_so@1024 call). OPT-IN per spec
+    (cabi_direct): only where the wrapper's D2H is proven to copy EXACTLY batch *
+    out_size elements (test_cabi_direct_mirror_sizes.py) — a NUM_JOINTS-strided mirror
+    on a floating base copies more than the public row and would overflow the caller's
+    buffer. The row-pitched vector buffers (h_c/h_qdd) need unpack_rows and stay as they were."""
+    return (spec.cabi_direct and spec.out_copy == "memcpy_h" and not spec.out_pitch_expr
+            and bool(spec.out_buffer))
 
 
 def _mirror_swap_pre(spec: AbiSpec, out_name: str) -> list[str]:

@@ -2641,9 +2641,14 @@ pinnedness was never the variable.
 `g_data->h_<out>` at the caller's buffer for the duration of the call, so the wrapper's own
 D2H lands there; an RAII destructor restores the mirror on EVERY exit path (the first draft
 restored it after the sync and would have left the context aimed at freed numpy memory on a
-launch-check or sync early return). Emitted for every contiguous mirror op by
-`wrapper_body_gen._mirror_swap`; row-pitched vector outputs (`unpack_rows`) are untouched.
-`handle.pinned_empty` + `out=` make that buffer page-locked so the copy runs at the PCIe rate.
+launch-check or sync early return). OPT-IN per spec (`abi_specs.cabi_direct`, 15 rows):
+the exact audit (`test/test_cabi_direct_mirror_sizes.py`, regenerated fixed + floating
+headers) showed three wrappers copy `NUM_JOINTS`-strided rows into their mirror
+(`generalized_gravity`, `nonlinear_effects`, `integrator_gradient`) — one extra float per
+row on a floating base, harmless behind a memcpy that reads `batch*NUM_VEL`, a heap overflow
+if the copy were aimed at a caller's buffer — and five copy by another pattern. Those keep the
+memcpy. `handle.pinned_empty` + `out=` make the buffer page-locked so the copy runs at the
+PCIe rate.
 
 **Rules.**
 - Measure the mechanism before fixing it: one C-ABI call with a pinned vs pageable

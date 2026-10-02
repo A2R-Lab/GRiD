@@ -132,6 +132,14 @@ class AbiSpec:
     # for a page-locked destination. Only for ops whose numpy-side out_layout
     # is a pure view (so_slabs): a host re-layout (grad_concat) would copy anyway.
     py_out_param: bool = False
+    # cabi_direct: the C-ABI body retargets the generated host wrapper's D2H copy at the
+    # caller's buffer (GridMirrorRetarget) instead of memcpy-ing the pinned mirror. OPT-IN
+    # per row, set only where test/test_cabi_direct_mirror_sizes.py proves the wrapper
+    # copies EXACTLY batch * out_size_expr elements into the mirror: three wrappers
+    # (generalized_gravity, nonlinear_effects, integrator_gradient) copy NUM_JOINTS-strided
+    # rows on a floating base and would overflow a caller's NUM_VEL-sized buffer; five
+    # (frame_jacobian{,_dot}, osc_inertia, the runtime EE ops) copy by another pattern.
+    cabi_direct: bool = False
     # ── python (pybind _core.cpp) surface — C4 arc, one field/many consumers ──
     # py_out_dims: trailing per-batch-item out dims as the VERBATIM C++ exprs the
     # pybind method allocates ({batch, *py_out_dims}); the jax/torch reshape
@@ -235,6 +243,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
     ),
     "integrator": AbiSpec(
         "integrator",
+        cabi_direct=True,
         inputs=(("q", "const T*"), ("qd", "const T*"), ("u", "const T*"),
                 ("x_kp1_out", "T*"), ("batch", "int"), ("gravity", "T"),
                 ("dt", "T"), ("it", "int")),
@@ -371,6 +380,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
 
     "idsva_so": AbiSpec(
         "idsva_so",
+        cabi_direct=True,
         inputs=(("q", "const T*"), ("qd", "const T*"), ("qdd", "const T*"),
                 ("out", "T*"), ("batch", "int"), ("gravity", "T")),
         pack_mode="qdd_u_slot",   # pack_q_qd_u(q, qd, qdd): kernel reads s_qdd from u-slot
@@ -393,6 +403,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
 
     "fdsva_so": AbiSpec(
         "fdsva_so",
+        cabi_direct=True,
         inputs=(("q", "const T*"), ("qd", "const T*"), ("u", "const T*"),
                 ("out", "T*"), ("batch", "int"), ("gravity", "T")),
         pack_mode="q_qd_u",
@@ -413,6 +424,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
 
     "inverse_dynamics_regressor": AbiSpec(
         "inverse_dynamics_regressor",
+        cabi_direct=True,
         inputs=(("q", "const T*"), ("qd", "const T*"), ("qdd", "const T*"),
                 ("out", "T*"), ("batch", "int"), ("gravity", "T")),
         pack_mode="qdd_u_slot",   # qdd rides the u-slot (like idsva_so)
@@ -457,6 +469,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
 
     "kinetic_energy_regressor": AbiSpec(
         "kinetic_energy_regressor",
+        cabi_direct=True,
         inputs=(("q", "const T*"), ("qd", "const T*"), ("out", "T*"),
                 ("batch", "int"), ("gravity", "T")),
         pack_mode="q_qd_null",
@@ -471,6 +484,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
 
     "potential_energy_regressor": AbiSpec(
         "potential_energy_regressor",
+        cabi_direct=True,
         inputs=(("q", "const T*"), ("out", "T*"), ("batch", "int"),
                 ("gravity", "T")),
         pack_mode="pack_q",       # COMPRESSED input layout (h_q / d_q), like com
@@ -485,6 +499,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
 
     "energy": AbiSpec(
         "energy",
+        cabi_direct=True,
         gate_form="ifdef",        # `#ifdef GRID_HAS_ENERGY` (macro is the default name)
         not_built_msg="reduced",  # "not generated for this robot (reduced codegen profile)"
         inputs=(("q", "const T*"), ("qd", "const T*"), ("out", "T*"),
@@ -509,6 +524,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
     # ── EE pose family (baked targets; macro callee + SIG_MJX signature fork) ──
     "end_effector_pose": AbiSpec(
         "end_effector_pose",
+        cabi_direct=True,
         grid_symbol="grid::GRID_RBD_EE_POSE_FN",              # [D7] macro callee
         sig_mjx_macro="GRID_RBD_SIG_MJX_EE_POSE",
         template_shape="std5",
@@ -524,6 +540,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
     ),
     "end_effector_pose_gradient": AbiSpec(
         "end_effector_pose_gradient",
+        cabi_direct=True,
         grid_symbol="grid::GRID_RBD_EE_POSE_GRADIENT_FN",     # [D7]
         sig_mjx_macro="GRID_RBD_SIG_MJX_EE_POSE_GRADIENT",
         template_shape="std5",
@@ -539,6 +556,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
     ),
     "end_effector_pose_hessian": AbiSpec(
         "end_effector_pose_hessian",
+        cabi_direct=True,
         grid_symbol="grid::GRID_RBD_EE_POSE_HESSIAN_FN",      # [D7]
         sig_mjx_macro="GRID_RBD_SIG_MJX_EE_POSE_HESSIAN",
         template_shape="std5",
@@ -651,6 +669,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
     ),
     "coriolis_matrix": AbiSpec(
         "coriolis_matrix",
+        cabi_direct=True,
         inputs=(("q", "const T*"), ("qd", "const T*"), ("out", "T*"),
                 ("batch", "int"), ("gravity", "T")),
         pack_mode="q_qd_null",
@@ -666,6 +685,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
     # ── centroidal (compressed pack_q on com/dccrba; clamped launches) ────────
     "com": AbiSpec(
         "com",
+        cabi_direct=True,
         gate_form="ifdef",                                     # #ifdef GRID_HAS_COM
         not_built_msg="reduced",
         inputs=(("q", "const T*"), ("out", "T*"), ("batch", "int")),
@@ -680,6 +700,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
     ),
     "ccrba": AbiSpec(
         "ccrba",
+        cabi_direct=True,
         gate_form="ifdef",                                     # #ifdef GRID_HAS_CCRBA
         not_built_msg="reduced",
         inputs=(("q", "const T*"), ("qd", "const T*"), ("out", "T*"), ("batch", "int")),
@@ -695,6 +716,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
     ),
     "dccrba": AbiSpec(
         "dccrba",
+        cabi_direct=True,
         gate_form="ifdef",                                     # #ifdef GRID_HAS_DCCRBA
         not_built_msg="reduced",
         inputs=(("q", "const T*"), ("out", "T*"), ("batch", "int")),
@@ -710,6 +732,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
     ),
     "cmm_time_variation": AbiSpec(
         "cmm_time_variation",
+        cabi_direct=True,
         gate_form="ifdef",                                     # #ifdef GRID_HAS_CMM_TIME_VARIATION
         not_built_msg="not generated for this robot (mimic)",  # [D1]
         inputs=(("q", "const T*"), ("qd", "const T*"), ("out", "T*"), ("batch", "int")),

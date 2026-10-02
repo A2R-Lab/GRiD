@@ -1,0 +1,86 @@
+"""CPU referee for abi_specs.cabi_direct (2026-10-01).
+
+A cabi_direct row makes the C-ABI body aim the generated host wrapper's D2H copy at the
+caller's buffer (GridMirrorRetarget) instead of memcpy-ing the pinned mirror. That is only
+memory-safe when the wrapper copies EXACTLY batch * out_size_expr elements into the mirror.
+Three wrappers copy NUM_JOINTS-strided rows (more than the NUM_VEL public row on a floating
+base) and five copy by another pattern; this test regenerates fixed and floating headers
+and evaluates every cabi_direct wrapper's D2H size against the spec, so flagging a row that
+does not qualify — or a wrapper edit that breaks a flagged one — fails here, not in a user's
+heap.
+"""
+from __future__ import annotations
+
+import contextlib
+import os
+import re
+import tempfile
+from pathlib import Path
+
+import pytest
+
+from grid_codegen.abi_specs import ABI_SPECS
+from grid_codegen.GRiDCodeGenerator import GRiDCodeGenerator
+from grid_codegen.wrapper_body_gen import _mirror_swap
+from RBDReference.equivalents.reference_backend import build_project_adapter
+from RBDReference.tests import MANIFEST_PATH
+from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec
+
+_CASES = (("iiwa14", "fixed"), ("go2", "floating"))
+
+
+def _header(robot, base, monkeypatch):
+    monkeypatch.setenv("GRID_ENABLE_MUJOCO_KERNELS", "1")   # the mjx-twin bodies retarget too
+    spec = next(c["spec"] for c in iter_robot_cases(MANIFEST_PATH, base_mode=base) if c["spec"].robot_id == robot)
+    pm = build_project_adapter(spec, resolve_robot_spec(spec), base_mode=base)
+    out = Path(tempfile.mkdtemp()) / "grid.cuh"
+    gen = GRiDCodeGenerator(pm.robot, DEBUG_MODE=False, NEED_PRINT_MAT=False, FILE_NAMESPACE="grid")
+    with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
+        gen.gen_all_code(output_path=str(out), codegen_profile="all", include_homogenous_transforms=True)
+    return out.read_text()
+
+
+def _consts(src):
+    c = {m.group(1): int(m.group(2)) for m in re.finditer(r"const int (\w+) = (\d+);", src)}
+    for m in re.finditer(r"#define (GRID_RBD_NUM_EES|NUM_EES)\s+(\d+)", src):
+        c[m.group(1)] = int(m.group(2))
+    c.setdefault("GRID_RBD_NUM_EES", c.get("NUM_EES", 0))
+    return c
+
+
+def _ev(expr, c, batch):
+    env = dict(c, num_timesteps=batch)
+    return eval(expr.replace("grid::", "").replace("sizeof(T)", "1"), {"__builtins__": {}}, env)
+
+
+@pytest.mark.parametrize("robot,base", _CASES, ids=[f"{r}-{b}" for r, b in _CASES])
+def test_every_cabi_direct_wrapper_copies_exactly_batch_times_out_size(robot, base, monkeypatch):
+    src = _header(robot, base, monkeypatch)
+    c = _consts(src)
+    batch = 5
+    direct = {k: s for k, s in ABI_SPECS.items() if s.cabi_direct}
+    assert direct and all(_mirror_swap(s) for s in direct.values())
+    problems = []
+    for key, s in direct.items():
+        want = _ev(s.out_size_expr, c, batch) * batch
+        pat = re.compile(r"cudaMemcpy(?:Async)?\(\s*hd_data->" + re.escape(s.out_buffer)
+                         + r"\s*,\s*[^,]+,\s*(.+?),\s*cudaMemcpyDeviceToHost")
+        lines = [m for line in src.splitlines() for m in [pat.search(line)] if m]
+        if not lines:
+            problems.append(f"{key}: no D2H into {s.out_buffer} (copy pattern not recognised)")
+            continue
+        for m in lines:
+            size = m.group(1)
+            got = _ev(size, c, batch)
+            if "num_timesteps" not in size:     # the single-call timing variant copies one item
+                got *= batch
+            if got != want:
+                problems.append(f"{key}: wrapper copies {got} elements, batch*out_size is {want} [{size.strip()}]")
+    assert not problems, "\n".join(problems)
+
+
+def test_known_over_copying_wrappers_are_not_direct():
+    for key in ("generalized_gravity", "nonlinear_effects", "integrator_gradient",
+                "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
+                "end_effector_pose_runtime", "end_effector_pose_gradient_runtime"):
+        assert not ABI_SPECS[key].cabi_direct, key

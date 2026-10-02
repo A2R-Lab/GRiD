@@ -1509,11 +1509,9 @@ extern "C" int grid_rbd_nonlinear_effects(long long ctx_id, const T* q, const T*
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
-    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_c;
-    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
-    GridMirrorRetarget _retarget_h_c(&g_data->h_c, out);  // (size_t)batch * grid::NUM_VEL elements
     grid::nonlinear_effects<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_NONLINEAR_EFFECTS>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
     return 0;
 #else
     (void)q; (void)qd; (void)out; (void)batch; (void)gravity;
@@ -1527,11 +1525,9 @@ extern "C" int grid_rbd_generalized_gravity(long long ctx_id, const T* q, T* out
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
-    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_c;
-    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
-    GridMirrorRetarget _retarget_h_c(&g_data->h_c, out);  // (size_t)batch * grid::NUM_VEL elements
     grid::generalized_gravity<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_GENERALIZED_GRAVITY>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
     return 0;
 #else
     (void)q; (void)out; (void)batch; (void)gravity;
@@ -1690,13 +1686,11 @@ extern "C" int grid_rbd_frame_jacobian(long long ctx_id, const T* q, T* out, int
     if (batch > kMaxBatch) return 2;
     if (target_jid < -1 || target_jid >= grid::NUM_JOINTS) return 1;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
-    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_frame_jacobian;
-    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
-    GridMirrorRetarget _retarget_h_frame_jacobian(&g_data->h_frame_jacobian, out);  // (size_t)batch * 6*grid::NUM_VEL elements
     // -1 per arg => "use default" (leaf-EE / LWA); the host resolves each
     // INDEPENDENTLY, so a default target with an explicit frame is honored.
     grid::frame_jacobian<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN>(g_ctx, batch), g_streams, target_jid, reference_frame);
     if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_frame_jacobian, (size_t)batch * 6*grid::NUM_VEL * sizeof(T));
     return 0;
 #else
     (void)q; (void)out; (void)batch; (void)target_jid; (void)reference_frame;
@@ -1711,13 +1705,11 @@ extern "C" int grid_rbd_frame_jacobian_dot(long long ctx_id, const T* q, const T
     if (batch > kMaxBatch) return 2;
     if (target_jid < -1 || target_jid >= grid::NUM_JOINTS) return 1;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
-    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_frame_jacobian_dot;
-    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
-    GridMirrorRetarget _retarget_h_frame_jacobian_dot(&g_data->h_frame_jacobian_dot, out);  // (size_t)batch * 6*grid::NUM_VEL elements
     // -1 per arg => "use default" (leaf-EE / LWA); the host resolves each
     // INDEPENDENTLY, so a default target with an explicit frame is honored.
     grid::frame_jacobian_dot<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN_DOT>(g_ctx, batch), g_streams, target_jid, reference_frame);
     if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_frame_jacobian_dot, (size_t)batch * 6*grid::NUM_VEL * sizeof(T));
     return 0;
 #else
     (void)q; (void)qd; (void)out; (void)batch; (void)target_jid; (void)reference_frame;
@@ -1731,11 +1723,9 @@ extern "C" int grid_rbd_osc_inertia(long long ctx_id, const T* q, T* out, int ba
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
-    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_osc_inertia;
-    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
-    GridMirrorRetarget _retarget_h_osc_inertia(&g_data->h_osc_inertia, out);  // (size_t)batch * 36 elements
     grid::osc_inertia<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_OSC_INERTIA>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_osc_inertia, (size_t)batch * 36 * sizeof(T));
     return 0;
 #else
     (void)q; (void)out; (void)batch;
@@ -2187,12 +2177,10 @@ extern "C" int grid_rbd_integrator_gradient(long long ctx_id, const T* q, const 
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS, grid::NUM_VEL);
-    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_dAB;
-    // retarget it at `dAB_out` for this call (scope-restored). See _mirror_swap.
-    GridMirrorRetarget _retarget_h_dAB(&g_data->h_dAB, dAB_out);  // (size_t)batch * (2 * grid::NUM_VEL) * (3 * grid::NUM_VEL) elements
     GRID_RBD_IT_DISPATCH(it, launch_integrator_grad_host, batch, gravity, dt);
     { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
     if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(dAB_out, g_data->h_dAB, (size_t)batch * (2 * grid::NUM_VEL) * (3 * grid::NUM_VEL) * sizeof(T));
     return 0;
 #else
     (void)q; (void)qd; (void)u; (void)dAB_out; (void)batch; (void)gravity; (void)dt; (void)it;
@@ -2232,11 +2220,9 @@ extern "C" int grid_rbd_end_effector_pose_runtime(long long ctx_id, const T* q, 
     if (offset) { for (int i = 0; i < 16; ++i) Xtool[i] = offset[i]; }
     if (cudaMemcpy(g_data->d_eepose_runtime_offset, Xtool, 16*sizeof(T),
                    cudaMemcpyHostToDevice) != cudaSuccess) return 101;
-    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_eePose;
-    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
-    GridMirrorRetarget _retarget_h_eePose(&g_data->h_eePose, out);  // (size_t)batch * 6 elements
     grid::end_effector_pose_runtime<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(g_ctx, batch), g_streams, target_jid);
     if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_eePose, (size_t)batch * 6 * sizeof(T));
     return 0;
 #else
     (void)q; (void)out; (void)batch; (void)target_jid; (void)offset;
@@ -2258,11 +2244,9 @@ extern "C" int grid_rbd_end_effector_pose_gradient_runtime(long long ctx_id, con
     if (offset) { for (int i = 0; i < 16; ++i) Xtool[i] = offset[i]; }
     if (cudaMemcpy(g_data->d_eepose_runtime_offset, Xtool, 16*sizeof(T),
                    cudaMemcpyHostToDevice) != cudaSuccess) return 101;
-    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_eePoseGrad;
-    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
-    GridMirrorRetarget _retarget_h_eePoseGrad(&g_data->h_eePoseGrad, out);  // (size_t)batch * 6*grid::NUM_VEL elements
     grid::end_effector_pose_gradient_runtime<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(g_ctx, batch), g_streams, target_jid);
     if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_eePoseGrad, (size_t)batch * 6*grid::NUM_VEL * sizeof(T));
     return 0;
 #else
     (void)q; (void)out; (void)batch; (void)target_jid; (void)offset;
@@ -2290,6 +2274,7 @@ extern "C" int grid_rbd_nonlinear_effects_mujoco(long long ctx_id, const T* q, c
     grid::nonlinear_effects<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_NONLINEAR_EFFECTS>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_NONLINEAR_EFFECTS
@@ -2306,6 +2291,7 @@ extern "C" int grid_rbd_generalized_gravity_mujoco(long long ctx_id, const T* q,
     grid::generalized_gravity<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_GENERALIZED_GRAVITY>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_GENERALIZED_GRAVITY
@@ -2460,6 +2446,7 @@ extern "C" int grid_rbd_frame_jacobian_mujoco(long long ctx_id, const T* q, T* o
     grid::frame_jacobian<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN>(g_ctx, batch), g_streams, target_jid, reference_frame);
     if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_frame_jacobian, (size_t)batch * 6*grid::NUM_VEL * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FRAME_JACOBIAN
@@ -2474,6 +2461,7 @@ extern "C" int grid_rbd_frame_jacobian_dot_mujoco(long long ctx_id, const T* q, 
     grid::frame_jacobian_dot<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN_DOT>(g_ctx, batch), g_streams, target_jid, reference_frame);
     if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_frame_jacobian_dot, (size_t)batch * 6*grid::NUM_VEL * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FRAME_JACOBIAN_DOT
@@ -2487,6 +2475,7 @@ extern "C" int grid_rbd_osc_inertia_mujoco(long long ctx_id, const T* q, T* out,
     grid::osc_inertia<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_OSC_INERTIA>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_osc_inertia, (size_t)batch * 36 * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_OSC_INERTIA
@@ -2794,6 +2783,7 @@ extern "C" int grid_rbd_integrator_gradient_mujoco(long long ctx_id, const T* q,
     GRID_RBD_IT_DISPATCH_SS(it, launch_integrator_grad_host_mujoco, batch, gravity, dt);   // MuJoCo: Euler / SI only
     { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
     if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(dAB_out, g_data->h_dAB, (size_t)batch * (2 * grid::NUM_VEL) * (3 * grid::NUM_VEL) * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_INTEGRATOR_GRADIENT
@@ -2838,6 +2828,7 @@ extern "C" int grid_rbd_end_effector_pose_runtime_mujoco(long long ctx_id, const
     grid::end_effector_pose_runtime<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(g_ctx, batch), g_streams, target_jid);
     if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_eePose, (size_t)batch * 6 * sizeof(T));
     return 0;
 #else
     (void)q; (void)out; (void)batch; (void)target_jid; (void)offset;
@@ -2868,6 +2859,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient_runtime_mujoco(long long ctx_
     grid::end_effector_pose_gradient_runtime<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(g_ctx, batch), g_streams, target_jid);
     if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_eePoseGrad, (size_t)batch * 6*grid::NUM_VEL * sizeof(T));
     return 0;
 #else
     (void)q; (void)out; (void)batch; (void)target_jid; (void)offset;
