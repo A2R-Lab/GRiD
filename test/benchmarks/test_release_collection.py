@@ -45,6 +45,20 @@ def test_capability_gaps_are_not_library_claims():
     assert set(p.PREALLOC) <= set(p.WRAPPERS) and set(p.PREALLOC.values()) <= set(p.WRAPPERS)
 
 
+def test_jax_pinned_floor_matches_the_bindings_and_selects_cells():
+    """The figure draws a JAX allocate-once bar only where to_host took the pinned route."""
+    import re
+    source = (p.ROOT / "bindings/grid_rbd/jax/__init__.py").read_text()
+    floor = re.search(r"^_PINNED_MIN_BYTES = (.+)$", source, re.M).group(1)
+    assert eval(floor, {"__builtins__": {}}) == p.JAX_PINNED_MIN_BYTES
+    row = lambda op, entries: {"operation": op, "entries": entries}
+    assert not p.jax_pinned_route(row("inverse_dynamics", 1024 * 35))                 # 140 KiB
+    assert p.jax_pinned_route(row("inverse_dynamics_gradient", 1024 * 2 * 7 * 7))     # 392 KiB
+    assert not p.jax_pinned_route(row("idsva_so", 128 * 4 * 7 ** 3))                  # 4 x 171.5 KiB
+    assert p.jax_pinned_route(row("idsva_so", 256 * 4 * 7 ** 3))                      # 4 x 343 KiB
+    assert not p.jax_pinned_route({"operation": "idsva_so", "entries": None})
+
+
 def test_numpy_out_ops_match_the_bindings_table():
     """The benchmark's notion of "NumPy has out=" is the bindings' py_out_param flag."""
     from grid_codegen.abi_specs import ABI_SPECS

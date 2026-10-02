@@ -2,12 +2,13 @@
   "publication_approved": true,
   "commit": "e92477857b0ca53fb307a8fa4799a4afd5757177",
   "raw_manifest_sha256": "c82b2cd6c0142567480ba71f467a69cabaf5a6e6123fd8953b8d4e7ad16efd14",
-  "workers": 210,
-  "measurements": 1260,
+  "workers": 300,
+  "measurements": 1800,
   "status_counts": {
     "excluded_method": 90,
-    "validated": 420,
+    "validated": 600,
     "model_mismatch": 24,
+    "not_applicable": 18,
     "adapter_pending": 60
   },
   "variability": [
@@ -40,6 +41,13 @@
       "boundary_flags": 0
     },
     {
+      "backend": "grid_jax_prealloc",
+      "cells": 54,
+      "host_flags": 5,
+      "resident_flags": 0,
+      "boundary_flags": 0
+    },
+    {
       "backend": "grid_native",
       "cells": 36,
       "host_flags": 0,
@@ -48,6 +56,13 @@
     },
     {
       "backend": "grid_numpy",
+      "cells": 54,
+      "host_flags": 0,
+      "resident_flags": 0,
+      "boundary_flags": 0
+    },
+    {
+      "backend": "grid_numpy_prealloc",
       "cells": 36,
       "host_flags": 0,
       "resident_flags": 0,
@@ -55,7 +70,14 @@
     },
     {
       "backend": "grid_torch",
-      "cells": 36,
+      "cells": 54,
+      "host_flags": 0,
+      "resident_flags": 0,
+      "boundary_flags": 0
+    },
+    {
+      "backend": "grid_torch_prealloc",
+      "cells": 54,
       "host_flags": 0,
       "resident_flags": 0,
       "boundary_flags": 0
@@ -98,5 +120,35 @@
   ],
   "sample_counts_and_means_verified": true,
   "hashes_and_contracts_verified": true,
-  "comparison_definition": "Ratios of medians of three run means; envelopes are observed ranges, not confidence intervals"
+  "comparison_definition": "Ratios of medians of three run means; envelopes are observed ranges, not confidence intervals",
+  "addendum_2026_10_02": {
+    "purpose": "allocate-once companions of the NumPy/PyTorch/JAX surfaces; NumPy and C-ABI RNEA-gradient cells re-collected after their C ABI stopped downloading the result twice; NumPy/PyTorch Hessian defaults added",
+    "workers": 108,
+    "measurements": 648,
+    "superseded_published_cells": 108,
+    "captures": {
+      "release-prealloc-J-20261002": {
+        "commit": "ab20188681334da365753b42da5f0021c4c70add",
+        "manifest_sha256": "4cebbee96a63865fe766bff53f84cc78472ec0d0fbd7aaa02a61493f26b9d7fc"
+      },
+      "release-prealloc-P-20261002": {
+        "commit": "53119f2d4c0b1297af19b9bd266879828001c566",
+        "manifest_sha256": "7c4bd7d692f361d3f78e73db6c4caf5ff57f1f213bb7879f3e60556130deab02"
+      },
+      "release-prealloc-N-20261002": {
+        "commit": "53119f2d4c0b1297af19b9bd266879828001c566",
+        "manifest_sha256": "9d9dcec30a59c6f43ff2d434e6ad76f81aae52c472c893bc8b04ef0931d09499"
+      },
+      "release-prealloc-H-20261002": {
+        "commit": "53119f2d4c0b1297af19b9bd266879828001c566",
+        "manifest_sha256": "d9568ea2ca6b6123f09b07edcfbc45700384526303322a66d2207cf936921374"
+      }
+    },
+    "accepted_source_drift": [
+      "test/benchmarks/release/grid_adapter.py",
+      "test/benchmarks/release/pin_adapter.py",
+      "test/benchmarks/release/protocol.py"
+    ],
+    "published_comparisons_unchanged": true
+  }
 }

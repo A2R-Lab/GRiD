@@ -42,7 +42,7 @@ sys.path.insert(0, str(ROOT))
 from test.benchmarks.release.report import (  # noqa: E402
     LABELS, SHORT_OP, _ratio_heatmap, banner, cell_marks, plot_stacked_comparison,
     plot_grid_composition)
-from test.benchmarks.release.protocol import CORE, EXTRA, ROBOTS, WRAPPER_OPS  # noqa: E402
+from test.benchmarks.release.protocol import CORE, EXTRA, ROBOTS, WRAPPER_OPS, jax_pinned_route  # noqa: E402
 
 PINOCCHIO = ("pinocchio", "pinocchio_plain")
 GPU_LIBRARIES = ("mjx", "mujoco_warp", "bard", "frax")
@@ -164,7 +164,9 @@ def api_boundaries(rows, out):
     reused), the hatched cap above it reaches the default call, which allocates its
     output on every call. A surface with no allocate-once companion for an
     operation (NumPy RNEA: no out=) shows its default call as the solid bar; a
-    default call that is not slower is marked by a tick instead of a cap.
+    default call that is not slower is marked by a tick instead of a cap. JAX's
+    allocate-once call (grid_rbd.jax.to_host) is the default call itself below its
+    256 KiB floor, so its companion is drawn only where the pinned route was taken.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -185,7 +187,10 @@ def api_boundaries(rows, out):
             for xi, batch in enumerate(batches):
                 for bi, (_, backend, field, color, companion) in enumerate(API_BOUNDARIES):
                     default = lookup.get((robot, op, backend, batch), {}).get(field)
-                    reuse = lookup.get((robot, op, companion, batch), {}).get("host_us") if companion else None
+                    paired = lookup.get((robot, op, companion, batch), {}) if companion else {}
+                    reuse = paired.get("host_us")
+                    if companion == "grid_jax_prealloc" and not jax_pinned_route(paired):
+                        reuse = None
                     if default is None and reuse is None:
                         continue
                     x = xi-.4+width*(bi+.5)
@@ -211,8 +216,8 @@ def api_boundaries(rows, out):
     handles = [Patch(color=color, label=label) for label, _, _, color, _ in API_BOUNDARIES]
     handles.append(Patch(facecolor="white", edgecolor=".3", hatch="//////",
                          label="default call (allocates its output); solid = allocate-once"))
-    fig.legend(handles=handles, loc="lower center", ncol=6, frameon=False, bbox_to_anchor=(.5, .01), fontsize=10)
-    fig.tight_layout(rect=(0, .26/(len(ops)+.6), 1, 1))
+    fig.legend(handles=handles, loc="lower center", ncol=6, frameon=False, bbox_to_anchor=(.5, .004), fontsize=10)
+    fig.tight_layout(rect=(0, .16/(len(ops)+.6), 1, 1))
     fig.savefig(out / "wrappers.svg")
     fig.savefig(out / "wrappers.png", dpi=150)
     plt.close(fig)
