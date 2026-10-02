@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import numpy as np
-from .protocol import digest, ROOT, CORE, VECTOR_OPS, Q_ONLY_OPS, Q_QD_OPS
+from .protocol import digest, ROOT, CORE, VECTOR_OPS, Q_ONLY_OPS, Q_QD_OPS, PREALLOC
 
 # Operation codes of kernel_bridge.cu (= the collector's OPS order).
 KERNEL_OPS = {op: i for i, op in enumerate(("inverse_dynamics", "inverse_dynamics_gradient", "idsva_so", "minv",
@@ -48,9 +48,11 @@ class GridAdapter:
         import grid_rbd
         self.backend, self.op, self.fixture = backend, operation, fixture
         self.dtype = dtype
-        interface = backend.removeprefix("grid_")
+        self.prealloc = backend in PREALLOC
+        interface = PREALLOC.get(backend, backend).removeprefix("grid_")
         if interface in {"native", "cuda"}:
             interface = "numpy"
+        self.interface = interface
         # Same compile contents and cache key for native/NumPy/JAX/PyTorch/CUDA.
         self.h = grid_rbd.register_robot("release_" + fixture.spec.robot_id + "_" + operation,
             fixture.urdf, floating_base=fixture.base == "floating", backend=interface,
@@ -69,6 +71,12 @@ class GridAdapter:
             "launch_policy": "same build; no profile overlay or new autotune",
             "build_metadata": getattr(self.h, "_base", self.h).meta,
             "library_sha256": digest(self.h._so_path) if hasattr(self.h, "_so_path") else None}
+        if self.prealloc:
+            self.metadata["allocation_policy"] = {
+                "numpy": "allocate-once: page-locked out= buffer from handle.pinned_empty, reused by every call",
+                "torch": "allocate-once: page-locked host input/output tensors and device inputs, non-blocking copies",
+                "jax": "grid_rbd.jax.to_host download (pinned_host memory kind); inputs as in the default call",
+            }[interface]
         self.build_dir = Path(build_dir)
         self.max_batch = max_batch
         # Arena fit at this max batch: a slot count below the batch means the
@@ -95,7 +103,9 @@ class GridAdapter:
 
     def prepare(self, batch):
         args = tuple(np.ascontiguousarray(a, dtype=self.dtype) for a in self.fixture.args(self.op, batch))
-        if self.backend in {"grid_numpy", "grid_native", "grid_cuda"}:
+        if self.prealloc:
+            self.prepare_prealloc(args, batch)
+        elif self.backend in {"grid_numpy", "grid_native", "grid_cuda"}:
             self.host = lambda: self.fn(*args)
             self.resident = None
             self.sync = lambda result: None
@@ -120,6 +130,40 @@ class GridAdapter:
             self.host = lambda: self.download(self.fn(*(torch.from_numpy(a).to("cuda") for a in args)))
             self.sync = lambda result: torch.cuda.synchronize()
         return args
+
+    def prepare_prealloc(self, args, batch):
+        """Allocate-once host round trips: every buffer is created HERE, outside the
+        timed window, and reused by each timed call. `download` copies, so the
+        validation outputs are snapshots and not views of a buffer the next call
+        overwrites; the timed call itself returns the reused buffers."""
+        self.resident = None                     # the resident boundary is the default backend's
+        self.sync = lambda result: None
+        if self.interface == "numpy":
+            nv = self.fixture.nv
+            width = 2 * nv * nv if self.op.endswith("_gradient") else 4 * nv ** 3
+            out = self.h.pinned_empty((batch, width))
+            self.host = lambda: self.fn(*args, out=out)
+            self.download = lambda result: tree_map(np.array, result)
+        elif self.interface == "torch":
+            import torch
+            import grid_rbd.torch as gt
+            host_in = tuple(torch.from_numpy(a).pin_memory() for a in args)
+            dev = tuple(torch.empty(a.shape, dtype=a.dtype, device="cuda") for a in host_in)
+            for d, a in zip(dev, host_in):
+                d.copy_(a)
+            host_out = gt.pinned_host_like(self.fn(*dev))
+            torch.cuda.synchronize()
+            def host():
+                for d, a in zip(dev, host_in):
+                    d.copy_(a, non_blocking=True)
+                return gt.copy_to_host(host_out, self.fn(*dev))      # synchronizes
+            self.host = host
+            self.download = lambda result: tree_map(lambda a: np.array(a.detach().cpu().numpy()), result)
+        else:
+            import jax
+            import grid_rbd.jax as gj
+            self.host = lambda: gj.to_host(self.fn(*(jax.device_put(a.copy()) for a in args)))
+            self.download = lambda result: tree_map(np.array, result)
 
     def normalize(self, result):
         result = self.download(result)
