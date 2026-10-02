@@ -62,6 +62,29 @@ def test_to_host_matches_device_get_for_array_and_pytree(hj, inputs):
     assert type(gj.to_host(so)) is type(so)                     # NamedTuple shape preserved
 
 
+@pytest.mark.parametrize("floor", [1, 10 ** 12, None], ids=["all-pinned", "all-device_get", "mixed"])
+def test_to_host_is_size_aware_and_every_route_returns_the_same_values(hj, inputs, floor, monkeypatch):
+    """pinned="auto": leaves at or above the byte floor take the pinned_host route, the
+    rest go through device_get (the pinned route costs ~20 us per leaf and loses below
+    ~256 KiB). Every split of a pytree must return device_get's values and tree."""
+    q, qd, u = inputs
+    grad = hj.inverse_dynamics_gradient(q, qd, u)               # 8 x 7 x 14 floats = 3136 B
+    tree = {"small": grad[:1], "large": (grad, grad * 2.0)}
+    if floor is None:
+        floor = int(grad.nbytes)                                 # small -> device_get, large -> pinned
+    monkeypatch.setattr(gj, "_PINNED_MIN_BYTES", floor)
+    got, ref = gj.to_host(tree), jax.device_get(tree)
+    assert jax.tree_util.tree_structure(got) == jax.tree_util.tree_structure(ref)
+    for g, r in zip(jax.tree_util.tree_leaves(got), jax.tree_util.tree_leaves(ref)):
+        assert isinstance(g, np.ndarray) and g.dtype == r.dtype and np.array_equal(g, r)
+    forced = gj.to_host(tree, pinned=True)                       # ignores the floor
+    assert all(np.array_equal(g, r) for g, r in zip(jax.tree_util.tree_leaves(forced), jax.tree_util.tree_leaves(ref)))
+
+
+def test_default_floor_is_the_measured_crossover():
+    assert gj._PINNED_MIN_BYTES == 256 * 1024
+
+
 def test_to_host_uses_the_pinned_host_memory_kind_when_offered(hj, inputs):
     q, qd, u = inputs
     device = jax.devices()[0]

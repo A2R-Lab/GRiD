@@ -1673,32 +1673,66 @@ def get_robot(
                           output_convention=output_convention)
 
 
-def to_host(outputs, *, pinned: bool = True):
+# Leaves at least this large take the pinned_host route in to_host(pinned="auto").
+# Measured 2026-10-02 (RTX 5090, fresh device result per sample): the pinned route costs
+# ~20 us more per leaf than jax.device_get below ~256 KiB and wins above it (1.3x at
+# 512 KiB, 1.5-2x at 1-4 MiB, 4.3x on four 16 MiB leaves).
+_PINNED_MIN_BYTES = 256 * 1024
+_PINNED_SHARDINGS: dict = {}
+
+
+def _pinned_sharding(device):
+    """SingleDeviceSharding(device, pinned_host), or None when the device has no such
+    memory kind (CPU backend, older runtimes). Cached per device."""
+    if device not in _PINNED_SHARDINGS:
+        sharding = None
+        try:
+            from jax.sharding import SingleDeviceSharding
+            if "pinned_host" in {m.kind for m in device.addressable_memories()}:
+                sharding = SingleDeviceSharding(device, memory_kind="pinned_host")
+        except (AttributeError, TypeError, ValueError):
+            sharding = None
+        _PINNED_SHARDINGS[device] = sharding
+    return _PINNED_SHARDINGS[device]
+
+
+def to_host(outputs, *, pinned="auto"):
     """Bring jax outputs (an array or any pytree of them) to host as numpy arrays.
 
-    ``pinned=True`` (default) routes the device->host copy through XLA's
-    ``pinned_host`` memory kind: the transfer runs at the PCIe rate and the
-    returned numpy arrays are zero-copy views of the page-locked buffers.
-    Measured 2026-10-01 on g1 idsva_so @1024 (702 MB): 41 ms vs 141.5 ms for
-    ``jax.device_get`` (the default literal path). Falls back to ``jax.device_get``
-    when the device has no ``pinned_host`` memory (CPU backend, older runtimes) or
-    with ``pinned=False``. The arrays are read-only views; copy them if you need
-    to write. Prefer keeping data resident when the next consumer is on the GPU."""
+    Large leaves are copied device->host through XLA's ``pinned_host`` memory kind: the
+    transfer runs at the PCIe rate and the returned numpy arrays are zero-copy, read-only
+    views of the page-locked buffers (g1 idsva_so @1024, 702 MB: 41 ms vs 141 ms for
+    ``jax.device_get``). That route has a fixed cost of ~20 us per leaf, so with the
+    default ``pinned="auto"`` only leaves of at least 256 KiB take it and smaller ones
+    go through ``jax.device_get`` — the call is never the slower choice. ``pinned=True``
+    forces the pinned route for every leaf, ``pinned=False`` is plain ``device_get``.
+    Falls back to ``device_get`` when the device has no ``pinned_host`` memory. Copy the
+    result if you need to write to it. Prefer keeping data resident when the next
+    consumer is on the GPU."""
     import jax
     import numpy as np
-    leaves = jax.tree_util.tree_leaves(outputs)
-    if not pinned or not leaves:
+    leaves, treedef = jax.tree_util.tree_flatten(outputs)
+    if pinned is False or not leaves:
         return jax.device_get(outputs)
     try:
-        from jax.sharding import SingleDeviceSharding
-        device = next(iter(leaves[0].devices()))
-        if "pinned_host" not in {m.kind for m in device.addressable_memories()}:
-            return jax.device_get(outputs)
-        sharding = SingleDeviceSharding(device, memory_kind="pinned_host")
-    except (AttributeError, TypeError, ValueError):
+        sharding = _pinned_sharding(next(iter(leaves[0].devices())))
+    except (AttributeError, TypeError, ValueError, StopIteration):
+        sharding = None
+    if sharding is None:
         return jax.device_get(outputs)
-    moved = jax.block_until_ready(jax.device_put(outputs, sharding))
-    return jax.tree_util.tree_map(np.asarray, moved)
+    floor = 0 if pinned is True else _PINNED_MIN_BYTES
+    big = [i for i, leaf in enumerate(leaves) if getattr(leaf, "nbytes", 0) >= floor]
+    if not big:
+        return jax.device_get(outputs)
+    host = list(leaves)
+    moved = jax.block_until_ready(jax.device_put([leaves[i] for i in big], sharding))
+    for i, array in zip(big, moved):
+        host[i] = np.asarray(array)
+    small = sorted(set(range(len(leaves))) - set(big))
+    if small:
+        for i, array in zip(small, jax.device_get([leaves[i] for i in small])):
+            host[i] = array
+    return treedef.unflatten(host)
 
 
 __all__ = ["JaxRobotHandle", "register_robot", "get_robot", "to_host"]

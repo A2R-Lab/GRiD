@@ -517,9 +517,11 @@ handler runs, and outputs stay device-resident.
 GPU. When you do need numpy, ``grid_rbd.jax.to_host(outputs)`` moves an array
 or any pytree of arrays through XLA's ``pinned_host`` memory kind and returns
 zero-copy numpy views: on a 702 MB ``idsva_so`` output (g1, batch 1024) it
-takes 41 ms against 141 ms for ``jax.device_get`` (measured 2026-10-01). It
-falls back to ``jax.device_get`` on devices without that memory kind, and
-``pinned=False`` selects the plain path explicitly. For device-side
+takes 41 ms against 141 ms for ``jax.device_get`` (measured 2026-10-01). The
+pinned route costs about 20 µs per array, so by default (``pinned="auto"``)
+only arrays of at least 256 KiB take it and smaller ones go through
+``jax.device_get``; ``pinned=True`` / ``pinned=False`` force either route. It
+falls back to ``jax.device_get`` on devices without that memory kind. For device-side
 allocate-once reuse, ``jax.jit(..., donate_argnums=...)`` lets XLA write an
 output into a donated input buffer.
 

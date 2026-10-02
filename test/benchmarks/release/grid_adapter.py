@@ -75,7 +75,7 @@ class GridAdapter:
             self.metadata["allocation_policy"] = {
                 "numpy": "allocate-once: page-locked out= buffer from handle.pinned_empty, reused by every call",
                 "torch": "allocate-once: page-locked host input/output tensors and device inputs, non-blocking copies",
-                "jax": "grid_rbd.jax.to_host download (pinned_host memory kind); inputs as in the default call",
+                "jax": "grid_rbd.jax.to_host download (pinned_host memory kind for arrays >= 256 KiB, device_get below); inputs as in the default call",
             }[interface]
         self.build_dir = Path(build_dir)
         self.max_batch = max_batch
