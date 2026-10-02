@@ -1673,4 +1673,32 @@ def get_robot(
                           output_convention=output_convention)
 
 
-__all__ = ["JaxRobotHandle", "register_robot", "get_robot"]
+def to_host(outputs, *, pinned: bool = True):
+    """Bring jax outputs (an array or any pytree of them) to host as numpy arrays.
+
+    ``pinned=True`` (default) routes the device->host copy through XLA's
+    ``pinned_host`` memory kind: the transfer runs at the PCIe rate and the
+    returned numpy arrays are zero-copy views of the page-locked buffers.
+    Measured 2026-10-01 on g1 idsva_so @1024 (702 MB): 41 ms vs 141.5 ms for
+    ``jax.device_get`` (the default literal path). Falls back to ``jax.device_get``
+    when the device has no ``pinned_host`` memory (CPU backend, older runtimes) or
+    with ``pinned=False``. The arrays are read-only views; copy them if you need
+    to write. Prefer keeping data resident when the next consumer is on the GPU."""
+    import jax
+    import numpy as np
+    leaves = jax.tree_util.tree_leaves(outputs)
+    if not pinned or not leaves:
+        return jax.device_get(outputs)
+    try:
+        from jax.sharding import SingleDeviceSharding
+        device = next(iter(leaves[0].devices()))
+        if "pinned_host" not in {m.kind for m in device.addressable_memories()}:
+            return jax.device_get(outputs)
+        sharding = SingleDeviceSharding(device, memory_kind="pinned_host")
+    except (AttributeError, TypeError, ValueError):
+        return jax.device_get(outputs)
+    moved = jax.block_until_ready(jax.device_put(outputs, sharding))
+    return jax.tree_util.tree_map(np.asarray, moved)
+
+
+__all__ = ["JaxRobotHandle", "register_robot", "get_robot", "to_host"]

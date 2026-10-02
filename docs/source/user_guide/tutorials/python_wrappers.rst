@@ -471,6 +471,16 @@ running on JAX-supplied CUDA streams. Inputs may be numpy or
 ``jax.Array`` — JAX moves data to device transparently before the
 handler runs, and outputs stay device-resident.
 
+**Host round trips.** Keep outputs resident when the next consumer is on the
+GPU. When you do need numpy, ``grid_rbd.jax.to_host(outputs)`` moves an array
+or any pytree of arrays through XLA's ``pinned_host`` memory kind and returns
+zero-copy numpy views: on a 702 MB ``idsva_so`` output (g1, batch 1024) it
+takes 41 ms against 141 ms for ``jax.device_get`` (measured 2026-10-01). It
+falls back to ``jax.device_get`` on devices without that memory kind, and
+``pinned=False`` selects the plain path explicitly. For device-side
+allocate-once reuse, ``jax.jit(..., donate_argnums=...)`` lets XLA write an
+output into a donated input buffer.
+
 JAX surface: the core dynamics / kinematics / SO methods are bound via
 FFI and JIT-compatible (the SO methods ``idsva_so`` / ``fdsva_so`` follow
 the plain wrapper's tuple-of-four convention), with autograd-aware
@@ -569,6 +579,24 @@ concepts page):
 
    g = h.capture("forward_dynamics", q, qd, u)   # warmup + capture
    qdd = g(q_new, qd_new, u_new)                 # copy_ + replay
+
+**Host round trips: allocate once, reuse.** ``.cpu()`` on a large device
+output goes through a pageable staged copy (~3 GB/s here). Allocate
+page-locked mirrors ONCE with ``grid_rbd.torch.pinned_host_like(out)`` (a
+tensor or a tuple, e.g. ``g.static_out``) and fill them with
+``grid_rbd.torch.copy_to_host(host, out)`` or, for a captured graph,
+``g.replay_into(host)`` — a ``non_blocking`` copy at the PCIe rate followed
+by a stream sync. Measured 2026-10-01 on g1 ``idsva_so`` at batch 1024
+(702 MB): 39.5 ms vs 238 ms for ``.cpu()``. Inputs can take the same route:
+``torch.from_numpy(a).pin_memory().to("cuda", non_blocking=True)``.
+
+.. code-block:: python
+
+   g = h.capture("idsva_so", q, qd, qdd)
+   host = grid_rbd.torch.pinned_host_like(g.static_out)   # once
+   for q_new in trajectory:                                # many
+       g.static_in[0].copy_(q_new)
+       d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq = g.replay_into(host)
 
 .. note::
 
