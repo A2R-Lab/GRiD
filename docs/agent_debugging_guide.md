@@ -2641,7 +2641,8 @@ pinnedness was never the variable.
 `g_data->h_<out>` at the caller's buffer for the duration of the call, so the wrapper's own
 D2H lands there; an RAII destructor restores the mirror on EVERY exit path (the first draft
 restored it after the sync and would have left the context aimed at freed numpy memory on a
-launch-check or sync early return). OPT-IN per spec (`abi_specs.cabi_direct`, 15 rows):
+launch-check or sync early return). OPT-IN per spec (`abi_specs.cabi_direct`; 16 rows after the
+2026-10-02 corrections in §7.z37 — the three baked EE-pose rows left, four device-direct rows joined):
 the exact audit (`test/test_cabi_direct_mirror_sizes.py`, regenerated fixed + floating
 headers) showed three wrappers copy `NUM_JOINTS`-strided rows into their mirror
 (`generalized_gravity`, `nonlinear_effects`, `integrator_gradient`) — one extra float per
@@ -2685,7 +2686,21 @@ already downloaded it into the pinned mirror — a second full D2H per call, lef
 mirror-stride workaround the generator has since fixed. They are `cabi_direct` now: one
 download, into the caller's buffer.
 
+**And a third defect, found by the receipt (segfault, rc=-11).** The baked EE-pose family
+was `cabi_direct`. Its public size is `6*GRID_RBD_NUM_EES*…` — a WRAPPER-side macro that a
+named-target build (`ee_joint_names=[one joint]`) sets to 1 — while the generated host
+function still downloads all `grid::NUM_EES` leaves into the mirror. Behind a memcpy that
+is harmless (the first slot is the named target); retargeted, the download overran the
+caller's array 4x on go2 (the gradient and pose calls before it corrupted the heap
+silently; the Hessian finally faulted). The size referee had evaluated both sides with one
+header's constants and `GRID_RBD_NUM_EES := NUM_EES`, i.e. only the multi-leaf build. The
+three rows are back on the memcpy, and the referee refuses any direct row whose
+`out_size_expr` names a wrapper-side macro.
+
 **Rules.**
+- A size proof that evaluates two expressions under one set of constants proves nothing
+  about a name the two sides can bind differently. Either the expressions name the same
+  header constants, or every binding is enumerated.
 - When a shared emitter starts returning nothing for some rows, enumerate every caller and
   show where each one delivers the removed effect instead.
 - `isfinite` is not a value check. Uninitialised memory is usually finite. Compare against

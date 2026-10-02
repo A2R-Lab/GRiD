@@ -21,7 +21,9 @@ from ._subset_artifacts import register_subset, cache_key as _cache_key, random_
 
 pytestmark = pytest.mark.python_wrappers
 ALGOS = ["forward_dynamics", "inverse_dynamics", "forward_dynamics_gradient", "inverse_dynamics_gradient",
-         "minv", "crba", "energy", "com"]
+         "minv", "crba", "energy", "com", "ccrba", "coriolis_matrix"]
+DIRECT_BUILT = ["minv", "crba", "energy", "com", "ccrba", "coriolis_matrix",
+                "forward_dynamics_gradient", "inverse_dynamics_gradient"]
 
 
 @pytest.fixture(scope="module")
@@ -93,6 +95,23 @@ def test_numpy_mujoco_twins_match_the_torch_twins(go2):
         assert len(got) == len(ref), name
         for a, b in zip(got, ref):
             assert a.shape == b.shape and np.allclose(a, b, rtol=1e-4, atol=1e-4), name
+
+
+def test_no_direct_op_or_twin_writes_outside_its_output(go2):
+    """Floating base (NUM_JOINTS != NUM_VEL), primaries AND MuJoCo twins: the whole output is
+    written and the guard words after it are not (see _cabi_canary)."""
+    from grid_codegen.abi_specs import ABI_SPECS
+    from ._cabi_canary import guarded_call
+    assert all(ABI_SPECS[k].cabi_direct and ABI_SPECS[k].has_mjx_twin for k in DIRECT_BUILT)
+    q, qd, u = _state(go2)
+    problems = []
+    for key in DIRECT_BUILT:
+        for mjx in (False, True):
+            rc, unwritten, overrun, _ = guarded_call(go2, key, q, qd, u, mjx=mjx)
+            if rc or unwritten or overrun:
+                problems.append(f"{key}{'_mujoco' if mjx else ''}: rc={rc}, {unwritten} output word(s) unwritten, "
+                                f"{overrun} guard word(s) overwritten")
+    assert not problems, "\n".join(problems)
 
 
 def test_jax_mujoco_forward_and_grad(go2):

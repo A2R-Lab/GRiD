@@ -145,6 +145,11 @@ class AbiSpec:
     # (generalized_gravity, nonlinear_effects, integrator_gradient) copy NUM_JOINTS-strided
     # rows on a floating base and would overflow a caller's NUM_VEL-sized buffer; five
     # (frame_jacobian{,_dot}, osc_inertia, the runtime EE ops) copy by another pattern.
+    # The baked EE-pose family is excluded for a different reason: its public size is the
+    # WRAPPER-side GRID_RBD_NUM_EES, which a named-target build sets to 1 while the
+    # generated host function still downloads all grid::NUM_EES leaves — a retargeted copy
+    # overran the caller's array (segfault in the 2026-10-02 receipt). A direct row's
+    # out_size_expr may name header constants only.
     cabi_direct: bool = False
     # ── python (pybind _core.cpp) surface — C4 arc, one field/many consumers ──
     # py_out_dims: trailing per-batch-item out dims as the VERBATIM C++ exprs the
@@ -534,7 +539,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
     # ── EE pose family (baked targets; macro callee + SIG_MJX signature fork) ──
     "end_effector_pose": AbiSpec(
         "end_effector_pose",
-        cabi_direct=True,
         grid_symbol="grid::GRID_RBD_EE_POSE_FN",              # [D7] macro callee
         sig_mjx_macro="GRID_RBD_SIG_MJX_EE_POSE",
         template_shape="std5",
@@ -550,7 +554,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
     ),
     "end_effector_pose_gradient": AbiSpec(
         "end_effector_pose_gradient",
-        cabi_direct=True,
         grid_symbol="grid::GRID_RBD_EE_POSE_GRADIENT_FN",     # [D7]
         sig_mjx_macro="GRID_RBD_SIG_MJX_EE_POSE_GRADIENT",
         template_shape="std5",
@@ -566,7 +569,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
     ),
     "end_effector_pose_hessian": AbiSpec(
         "end_effector_pose_hessian",
-        cabi_direct=True,
         grid_symbol="grid::GRID_RBD_EE_POSE_HESSIAN_FN",      # [D7]
         sig_mjx_macro="GRID_RBD_SIG_MJX_EE_POSE_HESSIAN",
         template_shape="std5",

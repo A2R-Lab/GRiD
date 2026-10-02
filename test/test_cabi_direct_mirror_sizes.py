@@ -69,6 +69,12 @@ def test_every_cabi_direct_wrapper_copies_exactly_batch_times_out_size(robot, ba
     batch = 5
     direct = {k: s for k, s in ABI_SPECS.items() if s.cabi_direct}
     assert direct and all(_mirror_swap(s) for s in direct.values())
+    # The comparison below evaluates both sides with THIS header's constants, so it is only
+    # a proof if the spec's size names nothing the wrapper can define differently from the
+    # header. GRID_RBD_NUM_EES is such a name (1 on a named-target build, grid::NUM_EES
+    # leaves in the host function's download).
+    wrapper_sized = [k for k, s in direct.items() if "GRID_RBD_" in s.out_size_expr]
+    assert not wrapper_sized, f"direct rows sized by a wrapper-side macro: {wrapper_sized}"
     problems = []
     for key, s in direct.items():
         want = _ev(s.out_size_expr, c, batch) * batch
@@ -92,7 +98,9 @@ def test_every_cabi_direct_wrapper_copies_exactly_batch_times_out_size(robot, ba
 def test_known_over_copying_wrappers_are_not_direct():
     for key in ("generalized_gravity", "nonlinear_effects", "integrator_gradient",
                 "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
-                "end_effector_pose_runtime", "end_effector_pose_gradient_runtime"):
+                "end_effector_pose_runtime", "end_effector_pose_gradient_runtime",
+                # named-target builds: wrapper-side NUM_EES == 1, host download == all leaves
+                "end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian"):
         assert not ABI_SPECS[key].cabi_direct, key
 
 

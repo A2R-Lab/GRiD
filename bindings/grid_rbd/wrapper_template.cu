@@ -1799,9 +1799,6 @@ extern "C" int grid_rbd_end_effector_pose(long long ctx_id, const T* q, T* ee_ou
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
-    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_end_effector_pose;
-    // retarget it at `ee_out` for this call (scope-restored). See _mirror_swap.
-    GridMirrorRetarget _retarget_h_end_effector_pose(&g_data->h_end_effector_pose, ee_out);  // (size_t)batch * 6*GRID_RBD_NUM_EES elements
 
 // signature switch: the host template carries MUJOCO_OUTPUT on floating
 // builds regardless of enable_mujoco_kernels — keyed on the per-fn
@@ -1816,6 +1813,7 @@ extern "C" int grid_rbd_end_effector_pose(long long ctx_id, const T* q, T* ee_ou
 
     if (int rc = grid_rbd_sync_consume()) return rc;
 
+    std::memcpy(ee_out, g_data->h_end_effector_pose, (size_t)batch * 6*GRID_RBD_NUM_EES * sizeof(T));
     return 0;
 #else
     (void)q; (void)ee_out; (void)batch;
@@ -1829,9 +1827,6 @@ extern "C" int grid_rbd_end_effector_pose_gradient(long long ctx_id, const T* q,
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
-    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_end_effector_pose_gradient;
-    // retarget it at `dee_out` for this call (scope-restored). See _mirror_swap.
-    GridMirrorRetarget _retarget_h_end_effector_pose_gradient(&g_data->h_end_effector_pose_gradient, dee_out);  // (size_t)batch * 6*GRID_RBD_NUM_EES*grid::NUM_VEL elements
 
 // signature switch: the host template carries MUJOCO_OUTPUT on floating
 // builds regardless of enable_mujoco_kernels — keyed on the per-fn
@@ -1846,6 +1841,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient(long long ctx_id, const T* q,
 
     if (int rc = grid_rbd_sync_consume()) return rc;
 
+    std::memcpy(dee_out, g_data->h_end_effector_pose_gradient, (size_t)batch * 6*GRID_RBD_NUM_EES*grid::NUM_VEL * sizeof(T));
     return 0;
 #else
     (void)q; (void)dee_out; (void)batch;
@@ -1859,9 +1855,6 @@ extern "C" int grid_rbd_end_effector_pose_hessian(long long ctx_id, const T* q, 
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
-    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_end_effector_pose_hessian;
-    // retarget it at `d2ee_out` for this call (scope-restored). See _mirror_swap.
-    GridMirrorRetarget _retarget_h_end_effector_pose_hessian(&g_data->h_end_effector_pose_hessian, d2ee_out);  // (size_t)batch * 6*GRID_RBD_NUM_EES*grid::NUM_VEL*grid::NUM_VEL elements
 
 // signature switch: the host template carries MUJOCO_OUTPUT on floating
 // builds regardless of enable_mujoco_kernels — keyed on the per-fn
@@ -1876,6 +1869,7 @@ extern "C" int grid_rbd_end_effector_pose_hessian(long long ctx_id, const T* q, 
 
     if (int rc = grid_rbd_sync_consume()) return rc;
 
+    std::memcpy(d2ee_out, g_data->h_end_effector_pose_hessian, (size_t)batch * 6*GRID_RBD_NUM_EES*grid::NUM_VEL*grid::NUM_VEL * sizeof(T));
     return 0;
 #else
     (void)q; (void)d2ee_out; (void)batch;
@@ -2558,12 +2552,10 @@ extern "C" int grid_rbd_end_effector_pose_mujoco(long long ctx_id, const T* q, T
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
-    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_end_effector_pose;
-    // retarget it at `ee_out` for this call (scope-restored). See _mirror_swap.
-    GridMirrorRetarget _retarget_h_end_effector_pose(&g_data->h_end_effector_pose, ee_out);  // (size_t)batch * 6*GRID_RBD_NUM_EES elements
     grid::GRID_RBD_EE_POSE_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(ee_out, g_data->h_end_effector_pose, (size_t)batch * 6*GRID_RBD_NUM_EES * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_END_EFFECTOR_POSE
@@ -2578,12 +2570,10 @@ extern "C" int grid_rbd_end_effector_pose_gradient_mujoco(long long ctx_id, cons
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
-    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_end_effector_pose_gradient;
-    // retarget it at `dee_out` for this call (scope-restored). See _mirror_swap.
-    GridMirrorRetarget _retarget_h_end_effector_pose_gradient(&g_data->h_end_effector_pose_gradient, dee_out);  // (size_t)batch * 6*GRID_RBD_NUM_EES*grid::NUM_VEL elements
     grid::GRID_RBD_EE_POSE_GRADIENT_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(dee_out, g_data->h_end_effector_pose_gradient, (size_t)batch * 6*GRID_RBD_NUM_EES*grid::NUM_VEL * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_END_EFFECTOR_POSE_GRADIENT
@@ -2598,12 +2588,10 @@ extern "C" int grid_rbd_end_effector_pose_hessian_mujoco(long long ctx_id, const
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
-    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_end_effector_pose_hessian;
-    // retarget it at `d2ee_out` for this call (scope-restored). See _mirror_swap.
-    GridMirrorRetarget _retarget_h_end_effector_pose_hessian(&g_data->h_end_effector_pose_hessian, d2ee_out);  // (size_t)batch * 6*GRID_RBD_NUM_EES*grid::NUM_VEL*grid::NUM_VEL elements
     grid::GRID_RBD_EE_POSE_HESSIAN_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(d2ee_out, g_data->h_end_effector_pose_hessian, (size_t)batch * 6*GRID_RBD_NUM_EES*grid::NUM_VEL*grid::NUM_VEL * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_END_EFFECTOR_POSE_HESSIAN

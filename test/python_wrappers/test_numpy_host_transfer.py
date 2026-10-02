@@ -109,6 +109,19 @@ def test_direct_download_ops_fill_every_element(h, inputs):
     assert np.allclose(M @ Minv, np.eye(h.num_vel), atol=5e-3)
 
 
+def test_no_direct_op_writes_outside_its_output(h, inputs):
+    """Every cabi_direct C-ABI body on this (full, fixed-base) artifact: the whole output is
+    written and the guard words after it are not (see _cabi_canary)."""
+    from ._cabi_canary import direct_keys, guarded_call
+    q, qd, x = inputs
+    problems = []
+    for key in direct_keys():
+        rc, unwritten, overrun, _ = guarded_call(h, key, q, qd, x)
+        if rc or unwritten or overrun:
+            problems.append(f"{key}: rc={rc}, {unwritten} output word(s) unwritten, {overrun} guard word(s) overwritten")
+    assert not problems, "\n".join(problems)
+
+
 def test_bad_out_is_refused(h, inputs):
     q, qd, x = inputs
     B, n = q.shape[0], 4 * h.num_vel ** 3
