@@ -11,7 +11,7 @@ on:
       - '.gitmodules'
       - '.github/workflows/gh-pages.yml'
   push:
-    branches: [main, modernizing-tests]
+    branches: [main]
     paths:
       - 'docs/**'
       - 'bindings/grid_rbd/**'

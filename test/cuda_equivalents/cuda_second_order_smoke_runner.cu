@@ -7,6 +7,10 @@
 
 #include "grid.cuh"
 
+// Default block thread count when main() gets no argv[1]. The test passes the
+// count at RUNTIME (argv[1]) so a per-session random count never re-keys the
+// content-keyed executable cache (it used to be a -D flag: every session was a
+// guaranteed nvcc miss for the biggest SO builds).
 #ifndef GRID_CUDA_SECOND_ORDER_TEST_THREADS
 #define GRID_CUDA_SECOND_ORDER_TEST_THREADS 64
 #endif
@@ -41,13 +45,13 @@ void print_flat(const std::string &name, const T *data, int count) {
 }
 
 template <typename T>
-int run() {
+int run(const int req_threads) {
     const T gravity = static_cast<T>(-9.81);
     const dim3 block_dimms(1, 1, 1);
     // Clamp to the robot's MAX_PERF_LEVEL_THREADS (the kernels' __launch_bounds__ cap,
     // resolved dynamically from the generated header) so a swept count above the
     // bound doesn't fail with cudaErrorInvalidValue.
-    const int _req_threads = GRID_CUDA_SECOND_ORDER_TEST_THREADS;
+    const int _req_threads = req_threads;
     const int _nthreads = _req_threads < grid::MAX_PERF_LEVEL_THREADS ? _req_threads : grid::MAX_PERF_LEVEL_THREADS;
     const dim3 thread_dimms(_nthreads, 1, 1);
 
@@ -145,6 +149,15 @@ int run() {
     return 0;
 }
 
-int main() {
-    return run<float>();
+int main(int argc, char **argv) {
+    // Optional argv[1] = requested block thread count (clamped in run<T>() to the
+    // robot's MAX_PERF_LEVEL_THREADS). Non-positive or absent -> the compiled default.
+    int req_threads = GRID_CUDA_SECOND_ORDER_TEST_THREADS;
+    if (argc > 1) {
+        const int requested = std::atoi(argv[1]);
+        if (requested > 0) {
+            req_threads = requested;
+        }
+    }
+    return run<float>(req_threads);
 }

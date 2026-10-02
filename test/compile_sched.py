@@ -12,8 +12,9 @@ Design constraints honored:
   scheduler start minus a floor, margin multiplier on every prediction, hard
   max-jobs cap, plus a live MemAvailable backstop re-checked at each admission.
 - Jobs sharing a `group` run SERIALLY relative to each other (e.g. a mimic
-  robot's flagship cells share one header-cache key — unlocked concurrent
-  writes would race), still parallel vs everything else.
+  robot's flagship cells share one header-cache key; the harness caches are
+  per-key flock'd since 2026-10-01, so the group is now belt-and-braces that
+  also avoids two workers paying the same miss), still parallel vs everything else.
 - Workers run in their own sessions (setsid) so an interrupt can kill whole
   compiler trees; kill_all() is the SIGTERM path.
 - The ledger only records peaks for jobs the caller marks as real builds

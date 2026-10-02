@@ -2589,3 +2589,40 @@ re-measured.
 - Tools: `probes/audit_summary.py` (per robot × base, worst default excess), the fp64 plugin
   (generator `dtype="double"` + `GRID_EQUIV_T=double`), and `probes/fdgrad_noise.py`
   (fp32 noise model).
+
+### 7.z35 Session-random compile flags poison a content-keyed cache; shards can share a cache only with per-key locks (2026-10-01)
+
+**Symptom.** Every receipt paid ~1.5 h of nvcc for `test_cuda_second_order_fallback`
+(h1_2 ~47 min, g1 ~22 min) although nothing in those cells had changed. The executable
+cache held the SAME header built at 251 and at 347 threads.
+
+**Cause.** The test drew a session-random block thread count and baked it into the nvcc
+command (`-DGRID_CUDA_SECOND_ORDER_TEST_THREADS=<n>`). `executable_cache` keys on every
+input byte plus the flags, so a different random value is a different key: a guaranteed
+miss, every session, forever. The runner only used the value as a runtime `int`.
+
+**Fix.** The count travels as `argv[1]` (the flagship runner's existing pattern); the test
+prints it and `GRID_CUDA_SECOND_ORDER_TEST_THREADS=<n>` reproduces a run. Two executables
+per header (the `ENABLE_FDSVA` flag) instead of one per session.
+
+**Rules.**
+- Nothing random, time-, host- or session-dependent goes into the compile inputs of a
+  content-keyed artifact. Vary behaviour at RUNTIME (argv, stdin, env read by the
+  program) and record the value in the test output.
+- When a receipt is slow, read `test/.split_suite/durations.json` first: the eight humanoid
+  nvcc builds (integrator ×2 tiers, SO fallback) were ~4 h of a ~9.5 h serial cuda domain,
+  and compile-time fixes only pay when those are MISSES. A CPU-only predictor (regenerate
+  the header, recompute the key, test for the manifest) tells you before launching.
+- Predicting hits OUTSIDE pytest: set `GRID_ENABLE_MUJOCO_KERNELS=0` (the suite's
+  conftest and `run_split_suite.cuda_worker_env()` do). Without it floating robots gain
+  their mjx twins, every floating key changes, and "fixed hits, floating misses" looks
+  like a codegen change when it is only the knob.
+
+**Sharing the cache between shards.** The harness header/runner caches had NO writer
+locking, which is why `run_split_suite.phase_run` ran GPU shards one at a time. They now
+take a per-key exclusive flock (`cuda_harness._cache_key_lock`, the `executable_cache`
+idiom) around check-then-build, the runner executable is published by `os.replace`
+from a `.partial`, and `GRID_SPLIT_SHARD_JOBS` (default 1) runs that many shards side by
+side. Host RAM, not the GPU, is the bound: a shard's inline humanoid nvcc builds are not
+pool-admitted, so pilot >1 only under a `MemoryMax`'d unit. Guard:
+`test/test_cuda_cache_locking.py`.

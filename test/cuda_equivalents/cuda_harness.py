@@ -1,4 +1,5 @@
 import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -387,6 +388,27 @@ def _cache_root() -> Path:
     return Path(os.environ.get("GRID_CUDA_CACHE_DIR", ".grid_build_cache/cuda")).resolve()
 
 
+@contextlib.contextmanager
+def _cache_key_lock(kind: str, key: str):
+    """Per-key EXCLUSIVE flock on <cache_root>/<kind>/<key>.lock (2026-10-01).
+
+    The header and runner caches used to have NO writer locking, which is why the
+    split driver ran GPU shards strictly one at a time (`run_split_suite.phase_run`).
+    Holding this lock around the check-then-build of one key lets two shards (or a
+    shard and the prewarm pool) share the cache dir: the second arrival blocks until
+    the first has published, then takes the hit. Same idiom as
+    executable_cache.cached_nvcc_executable. flock is per open file description,
+    so it serializes threads of one process as well as separate processes."""
+    root = _cache_root() / kind
+    root.mkdir(parents=True, exist_ok=True)
+    with open(root / f"{key}.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
 def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -661,40 +683,41 @@ def _generate_grid_header(
 
     cached_dir = _cache_root() / "headers" / header_key
     cached_header = cached_dir / "grid.cuh"
-    if cached_header.exists():
-        shutil.copyfile(cached_header, header_path)
-        _progress(config, f"header cache hit: {project_model.spec.robot_id}-{project_model.base_mode} key={header_key[:12]}")
-        return header_path, header_key
+    with _cache_key_lock("headers", header_key):
+        if cached_header.exists():
+            shutil.copyfile(cached_header, header_path)
+            _progress(config, f"header cache hit: {project_model.spec.robot_id}-{project_model.base_mode} key={header_key[:12]}")
+            return header_path, header_key
 
-    _progress(config, f"generating header for {project_model.spec.robot_id}-{project_model.base_mode} cache miss key={header_key[:12]}")
-    cached_dir.mkdir(parents=True, exist_ok=True)
-    codegen = GRiDCodeGenerator(
-        project_model.robot,
-        DEBUG_MODE=False,
-        NEED_PRINT_MAT=True,
-        FILE_NAMESPACE="grid",
-    )
-    with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
-        _run_gen_all_code(
-            codegen, project_model, cached_header, include_homogenous_transforms,
-            codegen_algorithm_list=codegen_algorithm_list,
+        _progress(config, f"generating header for {project_model.spec.robot_id}-{project_model.base_mode} cache miss key={header_key[:12]}")
+        cached_dir.mkdir(parents=True, exist_ok=True)
+        codegen = GRiDCodeGenerator(
+            project_model.robot,
+            DEBUG_MODE=False,
+            NEED_PRINT_MAT=True,
+            FILE_NAMESPACE="grid",
         )
-    (cached_dir / "manifest.json").write_text(
-        json.dumps(
-            {
-                "schema": CACHE_SCHEMA_VERSION,
-                "robot_id": project_model.spec.robot_id,
-                "base_mode": project_model.base_mode,
-                "target_shared_mem_bytes": os.environ.get("GRID_CUDA_TARGET_SHARED_MEM_BYTES", "default"),
-                "shared_mem_type_size_bytes": os.environ.get("GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES", "default"),
-            },
-            indent=2,
-            sort_keys=True,
+        with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
+            _run_gen_all_code(
+                codegen, project_model, cached_header, include_homogenous_transforms,
+                codegen_algorithm_list=codegen_algorithm_list,
+            )
+        (cached_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema": CACHE_SCHEMA_VERSION,
+                    "robot_id": project_model.spec.robot_id,
+                    "base_mode": project_model.base_mode,
+                    "target_shared_mem_bytes": os.environ.get("GRID_CUDA_TARGET_SHARED_MEM_BYTES", "default"),
+                    "shared_mem_type_size_bytes": os.environ.get("GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES", "default"),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
         )
-        + "\n"
-    )
-    shutil.copyfile(cached_header, header_path)
-    return header_path, header_key
+        shutil.copyfile(cached_header, header_path)
+        return header_path, header_key
 
 
 def _compile_runner(
@@ -755,99 +778,105 @@ def _compile_runner(
         }
     )
 
-    if _cache_enabled():
-        compile_dir = _cache_root() / "runners" / runner_key
-        executable = compile_dir / "cuda_equivalence_runner.exe"
-        if executable.exists():
-            _progress(config, f"runner cache hit: arch=sm_{arch} floating={int(floating_base)} l2={l2_define} linalg={linalg_backend_note} eepose_hessian={enable_floating_eepose_hessian} key={runner_key[:12]}")
-            cmd = [str(executable)]
-            return executable, cmd
-        compile_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(build_dir / "grid.cuh", compile_dir / "grid.cuh")
-    else:
-        compile_dir = build_dir
-        executable = compile_dir / "cuda_equivalence_runner.exe"
+    # One writer per key (see _cache_key_lock); readers wait for an in-flight build
+    # instead of racing it or seeing a half-written executable.
+    lock = _cache_key_lock("runners", runner_key) if _cache_enabled() else contextlib.nullcontext()
+    with lock:
+        if _cache_enabled():
+            compile_dir = _cache_root() / "runners" / runner_key
+            executable = compile_dir / "cuda_equivalence_runner.exe"
+            if executable.exists():
+                _progress(config, f"runner cache hit: arch=sm_{arch} floating={int(floating_base)} l2={l2_define} linalg={linalg_backend_note} eepose_hessian={enable_floating_eepose_hessian} key={runner_key[:12]}")
+                cmd = [str(executable)]
+                return executable, cmd
+            compile_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(build_dir / "grid.cuh", compile_dir / "grid.cuh")
+        else:
+            compile_dir = build_dir
+            executable = compile_dir / "cuda_equivalence_runner.exe"
 
-    runner_copy = compile_dir / RUNNER_SOURCE.name
-    shutil.copyfile(RUNNER_SOURCE, runner_copy)
-    # The runner #includes "grid_runner_select.cuh"; copy it next to the runner so
-    # the isolated-dir compile (cwd=compile_dir) resolves it.
-    shutil.copyfile(SELECT_HEADER, compile_dir / SELECT_HEADER.name)
+        runner_copy = compile_dir / RUNNER_SOURCE.name
+        shutil.copyfile(RUNNER_SOURCE, runner_copy)
+        # The runner #includes "grid_runner_select.cuh"; copy it next to the runner so
+        # the isolated-dir compile (cwd=compile_dir) resolves it.
+        shutil.copyfile(SELECT_HEADER, compile_dir / SELECT_HEADER.name)
 
-    defines = [f"-DGRID_CUDA_FLOATING_BASE={1 if floating_base else 0}"]
-    if l2_persisting is not None:
-        defines.append(f"-DGRID_CUDA_ENABLE_L2_PERSISTING={l2_define}")
-    # Mimic robots emit no gradient algorithms (G0 guard); compile the runner
-    # without its gradient calls so it links against the gradient-free header.
-    if skip_gradients:
-        defines.append("-DGRID_RUNNER_SKIP_GRADIENTS=1")
-    # ee_pose gradient/hessian (kinematic) land in a later mimic phase (P4) than
-    # the dynamics gradients id_du/fd_du (P3). Fixed-base mimic skips ONLY the
-    # ee_pose gradients (keeps id_du/fd_du); floating mimic skips all gradients.
-    if skip_eepose_gradients and not skip_gradients:
-        defines.append("-DGRID_RUNNER_SKIP_EEPOSE_GRADIENTS=1")
-    # Split mode: gate the runner to a single algorithm (or tight group). The RUN
-    # tokens fully control which per-algo blocks compile (every unlisted RUN_<X>
-    # defaults to 0 under GRID_RUN_SPLIT), so a broken/absent kernel in another algo
-    # can't void this cell (Bug-A isolation). Pairs with a subset header
-    # (codegen_algorithm_list) so the TU is tiny + fast (~2s vs >6m for the full
-    # header). Split gating supersedes the coarse SKIP_GRADIENTS flags, so those stay
-    # off (False) whenever run_tokens is set.
-    if run_tokens:
-        defines.append("-DGRID_RUN_SPLIT")
-        for token in sorted(run_tokens):
-            defines.append(f"-D{token}=1")
+        defines = [f"-DGRID_CUDA_FLOATING_BASE={1 if floating_base else 0}"]
+        if l2_persisting is not None:
+            defines.append(f"-DGRID_CUDA_ENABLE_L2_PERSISTING={l2_define}")
+        # Mimic robots emit no gradient algorithms (G0 guard); compile the runner
+        # without its gradient calls so it links against the gradient-free header.
+        if skip_gradients:
+            defines.append("-DGRID_RUNNER_SKIP_GRADIENTS=1")
+        # ee_pose gradient/hessian (kinematic) land in a later mimic phase (P4) than
+        # the dynamics gradients id_du/fd_du (P3). Fixed-base mimic skips ONLY the
+        # ee_pose gradients (keeps id_du/fd_du); floating mimic skips all gradients.
+        if skip_eepose_gradients and not skip_gradients:
+            defines.append("-DGRID_RUNNER_SKIP_EEPOSE_GRADIENTS=1")
+        # Split mode: gate the runner to a single algorithm (or tight group). The RUN
+        # tokens fully control which per-algo blocks compile (every unlisted RUN_<X>
+        # defaults to 0 under GRID_RUN_SPLIT), so a broken/absent kernel in another algo
+        # can't void this cell (Bug-A isolation). Pairs with a subset header
+        # (codegen_algorithm_list) so the TU is tiny + fast (~2s vs >6m for the full
+        # header). Split gating supersedes the coarse SKIP_GRADIENTS flags, so those stay
+        # off (False) whenever run_tokens is set.
+        if run_tokens:
+            defines.append("-DGRID_RUN_SPLIT")
+            for token in sorted(run_tokens):
+                defines.append(f"-D{token}=1")
 
-    cmd = [
-        nvcc,
-        cxx_standard,
-        "-O0",
-        *defines,
-        *linalg_flags,
-        "-gencode",
-        f"arch=compute_{arch},code=sm_{arch}",
-        "-gencode",
-        f"arch=compute_{arch},code=compute_{arch}",
-        "-o",
-        str(executable),
-        str(runner_copy),
-    ]
-    _progress(config, f"compiling runner arch=sm_{arch} floating={int(floating_base)} l2={l2_define} linalg={linalg_backend_note} eepose_hessian={enable_floating_eepose_hessian} cache_key={runner_key[:12]}")
-    result = subprocess.run(cmd, cwd=compile_dir, capture_output=True, text=True)
-    if result.returncode != 0:
-        pytest.fail(
-            "CUDA equivalence runner compilation failed.\n"
-            "⚠ COVERAGE VOID: this runner compiles ALL of its algorithms into one executable, so this\n"
-            "  build failure means NONE of them were validated for this robot/base. Fixing the compile\n"
-            "  is NECESSARY BUT NOT SUFFICIENT — the value/correctness of EVERY algorithm in this runner\n"
-            "  is UNVERIFIED until it builds and the comparison runs. (This is exactly how Bug A hid: a\n"
-            "  `crba_inner` build break masked a latent forward_dynamics VALUE bug. After fixing a build\n"
-            "  error here, RE-RUN and treat any newly-reachable mismatch as a real, previously-masked bug.\n"
-            "  The VALUE algos also have an isolated home in test_cuda_floating_values_equivalence.py.)\n"
-            f"Command: {' '.join(cmd)}\n"
-            f"stdout:\n{result.stdout}\n"
-            f"stderr:\n{result.stderr}"
-        )
-    if _cache_enabled():
-        (compile_dir / "manifest.json").write_text(
-            json.dumps(
-                {
-                    "schema": CACHE_SCHEMA_VERSION,
-                    "header_content_hash": _hash_file(compile_dir / "grid.cuh"),
-                    "arch": arch,
-                    "floating_base": bool(floating_base),
-                    "l2_persisting": l2_define,
-                    "floating_eepose_hessian": enable_floating_eepose_hessian,
-                    "linalg_backend": linalg_backend_note,
-                    "compile_flags": compile_flags,
-                    "cmd": cmd,
-                },
-                indent=2,
-                sort_keys=True,
+        cmd = [
+            nvcc,
+            cxx_standard,
+            "-O0",
+            *defines,
+            *linalg_flags,
+            "-gencode",
+            f"arch=compute_{arch},code=sm_{arch}",
+            "-gencode",
+            f"arch=compute_{arch},code=compute_{arch}",
+            "-o",
+            str(executable) + ".partial",
+            str(runner_copy),
+        ]
+        _progress(config, f"compiling runner arch=sm_{arch} floating={int(floating_base)} l2={l2_define} linalg={linalg_backend_note} eepose_hessian={enable_floating_eepose_hessian} cache_key={runner_key[:12]}")
+        result = subprocess.run(cmd, cwd=compile_dir, capture_output=True, text=True)
+        if result.returncode == 0:
+            os.replace(str(executable) + ".partial", executable)
+        if result.returncode != 0:
+            pytest.fail(
+                "CUDA equivalence runner compilation failed.\n"
+                "⚠ COVERAGE VOID: this runner compiles ALL of its algorithms into one executable, so this\n"
+                "  build failure means NONE of them were validated for this robot/base. Fixing the compile\n"
+                "  is NECESSARY BUT NOT SUFFICIENT — the value/correctness of EVERY algorithm in this runner\n"
+                "  is UNVERIFIED until it builds and the comparison runs. (This is exactly how Bug A hid: a\n"
+                "  `crba_inner` build break masked a latent forward_dynamics VALUE bug. After fixing a build\n"
+                "  error here, RE-RUN and treat any newly-reachable mismatch as a real, previously-masked bug.\n"
+                "  The VALUE algos also have an isolated home in test_cuda_floating_values_equivalence.py.)\n"
+                f"Command: {' '.join(cmd)}\n"
+                f"stdout:\n{result.stdout}\n"
+                f"stderr:\n{result.stderr}"
             )
-            + "\n"
-        )
-    return executable, cmd
+        if _cache_enabled():
+            (compile_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema": CACHE_SCHEMA_VERSION,
+                        "header_content_hash": _hash_file(compile_dir / "grid.cuh"),
+                        "arch": arch,
+                        "floating_base": bool(floating_base),
+                        "l2_persisting": l2_define,
+                        "floating_eepose_hessian": enable_floating_eepose_hessian,
+                        "linalg_backend": linalg_backend_note,
+                        "compile_flags": compile_flags,
+                        "cmd": cmd,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+        return executable, cmd
 
 
 def _run_runner(executable: Path, sample_input: str, compile_cmd: list[str], num_threads: int | None = None) -> str:
@@ -956,8 +985,9 @@ def _thread_counts() -> tuple[int, ...]:
 def _random_thread_count() -> int:
     # A session-fresh multi-warp count that is not a multiple of 32, so a
     # trailing partial warp is always present. Seeded from os.urandom so each
-    # run probes a different count over time; the chosen value appears in the
-    # parametrized test id for reproducibility.
+    # run probes a different count over time; callers print the chosen value
+    # (reproduce via their env override). Pass it to the runner at RUNTIME, never
+    # as a -D flag: that re-keys the content-keyed executable cache every session.
     rng = random.Random()
     return rng.choice([n for n in range(33, 480) if n % 32 != 0])
 

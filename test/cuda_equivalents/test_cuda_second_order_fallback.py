@@ -140,8 +140,15 @@ def _generate_second_order_header(
     return header_path
 
 
-def _compile_second_order_runner(build_dir: Path, *, enable_fdsva=True):
-    arch = _detect_cuda_arch()
+def _second_order_thread_count() -> int:
+    """Block thread count for the SO smoke runner, passed at RUNTIME (argv).
+
+    Session-random multi-warp count (non-multiple of 32) so the SO kernels are
+    probed across warp counts over time, catching thread-count races that a fixed
+    block size hides. The count is printed per test and reproducible with
+    GRID_CUDA_SECOND_ORDER_TEST_THREADS=<n>. It is deliberately NOT a compile flag:
+    as a -D it re-keyed the content-keyed executable cache every session, so the
+    biggest SO builds (h1_2 ~47 min, g1 ~22 min) missed on every receipt."""
     threads = os.environ.get("GRID_CUDA_SECOND_ORDER_TEST_THREADS")
     if threads:
         try:
@@ -154,16 +161,16 @@ def _compile_second_order_runner(build_dir: Path, *, enable_fdsva=True):
             pytest.fail(
                 "GRID_CUDA_SECOND_ORDER_TEST_THREADS must be positive when set."
             )
-    else:
-        # Session-random multi-warp count (non-multiple of 32) so the SO kernels
-        # are probed across warp counts over time, catching thread-count races
-        # that a fixed block size hides. Override with the env var to reproduce.
-        thread_count = _random_thread_count()
+        return thread_count
+    return _random_thread_count()
+
+
+def _compile_second_order_runner(build_dir: Path, *, enable_fdsva=True):
+    arch = _detect_cuda_arch()
     flags = [
         "-std=c++11", "-O0",
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
         "-gencode", f"arch=compute_{arch},code=compute_{arch}",
-        f"-DGRID_CUDA_SECOND_ORDER_TEST_THREADS={thread_count}",
         f"-DGRID_CUDA_SECOND_ORDER_ENABLE_FDSVA={int(enable_fdsva)}",
     ]
     return cached_nvcc_executable(
@@ -197,15 +204,16 @@ def _build_second_order_case(
     return _compile_second_order_runner(build_dir, enable_fdsva=enable_fdsva)
 
 
-def _run_second_order_sample(executable, compile_cmd, sample):
-    stdout = _run_runner(executable, _sample_to_stdin(sample), compile_cmd)
+def _run_second_order_sample(executable, compile_cmd, sample, thread_count):
+    stdout = _run_runner(executable, _sample_to_stdin(sample), compile_cmd, num_threads=thread_count)
     # Run-to-run determinism (Inc6 class): the mimic NV^3 folds used to atomicAdd
     # in warp order (fixed 2026-07-31 → fixed-order gather). Byte-identical stdout
     # on an identical re-run keeps them honest at ULP level.
-    stdout_repeat = _run_runner(executable, _sample_to_stdin(sample), compile_cmd)
+    stdout_repeat = _run_runner(executable, _sample_to_stdin(sample), compile_cmd, num_threads=thread_count)
     assert stdout_repeat == stdout, (
         "second-order runner is NON-DETERMINISTIC run-to-run "
-        "(identical input, two launches differ) — warp-order-dependent reduction"
+        f"(identical input, two launches at {thread_count} threads differ) — "
+        "warp-order-dependent reduction"
     )
     return _parse_runner_output(stdout)
 
@@ -455,8 +463,12 @@ def test_fixed_second_order_forced_fallback_matches_python_reference(tmp_path, r
         target_shared_bytes,
     )
 
+    thread_count = _second_order_thread_count()
+    print(f"[second-order] {robot_id}-fixed thread_count={thread_count} "
+          "(reproduce: GRID_CUDA_SECOND_ORDER_TEST_THREADS)")
+
     for sample in samples:
-        forced_fallback = _run_second_order_sample(executable, compile_cmd, sample)
+        forced_fallback = _run_second_order_sample(executable, compile_cmd, sample, thread_count)
 
         np.testing.assert_allclose(
             forced_fallback["second_order_config"][0, 2:5],
@@ -532,8 +544,12 @@ def test_floating_second_order_diagnostic_matches_python_reference(tmp_path, rob
     )
     block_indices = _idsva_block_indices_from_env()
 
+    thread_count = _second_order_thread_count()
+    print(f"[second-order] {robot_id}-floating thread_count={thread_count} "
+          "(reproduce: GRID_CUDA_SECOND_ORDER_TEST_THREADS)")
+
     for sample in samples:
-        actual = _run_second_order_sample(executable, compile_cmd, sample)
+        actual = _run_second_order_sample(executable, compile_cmd, sample, thread_count)
         config = actual["second_order_config"][0]
         np.testing.assert_allclose(
             config[5:7],
