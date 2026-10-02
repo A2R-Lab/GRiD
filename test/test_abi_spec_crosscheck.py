@@ -50,6 +50,7 @@ _INFRA = {
     # Converting them to a spec row (so wrapper_body_gen owns the body) is the tracked
     # follow-up in the canonical plan's register; until then this is the recorded exemption.
     "contact_fext", "num_contact_frames",
+    "is_pinned",  # page-locked host buffers (2026-10-01): alloc/free are void-returning, this one is int
 }
 
 

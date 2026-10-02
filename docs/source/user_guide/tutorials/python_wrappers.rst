@@ -448,6 +448,32 @@ recompile at attach time. See
 
 .. _jax-ffi-quickstart:
 
+Host round trips (numpy): allocate once, reuse
+----------------------------------------------
+
+The numpy methods return a fresh array per call. For the large outputs
+(``idsva_so`` / ``fdsva_so``: ``4·NV³`` floats per batch item, 702 MB on g1
+at batch 1024) that costs a device→host copy into the context's page-locked
+mirror **plus** a host memcpy into the new array, and ~120 ms per call. The
+robotics pattern is to allocate once and reuse: ``handle.pinned_empty(shape)``
+returns a page-locked array in the compute dtype, and ``out=`` makes the
+generated host wrapper copy device→host straight into it — no host memcpy, at
+the PCIe rate. The returned tensors are views of ``out``. ``out`` may also be
+an ordinary C-contiguous array (then the copy is driver-staged, still without
+the extra memcpy); wrong shape/dtype/contiguity is refused with a clear error.
+
+.. code-block:: python
+
+   h = grid_rbd.get_robot("g1")
+   out = h.pinned_empty((B, 4 * h.num_vel ** 3))          # once
+   for q, qd, qdd in trajectory:                           # many
+       d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq = h.idsva_so(q, qd, qdd, out=out)
+
+Measured 2026-10-01 (g1 ``idsva_so`` @1024): ~40 ms with a pinned ``out``
+versus 120 ms through a fresh array; see the torch/JAX sections below for the
+same pattern on those surfaces. Page-locked memory is a limited resource — do
+not allocate it per call.
+
 JAX FFI (``grid_rbd[jax]``)
 ---------------------------
 

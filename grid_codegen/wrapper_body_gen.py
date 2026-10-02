@@ -305,6 +305,8 @@ def gen_body(spec: AbiSpec) -> str:
     L.append(_PACK[spec.pack_mode])
     if spec.key in XTOOL_STAGING:
         L.append(XTOOL_BLOCK)
+    if _mirror_swap(spec):
+        L.extend(_mirror_swap_pre(spec, out_name))
     if spec.template_shape != "plain":
         return _gen_expanded(spec, L)
     if spec.key in BODY_COMMENTS:
@@ -333,6 +335,35 @@ def gen_body(spec: AbiSpec) -> str:
     return "\n".join(L) + "\n"
 
 
+def _mirror_swap(spec: AbiSpec) -> bool:
+    """True when the C-ABI body retargets the generated host wrapper's D2H copy at the
+    caller's buffer instead of memcpy-ing the pinned h_* mirror afterwards (2026-10-01).
+    The host wrapper copies the whole slab into g_data->h_<out>; pointing that member at
+    `out` for the duration of the call makes the D2H land in the caller's array directly
+    (page-locked when it came from handle.pinned_empty), which removes a second
+    full-size host copy (28 ms of a 67 ms g1 idsva_so@1024 call). Only the contiguous
+    mirror ops qualify: the row-pitched vector buffers (h_c/h_qdd behind nv-wide rows)
+    need unpack_rows and stay as they were."""
+    return spec.out_copy == "memcpy_h" and not spec.out_pitch_expr and bool(spec.out_buffer)
+
+
+def _mirror_swap_pre(spec: AbiSpec, out_name: str) -> list[str]:
+    """The RAII retarget: GridMirrorRetarget (wrapper_template.cu hand region) points
+    g_data->h_<out> at the caller's buffer and its destructor restores the mirror on
+    EVERY exit path — the launch-check and sync early returns included — so an error
+    can never leave the context aimed at a numpy buffer the caller may free."""
+    buf = spec.out_buffer
+    size = _size_c(spec.out_size_expr)
+    return [f"    // D2H straight into the caller's buffer: the host wrapper copies into g_data->{buf};",
+            f"    // retarget it at `{out_name}` for this call (scope-restored). See _mirror_swap.",
+            f"    GridMirrorRetarget _retarget_{buf}(&g_data->{buf}, {out_name});  "
+            f"// (size_t)batch * {size} elements"]
+
+
+def _mirror_swap_post(spec: AbiSpec) -> list[str]:
+    return []  # restored by the guard's destructor
+
+
 def _out_copy_lines(spec: AbiSpec, out_name: str, size: str, *, gpuerr: bool) -> list[str]:
     """The out-buffer -> caller copy. A row-pitched spec (out_pitch_expr: the
     NUM_JOINTS-strided vector buffers behind NUM_VEL-wide outputs) copies `size`
@@ -346,6 +377,8 @@ def _out_copy_lines(spec: AbiSpec, out_name: str, size: str, *, gpuerr: bool) ->
                 f"{size} * sizeof(T), batch, cudaMemcpyDeviceToHost)")
         return [f"    gpuErrchk({call});" if gpuerr else f"    {call};"]
     if spec.out_copy == "memcpy_h":
+        if _mirror_swap(spec):
+            return _mirror_swap_post(spec)
         return [f"    std::memcpy({out_name}, {buf}, (size_t)batch * {size} * sizeof(T));"]
     call = f"cudaMemcpy({out_name}, {buf}, (size_t)batch * {size} * sizeof(T), cudaMemcpyDeviceToHost)"
     return [f"    gpuErrchk({call});" if gpuerr else f"    {call};"]

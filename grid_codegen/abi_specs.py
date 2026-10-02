@@ -125,6 +125,13 @@ class AbiSpec:
     # when f_ext_mode == "optional" and has_mjx_twin — flip per-row if a future
     # twin learns to reframe.
     mjx_rejects_f_ext: bool = False
+    # ── allocate-once host round trip (2026-10-01) ──────────────────────────
+    # py_out_param: the pybind method accepts an optional caller-owned `out`
+    # array (shape (batch, *py_out_dims), the .so's dtype, C-contiguous,
+    # writeable) that the C ABI fills directly — pair with handle.pinned_empty
+    # for a page-locked destination. Only for ops whose numpy-side out_layout
+    # is a pure view (so_slabs): a host re-layout (grad_concat) would copy anyway.
+    py_out_param: bool = False
     # ── python (pybind _core.cpp) surface — C4 arc, one field/many consumers ──
     # py_out_dims: trailing per-batch-item out dims as the VERBATIM C++ exprs the
     # pybind method allocates ({batch, *py_out_dims}); the jax/torch reshape
@@ -373,6 +380,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         template_shape="so4",
         out_buffer="h_idsva_so", out_copy="memcpy_h",
         out_size_expr="grid::SECOND_ORDER_TENSOR_SIZE",
+        py_out_param=True,
         has_mjx_twin=True, mjx_post_launch_check=True,
         # VOCAB GAP (no field): the MJX TWIN ONLY has the post-launch
         # `cudaGetLastError() -> return 200+e` check (register-heavy kernel,
@@ -393,6 +401,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         template_shape="so4",
         out_buffer="h_df2", out_copy="memcpy_h",
         out_size_expr="grid::SECOND_ORDER_TENSOR_SIZE",
+        py_out_param=True,
         has_mjx_twin=True, mjx_post_launch_check=True,
         # VOCAB GAP (no field): mjx-twin-only 200+ post-launch check
         # (wrapper_template.cu:1601-1602); pin body has none.

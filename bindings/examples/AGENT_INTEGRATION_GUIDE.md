@@ -82,6 +82,13 @@ Ship the cache dir (`grid_rbd.default_cache_dir()`, default `~/.cache/grid-rbd/`
   kernels. An un-built method raises a clear "add to `algorithm_list` and rebuild" error, never a
   segfault.
 
+## Host arrays (numpy): allocate once, reuse
+
+For the big outputs (`idsva_so` / `fdsva_so`), allocate a page-locked buffer once with
+`h.pinned_empty((B, 4*h.num_vel**3))` and pass it as `out=` on every call: the device→host
+copy lands in it directly (no extra host memcpy) and the returned tensors are views of it —
+~40 ms vs 120 ms per call on g1 @1024 (702 MB), measured 2026-10-01.
+
 ## The fast path (JAX): stay resident, compose, differentiate
 
 ```python

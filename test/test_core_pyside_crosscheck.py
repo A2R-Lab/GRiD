@@ -29,6 +29,9 @@ _CORE = _REPO / "bindings" / "src" / "_core.cpp"
 _METHOD = re.compile(
     r"\n    py::array_t<CT> (\w+)\((.*?)\)\n?\s*\{\n(.*?)\n    \}\n", re.DOTALL)
 _OUT = re.compile(r"py::array_t<CT> out\(\{batch,?\s*([^}]*)\}\)")
+# py_out_param rows (2026-10-01): the caller-owned out form carries the same dims as
+# the 3rd argument of grid_py_out<CT>(out_opt, batch, <dims>, "<name>").
+_OUT_PARAM = re.compile(r"py::array_t<CT> out = grid_py_out<CT>\(out_opt, batch, (.*?), \"")
 # A1 (2026-09-08): rc handling is one rc_message(rc, "<name>", <hint>) call; the
 # rc==3 hint is its third argument — a C string literal, or the bare token
 # `nullptr` for methods with no per-algo message (the decoder's generic rc==3
@@ -49,7 +52,7 @@ def _core_methods():
     out = {}
     for m in _METHOD.finditer(src):
         name, _, body = m.groups()
-        o = _OUT.search(body)
+        o = _OUT.search(body) or _OUT_PARAM.search(body)
         rc3 = _RC3.search(body)
         rc3_hint = None
         if rc3 and "nullptr" not in rc3.group(1):

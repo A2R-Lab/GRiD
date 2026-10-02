@@ -2626,3 +2626,30 @@ from a `.partial`, and `GRID_SPLIT_SHARD_JOBS` (default 1) runs that many shards
 side. Host RAM, not the GPU, is the bound: a shard's inline humanoid nvcc builds are not
 pool-admitted, so pilot >1 only under a `MemoryMax`'d unit. Guard:
 `test/test_cuda_cache_locking.py`.
+### 7.z36 "Pageable D2H" was a misdiagnosis: the numpy path copied twice; fix by retargeting the mirror, not by pinning the destination (2026-10-01)
+
+**Symptom.** The W14 report blamed the numpy path's large-output cost on a pageable
+device→host copy and proposed pinned output arrays. A probe that passed a page-locked
+destination to the C ABI measured NO change (67.3 vs 67.8 ms on g1 idsva_so @1024).
+
+**Cause.** The generated `grid::<op>` host wrapper already copies D2H into the page-locked
+`g_data->h_<out>` mirror; the C ABI then `std::memcpy`'d the whole slab into the caller's
+array (~28 ms of 67), and the handle added further copies (~53 ms). The destination's
+pinnedness was never the variable.
+
+**Fix.** `GridMirrorRetarget` (wrapper_template.cu hand region): the C-ABI body points
+`g_data->h_<out>` at the caller's buffer for the duration of the call, so the wrapper's own
+D2H lands there; an RAII destructor restores the mirror on EVERY exit path (the first draft
+restored it after the sync and would have left the context aimed at freed numpy memory on a
+launch-check or sync early return). Emitted for every contiguous mirror op by
+`wrapper_body_gen._mirror_swap`; row-pitched vector outputs (`unpack_rows`) are untouched.
+`handle.pinned_empty` + `out=` make that buffer page-locked so the copy runs at the PCIe rate.
+
+**Rules.**
+- Measure the mechanism before fixing it: one C-ABI call with a pinned vs pageable
+  destination settled this in a minute (drafts/host_transfer_probe.py).
+- Any code that temporarily redirects a context pointer restores it by destructor, never by
+  a statement after the call.
+- The pybind shim does not link cudart: anything needing the CUDA runtime from Python goes
+  through an export in the per-robot `.so` (here `grid_rbd_pinned_alloc/free/is_pinned`),
+  and a buffer that outlives the call keeps the Runner alive via its capsule.
