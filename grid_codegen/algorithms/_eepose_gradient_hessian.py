@@ -4,7 +4,7 @@ End effector pose, gradient, and hessian codegen.
 Fixed-joint targets are supported (including on branched trees and multiple
 fixed targets at once) via the ``fixed_target_name`` variants.
 """
-from grid_codegen.helpers._code_generation_helpers import gen_emit_host_result_transfer, _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import gen_launch_pair, gen_emit_host_result_transfer, _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
 from grid_codegen.helpers._code_generation_helpers import gen_host_wrapper_head
 from grid_codegen.helpers._code_generation_helpers import host_q_compressed_input_transfer_lines
 
@@ -358,8 +358,7 @@ def gen_end_effector_pose_host(self, mode = 0, fixed_target_name = ""):
     self.gen_add_code_line("// then call the kernel")
     func_call = func_call_start + func_call_end
     # add in compressed mem adjusts
-    func_call_mem_adjust = "if (USE_COMPRESSED_MEM) {" + func_call + "}"
-    func_call_mem_adjust2 = "else                    {" + func_call.replace("hd_data->d_q","hd_data->d_q_qd_u") + "}"
+    func_call_mem_adjust, func_call_mem_adjust2 = gen_launch_pair(func_call, "hd_data->d_q")
     # compule into a set of code
     func_call_code = [func_call_mem_adjust, func_call_mem_adjust2, "gpuErrchkKernel();"]
     # wrap function call in timing (if needed)
@@ -1076,8 +1075,7 @@ def gen_end_effector_pose_gradient_host(self, mode = 0, fixed_target_name = ""):
     self.gen_add_code_line("// then call the kernel")
     func_call = func_call_start + func_call_end
     # add in compressed mem adjusts
-    func_call_mem_adjust = "if (USE_COMPRESSED_MEM) {" + func_call + "}"
-    func_call_mem_adjust2 = "else                    {" + func_call.replace("hd_data->d_q","hd_data->d_q_qd_u") + "}"
+    func_call_mem_adjust, func_call_mem_adjust2 = gen_launch_pair(func_call, "hd_data->d_q")
     # compule into a set of code
     func_call_code = [func_call_mem_adjust, func_call_mem_adjust2, "gpuErrchkKernel();"]
     # wrap function call in timing (if needed)
@@ -2631,8 +2629,7 @@ def gen_end_effector_pose_hessian_host(self, mode = 0, fixed_target_name = ""):
     self.gen_add_code_line("// then call the kernel")
     func_call = func_call_start + func_call_end
     # add in compressed mem adjusts
-    func_call_mem_adjust = "if (USE_COMPRESSED_MEM) {" + func_call + "}"
-    func_call_mem_adjust2 = "else                    {" + func_call.replace("hd_data->d_q","hd_data->d_q_qd_u") + "}"
+    func_call_mem_adjust, func_call_mem_adjust2 = gen_launch_pair(func_call, "hd_data->d_q")
     # compule into a set of code
     func_call_code = [func_call_mem_adjust, func_call_mem_adjust2, "gpuErrchkKernel();"]
     # wrap function call in timing (if needed)

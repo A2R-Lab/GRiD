@@ -1837,6 +1837,9 @@ public:
             throw std::invalid_argument(
                 std::string(name) + ": " + arr + " must be (batch, " + std::to_string(last_dim) + ")");
         int batch = (int)a.shape(0);
+        if (batch < 1)   // W03: an empty batch is an argument error, not a launch error
+            throw std::invalid_argument(std::string(name) + ": " + arr + ": batch must be >= 1 (got "
+                                        + std::to_string(batch) + ")");
         if (batch > max_batch_)
             throw std::invalid_argument(
                 std::string(name) + ": batch=" + std::to_string(batch)
@@ -2092,6 +2095,9 @@ private:
                 + std::to_string(qd.shape(0)) + "x" + std::to_string(qd.shape(1)));
         }
         int batch = (int)q.shape(0);
+        if (batch < 1) {   // W03: an empty batch is an argument error, not a launch error
+            throw std::invalid_argument("q: batch must be >= 1 (got " + std::to_string(batch) + ")");
+        }
         if (batch > max_batch_) {
             throw std::invalid_argument(
                 "batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_)

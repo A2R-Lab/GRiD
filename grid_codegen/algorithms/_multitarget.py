@@ -21,7 +21,7 @@ extraction driven by a baked (anchor, offset) table — same table-driven idiom 
 W1a hessian collapse. Subsumes backlog D (multi-named-EE-target).
 """
 from grid_codegen._constants_arena import _tier2_bytes_line
-from grid_codegen.helpers._code_generation_helpers import gen_emit_host_result_transfer, host_mode_flags, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import gen_launch_pair, gen_emit_host_result_transfer, host_mode_flags, mangle_host_func_defs, wrap_host_single_call_timing
 from grid_codegen.helpers._code_generation_helpers import host_q_compressed_input_transfer_lines
 
 
@@ -463,22 +463,25 @@ def _mt_kernel_workspace_expr():
             " + GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()])")
 
 
-def gen_multi_target_position_kernel(self, batch, single_call_timing=False):
+def _gen_mt_kernel(self, name, out_size, doc, out_doc, ws_doc, single_call_timing):
+    """Kernel body shared by the MT position / position-gradient twins: the
+    same per-tier output placement around `<name>_device`, parametrised on
+    the output name, its per-timestep size and the doc strings."""
     n_pos = self.robot.get_num_pos()
-    out_size = 3 * batch["n"]
+    d_out, s_out = "d_" + name, "s_" + name
     func_params = [
-        "d_multi_target_position is the vector of 3*NUM_MULTI_TARGETS world positions per timestep",
-        "d_workspace is the global workspace arena (TIER_LITE/MINIMAL: the FK scratch spills to the SO band and the output writes DIRECTLY to d_multi_target_position — the d2ee direct-to-output idiom; unused at TIER_SHARED)",
+        d_out + " is the vector of " + out_doc + " per timestep",
+        "d_workspace is the global workspace arena (TIER_LITE/MINIMAL: " + ws_doc + "; unused at TIER_SHARED)",
         "d_q is the vector of joint positions",
         "stride_q is the stride between each q",
         "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)",
         "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)"]
-    func_def_start = "void multi_target_position_kernel(T *d_multi_target_position, unsigned char *d_workspace, const T *d_q, const int stride_q, "
+    func_def_start = "void " + name + "_kernel(T *" + d_out + ", unsigned char *d_workspace, const T *d_q, const int stride_q, "
     func_def_end = "const robotModel<T> *d_robotModel, const int NUM_TIMESTEPS) {"
     func_def = func_def_start + func_def_end
     if single_call_timing:
         func_def = func_def.replace("(", "_single_timing(")
-    self.gen_add_func_doc("Compute batched multi-target world positions", [], func_params, None)
+    self.gen_add_func_doc(doc, [], func_params, None)
     self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
     self.gen_add_code_line("__global__")
     self.gen_add_code_line("__launch_bounds__(tier_max_threads<RESOURCE_TIER>())")
@@ -491,193 +494,114 @@ def gen_multi_target_position_kernel(self, batch, single_call_timing=False):
     # from the per-block workspace slot.
     self.gen_add_code_line("if constexpr (RESOURCE_TIER == TIER_SHARED) {", True)
     self.gen_add_code_line("(void)d_workspace;")
-    self.gen_add_code_line("__shared__ T s_multi_target_position[" + str(out_size) + "];")
+    self.gen_add_code_line("__shared__ T " + s_out + "[" + str(out_size) + "];")
     if not single_call_timing:
         self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
         self.gen_kernel_load_inputs("q", str(n_pos), stride="stride_q")
         self.gen_add_code_line("// compute")
-        self.gen_add_code_line("multi_target_position_device<T, RESOURCE_TIER>(s_multi_target_position, s_q, d_robotModel);")
+        self.gen_add_code_line(name + "_device<T, RESOURCE_TIER>(" + s_out + ", s_q, d_robotModel);")
         self.gen_add_sync()
-        self.gen_kernel_save_result("multi_target_position", str(out_size), stride=str(out_size))
+        self.gen_kernel_save_result(name, str(out_size), stride=str(out_size))
         self.gen_add_end_control_flow()
     else:
         self.gen_kernel_load_inputs("q", str(n_pos))
         self.gen_add_code_line("// compute with NUM_TIMESTEPS as NUM_REPS for timing")
         self.gen_add_code_line("for (int rep = 0; rep < NUM_TIMESTEPS; rep++){", True)
-        self.gen_anti_licm_input_reload("q", str(n_pos), feedback_from="multi_target_position")
-        self.gen_add_code_line("multi_target_position_device<T, RESOURCE_TIER>(s_multi_target_position, s_q, d_robotModel);")
-        self.gen_anti_licm_output_write("multi_target_position")
+        self.gen_anti_licm_input_reload("q", str(n_pos), feedback_from=name)
+        self.gen_add_code_line(name + "_device<T, RESOURCE_TIER>(" + s_out + ", s_q, d_robotModel);")
+        self.gen_anti_licm_output_write(name)
         self.gen_add_end_control_flow()
-        self.gen_kernel_save_result("multi_target_position", str(out_size))
+        self.gen_kernel_save_result(name, str(out_size))
     self.gen_add_end_control_flow()
     self.gen_add_code_line("else {", True)
     if not single_call_timing:
         self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
         self.gen_kernel_load_inputs("q", str(n_pos), stride="stride_q")
         self.gen_add_code_line("// compute straight into this timestep's output slab")
-        self.gen_add_code_line("multi_target_position_device<T, RESOURCE_TIER>(&d_multi_target_position[k*" + str(out_size) + "], s_q, d_robotModel, " + _mt_kernel_workspace_expr() + ");")
+        self.gen_add_code_line(name + "_device<T, RESOURCE_TIER>(&" + d_out + "[k*" + str(out_size) + "], s_q, d_robotModel, " + _mt_kernel_workspace_expr() + ");")
         self.gen_add_sync()
         self.gen_add_end_control_flow()
     else:
         self.gen_kernel_load_inputs("q", str(n_pos))
         self.gen_add_code_line("// compute with NUM_TIMESTEPS as NUM_REPS for timing")
         self.gen_add_code_line("for (int rep = 0; rep < NUM_TIMESTEPS; rep++){", True)
-        self.gen_anti_licm_input_reload("q", str(n_pos), feedback_from="multi_target_position")
-        self.gen_add_code_line("multi_target_position_device<T, RESOURCE_TIER>(d_multi_target_position, s_q, d_robotModel, " + _mt_kernel_workspace_expr() + ");")
-        self.gen_anti_licm_output_write("multi_target_position", load_from_name="d_multi_target_position")
+        self.gen_anti_licm_input_reload("q", str(n_pos), feedback_from=name)
+        self.gen_add_code_line(name + "_device<T, RESOURCE_TIER>(" + d_out + ", s_q, d_robotModel, " + _mt_kernel_workspace_expr() + ");")
+        self.gen_anti_licm_output_write(name, load_from_name=d_out)
         self.gen_add_end_control_flow()
     self.gen_add_end_control_flow()
     self.gen_add_end_function()
+
+
+def _gen_mt_host(self, name, doc, out_size_expr, mode):
+    """Host wrapper shared by the MT twins (q-only compressed transfer, the
+    workspace-clamped launch, result transfer of `out_size_expr` per timestep)."""
+    single_call_timing, compute_only = host_mode_flags(mode)
+    macro = name.upper() + "_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()"
+    func_params = ["hd_data is the packaged input and output pointers",
+                   "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)",
+                   "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)",
+                   "streams are pointers to CUDA streams for async memory transfers (if needed)"]
+    func_def_start = "void " + name + "(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const int num_timesteps,"
+    func_def_end = "                            const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
+    self.gen_add_func_doc(doc, [], func_params, None)
+    self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
+    self.gen_add_code_line("__host__")
+    self.gen_add_code_line(func_def_start)
+    self.gen_add_code_line(func_def_end, True)
+    self.gen_add_code_line("static_assert(KIND == GRID_DATA_ALL || KIND == GRID_DATA_KINEMATICS, \"" + name + " requires all-data or kinematics gridData\");")
+    func_call_start = (name + "_kernel<T, RESOURCE_TIER><<<block_dimms,thread_dimms," + macro + ">>>"
+                       "(hd_data->d_" + name + ",hd_data->d_workspace,hd_data->d_q,stride_q,")
+    func_call_end = "d_robotModel,num_timesteps);"
+    if single_call_timing:
+        func_call_start = func_call_start.replace(name + "_kernel<", name + "_kernel_single_timing<")
+    if not compute_only:
+        self.gen_add_code_lines(host_q_compressed_input_transfer_lines(single_call_timing))
+    else:
+        self.gen_add_code_line("int stride_q = USE_COMPRESSED_MEM ? NUM_JOINTS: 3*NUM_JOINTS;")
+    self.gen_add_code_line("// then call the kernel")
+    func_call = func_call_start + func_call_end
+    func_call_mem_adjust, func_call_mem_adjust2 = gen_launch_pair(func_call, "hd_data->d_q")
+    func_call_code = [func_call_mem_adjust, func_call_mem_adjust2, "gpuErrchkKernel();"]
+    if single_call_timing:
+        wrap_host_single_call_timing(func_call_code)
+    self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"" + name + "\", " + macro + "));")
+    # Spill tiers index d_workspace per BLOCK slot -> clamp the launch grid to
+    # the slot count (no-op in the memory-comfortable default).
+    self.gen_add_workspace_clamped_launch(func_call_code)
+    if not compute_only:
+        gen_emit_host_result_transfer(self, "h_" + name, "d_" + name, out_size_expr, single_call_timing)
+    if single_call_timing:
+        from ..algo_registry import single_call_printf_line
+        self.gen_add_code_line(single_call_printf_line(name))
+    self.gen_add_end_function()
+
+
+def gen_multi_target_position_kernel(self, batch, single_call_timing=False):
+    _gen_mt_kernel(self, "multi_target_position", 3 * batch["n"],
+                   "Compute batched multi-target world positions",
+                   "3*NUM_MULTI_TARGETS world positions",
+                   "the FK scratch spills to the SO band and the output writes DIRECTLY to d_multi_target_position — the d2ee direct-to-output idiom",
+                   single_call_timing)
 
 
 def gen_multi_target_position_host(self, mode=0):
-    single_call_timing, compute_only = host_mode_flags(mode)
-    func_params = ["hd_data is the packaged input and output pointers",
-                   "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)",
-                   "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)",
-                   "streams are pointers to CUDA streams for async memory transfers (if needed)"]
-    func_def_start = "void multi_target_position(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const int num_timesteps,"
-    func_def_end = "                            const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
-    self.gen_add_func_doc("Compute batched multi-target world positions", [], func_params, None)
-    self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    self.gen_add_code_line("__host__")
-    self.gen_add_code_line(func_def_start)
-    self.gen_add_code_line(func_def_end, True)
-    self.gen_add_code_line("static_assert(KIND == GRID_DATA_ALL || KIND == GRID_DATA_KINEMATICS, \"multi_target_position requires all-data or kinematics gridData\");")
-    func_call_start = ("multi_target_position_kernel<T, RESOURCE_TIER><<<block_dimms,thread_dimms,MULTI_TARGET_POSITION_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()>>>"
-                       "(hd_data->d_multi_target_position,hd_data->d_workspace,hd_data->d_q,stride_q,")
-    func_call_end = "d_robotModel,num_timesteps);"
-    if single_call_timing:
-        func_call_start = func_call_start.replace("multi_target_position_kernel<", "multi_target_position_kernel_single_timing<")
-    if not compute_only:
-        self.gen_add_code_lines(host_q_compressed_input_transfer_lines(single_call_timing))
-    else:
-        self.gen_add_code_line("int stride_q = USE_COMPRESSED_MEM ? NUM_JOINTS: 3*NUM_JOINTS;")
-    self.gen_add_code_line("// then call the kernel")
-    func_call = func_call_start + func_call_end
-    func_call_mem_adjust = "if (USE_COMPRESSED_MEM) {" + func_call + "}"
-    func_call_mem_adjust2 = "else                    {" + func_call.replace("hd_data->d_q", "hd_data->d_q_qd_u") + "}"
-    func_call_code = [func_call_mem_adjust, func_call_mem_adjust2, "gpuErrchkKernel();"]
-    if single_call_timing:
-        wrap_host_single_call_timing(func_call_code)
-    self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"multi_target_position\", MULTI_TARGET_POSITION_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
-    # Spill tiers index d_workspace per BLOCK slot -> clamp the launch grid to
-    # the slot count (no-op in the memory-comfortable default).
-    self.gen_add_workspace_clamped_launch(func_call_code)
-    if not compute_only:
-        gen_emit_host_result_transfer(self, "h_multi_target_position", "d_multi_target_position", "3*NUM_MULTI_TARGETS*", single_call_timing)
-    if single_call_timing:
-        from ..algo_registry import single_call_printf_line
-        self.gen_add_code_line(single_call_printf_line("multi_target_position"))
-    self.gen_add_end_function()
+    _gen_mt_host(self, "multi_target_position", "Compute batched multi-target world positions",
+                 "3*NUM_MULTI_TARGETS*", mode)
 
 
 def gen_multi_target_position_gradient_kernel(self, batch, single_call_timing=False):
-    n_pos = self.robot.get_num_pos()
-    nv = self.robot.get_num_vel()
-    out_size = 3 * nv * batch["n"]
-    func_params = [
-        "d_multi_target_position_gradient is the vector of 3*NUM_VEL*NUM_MULTI_TARGETS position gradients per timestep",
-        "d_q is the vector of joint positions",
-        "stride_q is the stride between each q",
-        "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)",
-        "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)"]
-    func_def_start = "void multi_target_position_gradient_kernel(T *d_multi_target_position_gradient, unsigned char *d_workspace, const T *d_q, const int stride_q, "
-    func_def_end = "const robotModel<T> *d_robotModel, const int NUM_TIMESTEPS) {"
-    func_def = func_def_start + func_def_end
-    if single_call_timing:
-        func_def = func_def.replace("(", "_single_timing(")
-    func_params.insert(1, "d_workspace is the global workspace arena (TIER_LITE/MINIMAL: the Xworld|Jv|Jw|ro scratch spills to the SO band and the output writes DIRECTLY to d_multi_target_position_gradient; unused at TIER_SHARED)")
-    self.gen_add_func_doc("Compute batched multi-target world-position gradient", [], func_params, None)
-    self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    self.gen_add_code_line("__global__")
-    self.gen_add_code_line("__launch_bounds__(tier_max_threads<RESOURCE_TIER>())")
-    self.gen_add_code_line(func_def, True)
-    self.gen_add_code_line("__shared__ T s_q[" + str(n_pos) + "];")
-    # Per-tier output placement — see gen_multi_target_position_kernel.
-    self.gen_add_code_line("if constexpr (RESOURCE_TIER == TIER_SHARED) {", True)
-    self.gen_add_code_line("(void)d_workspace;")
-    self.gen_add_code_line("__shared__ T s_multi_target_position_gradient[" + str(out_size) + "];")
-    if not single_call_timing:
-        self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
-        self.gen_kernel_load_inputs("q", str(n_pos), stride="stride_q")
-        self.gen_add_code_line("// compute")
-        self.gen_add_code_line("multi_target_position_gradient_device<T, RESOURCE_TIER>(s_multi_target_position_gradient, s_q, d_robotModel);")
-        self.gen_add_sync()
-        self.gen_kernel_save_result("multi_target_position_gradient", str(out_size), stride=str(out_size))
-        self.gen_add_end_control_flow()
-    else:
-        self.gen_kernel_load_inputs("q", str(n_pos))
-        self.gen_add_code_line("// compute with NUM_TIMESTEPS as NUM_REPS for timing")
-        self.gen_add_code_line("for (int rep = 0; rep < NUM_TIMESTEPS; rep++){", True)
-        self.gen_anti_licm_input_reload("q", str(n_pos), feedback_from="multi_target_position_gradient")
-        self.gen_add_code_line("multi_target_position_gradient_device<T, RESOURCE_TIER>(s_multi_target_position_gradient, s_q, d_robotModel);")
-        self.gen_anti_licm_output_write("multi_target_position_gradient")
-        self.gen_add_end_control_flow()
-        self.gen_kernel_save_result("multi_target_position_gradient", str(out_size))
-    self.gen_add_end_control_flow()
-    self.gen_add_code_line("else {", True)
-    if not single_call_timing:
-        self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
-        self.gen_kernel_load_inputs("q", str(n_pos), stride="stride_q")
-        self.gen_add_code_line("// compute straight into this timestep's output slab")
-        self.gen_add_code_line("multi_target_position_gradient_device<T, RESOURCE_TIER>(&d_multi_target_position_gradient[k*" + str(out_size) + "], s_q, d_robotModel, " + _mt_kernel_workspace_expr() + ");")
-        self.gen_add_sync()
-        self.gen_add_end_control_flow()
-    else:
-        self.gen_kernel_load_inputs("q", str(n_pos))
-        self.gen_add_code_line("// compute with NUM_TIMESTEPS as NUM_REPS for timing")
-        self.gen_add_code_line("for (int rep = 0; rep < NUM_TIMESTEPS; rep++){", True)
-        self.gen_anti_licm_input_reload("q", str(n_pos), feedback_from="multi_target_position_gradient")
-        self.gen_add_code_line("multi_target_position_gradient_device<T, RESOURCE_TIER>(d_multi_target_position_gradient, s_q, d_robotModel, " + _mt_kernel_workspace_expr() + ");")
-        self.gen_anti_licm_output_write("multi_target_position_gradient", load_from_name="d_multi_target_position_gradient")
-        self.gen_add_end_control_flow()
-    self.gen_add_end_control_flow()
-    self.gen_add_end_function()
+    _gen_mt_kernel(self, "multi_target_position_gradient", 3 * self.robot.get_num_vel() * batch["n"],
+                   "Compute batched multi-target world-position gradient",
+                   "3*NUM_VEL*NUM_MULTI_TARGETS position gradients",
+                   "the Xworld|Jv|Jw|ro scratch spills to the SO band and the output writes DIRECTLY to d_multi_target_position_gradient",
+                   single_call_timing)
 
 
 def gen_multi_target_position_gradient_host(self, mode=0):
-    single_call_timing, compute_only = host_mode_flags(mode)
-    func_params = ["hd_data is the packaged input and output pointers",
-                   "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)",
-                   "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)",
-                   "streams are pointers to CUDA streams for async memory transfers (if needed)"]
-    func_def_start = "void multi_target_position_gradient(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const int num_timesteps,"
-    func_def_end = "                            const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
-    self.gen_add_func_doc("Compute batched multi-target world-position gradient", [], func_params, None)
-    self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    self.gen_add_code_line("__host__")
-    self.gen_add_code_line(func_def_start)
-    self.gen_add_code_line(func_def_end, True)
-    self.gen_add_code_line("static_assert(KIND == GRID_DATA_ALL || KIND == GRID_DATA_KINEMATICS, \"multi_target_position_gradient requires all-data or kinematics gridData\");")
-    func_call_start = ("multi_target_position_gradient_kernel<T, RESOURCE_TIER><<<block_dimms,thread_dimms,MULTI_TARGET_POSITION_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()>>>"
-                       "(hd_data->d_multi_target_position_gradient,hd_data->d_workspace,hd_data->d_q,stride_q,")
-    func_call_end = "d_robotModel,num_timesteps);"
-    if single_call_timing:
-        func_call_start = func_call_start.replace("multi_target_position_gradient_kernel<", "multi_target_position_gradient_kernel_single_timing<")
-    if not compute_only:
-        self.gen_add_code_lines(host_q_compressed_input_transfer_lines(single_call_timing))
-    else:
-        self.gen_add_code_line("int stride_q = USE_COMPRESSED_MEM ? NUM_JOINTS: 3*NUM_JOINTS;")
-    self.gen_add_code_line("// then call the kernel")
-    func_call = func_call_start + func_call_end
-    func_call_mem_adjust = "if (USE_COMPRESSED_MEM) {" + func_call + "}"
-    func_call_mem_adjust2 = "else                    {" + func_call.replace("hd_data->d_q", "hd_data->d_q_qd_u") + "}"
-    func_call_code = [func_call_mem_adjust, func_call_mem_adjust2, "gpuErrchkKernel();"]
-    if single_call_timing:
-        wrap_host_single_call_timing(func_call_code)
-    self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"multi_target_position_gradient\", MULTI_TARGET_POSITION_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
-    # Spill tiers index d_workspace per BLOCK slot -> clamp the launch grid to
-    # the slot count (no-op in the memory-comfortable default).
-    self.gen_add_workspace_clamped_launch(func_call_code)
-    if not compute_only:
-        gen_emit_host_result_transfer(self, "h_multi_target_position_gradient", "d_multi_target_position_gradient", "3*NUM_VEL*NUM_MULTI_TARGETS*", single_call_timing)
-    if single_call_timing:
-        from ..algo_registry import single_call_printf_line
-        self.gen_add_code_line(single_call_printf_line("multi_target_position_gradient"))
-    self.gen_add_end_function()
+    _gen_mt_host(self, "multi_target_position_gradient", "Compute batched multi-target world-position gradient",
+                 "3*NUM_VEL*NUM_MULTI_TARGETS*", mode)
 
 
 def gen_multi_target_position_bench(self, batch):

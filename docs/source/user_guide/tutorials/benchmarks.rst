@@ -14,7 +14,7 @@ baselines (Pinocchio, MJX, Frax, BARD) and against historical GRiD
 reference points. BARD (PyTorch) is timed on both torch CPU and CUDA, so
 it contributes ``bard_cpu`` / ``bard_gpu`` columns to the report. The
 harness lives under
-`test/benchmarks/ <https://github.com/A2R-Lab/GRiD/tree/modernizing-tests/test/benchmarks>`_.
+`test/benchmarks/ <https://github.com/A2R-Lab/GRiD/tree/main/test/benchmarks>`_.
 
 Quick start
 -----------
@@ -200,7 +200,7 @@ adding ``config/launch_configs/<robot>/<gpu>.json`` (one file per (robot, GPU)) 
 everyone defaults to fast launches on your hardware. No code changes are
 needed — codegen auto-discovers the file. See
 `config/launch_configs/README.md
-<https://github.com/A2R-Lab/GRiD/blob/modernizing-tests/config/launch_configs/README.md>`_
+<https://github.com/A2R-Lab/GRiD/blob/main/config/launch_configs/README.md>`_
 for the full contribution checklist (GPU model, driver / CUDA version,
 robot DoF / base to include in the PR description).
 
@@ -349,11 +349,11 @@ See also
 --------
 
 * `test/benchmarks/README.md
-  <https://github.com/A2R-Lab/GRiD/blob/modernizing-tests/test/benchmarks/README.md>`_
+  <https://github.com/A2R-Lab/GRiD/blob/main/test/benchmarks/README.md>`_
   — full bench-harness reference (Pinocchio / MJX / Frax / BARD setup, etc.).
 * To run a full sweep yourself, use the harness under
   `test/benchmarks/
-  <https://github.com/A2R-Lab/GRiD/tree/modernizing-tests/test/benchmarks>`_;
+  <https://github.com/A2R-Lab/GRiD/tree/main/test/benchmarks>`_;
   results are written under ``test/benchmarks/results/`` locally
   (hardware-specific, e.g. sm_120).
 * :doc:`cuda_support_status` — currently exercised CUDA paths.

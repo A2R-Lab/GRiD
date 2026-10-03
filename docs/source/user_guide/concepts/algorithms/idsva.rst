@@ -45,7 +45,7 @@ The reference implementations live in
 ``idsva_so`` dispatcher. The codegen for the corresponding CUDA kernels
 lives in
 `grid_codegen/algorithms/_idsva_so.py
-<https://github.com/A2R-Lab/GRiD/tree/modernizing-tests/grid_codegen>`__.
+<https://github.com/A2R-Lab/GRiD/tree/main/grid_codegen>`__.
 
 Example Usage
 -------------

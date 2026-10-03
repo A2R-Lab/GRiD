@@ -9,7 +9,7 @@ wrapper together (see the :doc:`../../index` quick-start for the extras).
 
 .. code-block:: shell
 
-    git clone --recursive --branch modernizing-tests https://github.com/A2R-Lab/GRiD.git
+    git clone --recursive https://github.com/A2R-Lab/GRiD.git
     cd GRiD
 
 If you already cloned without ``--recursive``, populate the submodules with
@@ -20,9 +20,8 @@ Source installation
 
 Use an **editable install from a Git checkout**. The generator, wrapper
 template, launch profiles, GLASS headers and model assets are resolved
-relative to the repository root, so keep the checkout in place. The commands
-above select ``modernizing-tests``, which contains the implementation
-documented here.
+relative to the repository root, so keep the checkout in place. ``main`` is
+the branch documented here.
 
 What each activity needs:
 
@@ -46,7 +45,7 @@ What each activity needs:
        matching your GPU arch** (the extras pin the CPU packages only; the
        CUDA wheel is your choice, e.g. ``pip install "jax[cuda12]"`` or
        ``"jax[cuda13]"``, and a ``cu1xx`` torch wheel — see the
-       `bindings README <https://github.com/A2R-Lab/GRiD/blob/modernizing-tests/bindings/README.md>`_).
+       `bindings README <https://github.com/A2R-Lab/GRiD/blob/main/bindings/README.md>`_).
        A missing framework, or a CPU-only jax, is reported at
        ``register_robot`` time, not deep inside a call.
    * - Equivalence tests / the Pinocchio oracle / docs

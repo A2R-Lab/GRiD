@@ -126,7 +126,7 @@ html_context = {
     "display_github": True,
     "github_user": "A2R-Lab",
     "github_repo": "GRiD",
-    "github_version": os.environ.get("GRID_DOCS_REF", "modernizing-tests"),
+    "github_version": os.environ.get("GRID_DOCS_REF", "main"),
     "conf_py_path": "/source/",
     "doc_path": "docs/source"
 }
