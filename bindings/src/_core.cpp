@@ -39,6 +39,38 @@
 #include <cstdlib>
 #include <utility>
 #include <tuple>
+#include <vector>
+
+// ── allocate-once host round trip (2026-10-01) ────────────────────────────────
+// Generated methods flagged py_out_param in abi_specs take an optional caller-
+// owned `out` (shape (batch, cols), the .so's dtype, C-contiguous, writeable) that
+// the C ABI fills directly — pair with Runner.pinned_empty for a page-locked
+// destination. Validated, never copied, returned as-is; None allocates as before.
+template <typename CT>
+static pybind11::array_t<CT> grid_py_out(pybind11::object out_opt, int batch, int cols, const char* name) {
+    namespace py = pybind11;
+    if (out_opt.is_none()) return py::array_t<CT>({batch, cols});
+    if (!py::isinstance<py::array>(out_opt))
+        throw std::invalid_argument(std::string(name) + ": out must be a numpy array");
+    auto out = py::reinterpret_borrow<py::array>(out_opt);
+    if (!out.dtype().is(py::dtype::of<CT>()))
+        throw std::invalid_argument(std::string(name) + ": out has the wrong dtype for this robot .so");
+    if (out.ndim() != 2 || out.shape(0) != batch || out.shape(1) != cols)
+        throw std::invalid_argument(std::string(name) + ": out must have shape (" + std::to_string(batch)
+                                    + ", " + std::to_string(cols) + ")");
+    if (!(out.flags() & py::array::c_style) || !out.writeable())
+        throw std::invalid_argument(std::string(name) + ": out must be C-contiguous and writeable");
+    return py::reinterpret_borrow<py::array_t<CT>>(out);
+}
+
+// Matrix-shaped rows (the gradients): None allocates (batch, rows, cols) as before; a
+// caller-owned `out` is the FLAT per-item buffer (batch, rows*cols) in the C ABI's raw
+// layout — the handle returns the public (batch, rows, cols) array as a view of it.
+template <typename CT>
+static pybind11::array_t<CT> grid_py_out(pybind11::object out_opt, int batch, int rows, int cols, const char* name) {
+    if (out_opt.is_none()) return pybind11::array_t<CT>({batch, rows, cols});
+    return grid_py_out<CT>(out_opt, batch, rows * cols, name);
+}
 
 namespace py = pybind11;
 
@@ -254,6 +286,10 @@ public:
         fn_id_regressor_mujoco_ = reinterpret_cast<fn_dyn_no_fext_t>(opt_sym("grid_rbd_inverse_dynamics_regressor_mujoco"));  // floating only
         fn_fdsva_so_         = reinterpret_cast<fn_dyn_no_fext_t>  (require_sym("grid_rbd_fdsva_so"));
         fn_fdsva_so_mujoco_  = reinterpret_cast<fn_dyn_no_fext_t>  (opt_sym("grid_rbd_fdsva_so_mujoco"));  // floating only
+        // page-locked host buffers (2026-10-01; optional: an older .so lacks them)
+        fn_pinned_alloc_ = reinterpret_cast<fn_pinned_alloc_t>(opt_sym("grid_rbd_pinned_alloc"));
+        fn_pinned_free_  = reinterpret_cast<fn_pinned_free_t>(opt_sym("grid_rbd_pinned_free"));
+        fn_is_pinned_    = reinterpret_cast<fn_is_pinned_t>(opt_sym("grid_rbd_is_pinned"));
         fn_integrator_       = reinterpret_cast<fn_integrator_t>(require_sym("grid_rbd_integrator"));
         fn_integrator_mujoco_ = reinterpret_cast<fn_integrator_t>(opt_sym("grid_rbd_integrator_mujoco"));  // floating only
         fn_integrator_grad_  = reinterpret_cast<fn_integrator_t>(require_sym("grid_rbd_integrator_gradient"));
@@ -587,6 +623,36 @@ public:
 
 
 
+    // ── allocate-once host round trip (2026-10-01) ──────────────────────────
+    // pinned_empty(shape) -> page-locked numpy array (owned by the array; freed
+    // through the .so's cudaFreeHost when it is collected; the array keeps this
+    // Runner — and so the dlopened .so — alive). Pass it as `out=` to the
+    // py_out_param methods so the host wrapper's D2H lands in it at the PCIe rate.
+    py::array_t<CT> pinned_empty(std::vector<ssize_t> shape) {
+        if (!fn_pinned_alloc_ || !fn_pinned_free_)
+            throw std::runtime_error("pinned_empty: this robot .so predates the pinned-host exports; "
+                                     "re-register with force_rebuild=True");
+        size_t n = 1;
+        for (auto s : shape) {
+            if (s < 0) throw std::invalid_argument("pinned_empty: negative dimension");
+            n *= (size_t)s;
+        }
+        void* p = fn_pinned_alloc_(n * sizeof(CT) + (n == 0 ? 1 : 0));
+        if (!p) throw std::runtime_error("pinned_empty: cudaMallocHost failed (page-locked pool exhausted?) — "
+                                         "use numpy.empty for this buffer");
+        struct Block { void* p; fn_pinned_free_t free; py::object keepalive; };
+        auto* blk = new Block{p, fn_pinned_free_, py::cast(this)};
+        py::capsule owner(blk, [](void* raw) {
+            auto* b = static_cast<Block*>(raw);
+            b->free(b->p);
+            delete b;  // drops the Runner reference last
+        });
+        return py::array_t<CT>(shape, static_cast<CT*>(p), owner);
+    }
+    bool is_pinned(py::array arr) const {
+        return fn_is_pinned_ != nullptr && arr.size() > 0 && fn_is_pinned_(arr.data()) == 1;
+    }
+
     // ── BEGIN GENERATED PYBIND METHOD BODIES (grid_codegen/core_body_gen.py — do not hand-edit) ──
     // Regenerate: .venv/bin/python -m grid_codegen.core_body_gen
     // Table: grid_codegen/abi_specs.py (ABI_SPECS: inputs/py_out_dims/
@@ -784,8 +850,8 @@ public:
         return out;
     }
 
-    // inverse_dynamics_gradient(q, qd, qdd_opt, gravity, f_ext_opt) -> (batch, num_vel_, 2 * num_vel_)
-    py::array_t<CT> inverse_dynamics_gradient(arr_t q, arr_t qd, py::object qdd_opt, CT gravity, py::object f_ext_opt)
+    // inverse_dynamics_gradient(q, qd, qdd_opt, gravity, f_ext_opt, out_opt) -> (batch, num_vel_, 2 * num_vel_)
+    py::array_t<CT> inverse_dynamics_gradient(arr_t q, arr_t qd, py::object qdd_opt, CT gravity, py::object f_ext_opt, py::object out_opt)
     {
         int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
         const CT* qdd_ptr = nullptr;
@@ -796,7 +862,7 @@ public:
         }
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
-        py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
+        py::array_t<CT> out = grid_py_out<CT>(out_opt, batch, num_vel_, 2 * num_vel_, "inverse_dynamics_gradient");
         int rc = fn_inverse_dynamics_gradient_(ctx_id_, q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "inverse_dynamics_gradient",
             "inverse_dynamics_gradient not built into this robot .so — add "
@@ -806,8 +872,8 @@ public:
     }
 
     bool has_inverse_dynamics_gradient_mujoco() const { return fn_inverse_dynamics_gradient_mujoco_ != nullptr; }
-    // inverse_dynamics_gradient_mujoco(q, qd, qdd, gravity, f_ext_opt) -> (batch, num_vel_, 2 * num_vel_)
-    py::array_t<CT> inverse_dynamics_gradient_mujoco(arr_t q, arr_t qd, arr_t qdd, CT gravity, py::object f_ext_opt)
+    // inverse_dynamics_gradient_mujoco(q, qd, qdd, gravity, f_ext_opt, out_opt) -> (batch, num_vel_, 2 * num_vel_)
+    py::array_t<CT> inverse_dynamics_gradient_mujoco(arr_t q, arr_t qd, arr_t qdd, CT gravity, py::object f_ext_opt, py::object out_opt)
     {
         if (!fn_inverse_dynamics_gradient_mujoco_) throw std::runtime_error(
             "inverse_dynamics_gradient_mujoco unavailable: floating-base .so only");
@@ -815,21 +881,21 @@ public:
         check_array_2d(qdd, batch, num_vel_, "qdd");
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
-        py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
+        py::array_t<CT> out = grid_py_out<CT>(out_opt, batch, num_vel_, 2 * num_vel_, "inverse_dynamics_gradient_mujoco");
         int rc = fn_inverse_dynamics_gradient_mujoco_(ctx_id_, q.data(), qd.data(), qdd.data(), out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "inverse_dynamics_gradient_mujoco",
             nullptr));
         return out;
     }
 
-    // forward_dynamics_gradient(q, qd, u, gravity, f_ext_opt) -> (batch, num_vel_, 2 * num_vel_)
-    py::array_t<CT> forward_dynamics_gradient(arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt)
+    // forward_dynamics_gradient(q, qd, u, gravity, f_ext_opt, out_opt) -> (batch, num_vel_, 2 * num_vel_)
+    py::array_t<CT> forward_dynamics_gradient(arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt, py::object out_opt)
     {
         int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
         check_array_2d(u, batch, num_vel_, "u");
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
-        py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
+        py::array_t<CT> out = grid_py_out<CT>(out_opt, batch, num_vel_, 2 * num_vel_, "forward_dynamics_gradient");
         int rc = fn_fd_grad_(ctx_id_, q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "forward_dynamics_gradient",
             "forward_dynamics_gradient not built into this robot .so — add "
@@ -839,8 +905,8 @@ public:
     }
 
     bool has_forward_dynamics_gradient_mujoco() const { return fn_fd_grad_mujoco_ != nullptr; }
-    // forward_dynamics_gradient_mujoco(q, qd, u, gravity, f_ext_opt) -> (batch, num_vel_, 2 * num_vel_)
-    py::array_t<CT> forward_dynamics_gradient_mujoco(arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt)
+    // forward_dynamics_gradient_mujoco(q, qd, u, gravity, f_ext_opt, out_opt) -> (batch, num_vel_, 2 * num_vel_)
+    py::array_t<CT> forward_dynamics_gradient_mujoco(arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt, py::object out_opt)
     {
         if (!fn_fd_grad_mujoco_) throw std::runtime_error(
             "forward_dynamics_gradient_mujoco unavailable: floating-base .so only");
@@ -848,15 +914,15 @@ public:
         check_array_2d(u, batch, num_vel_, "u");
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
-        py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
+        py::array_t<CT> out = grid_py_out<CT>(out_opt, batch, num_vel_, 2 * num_vel_, "forward_dynamics_gradient_mujoco");
         int rc = fn_fd_grad_mujoco_(ctx_id_, q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "forward_dynamics_gradient_mujoco",
             nullptr));
         return out;
     }
 
-    // idsva_so(q, qd, qdd_opt, second_order_tensor_size, gravity) -> (batch, second_order_tensor_size)
-    py::array_t<CT> idsva_so(arr_t q, arr_t qd, py::object qdd_opt, int second_order_tensor_size, CT gravity)
+    // idsva_so(q, qd, qdd_opt, second_order_tensor_size, gravity, out_opt) -> (batch, second_order_tensor_size)
+    py::array_t<CT> idsva_so(arr_t q, arr_t qd, py::object qdd_opt, int second_order_tensor_size, CT gravity, py::object out_opt)
     {
         int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
         const CT* qdd_ptr = nullptr;
@@ -865,7 +931,7 @@ public:
             check_array_2d(qdd, batch, num_vel_, "qdd");
             qdd_ptr = qdd.data();
         }
-        py::array_t<CT> out({batch, second_order_tensor_size});
+        py::array_t<CT> out = grid_py_out<CT>(out_opt, batch, second_order_tensor_size, "idsva_so");
         int rc = fn_idsva_so_(ctx_id_, q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "idsva_so",
             "idsva_so not built into this robot .so — add 'idsva_so_body_frame' "
@@ -874,8 +940,8 @@ public:
     }
 
     bool has_idsva_so_mujoco() const { return fn_idsva_so_mujoco_ != nullptr; }
-    // idsva_so_mujoco(q, qd, qdd_opt, second_order_tensor_size, gravity) -> (batch, second_order_tensor_size)
-    py::array_t<CT> idsva_so_mujoco(arr_t q, arr_t qd, py::object qdd_opt, int second_order_tensor_size, CT gravity)
+    // idsva_so_mujoco(q, qd, qdd_opt, second_order_tensor_size, gravity, out_opt) -> (batch, second_order_tensor_size)
+    py::array_t<CT> idsva_so_mujoco(arr_t q, arr_t qd, py::object qdd_opt, int second_order_tensor_size, CT gravity, py::object out_opt)
     {
         if (!fn_idsva_so_mujoco_) throw std::runtime_error(
             "idsva_so_mujoco unavailable: floating-base .so only");
@@ -886,19 +952,19 @@ public:
             check_array_2d(qdd, batch, num_vel_, "qdd");
             qdd_ptr = qdd.data();
         }
-        py::array_t<CT> out({batch, second_order_tensor_size});
+        py::array_t<CT> out = grid_py_out<CT>(out_opt, batch, second_order_tensor_size, "idsva_so_mujoco");
         int rc = fn_idsva_so_mujoco_(ctx_id_, q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "idsva_so_mujoco",
             nullptr));
         return out;
     }
 
-    // fdsva_so(q, qd, u, second_order_tensor_size, gravity) -> (batch, second_order_tensor_size)
-    py::array_t<CT> fdsva_so(arr_t q, arr_t qd, arr_t u, int second_order_tensor_size, CT gravity)
+    // fdsva_so(q, qd, u, second_order_tensor_size, gravity, out_opt) -> (batch, second_order_tensor_size)
+    py::array_t<CT> fdsva_so(arr_t q, arr_t qd, arr_t u, int second_order_tensor_size, CT gravity, py::object out_opt)
     {
         int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
         check_array_2d(u, batch, num_vel_, "u");
-        py::array_t<CT> out({batch, second_order_tensor_size});
+        py::array_t<CT> out = grid_py_out<CT>(out_opt, batch, second_order_tensor_size, "fdsva_so");
         int rc = fn_fdsva_so_(ctx_id_, q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "fdsva_so",
             "fdsva_so not built into this robot .so — add 'fdsva_so' to "
@@ -907,14 +973,14 @@ public:
     }
 
     bool has_fdsva_so_mujoco() const { return fn_fdsva_so_mujoco_ != nullptr; }
-    // fdsva_so_mujoco(q, qd, u, second_order_tensor_size, gravity) -> (batch, second_order_tensor_size)
-    py::array_t<CT> fdsva_so_mujoco(arr_t q, arr_t qd, arr_t u, int second_order_tensor_size, CT gravity)
+    // fdsva_so_mujoco(q, qd, u, second_order_tensor_size, gravity, out_opt) -> (batch, second_order_tensor_size)
+    py::array_t<CT> fdsva_so_mujoco(arr_t q, arr_t qd, arr_t u, int second_order_tensor_size, CT gravity, py::object out_opt)
     {
         if (!fn_fdsva_so_mujoco_) throw std::runtime_error(
             "fdsva_so_mujoco unavailable: floating-base .so only");
         int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
         check_array_2d(u, batch, num_vel_, "u");
-        py::array_t<CT> out({batch, second_order_tensor_size});
+        py::array_t<CT> out = grid_py_out<CT>(out_opt, batch, second_order_tensor_size, "fdsva_so_mujoco");
         int rc = fn_fdsva_so_mujoco_(ctx_id_, q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "fdsva_so_mujoco",
             nullptr));
@@ -2131,6 +2197,12 @@ private:
     fn_q_out_t    fn_ee_pose_hessian_mujoco_ = nullptr;  // floating-base mjx EE-pose hessian (optional)
     fn_fk_batched_t fn_fk_batched_ = nullptr;
     fn_dyn_no_fext_t fn_idsva_so_ = nullptr;
+    using fn_pinned_alloc_t = void* (*)(size_t);
+    using fn_pinned_free_t  = void (*)(void*);
+    using fn_is_pinned_t    = int (*)(const void*);
+    fn_pinned_alloc_t fn_pinned_alloc_ = nullptr;
+    fn_pinned_free_t  fn_pinned_free_  = nullptr;
+    fn_is_pinned_t    fn_is_pinned_    = nullptr;
     fn_dyn_no_fext_t fn_idsva_so_mujoco_ = nullptr;  // floating mjx (optional)
     fn_dyn_no_fext_t fn_id_regressor_ = nullptr;         // (q, qd, qdd) -> Y (optional)
     fn_dyn_no_fext_t fn_id_regressor_mujoco_ = nullptr;  // floating mjx (optional)
@@ -2359,30 +2431,38 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def("inverse_dynamics_gradient", &R::inverse_dynamics_gradient,
              py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
              py::arg("gravity") = -9.81f,
-             py::arg("f_ext") = py::none())
+             py::arg("f_ext") = py::none(),
+             py::arg("out") = py::none())
         .def_property_readonly("has_inverse_dynamics_gradient_mujoco", &R::has_inverse_dynamics_gradient_mujoco)
         .def("inverse_dynamics_gradient_mujoco", &R::inverse_dynamics_gradient_mujoco,
              py::arg("q"), py::arg("qd"), py::arg("qdd"),
-             py::arg("gravity") = -9.81f, py::arg("f_ext") = py::none())
+             py::arg("gravity") = -9.81f, py::arg("f_ext") = py::none(),
+             py::arg("out") = py::none())
         .def("forward_dynamics_gradient", &R::forward_dynamics_gradient,
              py::arg("q"), py::arg("qd"), py::arg("u"),
              py::arg("gravity") = -9.81f,
-             py::arg("f_ext") = py::none())
+             py::arg("f_ext") = py::none(),
+             py::arg("out") = py::none())
         .def_property_readonly("has_forward_dynamics_gradient_mujoco", &R::has_forward_dynamics_gradient_mujoco)
         .def("forward_dynamics_gradient_mujoco", &R::forward_dynamics_gradient_mujoco,
              py::arg("q"), py::arg("qd"), py::arg("u"),
-             py::arg("gravity") = -9.81f, py::arg("f_ext") = py::none())
+             py::arg("gravity") = -9.81f, py::arg("f_ext") = py::none(),
+             py::arg("out") = py::none())
         .def("end_effector_pose_hessian", &R::end_effector_pose_hessian,
              py::arg("q"))
+        .def("pinned_empty", &R::pinned_empty, py::arg("shape"))
+        .def("is_pinned", &R::is_pinned, py::arg("arr"))
         .def("idsva_so", &R::idsva_so,
              py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
              py::arg("second_order_tensor_size"),
-             py::arg("gravity") = -9.81f)
+             py::arg("gravity") = -9.81f,
+             py::arg("out") = py::none())
         .def_property_readonly("has_idsva_so_mujoco", &R::has_idsva_so_mujoco)
         .def("idsva_so_mujoco", &R::idsva_so_mujoco,
              py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
              py::arg("second_order_tensor_size"),
-             py::arg("gravity") = -9.81f)
+             py::arg("gravity") = -9.81f,
+             py::arg("out") = py::none())
         .def("inverse_dynamics_regressor", &R::inverse_dynamics_regressor,
              py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
              py::arg("gravity") = -9.81f)
@@ -2393,12 +2473,14 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def("fdsva_so", &R::fdsva_so,
              py::arg("q"), py::arg("qd"), py::arg("u"),
              py::arg("second_order_tensor_size"),
-             py::arg("gravity") = -9.81f)
+             py::arg("gravity") = -9.81f,
+             py::arg("out") = py::none())
         .def_property_readonly("has_fdsva_so_mujoco", &R::has_fdsva_so_mujoco)
         .def("fdsva_so_mujoco", &R::fdsva_so_mujoco,
              py::arg("q"), py::arg("qd"), py::arg("u"),
              py::arg("second_order_tensor_size"),
-             py::arg("gravity") = -9.81f)
+             py::arg("gravity") = -9.81f,
+             py::arg("out") = py::none())
         .def("integrator", &R::integrator,
              py::arg("q"), py::arg("qd"), py::arg("u"),
              py::arg("dt"), py::arg("it") = 0, py::arg("gravity") = -9.81f)

@@ -82,6 +82,17 @@ Ship the cache dir (`grid_rbd.default_cache_dir()`, default `~/.cache/grid-rbd/`
   kernels. An un-built method raises a clear "add to `algorithm_list` and rebuild" error, never a
   segfault.
 
+## Host arrays (numpy): allocate once, reuse
+
+For the big outputs (`idsva_so` / `fdsva_so`), allocate a page-locked buffer once with
+`h.pinned_empty((B, 4*h.num_vel**3))` and pass it as `out=` on every call: the device→host
+copy lands in it directly (no extra host memcpy) and the returned tensors are views of it —
+~40 ms vs 120 ms per call on g1 @1024 (702 MB), measured 2026-10-01.
+
+`inverse_dynamics_gradient` / `forward_dynamics_gradient` take `out=` as well: allocate
+`h.pinned_empty((B, 2*h.num_vel**2))` once; the returned `(B, NV, 2NV)` array is a view of
+it (column-major per item, so not C-contiguous) — no per-call allocation, no host re-layout.
+
 ## The fast path (JAX): stay resident, compose, differentiate
 
 ```python
@@ -110,6 +121,9 @@ batched = jax.vmap(step)(qb, qdb, ub)            # batch with no Python loop
   [`jax_gpu_resident.py`](jax_gpu_resident.py) for a timed comparison vs the host-roundtrip
   anti-pattern (often 10×+).
 - `donate_argnums=` lets XLA reuse an input buffer in place.
+- **Need numpy at the end?** `gj.to_host(outputs)` (array or pytree) moves through XLA's
+  `pinned_host` memory kind and returns zero-copy numpy views — 41 ms vs 141 ms for
+  `jax.device_get` on a 702 MB `idsva_so` output (g1 @1024, measured 2026-10-01).
 
 ## The fast path (PyTorch): autograd + CUDA-Graphs
 
@@ -126,6 +140,11 @@ out = g(q_new, qd_new, u_new)                    # memcpy-in + replay + memcpy-o
 `capture()` collapses dozens of per-kernel launches into a single graph replay — a large win
 in tight MPC / RL loops where launch overhead dominates. See
 [`torch_cuda_graphs.py`](torch_cuda_graphs.py).
+
+**Host round trips, allocate-once style:** `.cpu()` on a big output is a pageable staged copy.
+Allocate page-locked mirrors once — `host = gt.pinned_host_like(g.static_out)` — and reuse them:
+`g.replay_into(host)` (graph) or `gt.copy_to_host(host, out)` (eager). 39.5 ms vs 238 ms for
+`.cpu()` on g1 `idsva_so` @1024 (702 MB), measured 2026-10-01.
 
 ## Zero-copy interop (share the GPU pointer)
 

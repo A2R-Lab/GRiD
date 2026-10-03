@@ -48,6 +48,23 @@ using T = float;
 #endif
 static constexpr int kMaxBatch = GRID_RBD_MAX_BATCH;
 
+// ─── mirror retarget for the allocate-once numpy round trip (2026-10-01) ──────
+// The generated grid::<op> host wrappers copy their output D2H into the pinned
+// g_data->h_<out> mirror; the C ABI used to std::memcpy that into the caller's
+// array (a second full-size host copy: 28 ms of a 67 ms g1 idsva_so@1024 call).
+// A body that constructs this guard aims the mirror at the caller's buffer for
+// the duration of the call, so the wrapper's own D2H lands there directly (at the
+// PCIe rate when the buffer came from handle.pinned_empty). The destructor
+// restores the mirror on EVERY exit path — launch-check / sync early returns
+// included — so an error never leaves the context pointing at caller memory.
+struct GridMirrorRetarget {
+    T **slot; T *saved;
+    GridMirrorRetarget(T **s, T *to) : slot(s), saved(*s) { *s = to; }
+    ~GridMirrorRetarget() { *slot = saved; }
+    GridMirrorRetarget(const GridMirrorRetarget &) = delete;
+    GridMirrorRetarget &operator=(const GridMirrorRetarget &) = delete;
+};
+
 // Sync + consume the NO_EXIT sticky error slot (see the comment in
 // grid_rbd_sync_consume). Returns 0 on success, 100+cudaError_t on failure.
 static inline int grid_rbd_sync_consume() {
@@ -522,6 +539,27 @@ extern "C" int grid_rbd_graph_end(long long token) {
     return 0;
 }
 extern "C" int grid_rbd_ctx_count() { std::lock_guard<std::mutex> lk(grid_ctx_mutex()); return (int)grid_ctx_registry().size(); }
+
+// ─── page-locked host buffers for the allocate-once numpy round trip (2026-10-01) ────
+// The pybind shim (_core.cpp) does not link the CUDA runtime, so the per-robot .so
+// exports the three calls behind handle.pinned_empty / handle.is_pinned. A pinned
+// `out` passed to the C ABI receives the host wrapper's D2H copy at the PCIe rate
+// (see the generated bodies' mirror retargeting); a plain numpy array still works.
+extern "C" void *grid_rbd_pinned_alloc(size_t bytes) {
+    void *p = nullptr;
+    if (cudaMallocHost(&p, bytes) != cudaSuccess) { cudaGetLastError(); return nullptr; }
+    return p;
+}
+extern "C" void grid_rbd_pinned_free(void *p) {
+    if (p == nullptr) return;
+    cudaFreeHost(p);
+    cudaGetLastError();  // never let a teardown-time error leak into the next call
+}
+extern "C" int grid_rbd_is_pinned(const void *p) {
+    cudaPointerAttributes a;
+    if (cudaPointerGetAttributes(&a, p) != cudaSuccess) { cudaGetLastError(); return 0; }
+    return a.type == cudaMemoryTypeHost ? 1 : 0;
+}
 
 // ─── device-pool (slab) install for the DEFAULT context ──────────────────────
 // A jax/torch surface hands GRiD a device slab from ITS OWN allocator BEFORE the
@@ -1503,9 +1541,11 @@ extern "C" int grid_rbd_coriolis_matrix(long long ctx_id, const T* q, const T* q
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_coriolis;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_coriolis(&g_data->h_coriolis, out);  // (size_t)batch * grid::NUM_VEL*grid::NUM_VEL elements
     grid::coriolis_matrix<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CORIOLIS_MATRIX>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_coriolis, (size_t)batch * grid::NUM_VEL*grid::NUM_VEL * sizeof(T));
     return 0;
 #else
     (void)q; (void)qd; (void)out; (void)batch; (void)gravity;
@@ -1519,9 +1559,11 @@ extern "C" int grid_rbd_energy(long long ctx_id, const T* q, const T* qd, T* out
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_energy;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_energy(&g_data->h_energy, out);  // (size_t)batch * 3 elements
     grid::energy<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_ENERGY>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_energy, (size_t)batch * 3 * sizeof(T));
     return 0;
 #else
     (void)q; (void)qd; (void)out; (void)batch; (void)gravity;
@@ -1535,9 +1577,11 @@ extern "C" int grid_rbd_com(long long ctx_id, const T* q, T* out, int batch) {
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q(g_ctx, q, batch, grid::NUM_JOINTS);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_com;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_com(&g_data->h_com, out);  // (size_t)batch * (3 + 3 * grid::NUM_VEL) elements
     grid::com<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_COM>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_com, (size_t)batch * (3 + 3 * grid::NUM_VEL) * sizeof(T));
     return 0;
 #else
     (void)q; (void)out; (void)batch;
@@ -1551,9 +1595,11 @@ extern "C" int grid_rbd_ccrba(long long ctx_id, const T* q, const T* qd, T* out,
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_ccrba;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_ccrba(&g_data->h_ccrba, out);  // (size_t)batch * (6 * grid::NUM_VEL + 6) elements
     grid::ccrba<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_clamp_threads_for(grid::ccrba_kernel<T>, grid_rbd_launch_threads_n<grid::GRID_ALGO_CCRBA>(g_ctx, batch)), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_ccrba, (size_t)batch * (6 * grid::NUM_VEL + 6) * sizeof(T));
     return 0;
 #else
     (void)q; (void)qd; (void)out; (void)batch;
@@ -1567,9 +1613,11 @@ extern "C" int grid_rbd_dccrba(long long ctx_id, const T* q, T* out, int batch) 
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q(g_ctx, q, batch, grid::NUM_JOINTS);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_dccrba;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_dccrba(&g_data->h_dccrba, out);  // (size_t)batch * 6*grid::NUM_VEL*grid::NUM_VEL elements
     grid::dccrba<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_clamp_threads_for(grid::dccrba_kernel<T>, grid_rbd_launch_threads_n<grid::GRID_ALGO_DCCRBA>(g_ctx, batch)), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_dccrba, (size_t)batch * 6*grid::NUM_VEL*grid::NUM_VEL * sizeof(T));
     return 0;
 #else
     (void)q; (void)out; (void)batch;
@@ -1583,9 +1631,11 @@ extern "C" int grid_rbd_cmm_time_variation(long long ctx_id, const T* q, const T
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_cmm_time_variation;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_cmm_time_variation(&g_data->h_cmm_time_variation, out);  // (size_t)batch * 6*grid::NUM_VEL elements
     grid::cmm_time_variation<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_clamp_threads_for(grid::cmm_time_variation_kernel<T>, grid_rbd_launch_threads_n<grid::GRID_ALGO_CMM_TIME_VARIATION>(g_ctx, batch)), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_cmm_time_variation, (size_t)batch * 6*grid::NUM_VEL * sizeof(T));
     return 0;
 #else
     (void)q; (void)qd; (void)out; (void)batch;
@@ -1599,9 +1649,11 @@ extern "C" int grid_rbd_kinetic_energy_regressor(long long ctx_id, const T* q, c
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_ke_regressor;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_ke_regressor(&g_data->h_ke_regressor, out);  // (size_t)batch * 10*grid::NUM_BODIES elements
     grid::kinetic_energy_regressor<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_KINETIC_ENERGY_REGRESSOR>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_ke_regressor, (size_t)batch * 10*grid::NUM_BODIES * sizeof(T));
     return 0;
 #else
     (void)q; (void)qd; (void)out; (void)batch; (void)gravity;
@@ -1615,9 +1667,11 @@ extern "C" int grid_rbd_potential_energy_regressor(long long ctx_id, const T* q,
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q(g_ctx, q, batch, grid::NUM_JOINTS);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_pe_regressor;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_pe_regressor(&g_data->h_pe_regressor, out);  // (size_t)batch * 10*grid::NUM_BODIES elements
     grid::potential_energy_regressor<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_POTENTIAL_ENERGY_REGRESSOR>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_pe_regressor, (size_t)batch * 10*grid::NUM_BODIES * sizeof(T));
     return 0;
 #else
     (void)q; (void)out; (void)batch; (void)gravity;
@@ -1685,6 +1739,9 @@ extern "C" int grid_rbd_minv(long long ctx_id, const T* q, T* minv_out, int batc
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_Minv;
+    // retarget it at `minv_out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_Minv(&g_data->h_Minv, minv_out);  // (size_t)batch * grid::NUM_VEL*grid::NUM_VEL elements
 
 // signature switch: the host template carries MUJOCO_OUTPUT on floating
 // builds regardless of enable_mujoco_kernels — keyed on the per-fn
@@ -1699,9 +1756,6 @@ extern "C" int grid_rbd_minv(long long ctx_id, const T* q, T* minv_out, int batc
 
     if (int rc = grid_rbd_sync_consume()) return rc;
 
-    // Device-direct copy at the nv*nv kernel stride (same nj-stride staging issue
-    // as crba).
-    cudaMemcpy(minv_out, g_data->d_Minv, (size_t)batch * grid::NUM_VEL*grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 #else
     (void)q; (void)minv_out; (void)batch;
@@ -1715,6 +1769,9 @@ extern "C" int grid_rbd_crba(long long ctx_id, const T* q, T* m_out, int batch, 
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_M;
+    // retarget it at `m_out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_M(&g_data->h_M, m_out);  // (size_t)batch * grid::NUM_VEL*grid::NUM_VEL elements
 
 // signature switch: the host template carries MUJOCO_OUTPUT on floating
 // builds regardless of enable_mujoco_kernels — keyed on the per-fn
@@ -1729,10 +1786,6 @@ extern "C" int grid_rbd_crba(long long ctx_id, const T* q, T* m_out, int batch, 
 
     if (int rc = grid_rbd_sync_consume()) return rc;
 
-    // Device-direct copy at the nv*nv kernel stride: the generated host wrapper's
-    // h_M staging used the nj*nj stride (over-read for floating; see the nj-stride
-    // host-wrapper item). FIXED base has nv == nj so this is byte-identical.
-    cudaMemcpy(m_out, g_data->d_M, (size_t)batch * grid::NUM_VEL*grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 #else
     (void)q; (void)m_out; (void)batch; (void)gravity;
@@ -1832,6 +1885,9 @@ extern "C" int grid_rbd_idsva_so(long long ctx_id, const T* q, const T* qd, cons
     // idsva_so reads the joint acceleration from the u-slot of d_q_qd_u (s_qdd);
     // pack qdd there so the second-order tensors use the requested acceleration.
     pack_q_qd_u(g_ctx, q, qd, qdd, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_idsva_so;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_idsva_so(&g_data->h_idsva_so, out);  // (size_t)batch * grid::SECOND_ORDER_TENSOR_SIZE elements
 
 // signature switch: the host template carries MUJOCO_OUTPUT on floating
 // builds regardless of enable_mujoco_kernels — keyed on the per-fn
@@ -1849,7 +1905,6 @@ extern "C" int grid_rbd_idsva_so(long long ctx_id, const T* q, const T* qd, cons
 
     if (int rc = grid_rbd_sync_consume()) return rc;
 
-    std::memcpy(out, g_data->h_idsva_so, (size_t)batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
     return 0;
 #else
     (void)q; (void)qd; (void)qdd; (void)out; (void)batch; (void)gravity;
@@ -1863,6 +1918,9 @@ extern "C" int grid_rbd_fdsva_so(long long ctx_id, const T* q, const T* qd, cons
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_df2;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_df2(&g_data->h_df2, out);  // (size_t)batch * grid::SECOND_ORDER_TENSOR_SIZE elements
 
 // signature switch: the host template carries MUJOCO_OUTPUT on floating
 // builds regardless of enable_mujoco_kernels — keyed on the per-fn
@@ -1878,7 +1936,6 @@ extern "C" int grid_rbd_fdsva_so(long long ctx_id, const T* q, const T* qd, cons
 
     if (int rc = grid_rbd_sync_consume()) return rc;
 
-    std::memcpy(out, g_data->h_df2, (size_t)batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
     return 0;
 #else
     (void)q; (void)qd; (void)u; (void)out; (void)batch; (void)gravity;
@@ -2011,6 +2068,9 @@ extern "C" int grid_rbd_inverse_dynamics_gradient(long long ctx_id, const T* q, 
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_dc_du;
+    // retarget it at `dc_du_out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_dc_du(&g_data->h_dc_du, dc_du_out);  // (size_t)batch * 2*grid::NUM_VEL*grid::NUM_VEL elements
     if (int rc = apply_f_ext(g_ctx, f_ext, batch)) return rc;
 
 // signature switch: the host template carries MUJOCO_OUTPUT on floating
@@ -2044,7 +2104,6 @@ extern "C" int grid_rbd_inverse_dynamics_gradient(long long ctx_id, const T* q, 
     reset_f_ext(g_ctx, f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
 
-    cudaMemcpy(dc_du_out, g_data->d_dc_du, (size_t)batch * 2*grid::NUM_VEL*grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 #else
     (void)q; (void)qd; (void)qdd_opt; (void)dc_du_out; (void)batch; (void)gravity; (void)f_ext;
@@ -2058,6 +2117,9 @@ extern "C" int grid_rbd_forward_dynamics_gradient(long long ctx_id, const T* q, 
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_df_du;
+    // retarget it at `df_du_out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_df_du(&g_data->h_df_du, df_du_out);  // (size_t)batch * 2*grid::NUM_VEL*grid::NUM_VEL elements
     if (int rc = apply_f_ext(g_ctx, f_ext, batch)) return rc;
 
 // signature switch: the host template carries MUJOCO_OUTPUT on floating
@@ -2080,7 +2142,6 @@ extern "C" int grid_rbd_forward_dynamics_gradient(long long ctx_id, const T* q, 
     reset_f_ext(g_ctx, f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
 
-    cudaMemcpy(df_du_out, g_data->d_df_du, (size_t)batch * 2*grid::NUM_VEL*grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 #else
     (void)q; (void)qd; (void)u; (void)df_du_out; (void)batch; (void)gravity; (void)f_ext;
@@ -2094,10 +2155,12 @@ extern "C" int grid_rbd_integrator(long long ctx_id, const T* q, const T* qd, co
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_x_kp1;
+    // retarget it at `x_kp1_out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_x_kp1(&g_data->h_x_kp1, x_kp1_out);  // (size_t)batch * (grid::NUM_POS + grid::NUM_VEL) elements
     GRID_RBD_IT_DISPATCH(it, launch_integrator_host, batch, gravity, dt);
     { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(x_kp1_out, g_data->h_x_kp1, (size_t)batch * (grid::NUM_POS + grid::NUM_VEL) * sizeof(T));
     return 0;
 #else
     (void)q; (void)qd; (void)u; (void)x_kp1_out; (void)batch; (void)gravity; (void)dt; (void)it;
@@ -2128,9 +2191,11 @@ extern "C" int grid_rbd_inverse_dynamics_regressor(long long ctx_id, const T* q,
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, qdd, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_Y;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_Y(&g_data->h_Y, out);  // (size_t)batch * grid::NUM_VEL * 10 * grid::NUM_BODIES elements
     grid::inverse_dynamics_regressor<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_REGRESSOR>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_Y, (size_t)batch * grid::NUM_VEL * 10 * grid::NUM_BODIES * sizeof(T));
     return 0;
 #else
     (void)q; (void)qd; (void)qdd; (void)out; (void)batch; (void)gravity;
@@ -2237,10 +2302,12 @@ extern "C" int grid_rbd_coriolis_matrix_mujoco(long long ctx_id, const T* q, con
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_coriolis;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_coriolis(&g_data->h_coriolis, out);  // (size_t)batch * grid::NUM_VEL*grid::NUM_VEL elements
     grid::coriolis_matrix<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CORIOLIS_MATRIX>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_coriolis, (size_t)batch * grid::NUM_VEL*grid::NUM_VEL * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_CORIOLIS_MATRIX
@@ -2255,10 +2322,12 @@ extern "C" int grid_rbd_energy_mujoco(long long ctx_id, const T* q, const T* qd,
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_energy;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_energy(&g_data->h_energy, out);  // (size_t)batch * 3 elements
     grid::energy<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_ENERGY>::TIER>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_ENERGY>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_energy, (size_t)batch * 3 * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_ENERGY
@@ -2273,10 +2342,12 @@ extern "C" int grid_rbd_com_mujoco(long long ctx_id, const T* q, T* out, int bat
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q(g_ctx, q, batch, grid::NUM_JOINTS);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_com;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_com(&g_data->h_com, out);  // (size_t)batch * (3 + 3 * grid::NUM_VEL) elements
     grid::com<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_COM>::TIER>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_COM>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_com, (size_t)batch * (3 + 3 * grid::NUM_VEL) * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_COM
@@ -2291,10 +2362,12 @@ extern "C" int grid_rbd_ccrba_mujoco(long long ctx_id, const T* q, const T* qd, 
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_ccrba;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_ccrba(&g_data->h_ccrba, out);  // (size_t)batch * (6 * grid::NUM_VEL + 6) elements
     grid::ccrba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_CCRBA>::TIER>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CCRBA>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_ccrba, (size_t)batch * (6 * grid::NUM_VEL + 6) * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_CCRBA
@@ -2309,10 +2382,12 @@ extern "C" int grid_rbd_dccrba_mujoco(long long ctx_id, const T* q, T* out, int 
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q(g_ctx, q, batch, grid::NUM_JOINTS);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_dccrba;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_dccrba(&g_data->h_dccrba, out);  // (size_t)batch * 6*grid::NUM_VEL*grid::NUM_VEL elements
     grid::dccrba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_DCCRBA>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_dccrba, (size_t)batch * 6*grid::NUM_VEL*grid::NUM_VEL * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_DCCRBA
@@ -2326,10 +2401,12 @@ extern "C" int grid_rbd_cmm_time_variation_mujoco(long long ctx_id, const T* q, 
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_cmm_time_variation;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_cmm_time_variation(&g_data->h_cmm_time_variation, out);  // (size_t)batch * 6*grid::NUM_VEL elements
     grid::cmm_time_variation<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CMM_TIME_VARIATION>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_cmm_time_variation, (size_t)batch * 6*grid::NUM_VEL * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_CMM_TIME_VARIATION
@@ -2345,10 +2422,12 @@ extern "C" int grid_rbd_kinetic_energy_regressor_mujoco(long long ctx_id, const 
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_ke_regressor;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_ke_regressor(&g_data->h_ke_regressor, out);  // (size_t)batch * 10*grid::NUM_BODIES elements
     grid::kinetic_energy_regressor<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_KINETIC_ENERGY_REGRESSOR>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_ke_regressor, (size_t)batch * 10*grid::NUM_BODIES * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_KINETIC_ENERGY_REGRESSOR
@@ -2362,10 +2441,12 @@ extern "C" int grid_rbd_potential_energy_regressor_mujoco(long long ctx_id, cons
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q(g_ctx, q, batch, grid::NUM_JOINTS);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_pe_regressor;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_pe_regressor(&g_data->h_pe_regressor, out);  // (size_t)batch * 10*grid::NUM_BODIES elements
     grid::potential_energy_regressor<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_POTENTIAL_ENERGY_REGRESSOR>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_pe_regressor, (size_t)batch * 10*grid::NUM_BODIES * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
@@ -2431,10 +2512,12 @@ extern "C" int grid_rbd_minv_mujoco(long long ctx_id, const T* q, T* minv_out, i
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_Minv;
+    // retarget it at `minv_out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_Minv(&g_data->h_Minv, minv_out);  // (size_t)batch * grid::NUM_VEL*grid::NUM_VEL elements
     grid::minv<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_MINV>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
-    cudaMemcpy(minv_out, g_data->d_Minv, (size_t)batch * grid::NUM_VEL*grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_MINV
@@ -2449,10 +2532,12 @@ extern "C" int grid_rbd_crba_mujoco(long long ctx_id, const T* q, T* m_out, int 
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_M;
+    // retarget it at `m_out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_M(&g_data->h_M, m_out);  // (size_t)batch * grid::NUM_VEL*grid::NUM_VEL elements
     grid::crba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CRBA>(g_ctx, batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
-    cudaMemcpy(m_out, g_data->d_M, (size_t)batch * grid::NUM_VEL*grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_CRBA
@@ -2522,11 +2607,13 @@ extern "C" int grid_rbd_idsva_so_mujoco(long long ctx_id, const T* q, const T* q
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, qdd, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_idsva_so;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_idsva_so(&g_data->h_idsva_so, out);  // (size_t)batch * grid::SECOND_ORDER_TENSOR_SIZE elements
     grid::idsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO>::TIER>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_IDSVA_SO>(g_ctx, batch), g_streams);
     { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_idsva_so, (size_t)batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_IDSVA_SO
@@ -2542,11 +2629,13 @@ extern "C" int grid_rbd_fdsva_so_mujoco(long long ctx_id, const T* q, const T* q
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_df2;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_df2(&g_data->h_df2, out);  // (size_t)batch * grid::SECOND_ORDER_TENSOR_SIZE elements
     grid::fdsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FDSVA_SO>(g_ctx, batch), g_streams);
     { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_df2, (size_t)batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FDSVA_SO
@@ -2656,6 +2745,9 @@ extern "C" int grid_rbd_inverse_dynamics_gradient_mujoco(long long ctx_id, const
     if (int rc = apply_f_ext(g_ctx, f_ext, batch)) return rc;
     // NUM_VEL-wide rows into the NUM_JOINTS-pitched h_qdd (host wrapper copies h_qdd->d_qdd).
     pack_qdd(g_ctx, qdd_opt, batch);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_dc_du;
+    // retarget it at `dc_du_out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_dc_du(&g_data->h_dc_du, dc_du_out);  // (size_t)batch * 2*grid::NUM_VEL*grid::NUM_VEL elements
     grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(g_ctx, batch), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
@@ -2666,7 +2758,6 @@ extern "C" int grid_rbd_inverse_dynamics_gradient_mujoco(long long ctx_id, const
     if (e == cudaSuccess) e = grid_consume_last_error();
     reset_f_ext(g_ctx, f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
-    cudaMemcpy(dc_du_out, g_data->d_dc_du, (size_t)batch * 2*grid::NUM_VEL*grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_INVERSE_DYNAMICS_GRADIENT
@@ -2682,6 +2773,9 @@ extern "C" int grid_rbd_forward_dynamics_gradient_mujoco(long long ctx_id, const
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS, grid::NUM_VEL);
     if (int rc = apply_f_ext(g_ctx, f_ext, batch)) return rc;
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_df_du;
+    // retarget it at `df_du_out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_df_du(&g_data->h_df_du, df_du_out);  // (size_t)batch * 2*grid::NUM_VEL*grid::NUM_VEL elements
     grid::forward_dynamics_gradient<T, /*USE_QDD_MINV_FLAG=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>(g_ctx, batch), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
@@ -2692,7 +2786,6 @@ extern "C" int grid_rbd_forward_dynamics_gradient_mujoco(long long ctx_id, const
     if (e == cudaSuccess) e = grid_consume_last_error();
     reset_f_ext(g_ctx, f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
-    cudaMemcpy(df_du_out, g_data->d_df_du, (size_t)batch * 2*grid::NUM_VEL*grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FORWARD_DYNAMICS_GRADIENT
@@ -2707,10 +2800,12 @@ extern "C" int grid_rbd_integrator_mujoco(long long ctx_id, const T* q, const T*
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_x_kp1;
+    // retarget it at `x_kp1_out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_x_kp1(&g_data->h_x_kp1, x_kp1_out);  // (size_t)batch * (grid::NUM_POS + grid::NUM_VEL) elements
     GRID_RBD_IT_DISPATCH_SS(it, launch_integrator_host_mujoco, batch, gravity, dt);   // MuJoCo: Euler / SI only
     { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(x_kp1_out, g_data->h_x_kp1, (size_t)batch * (grid::NUM_POS + grid::NUM_VEL) * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_INTEGRATOR
@@ -2744,11 +2839,13 @@ extern "C" int grid_rbd_inverse_dynamics_regressor_mujoco(long long ctx_id, cons
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, qdd, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // D2H straight into the caller's buffer: the host wrapper copies into g_data->h_Y;
+    // retarget it at `out` for this call (scope-restored). See _mirror_swap.
+    GridMirrorRetarget _retarget_h_Y(&g_data->h_Y, out);  // (size_t)batch * grid::NUM_VEL * 10 * grid::NUM_BODIES elements
     grid::inverse_dynamics_regressor<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_REGRESSOR>(g_ctx, batch), g_streams);
     { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_Y, (size_t)batch * grid::NUM_VEL * 10 * grid::NUM_BODIES * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_INVERSE_DYNAMICS_REGRESSOR

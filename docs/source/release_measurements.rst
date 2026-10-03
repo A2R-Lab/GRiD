@@ -5,18 +5,31 @@ Release measurements
 
    **Data from the 27 September 2026 run:** 210 worker processes,
    1,260 measurements, all passing the existing strict numerical checks.
+   **Wrapper addendum, 2 October 2026:** 108 further worker processes and
+   648 measurements under the same protocol, for the allocate-once calls
+   in Figure 4. The published table now holds 300 workers and 1,800
+   measurements; every GRiD-versus-baseline comparison is unchanged.
 
 These measurements cover **iiwa14** (fixed base, 7 velocities), **go2** (floating
 base, 18 velocities), and **G1** (floating base, 35 velocities) on one NVIDIA
 RTX 5090 and Intel Core Ultra 9 285K system. Batch sizes are 16, 32, 64, 128,
 256, and 1024. The main figures compare RNEA, its analytical gradient, and its
-analytical Hessian. The wrapper study covers RNEA and its gradient through
-CUDA C++, the C ABI, NumPy, JAX, and PyTorch.
+analytical Hessian. The wrapper study covers the same three operations
+through CUDA C++, the C ABI (RNEA and its gradient), NumPy, JAX, and PyTorch,
+with each Python surface measured as its default call and with its buffers
+allocated once and reused.
 
 The main collection used commit ``e92477857b0ca53fb307a8fa4799a4afd5757177``.
 It includes the floating-base JAX Hessian packing correction and preserves
 fp64 mapped inputs for Pinocchio's analytical paths. No numerical tolerance
 was relaxed. Subsequent figure and documentation edits do not alter timed code.
+
+The wrapper addendum used commits ``53119f2d4c0b1297af19b9bd266879828001c566``
+and ``ab20188681334da365753b42da5f0021c4c70add`` (the latter for the JAX
+allocate-once cells). Between the two collections the bindings changed in the
+ways Figure 4 describes; the generated CUDA did not. A same-day drift check
+re-measured GRiD's native CUDA call on all 18 RNEA-gradient cells: both its
+compute-only and its host call landed within 0.6% of the September values.
 
 What the measurements show
 --------------------------
@@ -64,6 +77,16 @@ compute-only boundary.
   CUDA, 24.7 µs through the C ABI, 26.8 µs through NumPy, 61.0 µs through
   PyTorch, and 224.8 µs through JAX. This is one illustrative cell, not a
   universal wrapper overhead.
+* **Allocating once removes most of the NumPy and PyTorch wrapper cost.**
+  A default Python call allocates its output on every call. With the buffers
+  created once and reused, NumPy and PyTorch are faster in all 90 measured
+  cells, and at batch 1024 they land within 10% of the C++ host call on
+  the go2 and G1 gradients and Hessians (from 1% faster to 9% slower). G1's RNEA gradient at batch 1024
+  takes 1.13 ms in C++, 1.18 ms through NumPy and 1.14 ms through PyTorch,
+  against 2.79 ms and 3.32 ms for their default calls; its Hessian takes
+  38.0 ms, 38.0 ms and 39.5 ms against 107.0 ms and 235.5 ms. JAX's
+  ``to_host`` helps on large outputs (41.5 ms against 140.9 ms on that
+  Hessian) and is the default download below 256 KiB.
 
 Figure 1 — Where the time goes
 ------------------------------
@@ -157,16 +180,52 @@ Figure 4 — Wrapper costs
 ------------------------
 
 .. image:: _static/release/wrappers.svg
-   :alt: RNEA and gradient call wall times for CUDA Device, C++ Host, NumPy, PyTorch and JAX.
+   :alt: RNEA, gradient and Hessian call wall times for CUDA Device, C++ Host, NumPy, PyTorch and JAX; each Python bar is solid up to its allocate-once call with a hatched cap up to its default call.
    :target: _static/release/wrappers.svg
 
-Five solid bars show the measured wall time at each call boundary, ordered
-CUDA Device, C++ Host, NumPy, PyTorch, JAX. CUDA Device is the native
-compute-only call with resident data, including launch and synchronization;
-it is not bare device-event timing. C++ Host includes transfers with prepared
-host buffers. The Python bars include their complete host-to-host API calls.
-The C ABI remains available
-in the downloadable data but is omitted from this application-facing figure.
+Bars show the measured wall time at each call boundary, ordered CUDA Device,
+C++ Host, NumPy, PyTorch, JAX. CUDA Device is the native compute-only call
+with resident data, including launch and synchronization; it is not bare
+device-event timing. C++ Host includes transfers with prepared host buffers.
+The Python bars are complete host-to-host API calls, and each shows two
+measurements in one slot:
+
+* the **solid** bar is the *allocate-once* call: the I/O buffers are created
+  once, outside the timed window, and every timed call reuses them;
+* the **hatched cap** above it reaches the *default* call, which allocates its
+  output on every call.
+
+The allocate-once calls are, per surface: NumPy — ``out=`` with a page-locked
+buffer from ``handle.pinned_empty`` (the gradient and Hessian; RNEA has no
+``out=``, so its bar is the default call); PyTorch — page-locked host tensors
+for inputs and outputs with non-blocking copies
+(``pinned_host_like`` / ``copy_to_host``); JAX — ``grid_rbd.jax.to_host``.
+``to_host`` uses its page-locked route only for arrays of at least 256 KiB and
+is otherwise the default download itself, so a JAX allocate-once bar is drawn
+only where that route was taken (23 of 54 cells). A short black tick marks the
+one cell where the default call was not the slower of the two (JAX, iiwa14
+gradient at batch 1024, by 6%).
+
+Default and allocate-once are the same compiled artifact and the same
+operation; only the buffer handling differs. NumPy and PyTorch are faster
+with reused buffers in every measured cell: by 1.1–2.9× for NumPy and
+1.2–6.0× for PyTorch, growing with output size. Where the JAX page-locked
+route applies, the median gain is 1.3× on gradients and 2.1× on Hessians,
+up to 3.4×.
+
+The C ABI remains available in the downloadable data but is omitted from this
+application-facing figure. Its RNEA-gradient call, and the NumPy call built on
+it, used to download the result twice; they now download it once, which made
+the default calls 1.07–1.34× (C ABI) and 1.06–1.27× (NumPy) faster than the
+September measurements they replace in the table.
+
+**Which collection each bar comes from.** CUDA Device, C++ Host, the PyTorch
+and JAX default calls and NumPy's RNEA are the 27 September measurements. The
+allocate-once calls, NumPy's default gradient and the NumPy and PyTorch default
+Hessians are from 2 October. JAX full calls vary more between sessions than
+the other surfaces (its default gradient re-measured between 0.80× and 1.20×
+of the September values on 2 October), so read small JAX differences with
+that in mind.
 
 Protocol
 --------
@@ -181,8 +240,8 @@ Protocol
   consistently improve results and is not included in release timing data.
 * The box was reserved for serial measurement, with quiet checks between
   workers. Native CUDA, C ABI, NumPy, PyTorch, Warp and the other stable paths
-  were not exempted from variability checks. Of 420 supported groups, 17
-  full-call groups span more than 1.5× across process means; 23 of 222
+  were not exempted from variability checks. Of 600 supported groups, 22
+  full-call groups span more than 1.5× across process means; 23 of 240
   resident groups do so. These are marked, not selectively rerun.
 * Resident means inputs already on the GPU and outputs left there, including
   synchronization and any device-side copies. Full call includes host input
@@ -196,14 +255,18 @@ Protocol
   after timing against RBDReference's Pinocchio-backed fp64 oracle, plus
   repeatability and boundary agreement (entrywise ``rtol=2e-4, atol=1e-3``).
   This is a separate reference path, not an independent library when checking
-  Pinocchio itself. All 1,260 main-study measurements pass the strict checks.
+  Pinocchio itself. All 1,800 measurements pass the strict checks.
+* Allocate-once calls set up their buffers once per batch size, before the
+  warm-up, and never inside the timed window. Their validation outputs are
+  copied out of the reused buffers, so the before/after oracle checks compare
+  snapshots and not two views of one buffer.
 
 Downloads and reproduction
 --------------------------
 
 * `Browse both complete tables <_static/release/tables.html>`_.
 * :download:`Core and wrapper CSV <_static/release/table.csv>`:
-  594 planned cells, including 420 validated and 174 explicit N/A cells.
+  792 planned cells, including 600 validated and 192 explicit N/A cells.
 * :download:`Secondary-operation CSV <_static/release/secondary_table.csv>`:
   the remaining operations, retained from the earlier **30-sample** collection.
   This is a separate population, not mixed with 300-sample core comparisons.
@@ -216,7 +279,8 @@ Downloads and reproduction
 Every table row includes status, reason, dtype, times, run ranges and numerical
 error information. ``adapter_pending`` means our adapter is not wired;
 ``excluded_method`` means outside the analytical study; ``model_mismatch``
-identifies Frax's unvalidated floating-base conversion. No unavailable result
+identifies Frax's unvalidated floating-base conversion; ``not_applicable``
+marks NumPy's allocate-once RNEA, which has no ``out=``. No unavailable result
 is treated as zero.
 
 Secondary fp32 forward-dynamics-family cells may carry ``accuracy_warning``:

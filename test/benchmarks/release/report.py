@@ -16,7 +16,8 @@ from .protocol import CORE, EXTRA, PRIMARY, ROBOTS, WRAPPER_OPS, WRAPPERS, TABLE
 from .protocol import TIMED_STATUSES, cell_accuracy_status, ACCURACY_FOOTNOTE
 
 LABELS = {"grid_cuda": "GRiD CUDA host call", "grid_native": "GRiD C ABI", "grid_numpy": "GRiD NumPy", "grid_jax": "GRiD JAX",
-          "grid_torch": "GRiD PyTorch", "pinocchio": "Pinocchio CPU (codegen)", "pinocchio_plain": "Pinocchio CPU (standard API)", "mjx": "MJX",
+          "grid_torch": "GRiD PyTorch", "grid_numpy_prealloc": "GRiD NumPy (allocate-once)",
+          "grid_torch_prealloc": "GRiD PyTorch (allocate-once)", "grid_jax_prealloc": "GRiD JAX (allocate-once)", "pinocchio": "Pinocchio CPU (codegen)", "pinocchio_plain": "Pinocchio CPU (standard API)", "mjx": "MJX",
           "mujoco_warp": "MuJoCo Warp", "mujoco_cpu": "MuJoCo CPU", "bard": "BARD", "frax": "Frax"}
 OP_LABELS = {**dict(zip(CORE, ("RNEA", "grad RNEA", "Hessian RNEA"))),
              "minv": "M⁻¹", "forward_dynamics": "FD", "forward_dynamics_gradient": "grad FD", "fdsva_so": "Hessian FD",
@@ -26,7 +27,8 @@ OP_LABELS = {**dict(zip(CORE, ("RNEA", "grad RNEA", "Hessian RNEA"))),
 
 
 BACKEND_HUE = {"grid_cuda": "#2a78d6", "grid_native": "#2a78d6", "grid_numpy": "#2a78d6",
-               "grid_jax": "#2a78d6", "grid_torch": "#2a78d6", "pinocchio": "#eb6834", "pinocchio_plain": "#c94d1f",
+               "grid_jax": "#2a78d6", "grid_torch": "#2a78d6", "grid_numpy_prealloc": "#2a78d6",
+               "grid_torch_prealloc": "#2a78d6", "grid_jax_prealloc": "#2a78d6", "pinocchio": "#eb6834", "pinocchio_plain": "#c94d1f",
                "mjx": "#1baf7a", "mujoco_warp": "#eda100", "mujoco_cpu": "#e87ba4",
                "bard": "#008300", "frax": "#4a3aa7"}
 
@@ -261,7 +263,8 @@ def plot(rows, directory, kind, purpose):
     lookup = {(r["robot"], r["operation"], r["backend"], r["batch"]): r for r in rows}
     fig, axes = plt.subplots(len(ops), len(robots), figsize=(max(10,5.3*len(robots)), 3.3*len(ops)), squeeze=False)
     colors = {b: BACKEND_HUE[b] for b in LABELS}   # fixed validated palette, shared with the stacked figure
-    colors.update({"grid_cuda": "#0d366b", "grid_native": "#184f95", "grid_numpy": "#256abf", "grid_jax": "#3987e5", "grid_torch": "#86b6ef"})
+    colors.update({"grid_cuda": "#0d366b", "grid_native": "#184f95", "grid_numpy": "#256abf", "grid_jax": "#3987e5", "grid_torch": "#86b6ef",
+                   "grid_numpy_prealloc": "#7fa8dc", "grid_jax_prealloc": "#9cc3f2", "grid_torch_prealloc": "#c2daf7"})
     for oi, op in enumerate(ops):
         row_values = [v for r in rows if r["operation"] == op and r["backend"] in selected(op)
                       for v in (r.get("resident_us"),r.get("host_min_us"),r.get("host_max_us")) if v is not None and v > 0]

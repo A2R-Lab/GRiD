@@ -448,6 +448,48 @@ recompile at attach time. See
 
 .. _jax-ffi-quickstart:
 
+Host round trips (numpy): allocate once, reuse
+----------------------------------------------
+
+The numpy methods return a fresh array per call. For the large outputs
+(``idsva_so`` / ``fdsva_so``: ``4·NV³`` floats per batch item, 702 MB on g1
+at batch 1024) that costs a device→host copy into the context's page-locked
+mirror **plus** a host memcpy into the new array, and ~120 ms per call. The
+robotics pattern is to allocate once and reuse: ``handle.pinned_empty(shape)``
+returns a page-locked array in the compute dtype, and ``out=`` makes the
+generated host wrapper copy device→host straight into it — no host memcpy, at
+the PCIe rate. The returned tensors are views of ``out``. ``out`` may also be
+an ordinary C-contiguous array (then the copy is driver-staged, still without
+the extra memcpy); wrong shape/dtype/contiguity is refused with a clear error.
+
+.. code-block:: python
+
+   h = grid_rbd.get_robot("g1")
+   out = h.pinned_empty((B, 4 * h.num_vel ** 3))          # once
+   for q, qd, qdd in trajectory:                           # many
+       d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq = h.idsva_so(q, qd, qdd, out=out)
+
+Measured 2026-10-01 (g1 ``idsva_so`` @1024): ~40 ms with a pinned ``out``
+versus 120 ms through a fresh array; see the torch/JAX sections below for the
+same pattern on those surfaces. Page-locked memory is a limited resource — do
+not allocate it per call.
+
+The first-order gradients take ``out=`` too. Their buffer is the flat
+``(B, 2·NV²)`` block the device writes — one column-major ``NV × 2NV`` matrix
+per item — and the returned ``(B, NV, 2NV)`` array is a *view* of it, so no
+array is allocated and nothing is re-laid-out on the host:
+
+.. code-block:: python
+
+   out = h.pinned_empty((B, 2 * h.num_vel ** 2))            # once
+   for q, qd, qdd in trajectory:                             # many
+       dtau = h.inverse_dynamics_gradient(q, qd, qdd, out=out)   # view of out
+       dtau_dq, dtau_dqd = dtau[..., :h.num_vel], dtau[..., h.num_vel:]
+
+The view is column-major per item (not C-contiguous); wrap it in
+``np.ascontiguousarray`` if a consumer needs C order. Reusing ``out`` on the
+next call overwrites the values the earlier view shows.
+
 JAX FFI (``grid_rbd[jax]``)
 ---------------------------
 
@@ -470,6 +512,18 @@ Methods slot into the JAX FFI machinery as ``ffi_call`` targets
 running on JAX-supplied CUDA streams. Inputs may be numpy or
 ``jax.Array`` — JAX moves data to device transparently before the
 handler runs, and outputs stay device-resident.
+
+**Host round trips.** Keep outputs resident when the next consumer is on the
+GPU. When you do need numpy, ``grid_rbd.jax.to_host(outputs)`` moves an array
+or any pytree of arrays through XLA's ``pinned_host`` memory kind and returns
+zero-copy numpy views: on a 702 MB ``idsva_so`` output (g1, batch 1024) it
+takes 41 ms against 141 ms for ``jax.device_get`` (measured 2026-10-01). The
+pinned route costs about 20 µs per array, so by default (``pinned="auto"``)
+only arrays of at least 256 KiB take it and smaller ones go through
+``jax.device_get``; ``pinned=True`` / ``pinned=False`` force either route. It
+falls back to ``jax.device_get`` on devices without that memory kind. For device-side
+allocate-once reuse, ``jax.jit(..., donate_argnums=...)`` lets XLA write an
+output into a donated input buffer.
 
 JAX surface: the core dynamics / kinematics / SO methods are bound via
 FFI and JIT-compatible (the SO methods ``idsva_so`` / ``fdsva_so`` follow
@@ -569,6 +623,24 @@ concepts page):
 
    g = h.capture("forward_dynamics", q, qd, u)   # warmup + capture
    qdd = g(q_new, qd_new, u_new)                 # copy_ + replay
+
+**Host round trips: allocate once, reuse.** ``.cpu()`` on a large device
+output goes through a pageable staged copy (~3 GB/s here). Allocate
+page-locked mirrors ONCE with ``grid_rbd.torch.pinned_host_like(out)`` (a
+tensor or a tuple, e.g. ``g.static_out``) and fill them with
+``grid_rbd.torch.copy_to_host(host, out)`` or, for a captured graph,
+``g.replay_into(host)`` — a ``non_blocking`` copy at the PCIe rate followed
+by a stream sync. Measured 2026-10-01 on g1 ``idsva_so`` at batch 1024
+(702 MB): 39.5 ms vs 238 ms for ``.cpu()``. Inputs can take the same route:
+``torch.from_numpy(a).pin_memory().to("cuda", non_blocking=True)``.
+
+.. code-block:: python
+
+   g = h.capture("idsva_so", q, qd, qdd)
+   host = grid_rbd.torch.pinned_host_like(g.static_out)   # once
+   for q_new in trajectory:                                # many
+       g.static_in[0].copy_(q_new)
+       d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq = g.replay_into(host)
 
 .. note::
 

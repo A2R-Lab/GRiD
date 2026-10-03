@@ -50,6 +50,7 @@ _INFRA = {
     # Converting them to a spec row (so wrapper_body_gen owns the body) is the tracked
     # follow-up in the canonical plan's register; until then this is the recorded exemption.
     "contact_fext", "num_contact_frames",
+    "is_pinned",  # page-locked host buffers (2026-10-01): alloc/free are void-returning, this one is int
 }
 
 
@@ -226,7 +227,11 @@ def test_body_fields(key):
         return  # bespoke body: identity checks only
     nb = _norm(body)
     if spec.out_buffer:
-        assert spec.out_buffer in body, f"{key}: out_buffer {spec.out_buffer} not in body"
+        # a cabi_direct body names the host MIRROR it retargets (h_X), which for a
+        # device-direct row is not the spec's out_buffer (d_X) — that copy is gone.
+        from grid_codegen.wrapper_body_gen import _mirror_name, _mirror_swap
+        buffer = _mirror_name(spec) if _mirror_swap(spec) else spec.out_buffer
+        assert buffer in body, f"{key}: out buffer {buffer} not in body"
     if spec.out_size_expr:
         assert _norm(spec.out_size_expr) in nb, (
             f"{key}: out_size_expr {spec.out_size_expr!r} not found (normalized)")

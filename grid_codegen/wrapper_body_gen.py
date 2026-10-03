@@ -236,15 +236,7 @@ PRE_LAUNCH_COMMENTS: dict[str, str] = {
     "fdsva_so": (
         "// RESOURCE_TIER must match the autotuned tier (see idsva_so note)."),
 }
-PRE_COPY_COMMENTS: dict[str, str] = {
-    "crba": (
-        "    // Device-direct copy at the nv*nv kernel stride: the generated host wrapper's\n"
-        "    // h_M staging used the nj*nj stride (over-read for floating; see the nj-stride\n"
-        "    // host-wrapper item). FIXED base has nv == nj so this is byte-identical."),
-    "minv": (
-        "    // Device-direct copy at the nv*nv kernel stride (same nj-stride staging issue\n"
-        "    // as crba)."),
-}
+PRE_COPY_COMMENTS: dict[str, str] = {}
 
 NO_EXIT_COMMENT = (
     "    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is\n"
@@ -305,6 +297,8 @@ def gen_body(spec: AbiSpec) -> str:
     L.append(_PACK[spec.pack_mode])
     if spec.key in XTOOL_STAGING:
         L.append(XTOOL_BLOCK)
+    if _mirror_swap(spec):
+        L.extend(_mirror_swap_pre(spec, out_name))
     if spec.template_shape != "plain":
         return _gen_expanded(spec, L)
     if spec.key in BODY_COMMENTS:
@@ -333,6 +327,47 @@ def gen_body(spec: AbiSpec) -> str:
     return "\n".join(L) + "\n"
 
 
+def _mirror_swap(spec: AbiSpec) -> bool:
+    """True when the C-ABI body retargets the generated host wrapper's D2H copy at the
+    caller's buffer instead of memcpy-ing the pinned h_* mirror afterwards (2026-10-01).
+    The host wrapper copies the whole slab into g_data->h_<out>; pointing that member at
+    `out` for the duration of the call makes the D2H land in the caller's array directly
+    (page-locked when it came from handle.pinned_empty), which removes a second
+    full-size host copy (28 ms of a 67 ms g1 idsva_so@1024 call). OPT-IN per spec
+    (cabi_direct): only where the wrapper's D2H is proven to copy EXACTLY batch *
+    out_size elements (test_cabi_direct_mirror_sizes.py) — a NUM_JOINTS-strided mirror
+    on a floating base copies more than the public row and would overflow the caller's
+    buffer. The row-pitched vector buffers (h_c/h_qdd) need unpack_rows and stay as they were."""
+    return (spec.cabi_direct and spec.out_copy in ("memcpy_h", "cudaMemcpy_d")
+            and not spec.out_pitch_expr and bool(spec.out_buffer))
+
+
+def _mirror_name(spec: AbiSpec) -> str:
+    """The pinned host mirror the generated host wrapper downloads into. A memcpy_h row
+    names it directly; a cudaMemcpy_d row names the DEVICE buffer (d_X) whose mirror is h_X
+    — those C-ABI bodies used to download d_X a second time into the caller's array after
+    the wrapper had already downloaded it into h_X."""
+    buf = spec.out_buffer
+    return buf if buf.startswith("h_") else "h_" + buf[2:]
+
+
+def _mirror_swap_pre(spec: AbiSpec, out_name: str) -> list[str]:
+    """The RAII retarget: GridMirrorRetarget (wrapper_template.cu hand region) points
+    g_data->h_<out> at the caller's buffer and its destructor restores the mirror on
+    EVERY exit path — the launch-check and sync early returns included — so an error
+    can never leave the context aimed at a numpy buffer the caller may free."""
+    buf = _mirror_name(spec)
+    size = _size_c(spec.out_size_expr)
+    return [f"    // D2H straight into the caller's buffer: the host wrapper copies into g_data->{buf};",
+            f"    // retarget it at `{out_name}` for this call (scope-restored). See _mirror_swap.",
+            f"    GridMirrorRetarget _retarget_{buf}(&g_data->{buf}, {out_name});  "
+            f"// (size_t)batch * {size} elements"]
+
+
+def _mirror_swap_post(spec: AbiSpec) -> list[str]:
+    return []  # restored by the guard's destructor
+
+
 def _out_copy_lines(spec: AbiSpec, out_name: str, size: str, *, gpuerr: bool) -> list[str]:
     """The out-buffer -> caller copy. A row-pitched spec (out_pitch_expr: the
     NUM_JOINTS-strided vector buffers behind NUM_VEL-wide outputs) copies `size`
@@ -345,6 +380,8 @@ def _out_copy_lines(spec: AbiSpec, out_name: str, size: str, *, gpuerr: bool) ->
         call = (f"cudaMemcpy2D({out_name}, {size} * sizeof(T), {buf}, {pitch} * sizeof(T), "
                 f"{size} * sizeof(T), batch, cudaMemcpyDeviceToHost)")
         return [f"    gpuErrchk({call});" if gpuerr else f"    {call};"]
+    if _mirror_swap(spec):
+        return _mirror_swap_post(spec)
     if spec.out_copy == "memcpy_h":
         return [f"    std::memcpy({out_name}, {buf}, (size_t)batch * {size} * sizeof(T));"]
     call = f"cudaMemcpy({out_name}, {buf}, (size_t)batch * {size} * sizeof(T), cudaMemcpyDeviceToHost)"
@@ -525,6 +562,10 @@ def gen_mjx_body(spec: AbiSpec) -> str:
         L.append("    if (int rc = apply_f_ext(g_ctx, f_ext, batch)) return rc;")
     if spec.mjx_requires_qdd:
         L.append(_MJX_QDD_COPY)
+    if _mirror_swap(spec):
+        # the twin launches the SAME host wrapper (MUJOCO_OUTPUT=true), so its D2H is
+        # retargeted exactly like the primary's; _out_copy_lines emits no copy for it.
+        L.extend(_mirror_swap_pre(spec, out_name))
 
     if spec.it_dispatch or spec.mjx_it_dispatch:
         # Every MuJoCo-convention integration path (values and gradients) is

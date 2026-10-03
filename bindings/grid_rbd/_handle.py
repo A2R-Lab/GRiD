@@ -425,6 +425,17 @@ class RobotHandle:
                                 resolve_dims(spec.out_layout, toks),
                                 nv=nv, mjx=mjx, eye=eye)
 
+    def _grad_out(self, key: str, raw, out):
+        """First-order gradient result. Default: the shared grad_concat chain (a fresh
+        C-contiguous array). With a caller-owned ``out`` the C ABI has filled it in the
+        raw layout — two column-major NV x NV halves per item, which IS one column-major
+        NV x 2NV matrix — so the public (B, NV, 2NV) array is a transposed VIEW of it:
+        no allocation, no host re-layout."""
+        if out is None:
+            return self._shape_out(key, raw)
+        nv = self.num_vel
+        return raw.reshape(raw.shape[0], 2 * nv, nv).transpose(0, 2, 1)
+
     def _require_mjx_twin(self, key: str, method: str | None = None) -> None:
         """Raise the standard actionable error unless the mjx twin symbol for
         ``key`` is present in the dlopen'd .so (A4 probe dedup, 2026-09-09 —
@@ -1438,7 +1449,7 @@ class RobotHandle:
         raw = self._runner.end_effector_pose_gradient(q)
         return self._shape_out("end_effector_pose_gradient", raw)
 
-    def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None, _convention=None) -> np.ndarray:
+    def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None, out=None, _convention=None) -> np.ndarray:
         """∂τ/∂(q, qd). Returns shape (B, NV, 2*NV) — concatenated
         [dc_dq | dc_dqd], tangent-space (pinocchio) convention. Slice with
         `[..., :NV]` / `[..., NV:]`. FIXED base: NV == NJ (unchanged); FLOATING
@@ -1453,6 +1464,13 @@ class RobotHandle:
         f_ext enters RNEA affinely, so for a CONSTANT f_ext the Jacobian
         ∂c/∂(q,qd) is unchanged; the kwarg is for consistency with inverse_dynamics().
 
+        ``out`` (optional): a caller-owned ``(B, 2*NV*NV)`` array in the compute
+        dtype, C-contiguous and writeable — ideally from :meth:`pinned_empty` —
+        that the device result is downloaded into directly. The returned
+        ``(B, NV, 2*NV)`` array is then a VIEW of ``out`` (column-major per item,
+        so not C-contiguous; ``np.ascontiguousarray`` it if a consumer needs that).
+        Allocate once, reuse every call: no per-call allocation or host re-layout.
+
         With ``output_convention="mujoco"`` (floating base) ``q``/``qd``/``qdd`` are
         MuJoCo-convention and the returned gradient is in the mjx frame (the full
         convention transform — reframe + base-row rotate + ω×v couplings — is baked
@@ -1463,8 +1481,8 @@ class RobotHandle:
             q   = np.ascontiguousarray(q,   dtype=self._dt)
             qd  = np.ascontiguousarray(qd,  dtype=self._dt)
             qdd_arr = np.ascontiguousarray(qdd, dtype=self._dt)
-            raw = self._runner.inverse_dynamics_gradient_mujoco(q, qd, qdd_arr, gravity, None)
-            return self._shape_out("inverse_dynamics_gradient", raw)
+            raw = self._runner.inverse_dynamics_gradient_mujoco(q, qd, qdd_arr, gravity, None, out)
+            return self._grad_out("inverse_dynamics_gradient", raw, out)
         if self._mjx_active(_convention):
             raise NotImplementedError(
                 "inverse_dynamics_gradient(output_convention='mujoco') needs an explicit "
@@ -1476,17 +1494,20 @@ class RobotHandle:
         if qdd is not None:
             qdd_arr = np.ascontiguousarray(qdd, dtype=self._dt)
             self._check_nv_width(qdd_arr, "qdd")
-        raw = self._runner.inverse_dynamics_gradient(q, qd, qdd_arr, gravity, self._prep_f_ext(f_ext))
+        raw = self._runner.inverse_dynamics_gradient(q, qd, qdd_arr, gravity, self._prep_f_ext(f_ext), out)
         # A3 slice 4: the two-col-major-halves -> (NV, 2NV) hstack chain lives
         # in the shared out-layout module ("grad_concat").
-        return self._shape_out("inverse_dynamics_gradient", raw)
+        return self._grad_out("inverse_dynamics_gradient", raw, out)
 
-    def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None) -> np.ndarray:
+    def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, out=None, _convention=None) -> np.ndarray:
         """∂qdd/∂(q, qd). Returns shape (B, NV, 2*NV), tangent-space (pinocchio)
         convention. FIXED base: NV == NJ (unchanged); FLOATING base: NV < NJ.
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``;
         affine in f_ext so a constant f_ext leaves this Jacobian unchanged.
+
+        ``out`` (optional): caller-owned ``(B, 2*NV*NV)`` buffer, as in
+        :meth:`inverse_dynamics_gradient` — the result is a view of it.
 
         With ``output_convention="mujoco"`` (floating base) ``q``/``qd``/``u`` are
         MuJoCo-convention and the returned gradient is in the mjx frame (the full
@@ -1498,8 +1519,8 @@ class RobotHandle:
             q  = np.ascontiguousarray(q,  dtype=self._dt)
             qd = np.ascontiguousarray(qd, dtype=self._dt)
             u  = np.ascontiguousarray(u,  dtype=self._dt)
-            raw = self._runner.forward_dynamics_gradient_mujoco(q, qd, u, gravity, None)
-            return self._shape_out("forward_dynamics_gradient", raw)
+            raw = self._runner.forward_dynamics_gradient_mujoco(q, qd, u, gravity, None, out)
+            return self._grad_out("forward_dynamics_gradient", raw, out)
         if self._mjx_active(_convention):
             raise NotImplementedError(
                 "forward_dynamics_gradient(output_convention='mujoco') needs no f_ext "
@@ -1509,9 +1530,9 @@ class RobotHandle:
         u  = np.ascontiguousarray(u,  dtype=self._dt)
         self._check_nv_width(qd, "qd")
         self._check_nv_width(u, "u")
-        raw = self._runner.forward_dynamics_gradient(q, qd, u, gravity, self._prep_f_ext(f_ext))
+        raw = self._runner.forward_dynamics_gradient(q, qd, u, gravity, self._prep_f_ext(f_ext), out)
         # Same layout as dc_du ("grad_concat" in the shared out-layout module).
-        return self._shape_out("forward_dynamics_gradient", raw)
+        return self._grad_out("forward_dynamics_gradient", raw, out)
 
     def end_effector_pose_hessian(self, q, *, _convention=None) -> np.ndarray:
         """End-effector pose Hessian ∂²(pose)/∂v² (tangent-space, pinocchio convention).
@@ -1531,7 +1552,26 @@ class RobotHandle:
         q = np.ascontiguousarray(q, dtype=self._dt)
         return self._runner.end_effector_pose_hessian(q)
 
-    def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81, _convention=None) -> SecondOrderID:
+    # ─── allocate-once host round trip (2026-10-01) ─────────────────────────
+    def pinned_empty(self, shape, dtype=None) -> np.ndarray:
+        """A page-locked (``cudaMallocHost``) numpy array of ``shape`` in this
+        robot's compute dtype, to be reused as ``out=`` by the gradient methods, :meth:`idsva_so` /
+        :meth:`fdsva_so`. Allocate ONCE, reuse every call: the device->host copy
+        then runs at the PCIe rate and no host-side copy follows (g1 idsva_so at
+        batch 1024, 702 MB: ~40 ms vs 120 ms through a fresh pageable array,
+        measured 2026-10-01). The array owns its memory and keeps the robot
+        library loaded until it is collected. Page-locked memory is a limited
+        resource: do not allocate per call."""
+        if dtype is not None and np.dtype(dtype) != np.dtype(self._dt):
+            raise ValueError(f"pinned_empty: this robot computes in {np.dtype(self._dt).name}; "
+                             f"got dtype={np.dtype(dtype).name}")
+        return self._runner.pinned_empty([int(s) for s in np.atleast_1d(shape)])
+
+    def is_pinned(self, arr) -> bool:
+        """True when ``arr``'s buffer is page-locked (as returned by :meth:`pinned_empty`)."""
+        return bool(self._runner.is_pinned(np.asarray(arr)))
+
+    def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81, out=None, _convention=None) -> SecondOrderID:
         """Second-order inverse dynamics. Returns a :class:`SecondOrderID`
         NamedTuple ``(d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq)``, each tensor
         shape ``(B, NV, NV, NV)``. (NamedTuple is a plain tuple — positional
@@ -1539,6 +1579,12 @@ class RobotHandle:
 
         Uses the codegen-time dispatcher: body-frame for fixed-base,
         world-frame for floating-base.
+
+        ``out`` (optional): a caller-owned ``(B, 4*NV**3)`` array in the compute
+        dtype, C-contiguous and writeable — ideally from :meth:`pinned_empty` —
+        that receives the result directly; the returned tensors are views of it.
+        With ``allow_fp64`` the returned tensors are float64 upcast copies, but
+        ``out`` is still filled.
 
         With ``output_convention="mujoco"`` (floating base) ``q``/``qd``/``qdd`` are
         MuJoCo-convention and all four 2nd-order tensors are returned in the mjx frame
@@ -1552,14 +1598,14 @@ class RobotHandle:
         qdd_arr = np.ascontiguousarray(qdd_in, dtype=self._dt)
         NV = self.num_vel
         if self._mjx_active(_convention) and getattr(self._runner, "has_idsva_so_mujoco", False):
-            flat = self._runner.idsva_so_mujoco(q, qd, qdd_arr, 4 * NV ** 3, gravity)
+            flat = self._runner.idsva_so_mujoco(q, qd, qdd_arr, 4 * NV ** 3, gravity, out)
         elif self._mjx_active(_convention):
             raise NotImplementedError(
                 "idsva_so(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         else:
             self._check_nv_width(qd, "qd")
             self._check_nv_width(qdd_arr, "qdd")
-            flat = self._runner.idsva_so(q, qd, qdd_arr, 4 * NV ** 3, gravity)
+            flat = self._runner.idsva_so(q, qd, qdd_arr, 4 * NV ** 3, gravity, out)
         # 4 NV^3 slabs ("so_slabs" in the shared out-layout module).
         return SecondOrderID(*self._cast_out(*self._shape_out("idsva_so", flat)))
 
@@ -1591,10 +1637,12 @@ class RobotHandle:
         B = flat.shape[0]
         return self._cast_out(flat.reshape(B, NV, ncol))  # (B, NV, 10*NUM_BODIES)
 
-    def fdsva_so(self, q, qd, u, *, gravity: float = -9.81, _convention=None) -> SecondOrderFD:
+    def fdsva_so(self, q, qd, u, *, gravity: float = -9.81, out=None, _convention=None) -> SecondOrderFD:
         """Second-order forward dynamics. Returns a :class:`SecondOrderFD`
         NamedTuple of 4 tensors each shape ``(B, NV, NV, NV)`` (a plain tuple,
-        so positional unpacking / indexing still work).
+        so positional unpacking / indexing still work). ``out``: see
+        :meth:`idsva_so` (a ``(B, 4*NV**3)`` caller-owned buffer, e.g. from
+        :meth:`pinned_empty`).
 
         With ``output_convention="mujoco"`` (floating base) ``q``/``qd``/``u`` are
         MuJoCo-convention and all four 2nd-order tensors are returned in the mjx frame
@@ -1607,14 +1655,14 @@ class RobotHandle:
             # The fdsva_so mjx epilogue recomputes Minv / qdd / dqdd_du FRESH into a
             # disjoint d_mjx_scratch band (mirrors idsva_so) so it never reads the
             # possibly-spilled in-flight buffers — the §1g/§1h liveness bug is fixed.
-            flat = self._runner.fdsva_so_mujoco(q, qd, u, 4 * NV ** 3, gravity)
+            flat = self._runner.fdsva_so_mujoco(q, qd, u, 4 * NV ** 3, gravity, out)
         elif self._mjx_active(_convention):
             raise NotImplementedError(
                 "fdsva_so(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         else:
             self._check_nv_width(qd, "qd")
             self._check_nv_width(u, "u")
-            flat = self._runner.fdsva_so(q, qd, u, 4 * NV ** 3, gravity)
+            flat = self._runner.fdsva_so(q, qd, u, 4 * NV ** 3, gravity, out)
         return SecondOrderFD(*self._cast_out(*self._shape_out("fdsva_so", flat)))
 
     def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81, _convention=None):

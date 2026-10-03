@@ -42,7 +42,7 @@ sys.path.insert(0, str(ROOT))
 from test.benchmarks.release.report import (  # noqa: E402
     LABELS, SHORT_OP, _ratio_heatmap, banner, cell_marks, plot_stacked_comparison,
     plot_grid_composition)
-from test.benchmarks.release.protocol import CORE, EXTRA, ROBOTS, WRAPPER_OPS  # noqa: E402
+from test.benchmarks.release.protocol import CORE, EXTRA, ROBOTS, WRAPPER_OPS, jax_pinned_route  # noqa: E402
 
 PINOCCHIO = ("pinocchio", "pinocchio_plain")
 GPU_LIBRARIES = ("mjx", "mujoco_warp", "bard", "frax")
@@ -144,19 +144,29 @@ def speedup_core(rows, out, purpose):
 
 
 API_BOUNDARIES = (
-    ("CUDA Device", "grid_cuda", "resident_us", "#00693e"),
-    ("C++ Host", "grid_cuda", "host_us", "#c4dd88"),
-    ("NumPy", "grid_numpy", "host_us", "#267aba"),
-    ("PyTorch", "grid_torch", "host_us", "#d94415"),
-    ("JAX", "grid_jax", "host_us", "#8a6996"),
+    # label, default backend, field, color, allocate-once companion backend
+    ("CUDA Device", "grid_cuda", "resident_us", "#00693e", None),
+    ("C++ Host", "grid_cuda", "host_us", "#c4dd88", None),
+    ("NumPy", "grid_numpy", "host_us", "#267aba", "grid_numpy_prealloc"),
+    ("PyTorch", "grid_torch", "host_us", "#d94415", "grid_torch_prealloc"),
+    ("JAX", "grid_jax", "host_us", "#8a6996", "grid_jax_prealloc"),
 )
+WRAPPER_FIGURE_OPS = dict(zip(CORE, ("RNEA", "grad RNEA", "Hessian RNEA")))
 
 
 def api_boundaries(rows, out):
-    """Five directly measured call totals; no C ABI or inferred overhead stacks.
+    """Directly measured call totals; no C ABI or inferred overhead stacks.
 
     CUDA Device is the synchronized native compute-only call with data resident,
     NOT a new CUDA-event measurement. All other bars use the full host call.
+    Each Python surface shows two measured calls in one slot: the solid bar is the
+    allocate-once call (I/O buffers created once, outside the timed window, and
+    reused), the hatched cap above it reaches the default call, which allocates its
+    output on every call. A surface with no allocate-once companion for an
+    operation (NumPy RNEA: no out=) shows its default call as the solid bar; a
+    default call that is not slower is marked by a tick instead of a cap. JAX's
+    allocate-once call (grid_rbd.jax.to_host) is the default call itself below its
+    256 KiB floor, so its companion is drawn only where the pinned route was taken.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -165,24 +175,35 @@ def api_boundaries(rows, out):
     lookup = {(r["robot"], r["operation"], r["backend"], r["batch"]): r for r in rows}
     robots = [ro for ro in ROBOTS if any(r["robot"] == ro for r in rows)]
     batches = sorted({r["batch"] for r in rows})
-    fig, axes = plt.subplots(len(WRAPPER_OPS), len(robots),
-                             figsize=(5.3*len(robots), 3.3*len(WRAPPER_OPS)), squeeze=False)
+    surfaces = {b for _, b, _, _, companion in API_BOUNDARIES if companion for b in (b, companion)}
+    ops = [op for op in WRAPPER_FIGURE_OPS
+           if op in WRAPPER_OPS or any(r["operation"] == op and r["backend"] in surfaces - {"grid_jax"} and r.get("host_us") for r in rows)]
+    fig, axes = plt.subplots(len(ops), len(robots), figsize=(5.3*len(robots), 3.3*len(ops)), squeeze=False)
     width = .8/len(API_BOUNDARIES)
-    for oi, op in enumerate(WRAPPER_OPS):
+    for oi, op in enumerate(ops):
         limits = []
         for ri, robot in enumerate(robots):
             ax = axes[oi, ri]
             for xi, batch in enumerate(batches):
-                for bi, (_, backend, field, color) in enumerate(API_BOUNDARIES):
-                    row = lookup.get((robot, op, backend, batch), {})
-                    value = row.get(field)
-                    if value is None:
+                for bi, (_, backend, field, color, companion) in enumerate(API_BOUNDARIES):
+                    default = lookup.get((robot, op, backend, batch), {}).get(field)
+                    paired = lookup.get((robot, op, companion, batch), {}) if companion else {}
+                    reuse = paired.get("host_us")
+                    if companion == "grid_jax_prealloc" and not jax_pinned_route(paired):
+                        reuse = None
+                    if default is None and reuse is None:
                         continue
-                    lo, hi = row[field.replace("_us", "_min_us")], row[field.replace("_us", "_max_us")]
                     x = xi-.4+width*(bi+.5)
-                    ax.bar(x, value, width*.9, color=color)
-                    limits += [lo, hi]
-            ax.set(title=f"{robot} · {'RNEA' if oi == 0 else 'grad RNEA'}", xlabel="Batch size",
+                    solid = reuse if reuse is not None else default
+                    ax.bar(x, solid, width*.9, color=color)
+                    if reuse is not None and default is not None:
+                        if default > reuse:
+                            ax.bar(x, default-reuse, width*.9, bottom=reuse, facecolor="white", edgecolor=color,
+                                   hatch="//////", linewidth=.6)
+                        else:
+                            ax.plot([x-width*.45, x+width*.45], [default, default], color="black", linewidth=.9)
+                    limits += [v for v in (default, reuse) if v is not None]
+            ax.set(title=f"{robot} · {WRAPPER_FIGURE_OPS[op]}", xlabel="Batch size",
                    ylabel="Call wall time (µs / batch)", xticks=range(len(batches)), xticklabels=batches)
             ax.set_xlim(-.5, len(batches)-.5)
             ax.set_yscale("log")
@@ -191,10 +212,12 @@ def api_boundaries(rows, out):
                 ax.spines[side].set_visible(False)
         if limits:
             for ax in axes[oi]:
-                ax.set_ylim(min(limits)*.7, max(limits)*1.3)
-    fig.legend(handles=[Patch(color=color, label=label) for label, _, _, color in API_BOUNDARIES],
-               loc="lower center", ncol=5, frameon=False, bbox_to_anchor=(.5, .015), fontsize=11)
-    fig.tight_layout(rect=(0, .085, 1, 1))
+                ax.set_ylim(min(limits)*.7, max(limits)*1.4)
+    handles = [Patch(color=color, label=label) for label, _, _, color, _ in API_BOUNDARIES]
+    handles.append(Patch(facecolor="white", edgecolor=".3", hatch="//////",
+                         label="default call (allocates its output); solid = allocate-once"))
+    fig.legend(handles=handles, loc="lower center", ncol=6, frameon=False, bbox_to_anchor=(.5, .004), fontsize=10)
+    fig.tight_layout(rect=(0, .16/(len(ops)+.6), 1, 1))
     fig.savefig(out / "wrappers.svg")
     fig.savefig(out / "wrappers.png", dpi=150)
     plt.close(fig)

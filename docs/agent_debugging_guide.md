@@ -2626,3 +2626,101 @@ from a `.partial`, and `GRID_SPLIT_SHARD_JOBS` (default 1) runs that many shards
 side. Host RAM, not the GPU, is the bound: a shard's inline humanoid nvcc builds are not
 pool-admitted, so pilot >1 only under a `MemoryMax`'d unit. Guard:
 `test/test_cuda_cache_locking.py`.
+### 7.z36 "Pageable D2H" was a misdiagnosis: the numpy path copied twice; fix by retargeting the mirror, not by pinning the destination (2026-10-01)
+
+**Symptom.** The W14 report blamed the numpy path's large-output cost on a pageable
+device→host copy and proposed pinned output arrays. A probe that passed a page-locked
+destination to the C ABI measured NO change (67.3 vs 67.8 ms on g1 idsva_so @1024).
+
+**Cause.** The generated `grid::<op>` host wrapper already copies D2H into the page-locked
+`g_data->h_<out>` mirror; the C ABI then `std::memcpy`'d the whole slab into the caller's
+array (~28 ms of 67), and the handle added further copies (~53 ms). The destination's
+pinnedness was never the variable.
+
+**Fix.** `GridMirrorRetarget` (wrapper_template.cu hand region): the C-ABI body points
+`g_data->h_<out>` at the caller's buffer for the duration of the call, so the wrapper's own
+D2H lands there; an RAII destructor restores the mirror on EVERY exit path (the first draft
+restored it after the sync and would have left the context aimed at freed numpy memory on a
+launch-check or sync early return). OPT-IN per spec (`abi_specs.cabi_direct`; 16 rows after the
+2026-10-02 corrections in §7.z37 — the three baked EE-pose rows left, four device-direct rows joined):
+the exact audit (`test/test_cabi_direct_mirror_sizes.py`, regenerated fixed + floating
+headers) showed three wrappers copy `NUM_JOINTS`-strided rows into their mirror
+(`generalized_gravity`, `nonlinear_effects`, `integrator_gradient`) — one extra float per
+row on a floating base, harmless behind a memcpy that reads `batch*NUM_VEL`, a heap overflow
+if the copy were aimed at a caller's buffer — and five copy by another pattern. Those keep the
+memcpy. `handle.pinned_empty` + `out=` make the buffer page-locked so the copy runs at the
+PCIe rate.
+
+**Rules.**
+- Measure the mechanism before fixing it: one C-ABI call with a pinned vs pageable
+  destination settled this in a minute (drafts/host_transfer_probe.py).
+- Any code that temporarily redirects a context pointer restores it by destructor, never by
+  a statement after the call.
+- The pybind shim does not link cudart: anything needing the CUDA runtime from Python goes
+  through an export in the per-robot `.so` (here `grid_rbd_pinned_alloc/free/is_pinned`),
+  and a buffer that outlives the call keeps the Runner alive via its capsule.
+
+### 7.z37 A generator branch that REMOVES code needs its twin: the MuJoCo C-ABI bodies returned unwritten buffers (2026-10-02)
+
+**Symptom.** None in any gate. Found by reading a generated body while extending the
+retarget: `grid_rbd_idsva_so_mujoco` ended `sync_consume(); return 0;` with no copy into
+`out` at all. Fifteen twin bodies were like it.
+
+**Cause.** `_out_copy_lines` is shared by `gen_body` and `gen_mjx_body`; for a
+`cabi_direct` row it returns no copy because the retarget guard delivers the output. Only
+`gen_body` emitted the guard. The twins lost the memcpy and gained nothing, so the numpy
+MuJoCo-convention calls returned the freshly allocated result array unwritten — finite
+garbage. The 11 new GPU tests were fixed-base (twins `#ifdef`'d out); the one receipt-path
+twin module asserted `isfinite` on numpy outputs; the referee's docstring said "the
+mjx-twin bodies retarget too" and nothing checked it.
+
+**Fix.** `gen_mjx_body` emits the same guard. Two gates: a CPU referee over EVERY generated
+body, primary and twin — output delivered exactly once, by a guard or by a copy into the
+out pointer (`test_cabi_direct_mirror_sizes.py`; it reports all 15 on the old generator) —
+and a GPU test comparing numpy twins with the torch twins, which copy device-to-device and
+never touch the mirror (`test_mjx_twins_contexts.py`).
+
+**Same pass, the other direction.** Four C-ABI bodies (`crba`, `minv`, both first-order
+gradients) downloaded the device buffer into the caller's array AFTER the host wrapper had
+already downloaded it into the pinned mirror — a second full D2H per call, left over from a
+mirror-stride workaround the generator has since fixed. They are `cabi_direct` now: one
+download, into the caller's buffer.
+
+**And a third defect, found by the receipt (segfault, rc=-11).** The baked EE-pose family
+was `cabi_direct`. Its public size is `6*GRID_RBD_NUM_EES*…` — a WRAPPER-side macro that a
+named-target build (`ee_joint_names=[one joint]`) sets to 1 — while the generated host
+function still downloads all `grid::NUM_EES` leaves into the mirror. Behind a memcpy that
+is harmless (the first slot is the named target); retargeted, the download overran the
+caller's array 4x on go2 (the gradient and pose calls before it corrupted the heap
+silently; the Hessian finally faulted). The size referee had evaluated both sides with one
+header's constants and `GRID_RBD_NUM_EES := NUM_EES`, i.e. only the multi-leaf build. The
+three rows are back on the memcpy, and the referee refuses any direct row whose
+`out_size_expr` names a wrapper-side macro.
+
+**Rules.**
+- A size proof that evaluates two expressions under one set of constants proves nothing
+  about a name the two sides can bind differently. Either the expressions name the same
+  header constants, or every binding is enumerated.
+- When a shared emitter starts returning nothing for some rows, enumerate every caller and
+  show where each one delivers the removed effect instead.
+- `isfinite` is not a value check. Uninitialised memory is usually finite. Compare against
+  an independent path.
+- A feature that changes generated twins needs a floating-base GPU test in the receipt
+  path; fixed-base smokes compile the twins out.
+
+### 7.z38 A wrapper-only refresh empties the cuda rows of test/gpu-proof-header-keys.json (2026-10-02)
+
+**Symptom.** After `SPLIT=1 SPLIT_REFRESH=1` re-ran 39 wrapper modules and carried the 4 cuda
+shards, the committed header-key aggregate went from 4 shards / 321 records to 0 / 0.
+
+**Cause.** `run_split_suite.aggregate_header_keys` keeps an old shard's rows only when the shard
+is in the run's ledger (`results`). Carried shards never execute, so they are not in the
+ledger, and their rows are dropped. The next refresh then cannot carry them by header-key
+replay and falls back to the codegen-neutrality verdict (which still worked here).
+
+**Fix for now.** The receipt launchers save the file before the run and restore it afterwards
+(run_pilot_shardjobs2_receipt_levers_2026_10_01.py does; the 10-02 wrapper launcher did not,
+and the receipt commit restored the rows by hand from HEAD~1). The driver fix — keep rows for
+every shard the merged receipt carries, not only executed shards — touches a fingerprinted
+file and goes with the next refresh.
+

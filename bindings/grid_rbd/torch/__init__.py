@@ -472,6 +472,18 @@ class GraphCallable:
         with self._lock:
             return self._replay_admitted()
 
+    def replay_into(self, host):
+        """Replay, then copy ``static_out`` into ``host`` (a page-locked CPU tensor
+        or tuple of them from :func:`pinned_host_like`) with ``non_blocking=True``
+        and synchronize the current stream. The allocate-once host round trip:
+        measured 2026-10-01 at 39.5 ms vs 238 ms for ``.cpu()`` on g1 idsva_so
+        @1024 (702 MB), i.e. the box's pinned D2H rate instead of a pageable
+        staged copy. ``host`` must match ``static_out`` in shape and dtype."""
+        with self._lock:
+            out = self._replay_admitted()
+            copy_to_host(host, out, sync=True)
+            return host
+
     def __call__(self, *inputs):
         if len(inputs) != len(self.static_in):
             raise ValueError(f"expected {len(self.static_in)} inputs, got {len(inputs)}")
@@ -1220,6 +1232,37 @@ def _concat_blocks(blocks):
 # ─── public API ─────────────────────────────────────────────────────────────
 
 
+def pinned_host_like(tensors):
+    """Allocate page-locked CPU mirrors for ``tensors`` (one tensor or a tuple/list
+    of them, e.g. an op's output or ``GraphCallable.static_out``). Allocate ONCE and
+    reuse: ``cudaMallocHost`` is millisecond-scale, the copy into pinned memory runs
+    at the PCIe rate (~17-21 GB/s here) while ``.cpu()`` on a device tensor goes
+    through a pageable staged copy at ~3 GB/s for large outputs."""
+    torch = _require_torch()
+    if isinstance(tensors, (tuple, list)):
+        mirrors = [pinned_host_like(t) for t in tensors]
+        # NamedTuple outputs (SecondOrderID / SecondOrderFD) take positional fields
+        return type(tensors)(*mirrors) if hasattr(tensors, "_fields") else type(tensors)(mirrors)
+    return torch.empty(tuple(tensors.shape), dtype=tensors.dtype, device="cpu", pin_memory=True)
+
+
+def copy_to_host(host, device_out, *, sync=True):
+    """Copy ``device_out`` (tensor or tuple) into the pinned ``host`` mirrors with
+    ``non_blocking=True``; ``sync=True`` synchronizes the current CUDA stream before
+    returning so ``host`` is readable. Returns ``host``."""
+    torch = _require_torch()
+    if isinstance(device_out, (tuple, list)):
+        if len(host) != len(device_out):
+            raise ValueError(f"host has {len(host)} mirrors, device_out has {len(device_out)} tensors")
+        for h, d in zip(host, device_out):
+            h.copy_(d, non_blocking=True)
+    else:
+        host.copy_(device_out, non_blocking=True)
+    if sync:
+        torch.cuda.current_stream().synchronize()
+    return host
+
+
 def register_robot(
     name: str,
     urdf_path: str | None = None,
@@ -1313,4 +1356,5 @@ def _lookup(name, cache_dir):
     return entry["cache_key"], str(so_path)
 
 
-__all__ = ["TorchRobotHandle", "GraphCallable", "register_robot", "get_robot"]
+__all__ = ["TorchRobotHandle", "GraphCallable", "register_robot", "get_robot",
+           "pinned_host_like", "copy_to_host"]

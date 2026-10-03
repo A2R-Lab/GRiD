@@ -15,7 +15,7 @@ from test.benchmarks.release.report import aggregate, records
 def test_stage_sizes_and_exact_batches():
     assert p.BATCHES == (16,32,64,128,256,1024)
     assert len(list(p.jobs("core", p.ROBOTS))) == 45
-    assert len(list(p.jobs("wrappers", p.ROBOTS))) == 30
+    assert len(list(p.jobs("wrappers", p.ROBOTS))) == 48      # 3 robots x 2 ops x (5 surfaces + 3 allocate-once)
     assert len(list(p.jobs("table", p.ROBOTS))) == 3*len(p.OPERATIONS)*len(p.TABLE_BACKENDS)
     assert all(job["backend"] == "grid_cuda" for job in list(p.jobs("core", ["iiwa14"]))[::len(p.PRIMARY["inverse_dynamics"])][:1])
 
@@ -38,6 +38,31 @@ def test_capability_gaps_are_not_library_claims():
     assert p.capability("mjx","crba","go2") is None and p.capability("mujoco_warp","crba","go2") is None
     assert p.capability("bard","generalized_gravity","g1") is None and p.capability("frax","crba","iiwa14") is None
     assert p.capability("mjx","ccrba","iiwa14").startswith("adapter_pending:")
+    # allocate-once companions: NumPy only where the API has out=; torch/JAX everywhere
+    assert p.capability("grid_numpy_prealloc","inverse_dynamics","g1").startswith("not_applicable:")
+    assert all(p.capability("grid_numpy_prealloc",op,"g1") is None for op in p.NUMPY_OUT_OPS)
+    assert all(p.capability(b,op,"g1") is None for b in ("grid_torch_prealloc","grid_jax_prealloc") for op in p.CORE)
+    assert set(p.PREALLOC) <= set(p.WRAPPERS) and set(p.PREALLOC.values()) <= set(p.WRAPPERS)
+
+
+def test_jax_pinned_floor_matches_the_bindings_and_selects_cells():
+    """The figure draws a JAX allocate-once bar only where to_host took the pinned route."""
+    import re
+    source = (p.ROOT / "bindings/grid_rbd/jax/__init__.py").read_text()
+    floor = re.search(r"^_PINNED_MIN_BYTES = (.+)$", source, re.M).group(1)
+    assert eval(floor, {"__builtins__": {}}) == p.JAX_PINNED_MIN_BYTES
+    row = lambda op, entries: {"operation": op, "entries": entries}
+    assert not p.jax_pinned_route(row("inverse_dynamics", 1024 * 35))                 # 140 KiB
+    assert p.jax_pinned_route(row("inverse_dynamics_gradient", 1024 * 2 * 7 * 7))     # 392 KiB
+    assert not p.jax_pinned_route(row("idsva_so", 128 * 4 * 7 ** 3))                  # 4 x 171.5 KiB
+    assert p.jax_pinned_route(row("idsva_so", 256 * 4 * 7 ** 3))                      # 4 x 343 KiB
+    assert not p.jax_pinned_route({"operation": "idsva_so", "entries": None})
+
+
+def test_numpy_out_ops_match_the_bindings_table():
+    """The benchmark's notion of "NumPy has out=" is the bindings' py_out_param flag."""
+    from grid_codegen.abi_specs import ABI_SPECS
+    assert p.NUMPY_OUT_OPS == {k for k, s in ABI_SPECS.items() if s.py_out_param}
 
 
 def test_accuracy_checks_shapes_blocks_finiteness_and_near_zero():
@@ -460,7 +485,7 @@ def test_corrupt_capture_rejected(tmp_path):
 def test_cli_dry_run_and_bad_tool_no_gpu_needed():
     result=subprocess.run([sys.executable,"-m","test.benchmarks.release.collect","--stage","wrappers","--smoke"],cwd=p.ROOT,text=True,capture_output=True,check=True)
     plan=json.loads(result.stdout)
-    assert plan["batches"]==[16] and len(plan["jobs"])==30 and plan["warm_seconds"]==p.WARM_SECONDS
+    assert plan["batches"]==[16] and len(plan["jobs"])==48 and plan["warm_seconds"]==p.WARM_SECONDS
     full=json.loads(subprocess.run([sys.executable,"-m","test.benchmarks.release.collect","--stage","core"],cwd=p.ROOT,text=True,capture_output=True,check=True).stdout)
     assert full["batches"]==list(p.BATCHES) and full["batches"][-1]==1024
     assert command_output(["/definitely/no/such/binary"]).startswith("unavailable:")

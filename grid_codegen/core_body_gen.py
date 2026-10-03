@@ -171,6 +171,12 @@ def _signature_and_call(spec, mjx: bool):
         call = [c for c in call if c != "gravity"]
         params.remove("CT gravity")
         params.insert(params.index("CT dt, int it") + 1, "CT gravity")
+    if spec.py_out_param:
+        # allocate-once host round trip (2026-10-01): trailing optional caller-owned out
+        # 1 dim: grid_py_out(out, batch, n); 2 dims: the (batch, rows, cols) overload,
+        # whose caller-owned form is still the flat (batch, rows*cols) raw buffer.
+        assert spec.py_out_dims and len(spec.py_out_dims) in (1, 2), spec.key
+        params.append("py::object out_opt")
     return params, prelude, call
 
 
@@ -196,7 +202,10 @@ def gen_method(spec, mjx: bool) -> str:
         L.append(f'        int batch = check_q(q, "{name}");')
     for p in prelude:
         L.append("        " + p)
-    L.append(f"        py::array_t<CT> out({{batch, {dims}}});")
+    if spec.py_out_param:
+        L.append(f'        py::array_t<CT> out = grid_py_out<CT>(out_opt, batch, {dims}, "{name}");')
+    else:
+        L.append(f"        py::array_t<CT> out({{batch, {dims}}});")
     L.append(f"        int rc = {fn}(ctx_id_, {', '.join(call)});")
     # A1 (2026-09-08): ONE throw per method through the rc_message decoder
     # (defined beside the shared validators in the hand region). rc==3 returns
