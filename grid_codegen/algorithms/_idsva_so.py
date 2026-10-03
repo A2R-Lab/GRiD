@@ -2058,7 +2058,8 @@ def gen_idsva_so_body_frame_inner(self):
     self.gen_add_code_line('int mat_idx = (i / 36) * 36;')
     self.gen_add_code_line("matmul_trans<T>(i % 36, &Xup[mat_idx], &I_Xup[mat_idx], &IC[mat_idx], 'a');")
     self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    # NO sync (guide §7.z39): Xdown below reads only Xup (published at the I_Xup barrier) and
+    # writes the s_temp head slab, which the IC stage never touches; IC rides the Xdown barrier.
 
     # Next compute Xdown transformations
     # Just the transpose of internal 3x3 submatrices
@@ -2232,7 +2233,8 @@ def gen_idsva_so_body_frame_inner(self):
     self.gen_add_end_control_flow()
     self.gen_add_code_line(f'else IC_v[i - 6*NUM_BODIES] = dot_prod<T, 6, 6, 1>(&IC[index + jid*36], &v[jid*6]);')
     self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    # NO sync: crm(v)/crf(v) below read only v (published long before); psidd/IC_v ride the
+    # crm_v barrier, which is the one BC (their first reader) waits on.
 
     # Begin BC Computation
     # First Compute crm(v) & crf(v)
@@ -2259,7 +2261,7 @@ def gen_idsva_so_body_frame_inner(self):
     self.gen_add_code_line('        icrf<T>(i % 36, &IC_v[jid*6]) -')
     self.gen_add_code_line('        dot_prod<T, 6, 6, 1>(&IC[jid*36 + row], &crm_v[col_idx]);')
     self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    # NO sync: f below reads IC/a/crf_v/IC_v (all published at the crm_v barrier), never BC.
 
     # Next f = IC @ a + crf(v) @ IC @ v
     self.gen_add_code_line("\n\n")
@@ -2352,7 +2354,8 @@ def gen_idsva_so_body_frame_inner(self):
     self.gen_add_code_line('                                dot_prod<T, 6, 6, 1>(&IC[jid*36 + row], &crm_psid[jid*36 + col*6]);')
     self.gen_add_end_control_flow()
     self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    # NO sync: the T2/T3/T4/ICT_S stage reads BC/S/psid/IC/psidd/icrf_f/psid_Sd (all published at
+    # the crm_S barrier) and never B_IC_S/D2; both stages ride the barrier before the D stage.
 
     # Compute T2 = -BC.T @ S & T3 = BC @ psid + IC @ psidd + icrf(f) @ S, & T4 = BC @ S + IC @ (psid + Sd), & IC.T @ S for D4
     self.gen_add_code_line('\n\n')
@@ -2717,7 +2720,8 @@ def gen_idsva_so_body_frame_inner(self):
     self.gen_add_code_line(f'else if (i >= {5*len(jids)}) d2tau_dvdq[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + st_j] -= dot_prod<T, 6, 1, 1>(&p5[p_idx], &T4[st_j*6]);')
     self.gen_add_end_control_flow()
     self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    # NO sync: the p6 finish reads p6/S (published at the p barrier) and writes d2tau_dqd2 only,
+    # which the p1..p5 finish never touches.
 
     # Finish computation with p6
     self.gen_add_code_line('\n\n')
