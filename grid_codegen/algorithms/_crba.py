@@ -408,8 +408,9 @@ def gen_crba_inner(self):
     ImatOffset = 36*n   # Offset in XImats to Imats
     self.gen_add_code_line(f"s_M[jid+jid*{n}] = s_XImats[{ImatOffset} + 36*jid + 6*{S_ind_cpp} + {S_ind_cpp}];") # take the S_ind row and S_ind column of appropriate Imat
     self.gen_add_end_control_flow()
-    self.gen_add_sync()
-    
+    # NO sync (barrier audit 2026-10-03): the s_fh fill below reads only s_XImats; the
+    # diagonal writes ride the s_fh barrier (the chain walk after it never touches M[ii]).
+
 
     self.gen_add_code_line("//")
     self.gen_add_code_line("// Calculation of M[ind, parent]")

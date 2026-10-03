@@ -806,10 +806,13 @@ def gen_kernel_load_inputs(self, name, amount, name2=None, amount2=1, name3=None
         _emit(name3, amount3, stride3)
     self.gen_add_sync()
 
-def gen_kernel_save_result(self, store_to_name, amount, load_from_name=None, stride=None):
+def gen_kernel_save_result(self, store_to_name, amount, load_from_name=None, stride=None, sync=True):
     """Emit a save-result-from-shared block. Batched-k kernels pass `stride`
     to address each timestep's slot via `&d_<store_to_name>[k*stride]`;
-    single-timing kernels omit it."""
+    single-timing kernels omit it. `sync=False` drops the trailing barrier: use it
+    for the first of two back-to-back saves of DIFFERENT buffers (the copies are
+    independent, so one barrier after the second covers both — barrier audit
+    2026-10-03)."""
     if load_from_name is None:
         load_from_name = "s_" + store_to_name
     self.gen_add_code_line("// save down to global")
@@ -821,7 +824,8 @@ def gen_kernel_save_result(self, store_to_name, amount, load_from_name=None, str
     self.gen_add_parallel_loop("ind", amount)
     self.gen_add_code_line(dst + "[ind] = " + load_from_name + "[ind];")
     self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    if sync:
+        self.gen_add_sync()
 
 def gen_anti_licm_input_reload(self, name, amount, \
                                      name2 = None, amount2 = 1, name3 = None, amount3 = 1, \

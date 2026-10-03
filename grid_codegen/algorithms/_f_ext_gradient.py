@@ -791,7 +791,7 @@ def _emit_f_ext_gradient_kernel_body_for_flags(self, pick, single_call_timing):
         _repoint_spilled_output(in_timestep_loop=True)
         self.gen_add_code_line("// compute")
         _body(in_timestep_loop=True)
-        self.gen_kernel_save_result("dtau_dfext", str(out_each), stride=str(out_each))
+        self.gen_kernel_save_result("dtau_dfext", str(out_each), stride=str(out_each), sync=False)
         self.gen_kernel_save_result("dqdd_dfext", str(out_each), stride=str(out_each))
         self.gen_add_end_control_flow()
     else:
@@ -803,7 +803,7 @@ def _emit_f_ext_gradient_kernel_body_for_flags(self, pick, single_call_timing):
         _body(in_timestep_loop=False)
         self.gen_anti_licm_output_write("dtau_dfext")
         self.gen_add_end_control_flow()
-        self.gen_kernel_save_result("dtau_dfext", str(out_each))
+        self.gen_kernel_save_result("dtau_dfext", str(out_each), sync=False)
         self.gen_kernel_save_result("dqdd_dfext", str(out_each))
 
 
