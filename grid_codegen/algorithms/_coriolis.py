@@ -122,13 +122,7 @@ def _coriolis_metadata(self):
     # subtree / ancestor body lists (body ids), per body.
     subtree = {i: sorted(robot.get_subtree_by_id(i)) for i in range(NB)}
 
-    def ancestors(i):
-        res = []
-        j = robot.get_parent_id(i)
-        while j != -1:
-            res.append(j)
-            j = robot.get_parent_id(j)
-        return res
+    ancestors = robot.get_ancestors_by_id          # [parent(i), ..., root child]
 
     # ---- C-assembly job table: one job per (i_col, target_col) cell ----
     # kind 0 = subtree term  Sw[i_col]^T dFdv[t_col]

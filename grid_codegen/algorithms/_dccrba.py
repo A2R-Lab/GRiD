@@ -80,12 +80,7 @@ def _dccrba_metadata(self):
     HAS_MIMIC = self.robot_has_mimic_joints()
 
     def ancestors(i):
-        res = set()
-        j = robot.get_parent_id(i)
-        while j != -1:
-            res.add(j)
-            j = robot.get_parent_id(j)
-        return res
+        return set(robot.get_ancestors_by_id(i))
 
     anc = [ancestors(i) for i in range(NB)]
     anc_self = [anc[i] | {i} for i in range(NB)]

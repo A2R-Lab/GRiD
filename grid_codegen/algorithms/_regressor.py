@@ -204,14 +204,7 @@ def gen_inverse_dynamics_regressor_inner(self):
     #    i->root, project f onto j's DOF rows (mimic-scaled), then f = X[j]^T f.
     #
     # Precompute, per body i, the ancestor chain [i, parent(i), ...] until root.
-    chains = []
-    for i in range(NB):
-        chain = []
-        cur = i
-        while cur != -1:
-            chain.append(cur)
-            cur = self.robot.get_parent_id(cur)
-        chains.append(chain)
+    chains = [[i] + self.robot.get_ancestors_by_id(i) for i in range(NB)]
 
     # mimic multiplier + S projection tables, indexed by body id.
     def _mimic_scale(jid):
@@ -1382,13 +1375,7 @@ def _idrg_walk_plan(self):
     band) exactly the band's column order for body i."""
     robot = self.robot
     NB = robot.get_num_bodies()
-    chains = []
-    for i in range(NB):
-        ch, cur = [], i
-        while cur != -1:
-            ch.append(cur)
-            cur = robot.get_parent_id(cur)
-        chains.append(ch)
+    chains = [[i] + robot.get_ancestors_by_id(i) for i in range(NB)]
 
     def vcols(j):
         idx = robot.get_joint_index_v(j)
