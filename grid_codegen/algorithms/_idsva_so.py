@@ -3385,16 +3385,14 @@ def gen_idsva_so_world_frame_inner(self):
     # the v/a update, Sd) runs on thread 0, while the two dominant 36-element
     # matrix builds (IC = Xup^T I Xup, and BC) run as block-parallel idx-over-36
     # loops between syncs. Per-body temporaries that the parallel loops read across
-    # threads (vJ, aJ, I_Xup, IC_v) live in the otherwise-idle Step-5 `scratch`
-    # region rather than thread-0 stack. All threads execute the jid loop body so
+    # threads (vJ, aJ) live in the otherwise-idle Step-5 `scratch` region rather than
+    # thread-0 stack (I_Xup / IC_v are re-formed in registers by their consumers). All threads execute the jid loop body so
     # every thread reaches each sync; the trailing sync closes the phase.
     self.gen_add_code_line("// Forward sweep: build v, a, f, IC, BC, psid, psidd, Sd.")
     self.gen_add_code_lines([
         "// Per-body forward-sweep temporaries borrowed from the (dead-until-Step-5) scratch region.",
         "T *fs_vJ   = scratch;        // 6",
         "T *fs_aJ   = fs_vJ   + 6;    // 6",
-        "T *fs_I_Xup = fs_aJ  + 6;    // 36 (Ipool @ Xup, intermediate for IC)",
-        "T *fs_IC_v = fs_I_Xup + 36;  // 6  (IC[jid] @ v[jid])",
     ])
     self.gen_add_code_line("for (int jid = 0; jid < NUM_BODIES; ++jid) {", True)
     self.gen_add_code_line("int parent = wf_parent[jid];")
@@ -3453,47 +3451,44 @@ def gen_idsva_so_world_frame_inner(self):
     # NO sync: the I_Xup build below reads only Ipool/Xup (published long before), so the
     # Sd writes ride the next barrier (guide §7.z39: a barrier that orders nothing is free).
 
-    # --- IC[jid] = Xup[jid]^T @ I_body @ Xup[jid]: two block-parallel idx-over-36 builds.
-    self.gen_add_code_line("// IC[jid] = Xup[jid]^T @ I_body @ Xup[jid] (block-parallel over the 36 elements).")
+    # --- IC[jid] = Xup[jid]^T @ I_body @ Xup[jid]: ONE block-parallel idx-over-36 build. Each
+    # element needs column `col` of I_body @ Xup[jid]; the legacy emission published that
+    # 6x6 intermediate through a shared slab + barrier, this one re-forms the six column
+    # entries in registers with the SAME per-entry expression (same bits) — barrier audit
+    # 2026-10-03, §7.z39 (recompute-instead-of-share).
+    self.gen_add_code_line("// IC[jid] = Xup[jid]^T @ I_body @ Xup[jid] (block-parallel over the 36 elements; the I_body @ Xup column re-formed in registers).")
     self.gen_add_parallel_loop("idx", "36")
     self.gen_add_code_line("int row = idx % 6; int col = idx / 6;")
+    self.gen_add_code_line("T ixc[6];")
+    self.gen_add_code_line("for (int kk2 = 0; kk2 < 6; ++kk2) { T acc = static_cast<T>(0); for (int mm = 0; mm < 6; ++mm) acc += Ipool[jid*36 + kk2 + 6*mm] * Xup[jid*36 + mm + 6*col]; ixc[kk2] = acc; }")
     self.gen_add_code_line("T acc = static_cast<T>(0);")
-    self.gen_add_code_line("for (int kk = 0; kk < 6; ++kk) acc += Ipool[jid*36 + row + 6*kk] * Xup[jid*36 + kk + 6*col];")
-    self.gen_add_code_line("fs_I_Xup[idx] = acc;")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
-    self.gen_add_parallel_loop("idx", "36")
-    self.gen_add_code_line("int row = idx % 6; int col = idx / 6;")
-    self.gen_add_code_line("T acc = static_cast<T>(0);")
-    self.gen_add_code_line("for (int kk = 0; kk < 6; ++kk) acc += Xup[jid*36 + kk + 6*row] * fs_I_Xup[kk + 6*col];")
+    self.gen_add_code_line("for (int kk = 0; kk < 6; ++kk) acc += Xup[jid*36 + kk + 6*row] * ixc[kk];")
     self.gen_add_code_line("IC[jid*36 + idx] = acc;")
     self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_sync()             # publish IC[jid] (BC/f read whole rows/columns of it)
 
-    # --- IC_v (6-vec), then BC[jid] (36, block-parallel), then f[jid] (6-vec).
-    # IC_v rows are independent: parallelize one row per thread.
-    self.gen_add_parallel_loop("row", "6")
-    self.gen_add_code_line("fs_IC_v[row] = dot_prod<T, 6, 6, 1>(&IC[jid*36 + row], &v_w[jid*6]);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
-    # BC[jid] = crf(v) @ IC + icrf(IC @ v) - IC @ crm(v).
-    self.gen_add_code_line("// BC[jid] = crf(v) @ IC + icrf(IC @ v) - IC @ crm(v) (block-parallel over the 36 elements).")
+    # --- BC[jid] (36, block-parallel) and f[jid] (6-vec), each re-forming IC[jid] @ v[jid] in
+    # registers (the legacy 6-row IC_v stage + its barrier are gone; same per-row dot, same bits).
+    self.gen_add_code_line("// BC[jid] = crf(v) @ IC + icrf(IC @ v) - IC @ crm(v) (block-parallel over the 36 elements; IC @ v re-formed in registers).")
     self.gen_add_parallel_loop("idx", "36")
     self.gen_add_code_line("int row = idx % 6; int col = idx / 6;")
+    self.gen_add_code_line("T icv[6];")
+    self.gen_add_code_line("for (int r = 0; r < 6; ++r) icv[r] = dot_prod<T, 6, 6, 1>(&IC[jid*36 + r], &v_w[jid*6]);")
     self.gen_add_code_line("T crf_v_row[6];  T crm_v_col[6];")
     self.gen_add_code_line("for (int kk = 0; kk < 6; ++kk) crf_v_row[kk] = -crm<T>(kk + 6*row, &v_w[jid*6]);")
     self.gen_add_code_line("for (int kk = 0; kk < 6; ++kk) crm_v_col[kk] = crm<T>(kk + 6*col, &v_w[jid*6]);")
     self.gen_add_code_line("T t_crfv_IC = dot_prod<T, 6, 1, 1>(crf_v_row, &IC[jid*36 + 6*col]);")
     self.gen_add_code_line("T t_IC_crmv = dot_prod<T, 6, 6, 1>(&IC[jid*36 + row], crm_v_col);")
-    self.gen_add_code_line("BC[jid*36 + idx] = t_crfv_IC + icrf<T>(idx, fs_IC_v) - t_IC_crmv;")
+    self.gen_add_code_line("BC[jid*36 + idx] = t_crfv_IC + icrf<T>(idx, icv) - t_IC_crmv;")
     self.gen_add_end_control_flow()
-    # NO sync: f[jid] reads IC/a_w/v_w/fs_IC_v (all published at the IC_v barrier), never BC.
-    # f[jid] = IC @ a + crf(v) @ IC @ v. Rows are independent: parallelize one row per thread.
-    self.gen_add_code_line("// f[jid] = IC[jid] @ a[jid] + crf(v[jid]) @ (IC[jid] @ v[jid]) (parallel over the 6 rows).")
+    # NO sync: f[jid] reads IC/a_w/v_w (all published at the IC barrier), never BC.
+    self.gen_add_code_line("// f[jid] = IC[jid] @ a[jid] + crf(v[jid]) @ (IC[jid] @ v[jid]) (parallel over the 6 rows; IC @ v re-formed in registers).")
     self.gen_add_parallel_loop("row", "6")
+    self.gen_add_code_line("T icv[6];")
+    self.gen_add_code_line("for (int r = 0; r < 6; ++r) icv[r] = dot_prod<T, 6, 6, 1>(&IC[jid*36 + r], &v_w[jid*6]);")
     self.gen_add_code_line("T crf_v_row2[6];")
     self.gen_add_code_line("for (int kk = 0; kk < 6; ++kk) crf_v_row2[kk] = -crm<T>(kk + 6*row, &v_w[jid*6]);")
-    self.gen_add_code_line("f_w[jid*6 + row] = dot_prod<T, 6, 6, 1>(&IC[jid*36 + row], &a_w[jid*6]) + dot_prod<T, 6, 1, 1>(crf_v_row2, fs_IC_v);")
+    self.gen_add_code_line("f_w[jid*6 + row] = dot_prod<T, 6, 6, 1>(&IC[jid*36 + row], &a_w[jid*6]) + dot_prod<T, 6, 1, 1>(crf_v_row2, icv);")
     self.gen_add_end_control_flow()
     # NO loop-end sync: the next body's thread-0 prologue writes v_w/a_w[jid+1] and fs_vJ/fs_aJ,
     # none of which the still-running BC/f stages of body jid read (they read v_w/a_w[jid],
