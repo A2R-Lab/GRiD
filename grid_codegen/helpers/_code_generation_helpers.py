@@ -504,6 +504,19 @@ def host_q_compressed_input_transfer_lines(single_call_timing, errcheck=True):
     return lines
 
 
+def gen_launch_pair(func_call, compressed_sym, indent=""):
+    """The USE_COMPRESSED_MEM launch pair every host wrapper emits: the
+    compressed launch reads the compact input buffer the call names
+    (``compressed_sym``: ``hd_data->d_q`` / ``hd_data->d_q_qd``, or with a
+    trailing ``,`` where the call also names another ``d_q*`` buffer); the
+    else branch retargets exactly that token onto the packed ``d_q_qd_u``
+    staging block. Returns the (if, else) line pair."""
+    head = "hd_data->d_q_qd" if compressed_sym.startswith("hd_data->d_q_qd") else "hd_data->d_q"
+    full = "hd_data->d_q_qd_u" + compressed_sym[len(head):]
+    return (indent + "if (USE_COMPRESSED_MEM) {" + func_call + "}",
+            indent + "else                    {" + func_call.replace(compressed_sym, full) + "}")
+
+
 def wrap_host_single_call_timing(func_call_code, kernel_errcheck=False):
     """Wrap the host launch-line list in the single-call timing scaffold, IN
     PLACE: clock_gettime start prepended, [optional gpuErrchkKernel,] clock_

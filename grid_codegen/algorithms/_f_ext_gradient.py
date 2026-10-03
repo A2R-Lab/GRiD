@@ -29,7 +29,7 @@ minv s_Minv). dJ^T/dq is the ANALYTIC closed form of the -J^T q-derivative
 col_{m,j}) via the Featherstone identity dX[m]/dq_m = -crm(S_m)X[m]); the q-dot
 block is identically zero (J^T is q-only) and is not stored.
 """
-from grid_codegen.helpers._code_generation_helpers import gen_workspace_repoint_line, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import gen_launch_pair, gen_workspace_repoint_line, mangle_host_func_defs, wrap_host_single_call_timing
 
 
 def _f_ext_gradient_chain_jobs(self):
@@ -613,8 +613,7 @@ def gen_f_ext_gradient_dq_host(self, mode=0):
         self.gen_add_code_line("int stride_q = USE_COMPRESSED_MEM ? NUM_JOINTS: 3*NUM_JOINTS;")
     self.gen_add_code_line("// then call the kernel")
     func_call = func_call_start + func_call_end
-    func_call_mem_adjust = "if (USE_COMPRESSED_MEM) {" + func_call + "}"
-    func_call_mem_adjust2 = "else                    {" + func_call.replace("hd_data->d_q", "hd_data->d_q_qd_u") + "}"
+    func_call_mem_adjust, func_call_mem_adjust2 = gen_launch_pair(func_call, "hd_data->d_q")
     func_call_code = [func_call_mem_adjust, func_call_mem_adjust2, "gpuErrchkKernel();"]
     if single_call_timing:
         wrap_host_single_call_timing(func_call_code)
@@ -880,8 +879,7 @@ def gen_f_ext_gradient_host(self, mode=0):
         self.gen_add_code_line("int stride_q = USE_COMPRESSED_MEM ? NUM_JOINTS: 3*NUM_JOINTS;")
     self.gen_add_code_line("// then call the kernel")
     func_call = func_call_start + func_call_end
-    func_call_mem_adjust = "if (USE_COMPRESSED_MEM) {" + func_call + "}"
-    func_call_mem_adjust2 = "else                    {" + func_call.replace("hd_data->d_q", "hd_data->d_q_qd_u") + "}"
+    func_call_mem_adjust, func_call_mem_adjust2 = gen_launch_pair(func_call, "hd_data->d_q")
     func_call_code = [func_call_mem_adjust, func_call_mem_adjust2, "gpuErrchkKernel();"]
     if single_call_timing:
         wrap_host_single_call_timing(func_call_code)

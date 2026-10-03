@@ -26,7 +26,7 @@ per-column independence is left for a future perf pass.
 
 import numpy as np
 
-from grid_codegen.helpers._code_generation_helpers import gen_emit_host_result_transfer, gen_workspace_repoint_line, host_mode_flags, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import gen_launch_pair, gen_emit_host_result_transfer, gen_workspace_repoint_line, host_mode_flags, mangle_host_func_defs, wrap_host_single_call_timing
 from grid_codegen.helpers._code_generation_helpers import gen_host_wrapper_head
 from grid_codegen.helpers._code_generation_helpers import host_q_compressed_input_transfer_lines
 
@@ -386,8 +386,7 @@ def gen_frame_jacobian_host(self, mode=0):
         self.gen_add_code_line("int stride_q = USE_COMPRESSED_MEM ? NUM_JOINTS: 3*NUM_JOINTS;")
     self.gen_add_code_line("// then call the kernel")
     func_call = func_call_start + func_call_end
-    func_call_mem_adjust = "if (USE_COMPRESSED_MEM) {" + func_call + "}"
-    func_call_mem_adjust2 = "else                    {" + func_call.replace("hd_data->d_q", "hd_data->d_q_qd_u") + "}"
+    func_call_mem_adjust, func_call_mem_adjust2 = gen_launch_pair(func_call, "hd_data->d_q")
     func_call_code = [func_call_mem_adjust, func_call_mem_adjust2, "gpuErrchkKernel();"]
     if single_call_timing:
         wrap_host_single_call_timing(func_call_code)
@@ -984,8 +983,7 @@ def gen_osc_inertia_host(self, mode=0):
         self.gen_add_code_line("int stride_q = USE_COMPRESSED_MEM ? NUM_JOINTS: 3*NUM_JOINTS;")
     self.gen_add_code_line("// then call the kernel")
     func_call = func_call_start + func_call_end
-    func_call_mem_adjust = "if (USE_COMPRESSED_MEM) {" + func_call + "}"
-    func_call_mem_adjust2 = "else                    {" + func_call.replace("hd_data->d_q", "hd_data->d_q_qd_u") + "}"
+    func_call_mem_adjust, func_call_mem_adjust2 = gen_launch_pair(func_call, "hd_data->d_q")
     func_call_code = [func_call_mem_adjust, func_call_mem_adjust2, "gpuErrchkKernel();"]
     if single_call_timing:
         wrap_host_single_call_timing(func_call_code)

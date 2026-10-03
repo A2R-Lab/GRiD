@@ -1,4 +1,4 @@
-from grid_codegen.helpers._code_generation_helpers import gen_emit_host_result_transfer, host_mode_flags, host_q_qd_input_transfer_lines, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import gen_launch_pair, gen_emit_host_result_transfer, host_mode_flags, host_q_qd_input_transfer_lines, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
 from grid_codegen.helpers._code_generation_helpers import gen_host_wrapper_head
 
 
@@ -970,10 +970,8 @@ def gen_inverse_dynamics_host(self, mode = 0):
     func_call = func_call_start + func_call_end
     func_call_with_qdd = func_call_qdd_start + "hd_data->d_qdd, " + func_call_end
     # add in compressed mem adjusts
-    func_call_mem_adjust = "    if (USE_COMPRESSED_MEM) {" + func_call + "}"
-    func_call_mem_adjust2 = "    else                    {" + func_call.replace("hd_data->d_q_qd","hd_data->d_q_qd_u") + "}"
-    func_call_with_qdd_mem_adjust = "    if (USE_COMPRESSED_MEM) {" + func_call_with_qdd + "}"
-    func_call_with_qdd_mem_adjust2 = "    else                    {" + func_call_with_qdd.replace("hd_data->d_q_qd","hd_data->d_q_qd_u") + "}"
+    func_call_mem_adjust, func_call_mem_adjust2 = gen_launch_pair(func_call, "hd_data->d_q_qd", indent="    ")
+    func_call_with_qdd_mem_adjust, func_call_with_qdd_mem_adjust2 = gen_launch_pair(func_call_with_qdd, "hd_data->d_q_qd", indent="    ")
     # compule into a set of code
     func_call_code = ["if (USE_QDD_FLAG) {", func_call_with_qdd_mem_adjust, func_call_with_qdd_mem_adjust2, "}", \
                       "else {", func_call_mem_adjust, func_call_mem_adjust2, "}", "gpuErrchkKernel();"]
