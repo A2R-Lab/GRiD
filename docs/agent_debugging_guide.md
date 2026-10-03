@@ -2755,3 +2755,54 @@ expensive serial latency. Count rounds (`items / participating threads`), not ba
 The remaining prologue barriers (helpers → A5/A7 vectors → A-matrices) are real cross-thread
 dependences; the next lever there would be recomputing the 6-vector helpers per item, which
 adds work and is not obviously a win — measure before funding.
+
+### 7.z40 Static barrier audit: four bit-identical ways to delete a `__syncthreads` (2026-10-03)
+
+**Tool.** `.venv/bin/python tools/barrier_audit.py <generated grid.cuh> [--func REGEX] [--all]`
+walks every device function, pairs each barrier with the stages before/after it (a stage = one
+block-parallel `for(... threadIdx ...)` loop or one thread-0 block) and runs a greedy pass:
+`pending` = the stages since the last KEPT barrier; a barrier is deletable iff every stage of the
+next group is `independent` (no RAW/WAR/WAW with any pending stage) or `same-idx` (every read
+of a pending write is at the same loop index, AND the producer's write index is an injective
+function of its loop variable — `h_idx % 6` is NOT: several iterations/threads write the
+same slot) of every pending stage. Pointer aliases (`T *Xdn = &s_oXi[..]`, function-level
+`T *p1 = t;`) are range accesses on the base array; helper calls that take pointers (`gemm`,
+`matmul`, `grid_id_du_temp_ptr`) make the pair `calls` (unknown → look by hand); sequential
+loop boundaries / if-else / calls make it `opaque`. Independence is only half the story:
+also check the stage AFTER the next barrier (the greedy pass does), and loop-carried
+pairs (last stage of iteration k vs first stage of k+1) by hand.
+
+**Four deletions that are bit-identical by construction** (all verified with the raw-output
+harness, float+double, 32/256/max threads, before any A/B):
+1. *Independent* — the consumer never touches the producer's arrays: delete, both ride the
+   next barrier. (World-frame fwd sweep 3/body, body-frame 5, crba, coriolis, integrator.)
+2. *Same-idx* — fuse the loops, keep the producer's value in a register (§7.z39).
+3. *Recompute-instead-of-share* — a stage that only materialises a small intermediate for a
+   later stage (6-vector helper, 6x6 outer product, a 6x6 matrix column) can be deleted and
+   the consumer re-forms the value in registers with the SAME expression in the SAME
+   operation order. Bit-identical pitfalls: a stored product `0 + a*b` is +0 when the product
+   is −0 (glass `gemm`'s `res = 0; res += a*b; C = alpha*res`), so re-form it as
+   `static_cast<T>(0) + a*b`, not `a*b`; keep the k-order of `dot_strided` (m + 6n); the
+   rounded sub-values must stay rounded (an fma can only fuse the final multiply with the
+   add it feeds — it cannot reassociate across a stored value, so `res += (a*b) * D[k]`
+   equals the slab version). Body-frame idsva_so: t1..t9 (9 fill stages + 9 barriers) and
+   p1..p6 gone; world-frame: I·Xup column + IC·v gone (2 barriers/body).
+4. *Replay the exact fold order* — a serial chain `v[j] = v[parent] + vJ[j]` (NB barriers)
+   is, per element, the left-nested sum down the root→j path; one thread per (body, row)
+   evaluating that nesting from a baked path table stores the same bits. The backward
+   `X[parent] += X[child]` walk is, per body, `X[j]` folded with the children's totals in the
+   legacy visiting order (BFS level descending, then `get_ids_by_bfs_level` order) — emit the
+   per-body subtree expression straight-line (post-order temporaries, `switch (jid)`), write
+   into a free region, repoint the consumers. NB-1 barriers → 1. The originals are never
+   written in place, so no hazard.
+
+**Numbers (static, per launch).** iiwa14 body-frame idsva_so inner ~65 → ~31 barriers (the
+remaining: the Xup matmul chain, eight output-assembly stages whose output-entry RAW crosses
+thread indices — a per-entry gather rewrite would remove them — and the real cross-thread
+ones); world-frame forward sweep 9 → 4 per body. Arena: body-frame 36·pairs t/p scratch →
+78·NB totals region (iiwa14 3744 → 3282 floats). The A/B decides what is kept.
+
+**Harness.** `docs/open-tasks/bitident_2026_10_03.py` (gitignored): generates PRE (main) and
+POST (worktree) headers for one robot, compiles a stdin runner against each, same inputs,
+`BEGIN <tag> … END <tag>` block must be byte-identical and thread-invariant. The general
+`cuda_equivalence_runner.cu` works with `--defines GRID_RUN_SPLIT=1,RUN_<ALGO>=1`.
