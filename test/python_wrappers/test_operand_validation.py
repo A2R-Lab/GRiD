@@ -43,8 +43,15 @@ def go2():
 
 def test_numpy_rejects_zero_batch_and_shape_faults(iiwa):
     q, qd, u = _state(iiwa)
-    with pytest.raises((ValueError, RuntimeError), match="batch must be >= 1"):
+    # every operand-shape class refuses an empty batch as an ARGUMENT error
+    # (2026-10-03: the q-only and q+qd validators let batch=0 through to the C
+    # ABI, which answered "rc=1 ... runtime arena failed to initialize")
+    with pytest.raises(ValueError, match="batch must be >= 1"):
         iiwa.forward_dynamics(q[:0], qd[:0], u[:0])
+    with pytest.raises(ValueError, match="batch must be >= 1"):
+        iiwa.inverse_dynamics(q[:0], qd[:0])
+    with pytest.raises(ValueError, match="batch must be >= 1"):
+        iiwa.minv(q[:0])
     with pytest.raises((ValueError, RuntimeError), match="batch"):   # pybind: matching batch dim
         iiwa.forward_dynamics(q, qd[:3], u)
     with pytest.raises((ValueError, RuntimeError), match="must be"):
