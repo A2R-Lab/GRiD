@@ -2718,9 +2718,10 @@ is in the run's ledger (`results`). Carried shards never execute, so they are no
 ledger, and their rows are dropped. The next refresh then cannot carry them by header-key
 replay and falls back to the codegen-neutrality verdict (which still worked here).
 
-**Fix for now.** The receipt launchers save the file before the run and restore it afterwards
-(run_pilot_shardjobs2_receipt_levers_2026_10_01.py does; the 10-02 wrapper launcher did not,
-and the receipt commit restored the rows by hand from HEAD~1). The driver fix — keep rows for
-every shard the merged receipt carries, not only executed shards — touches a fingerprinted
-file and goes with the next refresh.
+**Fix (2026-10-03, branch overnight-hygiene).** `aggregate_header_keys(rdir, results, merged)`
+now takes the MERGED receipt and keeps the committed rows for every shard it attests (fresh
+or carried) that has no fresh sidecar; only shards the receipt no longer names are dropped.
+CPU test `test_aggregate_header_keys_keeps_rows_for_receipt_carried_shards` reproduces the
+wrapper-only ledger. Before that fix the receipt launchers saved/restored the file around the
+run (the 10-02 receipt commit restored the rows by hand from HEAD~1).
 

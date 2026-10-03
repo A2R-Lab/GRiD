@@ -736,14 +736,22 @@ def update_durations(merged_receipt: Path) -> None:
 HEADER_KEYS_PATH = REPO_ROOT / "test" / "gpu-proof-header-keys.json"
 
 
-def aggregate_header_keys(rdir: Path, results: list[dict]) -> None:
+def aggregate_header_keys(rdir: Path, results: list[dict],
+                          merged_receipt: Path | None = None) -> None:
     """A4 (2026-09-11): fold the per-shard header content-key sidecars
     (receipts/<shard>.header_keys.jsonl, recorded by the cuda conftest) into
     the COMMITTED aggregate test/gpu-proof-header-keys.json, carrying forward
-    the old aggregate's rows for shards that were carried (present in the
-    ledger, no fresh sidecar). Wave A' refresh planning reads the aggregate:
+    the old aggregate's rows for every shard the MERGED receipt still attests
+    without a fresh sidecar. Wave A' refresh planning reads the aggregate:
     a cell whose header CONTENT hash still reproduces CPU-side need not
-    re-run; a shard with no rows stays conservatively fingerprint-ruled."""
+    re-run; a shard with no rows stays conservatively fingerprint-ruled.
+
+    The kept set is the merged receipt's shard names when it is given, else
+    the executed ledger. Shards carried by `gpu-proof merge --carry-from`
+    never appear in the ledger (guide §7.z38: a wrapper-only refresh emptied
+    every carried cuda shard's rows, and the next refresh lost header-key
+    replay for all of them), so the receipt is the authority on what is
+    still attested."""
     new: dict[str, list] = {}
     for p in sorted(rdir.glob("*.header_keys.jsonl")):
         shard = p.name[: -len(".header_keys.jsonl")]
@@ -765,9 +773,12 @@ def aggregate_header_keys(rdir: Path, results: list[dict]) -> None:
             old = json.loads(HEADER_KEYS_PATH.read_text()).get("shards", {})
         except (OSError, json.JSONDecodeError):
             pass
-    ledger = {r.get("shard") for r in results}
+    attested = {r.get("shard") for r in results}
+    if merged_receipt is not None:
+        attested = {s["name"] for s in
+                    json.loads(merged_receipt.read_text()).get("shards", [])}
     for shard, rows in old.items():
-        if shard not in new and shard in ledger:
+        if shard not in new and shard in attested:
             new[shard] = rows
     HEADER_KEYS_PATH.write_text(json.dumps(
         {"schema": 1, "shards": {k: new[k] for k in sorted(new)}},
@@ -1752,7 +1763,7 @@ def main() -> int:
                 bad += 1
             elif bad == 0:
                 update_durations(merged)
-                aggregate_header_keys(rdir, results)
+                aggregate_header_keys(rdir, results, merged)
         else:
             print("  receipts: no shard receipts were produced")
 

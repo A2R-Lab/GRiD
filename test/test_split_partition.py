@@ -660,6 +660,45 @@ def test_aggregate_header_keys_folds_and_carries(tmp_path, monkeypatch):
     assert "cuda_gone" not in data
 
 
+def test_aggregate_header_keys_keeps_rows_for_receipt_carried_shards(tmp_path, monkeypatch):
+    """Guide §7.z38 (2026-10-02): on a wrapper-only refresh the executed ledger
+    holds wrapper modules only — the carried cuda shards enter the merged
+    receipt via `gpu-proof merge --carry-from` and are never in `results`.
+    Their committed rows must survive (the next refresh replays them); a
+    shard the merged receipt no longer attests is still dropped."""
+    import run_split_suite as rss
+
+    committed = tmp_path / "gpu-proof-header-keys.json"
+    monkeypatch.setattr(rss, "HEADER_KEYS_PATH", committed)
+    committed.write_text(json.dumps({"schema": 1, "shards": {
+        "cuda_00": [{"kind": "flagship", "robot": "iiwa14",
+                     "content_sha256": "old00"}],
+        "cuda_01": [{"kind": "direct", "robot": "go2",
+                     "content_sha256": "old01"}],
+        "cuda_gone": [{"kind": "direct", "robot": "baxter",
+                       "content_sha256": "oldgone"}],
+    }}))
+    rdir = tmp_path / "receipts"
+    rdir.mkdir()
+    merged = tmp_path / "gpu-proof.json"
+    merged.write_text(json.dumps({"shards": [
+        {"name": "test_wrapper_a", "carried": False},
+        {"name": "cuda_00", "carried": True},
+        {"name": "cuda_01", "carried": True},
+    ]}))
+    results = [{"shard": "test_wrapper_a", "kind": "OK", "domain": "wrappers"}]
+
+    rss.aggregate_header_keys(rdir, results, merged)
+
+    data = json.loads(committed.read_text())["shards"]
+    assert data["cuda_00"] == [{"kind": "flagship", "robot": "iiwa14",
+                                "content_sha256": "old00"}]
+    assert data["cuda_01"] == [{"kind": "direct", "robot": "go2",
+                                "content_sha256": "old01"}]
+    assert "cuda_gone" not in data
+    assert "test_wrapper_a" not in data   # no sidecar, no committed rows
+
+
 def test_fingerprint_follows_named_runners_and_local_helpers():
     """Runner sources outside the same-stem convention and local helper modules
     must stale the shards that use them (2026-09-28: the integrator/plant/
