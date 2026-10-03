@@ -2725,3 +2725,33 @@ CPU test `test_aggregate_header_keys_keeps_rows_for_receipt_carried_shards` repr
 wrapper-only ledger. Before that fix the receipt launchers saved/restored the file around the
 run (the 10-02 receipt commit restored the rows by hand from HEAD~1).
 
+
+### 7.z39 Barrier stall share is not wall-clock: narrowing a stage to one warp lost 21–31 %, fusing same-idx stages won 13 % (2026-10-03, L1b)
+
+**Context.** ncu put 63 % of the g1 `idsva_so_world_frame_kernel` stall samples on
+`__syncthreads`; the per-(i,p) A-matrix prologue costs four block barriers for stages of
+42 / 12 / 36 / 36 work items on a 512-thread block.
+
+**Experiment 1 (lost).** Run the four stages on warp 0 with `__syncwarp` between them and
+keep one block barrier before the u-stage (3 barriers saved per (i,p)). Quiet-window A/B
+(noise floor 0.27 %): g1 idsva_so compute +21.6 %, go2 +28–31 %, fdsva_so +12–27 %.
+Each 36/42-item stage became TWO lane-rounds on one warp; that serial latency is far larger
+than three barriers. Threads "stalled on a barrier" are mostly waiting for the one warp that
+does the stage's work — the barrier is where the wait is *measured*, not what causes it.
+
+**Experiment 2 (kept, c34ae88).** Stage 4 (`A2..A7[idx]`) reads only *its own idx* of stage 3
+(`A0/Bphi/Bpsid[idx]`) plus helper vectors published two barriers earlier, so the two
+36-item loops fuse into one with the stage-3 values held in registers: one barrier fewer per
+(i,p), zero extra work, same expressions in the same order → bit-identical (verified raw
+output pre/post on go2 + g1, float + double, 32/256/max threads). A/B (floor 0.50 %): g1
+idsva_so compute −13.1 % at N=256 and N=1024, fdsva_so −8 %; go2 idsva_so −17 %, fdsva_so
+−14 %; every N and both metrics faster.
+
+**Rule.** Before touching a barrier, classify its consumer: if every item of the next stage
+reads only its own index (or values already published earlier), the barrier is free to
+delete (fuse the loops). If the next stage reads other threads' outputs, the barrier is
+real — and shrinking the producer's participation to cut barriers trades a cheap barrier for
+expensive serial latency. Count rounds (`items / participating threads`), not barriers.
+The remaining prologue barriers (helpers → A5/A7 vectors → A-matrices) are real cross-thread
+dependences; the next lever there would be recomputing the 6-vector helpers per item, which
+adds work and is not obviously a win — measure before funding.
