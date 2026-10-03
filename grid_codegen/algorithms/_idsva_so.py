@@ -3609,7 +3609,7 @@ def gen_idsva_so_world_frame_inner(self):
     ])
     self.gen_add_end_control_flow()
     self.gen_add_sync()
-    # Parallel build of A0/A1/Bphi/Bpsid (each over idx ∈ [0, 36)).
+    # Parallel build of A0/A1/Bphi/Bpsid, then A2..A7, in ONE idx-over-36 loop (L1b').
     self.gen_add_parallel_loop("idx", "36")
     self.gen_add_code_lines([
         "int row = idx % 6; int col = idx / 6;",
@@ -3621,32 +3621,29 @@ def gen_idsva_so_world_frame_inner(self):
         "T t_IC_crmSp = dot_prod<T, 6, 6, 1>(&IC[i*36 + row], crm_Sp_col);",
         "T t_crfpsid_IC = dot_prod<T, 6, 1, 1>(crf_psid_row, &IC[i*36 + 6*col]);",
         "T t_IC_crmpsid = dot_prod<T, 6, 6, 1>(&IC[i*36 + row], crm_psid_col);",
-        "S_Bphi[idx]  = t_crfSp_IC  + icrf<T>(idx, S_ICi_S)    - t_IC_crmSp;",
-        "S_Bpsid[idx] = t_crfpsid_IC + icrf<T>(idx, S_ICi_psid) - t_IC_crmpsid;",
-        "S_A0[idx] = icrf<T>(idx, S_ICi_S);",
+        "T a0 = icrf<T>(idx, S_ICi_S);",
+        "T bphi = t_crfSp_IC + a0 - t_IC_crmSp;",
+        "T bpsid = t_crfpsid_IC + icrf<T>(idx, S_ICi_psid) - t_IC_crmpsid;",
+        "S_Bphi[idx]  = bphi;",
+        "S_Bpsid[idx] = bpsid;",
+        "S_A0[idx] = a0;",
         "S_A1[idx] = t_crfSp_IC - t_IC_crmSp;",
-    ])
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
-    # Parallel build of A2/A3/A4/A5/A6/A7 (depends on prior A0/A1/Bphi/Bpsid).
-    self.gen_add_parallel_loop("idx", "36")
-    self.gen_add_code_lines([
-        "int row = idx % 6; int col = idx / 6;",
+        # L1b' (2026-10-03): A2..A7 at this idx read ONLY this idx's A0/Bphi/Bpsid (just
+        # computed above, kept in registers) plus the stage-1/2 helper vectors already
+        # published — no cross-thread dependence, so the second 36-item loop and its block
+        # barrier fold into this one. Same expressions, same order: bit-identical.
         "// A2 = 2*A0 - Bphi",
-        "S_A2[idx] = static_cast<T>(2) * S_A0[idx] - S_Bphi[idx];",
+        "S_A2[idx] = static_cast<T>(2) * a0 - bphi;",
         "// A3 = Bpsid + dot_matrix(BC[i], S_p)",
-        "T crf_Sp_row[6]; for (int kk = 0; kk < 6; ++kk) crf_Sp_row[kk] = -crm<T>(kk + 6*row, S_p);",
-        "T crm_Sp_col[6]; for (int kk = 0; kk < 6; ++kk) crm_Sp_col[kk] = crm<T>(kk + 6*col, S_p);",
         "T t_crfSp_BC = dot_prod<T, 6, 1, 1>(crf_Sp_row, &BC[i*36 + 6*col]);",
         "T t_BC_crmSp = dot_prod<T, 6, 6, 1>(&BC[i*36 + row], crm_Sp_col);",
-        "S_A3[idx] = S_Bpsid[idx] + t_crfSp_BC - t_BC_crmSp;",
+        "S_A3[idx] = bpsid + t_crfSp_BC - t_BC_crmSp;",
         "// A4 = icrf(BCiT_S)",
         "S_A4[idx] = icrf<T>(idx, S_BCiT_S);",
         "// A5 = icrf(A5_vec)",
         "S_A5[idx] = icrf<T>(idx, S_A5_vec);",
         "// A6 = crf(S_p) @ IC[i][:, col] + A0[idx]",
-        "T t_crfSp_IC = dot_prod<T, 6, 1, 1>(crf_Sp_row, &IC[i*36 + 6*col]);",
-        "S_A6[idx] = t_crfSp_IC + S_A0[idx];",
+        "S_A6[idx] = t_crfSp_IC + a0;",
         "// A7 = icrf(A7_vec)",
         "S_A7[idx] = icrf<T>(idx, S_A7_vec);",
     ])
