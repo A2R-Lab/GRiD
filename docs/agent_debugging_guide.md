@@ -2708,3 +2708,19 @@ three rows are back on the memcpy, and the referee refuses any direct row whose
 - A feature that changes generated twins needs a floating-base GPU test in the receipt
   path; fixed-base smokes compile the twins out.
 
+### 7.z38 A wrapper-only refresh empties the cuda rows of test/gpu-proof-header-keys.json (2026-10-02)
+
+**Symptom.** After `SPLIT=1 SPLIT_REFRESH=1` re-ran 39 wrapper modules and carried the 4 cuda
+shards, the committed header-key aggregate went from 4 shards / 321 records to 0 / 0.
+
+**Cause.** `run_split_suite.aggregate_header_keys` keeps an old shard's rows only when the shard
+is in the run's ledger (`results`). Carried shards never execute, so they are not in the
+ledger, and their rows are dropped. The next refresh then cannot carry them by header-key
+replay and falls back to the codegen-neutrality verdict (which still worked here).
+
+**Fix for now.** The receipt launchers save the file before the run and restore it afterwards
+(run_pilot_shardjobs2_receipt_levers_2026_10_01.py does; the 10-02 wrapper launcher did not,
+and the receipt commit restored the rows by hand from HEAD~1). The driver fix — keep rows for
+every shard the merged receipt carries, not only executed shards — touches a fingerprinted
+file and goes with the next refresh.
+
