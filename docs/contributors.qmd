@@ -87,8 +87,6 @@ We extend our sincere thanks to the diverse group of individuals who have genero
     </tr>
     <tr>
       <td align="center" valign="top" width="20%"><a href="https://github.com/pruyontrarakk"><img src="https://avatars.githubusercontent.com/pruyontrarakk?s=100" width="100px;" alt="pruyontrarakk"/><br /><sub><b>pruyontrarakk</b></sub></a><br /></td>
-      <td align="center" valign="top" width="20%"><a href="https://github.com/harvard-edge/cs249r_book/graphs/contributors"><img src="https://www.gravatar.com/avatar/b6a2a74133224e85e9714e282a1576df?d=identicon&s=100?s=100" width="100px;" alt="Kimiya Shahamat"/><br /><sub><b>Kimiya Shahamat</b></sub></a><br /></td>
-      <td align="center" valign="top" width="20%"><a href="https://github.com/harvard-edge/cs249r_book/graphs/contributors"><img src="https://www.gravatar.com/avatar/b6a2a74133224e85e9714e282a1576df?d=identicon&s=100?s=100" width="100px;" alt="Kimiya Shahamat"/><br /><sub><b>Kimiya Shahamat</b></sub></a><br /></td>
     </tr>
   </tbody>
 </table>
