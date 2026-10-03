@@ -13,9 +13,9 @@ name: Verify GPU Proof
 
 on:
   push:
-    branches: [modernizing-tests, main]
+    branches: [main]
   pull_request:
-    branches: [modernizing-tests, main]
+    branches: [main]
 
 jobs:
   verify-receipt:

@@ -20,7 +20,7 @@ on:
         type: boolean
         default: false
   push:
-    branches: [modernizing-tests, main]
+    branches: [main]
     paths: [".github/workflows/peer-suites.yml"]
 
 jobs:
