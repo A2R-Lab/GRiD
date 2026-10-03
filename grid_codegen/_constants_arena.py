@@ -7,6 +7,7 @@ restructuring internals)."""
 import numpy as np
 
 from .helpers._gpu_err import legacy_wrapper_lines
+from .algorithms._idsva_so import idsva_so_body_frame_tot_span
 from .algo_registry import (ALGO_DESCRIPTORS, arena_ctx_from_codegen, compose_arena_full,
                             compose_arena_rungs, ARENA_COMPOSED_KEYS, ARENA_RUNG_KEYS)
 
@@ -635,7 +636,7 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
     #   rung0 full:          output + s_temp + BC all in smem
     #   rung1 global_output: 4*NV^3 output tensor -> d_workspace (cheap; coalesced one-shot)
     #   rung2 output_bc:     + BC (36*NB cold buffer, dead before hot loops) -> d_workspace (surgical)
-    #   rung3 output_tp:     + ancestor-pair scratch t/p1..p6 (36*len(jids_a), 30-45% of the
+    #   rung3 output_tp:     + backward-accumulation totals IC/BC/f (idsva_so_body_frame_tot_span, ex t/p; part of the
     #                          body arena; DEAD through the whole recursion-hot forward sweep,
     #                          live only in the final block-parallel output assembly) ->
     #                          d_workspace. BC stays in smem (slides down to fill the vacated
@@ -648,8 +649,7 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
     # (the dispatcher routes floating to the WORLD frame) so it keeps the legacy
     # single-body emit with the gravity shim; its picks are (0,0,0) and unused.
     _idsva_bf_BC = 36 * self.robot.get_num_bodies()
-    _idsva_bf_jids_a = len(self.robot.get_jid_ancestor_ids(include_joint=True)[0])
-    _idsva_bf_TP = 36 * _idsva_bf_jids_a
+    _idsva_bf_TP = idsva_so_body_frame_tot_span(self.robot.get_num_bodies())
     _idsva_bf_base_smem = (3*n) + XI_size                                  # whole s_temp -> global
     _idsva_bf_full     = (3*n) + idsva_so_body_frame_inner_temp_count + XI_size + 4*nv**3 + rt_xfixed_reserve
     _idsva_bf_out      = (3*n) + idsva_so_body_frame_inner_temp_count + XI_size + rt_xfixed_reserve
@@ -706,8 +706,8 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
     self.idsva_so_world_frame_spill_tier_3way = select_shared_tier_3way(*_idsva_so_world_arenas)
     self.idsva_so_world_frame_t_count_per_tier = tuple(_idsva_so_world_arenas[i] for i in self.idsva_so_world_frame_spill_tier_3way)
     # d_workspace floats needed per timestep by the idsva_so spill rungs (for so_workspace sizing).
-    # Body rungs: 4=output_temp (whole inner arena), 3=output_tp (36*len(jids_a) ancestor-pair
-    # scratch), 2=output_bc (36*NB cold slab); 0/1 spill nothing into d_workspace.
+    # Body rungs: 4=output_temp (whole inner arena), 3=output_tp (idsva_so_body_frame_tot_span
+    # backward totals), 2=output_bc (36*NB cold slab); 0/1 spill nothing into d_workspace.
     def _idsva_body_ws_floats(pick):
         if pick == 4:
             # whole s_temp routed to workspace; the XImats helper still rebuilds

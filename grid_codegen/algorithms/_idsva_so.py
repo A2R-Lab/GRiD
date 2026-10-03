@@ -11,22 +11,12 @@ from ._mjx_blockpar import bpfor as _bpfor, stride_rc as _bp_stride_rloop
 from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
 
 
-def _emit_t_outer(self, n_pairs, x_expr, y_expr):
-    """Emit one t-slab fill: t[t_idx] = outer(x, y) for every (jid, ancestor) pair.
+def idsva_so_body_frame_tot_span(num_bodies):
+    """Floats of the body-frame backward-accumulation region (IC_tot 36*NB + BC_tot 36*NB +
+    f_tot 6*NB). It replaces the legacy ancestor-pair t/p scratch (36*len(jids_a)) at the
+    same arena anchor and under the same surgical TP_IN_SMEM lever (barrier audit 2026-10-03)."""
+    return 2 * 36 * num_bodies + 6 * num_bodies
 
-    One PAIR per thread via glass::thread::gemm<6,6,1> (an outer-product assign;
-    column-major, one multiply per element). Chosen over the historical
-    per-element outerProduct loop by the 2026-07-31 interleaved A/B: -3..-6.5%
-    on iiwa14-fixed body_frame/fdsva_so, wash (|d| <= 0.1%) on go2/g1 floating,
-    no regressions (27 cells, 5 reps).
-    """
-    self.gen_add_parallel_loop('i', f'{n_pairs}')
-    self.gen_add_code_line('int jid = jids[i];')
-    self.gen_add_code_line('int ancestor_j = ancestors_j[i];')
-    self.gen_add_code_line('int t_idx = t_index_map[jid][ancestor_j]*36;')
-    self.gen_add_code_line(f'glass::thread::gemm<T, 6, 6, 1>(static_cast<T>(1), {x_expr}, {y_expr}, &t[t_idx]);')
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
 
 def _idsva_so_fold_jobs(groups, alphas, NV, NB):
     """Flat job list for the mimic einsum fold: for each public cell in
@@ -372,10 +362,10 @@ def gen_idsva_so_body_frame_inner_temp_mem_size(self):
     # byte-identical (NB == NV for fixed non-mimic single-DoF chains).
     if self.robot_has_mimic_joints():
         NB = num_bodies
-        base = 36 * NB * 10 + 30 * NB + 6 + len(jids_a) * 36
+        base = 36 * NB * 10 + 30 * NB + 6 + idsva_so_body_frame_tot_span(NB)
         internal_slab = 4 * NB ** 3
         return int(base + internal_slab)
-    return int(36 * NV * 10 + 30 * NV + 6 + len(jids_a)*36)
+    return int(36 * NV * 10 + 30 * NV + 6 + idsva_so_body_frame_tot_span(num_bodies))
 
 def _floating_gravity_lie_metadata(robot):
     """Per-velocity Lie-generator metadata for the floating-base gravity Hessian.
@@ -1762,13 +1752,12 @@ def gen_idsva_so_body_frame_inner(self):
         hot buffer S (NOT on BC), so spilling BC truncates only the arena tail and leaves
         every hot buffer (incl. D3, read by the reference-order repair) in place. This is
         the de-alias that fixes the surgical-rung g1/h1_2 regression.
-      - TP_IN_SMEM (surgical): only the ancestor-pair scratch t/p1..p6 (36*len(jids_a)
-        floats; 30-45% of the body arena) routes to d_workspace. t/p is anchored on
-        tp_anchor (the fixed in-smem hot-chain end) and is dead through the whole forward
-        recursion + D-matrix build (live only in the final block-parallel output assembly),
-        so spilling it keeps every recursion-hot buffer in smem. BC re-bases off tp_anchor
-        too, so it slides down to fill the vacated smem and the arena shrinks by exactly
-        36*len(jids_a). Mutually exclusive with BC_IN_SMEM/SCRATCH_IN_SMEM per the tier table.
+      - TP_IN_SMEM (surgical): only the backward-accumulation region IC_tot/BC_tot/f_tot
+        (idsva_so_body_frame_tot_span = 78*NB floats; it replaced the legacy ancestor-pair
+        t/p scratch, barrier audit 2026-10-03) routes to d_workspace. It is anchored on
+        tp_anchor (the fixed in-smem hot-chain end); BC re-bases off tp_anchor too, so it
+        slides down to fill the vacated smem and the arena shrinks by exactly that span.
+        Mutually exclusive with BC_IN_SMEM/SCRATCH_IN_SMEM per the tier table.
     The inner loads/updates s_XImats from s_q internally, so it takes d_robotModel.
     """
     if self.robot.floating_base:
@@ -1802,14 +1791,53 @@ def gen_idsva_so_body_frame_inner(self):
     func_notes = ["Loads/updates s_XImats from s_q internally (helper runs after the SCRATCH_IN_SMEM repoint so its scratch follows the placement)"]
     func_def = func_def_start + func_def_end
     # then generate the code
+    self.gen_add_code_lines([
+        "// Barrier audit 2026-10-03 (guide §7.z39): dot_prod<36>(outer(x, y), D) with the outer product",
+        "// re-formed in registers by the consumer instead of a block-shared t slab filled one stage",
+        "// earlier. Same k = m + 6*n order as the legacy slab and the same per-element value",
+        "// (legacy gemm stored 1 * (0 + x[m]*y[n]), which also normalises a -0 product to +0), so",
+        "// the running sum rounds identically -> bit-identical; the nine fill stages and their",
+        "// eighteen barriers are gone.",
+        "template <typename T>",
+        "__device__ __forceinline__ T idsva_so_outer_dot(const T *x, const T *y, const T *D) {",
+        "    T res = static_cast<T>(0);",
+        "    for (int n = 0; n < 6; ++n) {",
+        "        T yn = y[n];",
+        "        for (int m = 0; m < 6; ++m) { T tk = static_cast<T>(0) + x[m] * yn; res += tk * D[m + 6*n]; }",
+        "    }",
+        "    return res;",
+        "}",
+        "// dot_prod<6>(p, w) with p[r] = crm_mul<T>(r, a, b) (the legacy p1/p2/p3/p5 slabs) re-formed per",
+        "// row in registers: each p[r] is the same rounded value the slab held, summed in the same r order.",
+        "template <typename T>",
+        "__device__ __forceinline__ T idsva_so_crm_dot(T *a, T *b, const T *w) {",
+        "    T res = static_cast<T>(0);",
+        "    for (int r = 0; r < 6; ++r) { T pr = crm_mul<T>(r, a, b); res += pr * w[r]; }",
+        "    return res;",
+        "}",
+        "// Same for the legacy p4 slab: p4[r] = crm_mul(r, a, b) - 2 * crm_mul(r, c, d).",
+        "template <typename T>",
+        "__device__ __forceinline__ T idsva_so_crm2_dot(T *a, T *b, T *c, T *d, const T *w) {",
+        "    T res = static_cast<T>(0);",
+        "    for (int r = 0; r < 6; ++r) { T pr = crm_mul<T>(r, a, b) - 2 * crm_mul<T>(r, c, d); res += pr * w[r]; }",
+        "    return res;",
+        "}",
+        "// And the legacy p6 slab: p6[r] = IC_S[jid] . crm_S[anc][:, r] + S[anc] . crf_S_IC[jid][:, r].",
+        "template <typename T>",
+        "__device__ __forceinline__ T idsva_so_p6_dot(const T *IC_S_j, const T *crm_S_a, const T *S_a, const T *crf_S_IC_j, const T *w) {",
+        "    T res = static_cast<T>(0);",
+        "    for (int r = 0; r < 6; ++r) { T pr = dot_prod<T, 6, 1, 1>(IC_S_j, &crm_S_a[r*6]) + dot_prod<T, 6, 1, 1>(S_a, &crf_S_IC_j[r*6]); res += pr * w[r]; }",
+        "    return res;",
+        "}",
+        "",
+    ])
     self.gen_add_func_doc("Computes the second order derivatives of inverse dynamics",func_notes,func_params,None)
     # SCRATCH_IN_SMEM: whole-arena lever (s_temp pool in smem vs routed to d_workspace).
     # BC_IN_SMEM: surgical lever (only the cold BC slab routes to d_workspace).
-    # TP_IN_SMEM: surgical lever (only the ancestor-pair scratch t/p1..p6, 36*len(jids_a)
-    #   floats, routes to d_workspace). t/p is DEAD through the whole recursion-hot forward
-    #   sweep + D-matrix build; it is written/read ONLY in the final block-parallel output
-    #   assembly (t1-t9 / p-phase). Spilling it keeps every recursion-hot buffer in smem and
-    #   is the single highest-payoff cold sub-band (30-45% of the body arena).
+    # TP_IN_SMEM: surgical lever (only the backward-accumulation region IC_tot/BC_tot/f_tot,
+    #   idsva_so_body_frame_tot_span floats, routes to d_workspace). It is read by every
+    #   consumer after the backward pass, so this rung trades smem for global reads of the
+    #   totals; it keeps the whole forward recursion in smem.
     self.gen_add_code_line("template <typename T, bool SCRATCH_IN_SMEM = true, bool BC_IN_SMEM = true, bool TP_IN_SMEM = true>")
     self.gen_add_code_line("__device__")
     self.gen_add_code_line(func_def, True)
@@ -1845,13 +1873,11 @@ def gen_idsva_so_body_frame_inner(self):
         # crf_psid (36 * NJ)/D4 (36*NJ)
         # icrf_f (36 * NJ)/D1 (36*NJ)
         # D2 (36*NJ)
-        # Xup(36*NJ)/t - t1/t2/t3/t4/t5/t6/t7/t8/t9 [(len(jids_a) * 36]/p1 & p2 & p3 & p4 & p5 & p6 ([len(jids_a) * 6]*6)
-        # BC (36 * NJ)   <- LAST slab (top of arena); overlays Xup (forward-dead) & t/p
-        #                   (backward); surgical BC_IN_SMEM=false truncates exactly this.
+        # Xup(36*NJ)/IC_tot (36*NJ) & BC_tot (36*NJ) & f_tot (6*NJ)   <- backward subtree sums
+        # BC (36 * NJ)   <- LAST slab (top of arena); overlays Xup (forward-dead);
+        #                   surgical BC_IN_SMEM=false truncates exactly this.
 
 
-    jids_a, ancestors = self.robot.get_jid_ancestor_ids(include_joint=True)
-    var_offset = len(jids_a)
     vars = [
         '// Relevant Tensors in the order they appear',
         '// d_workspace: at TIER_SHARED unused; at the surgical BC rung only BC repoints here;',
@@ -1906,33 +1932,24 @@ def gen_idsva_so_body_frame_inner(self):
         'T *D3 = B_IC_S;', # Temporary D3 tensor - same as B(IC, S) (6x6 for each joint)',
         'T *D4 = crf_psid;', # Temporary D4 tensor (6x6 for each joint)',
         # tp_anchor is the FIXED in-smem end of the recursion-hot chain (just past D2). The
-        # ancestor-pair scratch t/p1..p6 (36*var_offset floats) anchors here when in smem.
-        # Holding this anchor stable (independent of where t/p actually lives) lets the
-        # TP_IN_SMEM=false rung relocate t/p to d_workspace while BC re-bases off this same
-        # in-smem anchor — so the hot chain below is byte-identical regardless of the t/p
-        # placement, and the smem arena shrinks by exactly 36*var_offset when t/p spills.
+        # backward-accumulation region (IC_tot / BC_tot / f_tot, idsva_so_body_frame_tot_span
+        # floats) anchors here when in smem. It replaced the legacy ancestor-pair t/p scratch
+        # (barrier audit 2026-10-03: t1..t9 and p1..p6 are re-formed in registers by their
+        # consumers, and the backward IC/BC/f += child chain became ONE subtree-sum stage that
+        # writes here, after which IC/BC/f are repointed at the totals). Holding this anchor
+        # stable lets the TP_IN_SMEM=false rung relocate the region to d_workspace while BC
+        # re-bases off this same in-smem anchor.
         f'T *tp_anchor = D2 + 36*NUM_BODIES;',
-        f'T *t = tp_anchor;', # Temporary outer product tensor for t1-t9 (6x6 for each joint and its ancestors)',
-        # Surgical t/p spill: route the ancestor-pair scratch to d_workspace. t/p is DEAD
-        # through the whole forward sweep + D-matrix build (written/read ONLY in the final
-        # block-parallel t1-t9 / p-phase output assembly), and the t-loop distributes
-        # ancestor-pairs across the block on disjoint t_index_map[jid][anc]*36 slices, so a
-        # spilled (L2-pinned) access coalesces. Mutually exclusive with BC/whole-arena
-        # spills per the body tier table (rung "output_tp": TP=F, BC=T, SCRATCH=T).
-        'if constexpr (!TP_IN_SMEM) { t = d_workspace; }',
-        'T *p1 = t;', # Temporary cross product vector for p1 (6x1 for each joint and its ancestors)',
-        f'T *p2 = p1 + 6*{var_offset};', # Temporary cross product vector for p2 (6x1 for each joint and its ancestors)',
-        f'T *p3 = p2 + 6*{var_offset};', # Temporary cross product vector for p3 (6x1 for each joint and its ancestors)',
-        f'T *p4 = p3 + 6*{var_offset};', # Temporary cross product vector for p4 (6x1 for each joint and its ancestors)',
-        f'T *p5 = p4 + 6*{var_offset};', # Temporary cross product vector for p5 (6x1 for each joint and its ancestors)',
-        f'T *p6 = p5 + 6*{var_offset};', # Temporary cross product vector used in computation of d2tau_dqd2[ancestor, joint, joint] (6x1 for each joint and its ancestors)',
+        f'T *IC_tot = tp_anchor;', # subtree-summed IC (6x6 for each joint)
+        'if constexpr (!TP_IN_SMEM) { IC_tot = d_workspace; }',
+        'T *BC_tot = IC_tot + 36*NUM_BODIES;', # subtree-summed BC (6x6 for each joint)
+        'T *f_tot = BC_tot + 36*NUM_BODIES;', # subtree-summed f (6x1 for each joint)
         'T *crf_S_IC = crm_psid;', # Cross product of S and IC (6x6 for each joint)',
         # Composite body-Coriolis Bias tensor (6x6 for each joint). It is the LAST 36*NB
         # slab of the SMEM arena, anchored on tp_anchor (the in-smem hot-chain end) plus the
-        # in-smem t/p span. When TP_IN_SMEM (default) that span is 36*var_offset, so BC sits
-        # exactly where the legacy `p6 + 6*var_offset` put it (byte-identical). When t/p
-        # spills (TP_IN_SMEM=false) the in-smem span is 0, so BC slides DOWN to tp_anchor,
-        # reclaiming the vacated 36*var_offset smem and shrinking the arena.
+        # in-smem tot span (idsva_so_body_frame_tot_span). When the tot region spills
+        # (TP_IN_SMEM=false) the in-smem span is 0, so BC slides DOWN to tp_anchor,
+        # reclaiming the vacated smem and shrinking the arena.
         # BC is cold: written in the forward IC/BC propagation and last read by the
         # T2/T3/T4/D2 tensors, then dead before the t/p backward loops. The high arena
         # region it occupies is shared with Xup (forward-dead by the time BC is written)
@@ -1940,7 +1957,7 @@ def gen_idsva_so_body_frame_inner(self):
         # overlap. Because BC is the literal top smem slab, the surgical BC_IN_SMEM=false
         # rung shrinks the arena by exactly 36*NB and truncates only BC's tail; every hot
         # buffer below keeps its address.
-        f'T *BC = tp_anchor + (TP_IN_SMEM ? 36*{var_offset} : 0);',
+        f'T *BC = tp_anchor + (TP_IN_SMEM ? {idsva_so_body_frame_tot_span(num_bodies)} : 0);',
 
 
         '\n\n',
@@ -1970,7 +1987,7 @@ def gen_idsva_so_body_frame_inner(self):
         # Public (reduced 4*NV^3) output destination handed in by the caller.
         self.gen_add_code_line("T *s_idsva_so_public = s_idsva_so;")
         # Internal 4*NB^3 slab anchored at the top of the (NB-grown) arena, just
-        # past BC (the legacy top slab). BC = tp_anchor + 36*var_offset when in smem.
+        # past BC (the legacy top slab). BC = tp_anchor + tot span when in smem.
         self.gen_add_code_line(f"T *s_idsva_so_internal = BC + 36*NUM_BODIES;")
         self.gen_add_code_line("s_idsva_so = s_idsva_so_internal;")
         # Shadow the output stride to NB for the whole assembly. This function-local
@@ -2123,104 +2140,61 @@ def gen_idsva_so_body_frame_inner(self):
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 
-    # Compute v = v[parent] + vJ
+    # ---- v / a propagation as root-first prefix sums (barrier audit 2026-10-03, §7.z39) ----
+    # The legacy emission walked the tree one body (chain) or one BFS level at a time with a
+    # barrier per step: v[j] = v[parent] + vJ[j] (NB barriers), then aJ += crm(v[parent])@vJ
+    # (1 barrier), then a[j] = a[parent] + aJ[j] (NB barriers), then a_world (1 barrier). Every
+    # v[j] is the left-nested sum ((vJ[root] + vJ[c1]) + vJ[c2]) + ... down the root->j path,
+    # so ONE thread per (body, row) can evaluate exactly that nesting from a baked path table
+    # and store the same bits, with no cross-thread traffic. a[j] likewise, with the per-body
+    # aJ finish (aJ[k] + crm(v[parent_k])@vJ[k], rounded, as the legacy stage stored it)
+    # recomputed inline — aJ_final has no other consumer, so its stage and barrier vanish.
+    # a and a_world ride the Sd/psid stage (they read only v / aJ / vJ, published above).
+    paths = [list(reversed(self.robot.get_ancestors_by_id(jid))) + [jid] for jid in range(num_bodies)]
+    path_start = [0]
+    for pth in paths:
+        path_start.append(path_start[-1] + len(pth))
     self.gen_add_code_line("\n\n")
-    self.gen_add_code_line('// Compute v = v[parent] + vJ')
-    if self.robot.is_serial_chain():
-        self.gen_add_code_line('#pragma unroll')
-        self.gen_add_code_line('for (int jid = 0; jid < NUM_BODIES; ++jid) {', 1)
-        self.gen_add_parallel_loop('i','6')
-        self.gen_add_code_line(f'if ({parent_ind_cpp} == -1) v[jid*6 + i] = vJ[jid*6 + i];')
-        self.gen_add_code_line(f'else v[jid*6 + i] = v[{parent_ind_cpp}*6 + i] + vJ[jid*6 + i];')
-        self.gen_add_end_control_flow()
-        self.gen_add_sync()
-        self.gen_add_end_control_flow()
-    else:
-        for bfs_level in range(n_bfs_levels):
-            inds = self.robot.get_ids_by_bfs_level(bfs_level)
-            self.gen_add_code_line(f'// Compute v for bfs_level {bfs_level}')
-            self.gen_add_parallel_loop('i', str(6*len(inds)))
-            if len(inds) > 1: 
-                    select_var_vals = [("int", "jid", [str(jid) for jid in inds])]
-                    jid_cpp = "jid"
-                    level_parent_ind_cpp = parent_ind_cpp_for_jid
-                    self.gen_add_multi_threaded_select("(i)", "<", [str((idx+1)*6) for idx, jid in enumerate(inds)], select_var_vals)
-            else:
-                jid_cpp = str(inds[0])
-                level_parent_ind_cpp = str(self.robot.get_parent_id(inds[0]))
-            self.gen_add_code_line(f'int idx = i % 6;')
-            if bfs_level == 0: self.gen_add_code_line(f'v[{jid_cpp}*6 + idx] = vJ[{jid_cpp}*6 + idx]; // Parent is base')
-            else: self.gen_add_code_line(f'v[{jid_cpp}*6 + idx] = v[{level_parent_ind_cpp}*6 + idx] + vJ[{jid_cpp}*6 + idx];')
-            self.gen_add_end_control_flow()
-            self.gen_add_sync()
-
-    # Finish aJ += crm(v[parent])@vJ
-    self.gen_add_code_line("\n\n")
-    self.gen_add_code_line('// Finish aJ += crm(v[parent])@vJ')
-    self.gen_add_code_line('// For base, v[parent] = 0')
-    self.gen_add_parallel_loop('i','6*NUM_BODIES')
-    self.gen_add_code_line('int jid = i / 6;')
-    self.gen_add_code_line('int index = i % 6;')
-    self.gen_add_code_line(f'if ({parent_ind_cpp_for_jid} != -1) aJ[i] += crm_mul<T>(index, &v[{parent_ind_cpp_for_jid}*6], &vJ[jid*6]);')
+    self.gen_add_code_line('// Compute v = v[parent] + vJ as the root-first prefix sum down each body\'s ancestor path')
+    self.gen_add_code_line('// (same left-nested order as the step-by-step propagation -> bit-identical, no per-step barrier).')
+    self.gen_add_code_line(f'static const int so_path_start[] = {{ {", ".join(map(str, path_start))} }};')
+    self.gen_add_code_line(f'static const int so_path[] = {{ {", ".join(str(b) for pth in paths for b in pth)} }}; // root-first ancestor-or-self path per body')
+    self.gen_add_parallel_loop('i', '6*NUM_BODIES')
+    self.gen_add_code_line('int jid = i / 6; int idx = i % 6;')
+    self.gen_add_code_line('T acc = vJ[so_path[so_path_start[jid]]*6 + idx];')
+    self.gen_add_code_line('for (int k = so_path_start[jid] + 1; k < so_path_start[jid + 1]; ++k) acc = acc + vJ[so_path[k]*6 + idx];')
+    self.gen_add_code_line('v[jid*6 + idx] = acc;')
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 
-    # Compute Sd = crm(v) @ S & psid = crm(v[parent]) @ S
+    # Sd = crm(v) @ S, psid = crm(v[parent]) @ S, a = prefix sum of the finished aJ, a_world.
     self.gen_add_code_line("\n\n")
     self.gen_add_code_line('// Compute Sd = crm(v) @ S & psid = crm(v[parent]) @ S')
     self.gen_add_code_line('// For base, v[parent] = 0')
-    self.gen_add_parallel_loop('i','2*6*NUM_BODIES')
+    self.gen_add_code_line('// Also a = a[parent] + aJ as the root-first prefix sum (aJ finished inline: aJ[k] + crm(v[parent_k]) @ vJ[k]) and a_world.')
+    self.gen_add_parallel_loop('i','3*6*NUM_BODIES + 6')
     self.gen_add_code_line('int jid = (i / 6) % NUM_BODIES;')
     self.gen_add_code_line('int index = i % 6;')
     self.gen_add_code_line('if (i < 6*NUM_BODIES) Sd[i] = crm_mul<T>(index, &v[jid*6], &S[jid*6]);')
-    self.gen_add_code_line('else {', True)
+    self.gen_add_code_line('else if (i < 2*6*NUM_BODIES) {', True)
     self.gen_add_code_line(f'if ({parent_ind_cpp_for_jid} == -1) psid[jid*6 + index] = 0;')
-    self.gen_add_code_line(f'else psid[i - 6 * NUM_BODIES] = crm_mul<T>(index, &v[{parent_ind_cpp_for_jid}*6], &S[jid*6]);')   
+    self.gen_add_code_line(f'else psid[i - 6 * NUM_BODIES] = crm_mul<T>(index, &v[{parent_ind_cpp_for_jid}*6], &S[jid*6]);')
     self.gen_add_end_control_flow()
+    self.gen_add_code_line('else if (i < 3*6*NUM_BODIES) {', True)
+    self.gen_add_code_line('int root = so_path[so_path_start[jid]];')
+    self.gen_add_code_line("T acc = aJ[root*6 + index] - gravity * (index == 5); // Base joint's parent is the world")
+    self.gen_add_code_line('for (int k = so_path_start[jid] + 1; k < so_path_start[jid + 1]; ++k) {', True)
+    self.gen_add_code_line('int body = so_path[k]; int body_parent = so_path[k - 1];')
+    self.gen_add_code_line('T aJ_body = aJ[body*6 + index] + crm_mul<T>(index, &v[body_parent*6], &vJ[body*6]);')
+    self.gen_add_code_line('acc = acc + aJ_body;')
     self.gen_add_end_control_flow()
-    self.gen_add_sync()
-
-    # Compute a = a[parent] + aJ
-    self.gen_add_code_line("\n\n")
-    self.gen_add_code_line('// Compute a = a[parent] + aJ')
-    if self.robot.is_serial_chain():
-        self.gen_add_code_line('#pragma unroll')
-        self.gen_add_code_line('for (int jid = 0; jid < NUM_BODIES; ++jid) {', 1)
-        self.gen_add_parallel_loop('i','6')
-        self.gen_add_code_line(f"if ({parent_ind_cpp} == -1) a[jid*6+ i] = aJ[jid*6 + i] - gravity * (i == 5); // Base joint's parent is the world")
-        self.gen_add_code_line(f'else a[jid*6 + i] = a[{parent_ind_cpp}*6 + i] + aJ[jid*6 + i];')
-        self.gen_add_end_control_flow()
-        self.gen_add_sync()
-        self.gen_add_end_control_flow()
-    else:
-        for bfs_level in range(n_bfs_levels):
-            inds = self.robot.get_ids_by_bfs_level(bfs_level)
-            self.gen_add_code_line(f'// Compute a for bfs_level {bfs_level}')
-            self.gen_add_parallel_loop('i', str(6*len(inds)))
-            if len(inds) > 1: 
-                    select_var_vals = [("int", "jid", [str(jid) for jid in inds])]
-                    jid_cpp = "jid"
-                    level_parent_ind_cpp = parent_ind_cpp_for_jid
-                    self.gen_add_multi_threaded_select("(i)", "<", [str((idx+1)*6) for idx, jid in enumerate(inds)], select_var_vals)
-            else:
-                jid_cpp = str(inds[0])
-                level_parent_ind_cpp = str(self.robot.get_parent_id(inds[0]))
-            self.gen_add_code_line(f'int idx = i % 6;')
-            if bfs_level == 0: self.gen_add_code_line(f"a[{jid_cpp}*6+ idx] = aJ[{jid_cpp}*6 + idx] - gravity * (idx == 5); // Base joint's parent is the world")
-            else: self.gen_add_code_line(f'a[{jid_cpp}*6 + idx] = a[{level_parent_ind_cpp}*6 + idx] + aJ[{jid_cpp}*6 + idx];')
-            self.gen_add_end_control_flow()
-            self.gen_add_sync()
-        
-
-    # Initialize a_world
-    self.gen_add_code_line("\n\n")
-    self.gen_add_code_line('// Initialize a_world')
-    self.gen_add_parallel_loop('i','6')
-    self.gen_add_code_line('if (i < 5) a_world[i] = 0;')
+    self.gen_add_code_line('a[jid*6 + index] = acc;')
+    self.gen_add_end_control_flow()
+    self.gen_add_code_line('else if (i < 3*6*NUM_BODIES + 5) a_world[i - 3*6*NUM_BODIES] = 0;')
     self.gen_add_code_line('else a_world[5] = -gravity; // a_base = gravity_vec[5] = -GRAVITY = +9.81 (gravity=-9.81)')
     self.gen_add_end_control_flow()
     self.gen_add_sync()
-    
+
     # Compute psidd = crm(a[parent])@S + crm(v[parent])@psid & IC_v
     self.gen_add_code_line("\n\n")
     self.gen_add_code_line('// Compute psidd = crm(a[parent])@S + crm(v[:,i])@psid[:,i] & IC @ v (for BC) in parallel')
@@ -2280,39 +2254,61 @@ def gen_idsva_so_body_frame_inner(self):
     self.gen_add_code_line('// Now compute the backward pass')
 
 
-    # Compute IC[parent] += IC[i], BC[parent] += BC[i], f[parent] += f[i]
-    self.gen_add_code_line("\n\n")
-    self.gen_add_code_line('// Compute IC[parent] += IC[i], BC[parent] += BC[i], f[parent] += f[i]')
+    # Compute IC[parent] += IC[i], BC[parent] += BC[i], f[parent] += f[i] as ONE stage of
+    # subtree sums (barrier audit 2026-10-03, §7.z39). The legacy pass walked the tree leaf-
+    # to-root with a barrier per body (chain) or per body-within-level (tree), each step doing
+    # X[parent] = X[parent] + X_tot[child]. Replaying exactly that fold per node — X[k] plus the
+    # children's totals in the legacy visiting order — gives the same bits, so one thread per
+    # (buffer, body, element) evaluates its subtree straight-line into IC_tot/BC_tot/f_tot
+    # (the former t/p region, dead here), then IC/BC/f are repointed at the totals. The
+    # originals stay untouched, so no in-place hazard and no per-step barrier.
     if self.robot.is_serial_chain():
-        self.gen_add_code_line('#pragma unroll')
-        self.gen_add_code_line('for (int jid = NUM_BODIES-1; jid > 0; --jid) {', 1)
-        self.gen_add_parallel_loop('i','36*2 + 6')
-        self.gen_add_code_line(f'if ({parent_ind_cpp} != -1) {{', True)
-        self.gen_add_code_line(f'if (i < 36) IC[{parent_ind_cpp}*36 + i] += IC[jid*36 + i];')
-        self.gen_add_code_line(f'else if (i < 36*2) BC[{parent_ind_cpp}*36 + i - 36] += BC[jid*36 + i - 36];')
-        self.gen_add_code_line(f'else f[{parent_ind_cpp}*6 + i - 36*2] += f[jid*6 + i - 36*2];')
-        self.gen_add_end_control_flow()
-        self.gen_add_end_control_flow()
-        self.gen_add_sync()
-        self.gen_add_end_control_flow()
+        legacy_order = [(jid, jid - 1) for jid in range(num_bodies - 1, 0, -1)]
     else:
-        for bfs_level in range(n_bfs_levels-1, 0, -1):
-            inds = self.robot.get_ids_by_bfs_level(bfs_level)
-            self.gen_add_code_line(f'// Compute propogations for bfs_level {bfs_level}')
-            for jid in inds:
+        legacy_order = []
+        for bfs_level in range(n_bfs_levels - 1, 0, -1):
+            for jid in self.robot.get_ids_by_bfs_level(bfs_level):
                 parent_ind = self.robot.get_parent_id(jid)
-                if parent_ind == -1:
-                    continue
-                self.gen_add_code_line(
-                    f'// Accumulate joint {jid} into parent {parent_ind}'
-                )
-                self.gen_add_parallel_loop('i','36*2 + 6')
-                self.gen_add_code_line('int idx = i;')
-                self.gen_add_code_line(f'if (idx < 36) IC[{parent_ind}*36 + idx] += IC[{jid}*36 + idx];')
-                self.gen_add_code_line(f'else if (idx < 36*2) BC[{parent_ind}*36 + idx - 36] += BC[{jid}*36 + idx - 36];')
-                self.gen_add_code_line(f'else f[{parent_ind}*6 + idx - 36*2] += f[{jid}*6 + idx - 36*2];')
-                self.gen_add_end_control_flow()
-                self.gen_add_sync()
+                if parent_ind != -1:
+                    legacy_order.append((jid, parent_ind))
+    children_in_order = {jid: [] for jid in range(num_bodies)}
+    for child, parent_ind in legacy_order:
+        children_in_order[parent_ind].append(child)
+    def _subtree_lines(root):
+        # post-order: each node's total is its own value folded with its children's totals
+        lines = []
+        def visit(k):
+            for c in children_in_order[k]:
+                visit(c)
+            lines.append(f"T t{k} = X[{k}*stride + idx];")
+            for c in children_in_order[k]:
+                lines.append(f"t{k} = t{k} + t{c};")
+        visit(root)
+        return lines
+    self.gen_add_code_line("\n\n")
+    self.gen_add_code_line('// Compute IC[parent] += IC[i], BC[parent] += BC[i], f[parent] += f[i] as per-body subtree sums')
+    self.gen_add_code_line('// (same fold order as the legacy leaf-to-root walk -> bit-identical; one stage, no per-step barrier).')
+    self.gen_add_parallel_loop('i', '2*36*NUM_BODIES + 6*NUM_BODIES')
+    self.gen_add_code_line('const T *X; T *X_tot; int stride; int jid; int idx;')
+    self.gen_add_code_line('if (i < 36*NUM_BODIES) { X = IC; X_tot = IC_tot; stride = 36; jid = i / 36; idx = i % 36; }')
+    self.gen_add_code_line('else if (i < 2*36*NUM_BODIES) { X = BC; X_tot = BC_tot; stride = 36; jid = (i - 36*NUM_BODIES) / 36; idx = i % 36; }')
+    self.gen_add_code_line('else { X = f; X_tot = f_tot; stride = 6; jid = (i - 2*36*NUM_BODIES) / 6; idx = i % 6; }')
+    self.gen_add_code_line('T acc;')
+    self.gen_add_code_line('switch (jid) {', True)
+    for jid in range(num_bodies):
+        self.gen_add_code_line(f'case {jid}: {{', True)
+        for line in _subtree_lines(jid):
+            self.gen_add_code_line(line)
+        self.gen_add_code_line(f'acc = t{jid};')
+        self.gen_add_code_line('break;')
+        self.gen_add_end_control_flow()
+    self.gen_add_code_line('default: acc = static_cast<T>(0); break;')
+    self.gen_add_end_control_flow()
+    self.gen_add_code_line('X_tot[jid*stride + idx] = acc;')
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+    self.gen_add_code_line('// Every later consumer reads the subtree totals.')
+    self.gen_add_code_line('IC = IC_tot; BC = BC_tot; f = f_tot;')
 
     # Begin B(IC, S) & B(IC, psid) computation
     # First compute crm(S), crf(S), IC @ S && crm(psid), crf(psid), IC @ psid, icrf(f), psid+Sd
@@ -2405,34 +2401,11 @@ def gen_idsva_so_body_frame_inner(self):
     # Compute t1
     self.gen_add_code_line('\n\n')
     jids_a, ancestors = self.robot.get_jid_ancestor_ids(include_joint=True)
-    self.gen_add_code_line('// Compute t1 = outer(S[j], psid[ancestor])')
-    self.gen_add_code_line('// t1[j][k] is stored at t[((j*(j+1)/2) + k)*36]')
+    self.gen_add_code_line('// t1 = outer(S[j], psid[ancestor]) (re-formed in registers by each consumer; no shared slab, no fill barrier)')
     self.gen_add_code_line(f'static const int jids[] = {{ {", ".join(map(str, jids_a))} }}; // Joints with ancestor at equivalent index of ancestors_j')
     self.gen_add_code_line(f'static const int ancestors_j[] = {{ {", ".join(map(str, ancestors))} }}; // Joint or ancestor of joint at equivalent index of jids_a')
 
-    # Create t indexing map. Sized by NJ (raw joint count), NOT NV (DoF count),
-    # because get_jid_ancestor_ids returns joint IDs in range [0, NJ). When the
-    # mimic-aware URDFParser keeps fixed/mimic joints (e.g. h1_2 fixed-base:
-    # NJ=51 > NV=39), indexing by jid into an NV-sized map raises IndexError.
-    # S/psid/etc. are also jid-indexed downstream, so we keep this jid-indexed
-    # too rather than rewriting to v-indexed (see Option B in bug notes).
-    NJ = self.robot.get_num_joints()
-    # Initialize the matrix with -1
-    t_index_map = [[-1 for _ in range(NJ)] for _ in range(NJ)]
-
-    # Fill in the map with t_idx
-    for t_idx, (j, a) in enumerate(zip(jids_a, ancestors)):
-        t_index_map[j][a] = t_idx
-
-    # Emit CUDA code (NJ x NJ to match Python-side sizing above). `static const`
-    # keeps this NJxNJ table OFF the per-thread stack (big-robot launch OOM; §1v);
-    # 2D so the many t_index_map[jid][anc] consumers below stay unchanged.
-    self.gen_add_code_line("static const int t_index_map[{}][{}] = {{".format(NJ, NJ))
-    for row in t_index_map:
-        self.gen_add_code_line("    { " + ", ".join("{:2}".format(x) for x in row) + " },")
-    self.gen_add_code_line("};")
-
-    _emit_t_outer(self, len(jids_a), '&S[jid*6]', '&psid[ancestor_j*6]')
+    # (t1 is no longer materialized: each consumer re-forms outer(S[jid*6], psid[ancestor_j*6]) in registers)
 
     # Perform all computations with t1
     self.gen_add_code_line('\n\n')
@@ -2450,20 +2423,18 @@ def gen_idsva_so_body_frame_inner(self):
     self.gen_add_code_line(f'int jid = jids_compute[index];')
     self.gen_add_code_line(f'int ancestor_j = ancestors_j_compute[index];')
     self.gen_add_code_line(f'int st_j = st[index];')
-    self.gen_add_code_line(f'int t_idx = t_index_map[jid][ancestor_j]*36;')
-    self.gen_add_code_line(f'if (i < {len(jids)}) d2tau_dvdq[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + jid] = -dot_prod<T, 36, 1, 1>(&t[t_idx], &D3[st_j*36]);')
-    self.gen_add_code_line(f'else if (i < {len(jids)*2} && jid != st_j) d2tau_dq2[jid*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + ancestor_j] = dot_prod<T, 36, 1, 1>(&t[t_idx], &D2[st_j*36]);')
-    self.gen_add_code_line(f'else if (i < {len(jids)*3} && jid != st_j) d2tau_dq2[jid*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + st_j] = dot_prod<T, 36, 1, 1>(&t[t_idx], &D2[st_j*36]);')
-    self.gen_add_code_line(f'else if (jid != st_j) d2tau_dvdq[jid*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + st_j] = dot_prod<T, 36, 1, 1>(&t[t_idx], &D3[st_j*36]);')
+    self.gen_add_code_line(f'if (i < {len(jids)}) d2tau_dvdq[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + jid] = -idsva_so_outer_dot<T>(&S[jid*6], &psid[ancestor_j*6], &D3[st_j*36]);')
+    self.gen_add_code_line(f'else if (i < {len(jids)*2} && jid != st_j) d2tau_dq2[jid*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + ancestor_j] = idsva_so_outer_dot<T>(&S[jid*6], &psid[ancestor_j*6], &D2[st_j*36]);')
+    self.gen_add_code_line(f'else if (i < {len(jids)*3} && jid != st_j) d2tau_dq2[jid*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + st_j] = idsva_so_outer_dot<T>(&S[jid*6], &psid[ancestor_j*6], &D2[st_j*36]);')
+    self.gen_add_code_line(f'else if (jid != st_j) d2tau_dvdq[jid*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + st_j] = idsva_so_outer_dot<T>(&S[jid*6], &psid[ancestor_j*6], &D3[st_j*36]);')
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 
     # Compute t2
     self.gen_add_code_line('\n\n')
     jids_a, ancestors = self.robot.get_jid_ancestor_ids(include_joint=True)
-    self.gen_add_code_line('// Compute t2 = outer(S[j], S[ancestor])')
-    self.gen_add_code_line('// t2[j][k] is stored at t[((j*(j+1)/2) + k)*36]')
-    _emit_t_outer(self, len(jids_a), '&S[jid*6]', '&S[ancestor_j*6]')
+    self.gen_add_code_line('// t2 = outer(S[j], S[ancestor]) (re-formed in registers by each consumer)')
+    # (t2 is no longer materialized: each consumer re-forms outer(S[jid*6], S[ancestor_j*6]) in registers)
 
     # Perform all computations with t2
     self.gen_add_code_line('\n\n')
@@ -2479,13 +2450,12 @@ def gen_idsva_so_body_frame_inner(self):
     self.gen_add_code_line(f'int jid = jids_compute[index];')
     self.gen_add_code_line(f'int ancestor_j = ancestors_j_compute[index];')
     self.gen_add_code_line(f'int st_j = st[index];')
-    self.gen_add_code_line(f'int t_idx = t_index_map[jid][ancestor_j]*36;')
-    self.gen_add_code_line(f'if (i < {len(jids)} && ancestor_j < jid) d2tau_dqd2[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + ancestor_j] = -dot_prod<T, 36, 1, 1>(&t[t_idx], &D3[st_j*36]);')
-    self.gen_add_code_line(f'else if (i < {len(jids)} && jid == ancestor_j) d2tau_dqd2[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + jid] = -dot_prod<T, 36, 1, 1>(&t[t_idx], &D1[st_j*36]);')
-    self.gen_add_code_line(f'else if (i < {2*len(jids)} && jid != st_j) d2tau_dqd2[jid*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + ancestor_j] = dot_prod<T, 36, 1, 1>(&t[t_idx], &D3[st_j*36]);')
-    self.gen_add_code_line(f'else if (i < {3*len(jids)} && ancestor_j < jid) d2tau_dqd2[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + jid] = -dot_prod<T, 36, 1, 1>(&t[t_idx], &D3[st_j*36]);')
-    self.gen_add_code_line(f'else if (i < {4*len(jids)} && jid != st_j) d2tau_dqd2[jid*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + st_j] = dot_prod<T, 36, 1, 1>(&t[t_idx], &D3[st_j*36]);')
-    self.gen_add_code_line(f'else if (i >= {4*len(jids)} && jid != st_j) d2tau_dvdq[jid*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + ancestor_j] = dot_prod<T, 36, 1, 1>(&t[t_idx], &D2[st_j*36]);')
+    self.gen_add_code_line(f'if (i < {len(jids)} && ancestor_j < jid) d2tau_dqd2[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + ancestor_j] = -idsva_so_outer_dot<T>(&S[jid*6], &S[ancestor_j*6], &D3[st_j*36]);')
+    self.gen_add_code_line(f'else if (i < {len(jids)} && jid == ancestor_j) d2tau_dqd2[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + jid] = -idsva_so_outer_dot<T>(&S[jid*6], &S[ancestor_j*6], &D1[st_j*36]);')
+    self.gen_add_code_line(f'else if (i < {2*len(jids)} && jid != st_j) d2tau_dqd2[jid*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + ancestor_j] = idsva_so_outer_dot<T>(&S[jid*6], &S[ancestor_j*6], &D3[st_j*36]);')
+    self.gen_add_code_line(f'else if (i < {3*len(jids)} && ancestor_j < jid) d2tau_dqd2[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + jid] = -idsva_so_outer_dot<T>(&S[jid*6], &S[ancestor_j*6], &D3[st_j*36]);')
+    self.gen_add_code_line(f'else if (i < {4*len(jids)} && jid != st_j) d2tau_dqd2[jid*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + st_j] = idsva_so_outer_dot<T>(&S[jid*6], &S[ancestor_j*6], &D3[st_j*36]);')
+    self.gen_add_code_line(f'else if (i >= {4*len(jids)} && jid != st_j) d2tau_dvdq[jid*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + ancestor_j] = idsva_so_outer_dot<T>(&S[jid*6], &S[ancestor_j*6], &D2[st_j*36]);')
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 
@@ -2494,9 +2464,8 @@ def gen_idsva_so_body_frame_inner(self):
     # Compute t3
     self.gen_add_code_line('\n\n')
     jids_a, ancestors = self.robot.get_jid_ancestor_ids(include_joint=True)
-    self.gen_add_code_line('// Compute t3 = outer(psid[j], psid[ancestor])')
-    self.gen_add_code_line('// t3[j][k] is stored at t[((j*(j+1)/2) + k)*36]')
-    _emit_t_outer(self, len(jids_a), '&psid[jid*6]', '&psid[ancestor_j*6]')
+    self.gen_add_code_line('// t3 = outer(psid[j], psid[ancestor]) (re-formed in registers by each consumer)')
+    # (t3 is no longer materialized: each consumer re-forms outer(psid[jid*6], psid[ancestor_j*6]) in registers)
 
     # Perform all computations with t3
     self.gen_add_code_line('\n\n')
@@ -2508,9 +2477,8 @@ def gen_idsva_so_body_frame_inner(self):
     self.gen_add_code_line(f'int jid = jids_compute[index];')
     self.gen_add_code_line(f'int ancestor_j = ancestors_j_compute[index];')
     self.gen_add_code_line(f'int st_j = st[index];')
-    self.gen_add_code_line(f'int t_idx = t_index_map[jid][ancestor_j]*36;')
-    self.gen_add_code_line(f'if (i < {len(jids)}) d2tau_dq2[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + jid] = -dot_prod<T, 36, 1, 1>(&t[t_idx], &D3[st_j*36]);')
-    self.gen_add_code_line(f'else if (ancestor_j < jid) d2tau_dq2[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + ancestor_j] = -dot_prod<T, 36, 1, 1>(&t[t_idx], &D3[st_j*36]);')
+    self.gen_add_code_line(f'if (i < {len(jids)}) d2tau_dq2[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + jid] = -idsva_so_outer_dot<T>(&psid[jid*6], &psid[ancestor_j*6], &D3[st_j*36]);')
+    self.gen_add_code_line(f'else if (ancestor_j < jid) d2tau_dq2[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + ancestor_j] = -idsva_so_outer_dot<T>(&psid[jid*6], &psid[ancestor_j*6], &D3[st_j*36]);')
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 
@@ -2518,9 +2486,8 @@ def gen_idsva_so_body_frame_inner(self):
     # Compute t4
     self.gen_add_code_line('\n\n')
     jids_a, ancestors = self.robot.get_jid_ancestor_ids(include_joint=True)
-    self.gen_add_code_line('// Compute t4 = outer(S[j], psidd[ancestor])')
-    self.gen_add_code_line('// t4[j][k] is stored at t[((j*(j+1)/2) + k)*36]')
-    _emit_t_outer(self, len(jids_a), '&S[jid*6]', '&psidd[ancestor_j*6]')
+    self.gen_add_code_line('// t4 = outer(S[j], psidd[ancestor]) (re-formed in registers by each consumer)')
+    # (t4 is no longer materialized: each consumer re-forms outer(S[jid*6], psidd[ancestor_j*6]) in registers)
 
     # Perform all computations with t4
     self.gen_add_code_line('\n\n')
@@ -2532,9 +2499,8 @@ def gen_idsva_so_body_frame_inner(self):
     self.gen_add_code_line(f'int jid = jids_compute[index];')
     self.gen_add_code_line(f'int ancestor_j = ancestors_j_compute[index];')
     self.gen_add_code_line(f'int st_j = st[index];')
-    self.gen_add_code_line(f'int t_idx = t_index_map[jid][ancestor_j]*36;')
-    self.gen_add_code_line(f'if (i < {len(jids)} && jid != st_j) d2tau_dq2[jid*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + ancestor_j] += dot_prod<T, 36, 1, 1>(&t[t_idx], &D1[st_j*36]);')
-    self.gen_add_code_line(f'else if (jid != st_j) d2tau_dq2[jid*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + st_j] += dot_prod<T, 36, 1, 1>(&t[t_idx], &D1[st_j*36]);')
+    self.gen_add_code_line(f'if (i < {len(jids)} && jid != st_j) d2tau_dq2[jid*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + ancestor_j] += idsva_so_outer_dot<T>(&S[jid*6], &psidd[ancestor_j*6], &D1[st_j*36]);')
+    self.gen_add_code_line(f'else if (jid != st_j) d2tau_dq2[jid*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + st_j] += idsva_so_outer_dot<T>(&S[jid*6], &psidd[ancestor_j*6], &D1[st_j*36]);')
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 
@@ -2542,9 +2508,8 @@ def gen_idsva_so_body_frame_inner(self):
     # Compute t5
     self.gen_add_code_line('\n\n')
     jids_a, ancestors = self.robot.get_jid_ancestor_ids(include_joint=True)
-    self.gen_add_code_line('// Compute t5 = outer(S[j], (Sd+psid)[ancestor])')
-    self.gen_add_code_line('// t5[j][k] is stored at t[((j*(j+1)/2) + k)*36]')
-    _emit_t_outer(self, len(jids_a), '&S[jid*6]', '&psid_Sd[ancestor_j*6]')
+    self.gen_add_code_line('// t5 = outer(S[j], (Sd+psid)[ancestor]) (re-formed in registers by each consumer)')
+    # (t5 is no longer materialized: each consumer re-forms outer(S[jid*6], psid_Sd[ancestor_j*6]) in registers)
 
     # Perform all computations with t5
     self.gen_add_code_line('\n\n')
@@ -2555,8 +2520,7 @@ def gen_idsva_so_body_frame_inner(self):
     self.gen_add_code_line(f'int jid = jids_compute[index];')
     self.gen_add_code_line(f'int ancestor_j = ancestors_j_compute[index];')
     self.gen_add_code_line(f'int st_j = st[index];')
-    self.gen_add_code_line(f'int t_idx = t_index_map[jid][ancestor_j]*36;')
-    self.gen_add_code_line(f'if (st_j != jid) d2tau_dvdq[jid*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + ancestor_j] += dot_prod<T, 36, 1, 1>(&t[t_idx], &D1[st_j*36]);')
+    self.gen_add_code_line(f'if (st_j != jid) d2tau_dvdq[jid*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + ancestor_j] += idsva_so_outer_dot<T>(&S[jid*6], &psid_Sd[ancestor_j*6], &D1[st_j*36]);')
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 
@@ -2564,9 +2528,8 @@ def gen_idsva_so_body_frame_inner(self):
     # Compute t6
     self.gen_add_code_line('\n\n')
     jids_a, ancestors = self.robot.get_jid_ancestor_ids(include_joint=True)
-    self.gen_add_code_line('// Compute t6 = outer(S[ancestor], psid[joint])')
-    self.gen_add_code_line('// t6[j][k] is stored at t[((j*(j+1)/2) + k)*36]')
-    _emit_t_outer(self, len(jids_a), '&S[ancestor_j*6]', '&psid[jid*6]')
+    self.gen_add_code_line('// t6 = outer(S[ancestor], psid[joint]) (re-formed in registers by each consumer)')
+    # (t6 is no longer materialized: each consumer re-forms outer(S[ancestor_j*6], psid[jid*6]) in registers)
 
     # Perform all computations with t6
     self.gen_add_code_line('\n\n')
@@ -2579,11 +2542,10 @@ def gen_idsva_so_body_frame_inner(self):
     self.gen_add_code_line(f'int jid = jids_compute[index];')
     self.gen_add_code_line(f'int ancestor_j = ancestors_j_compute[index];')
     self.gen_add_code_line(f'int st_j = st[index];')
-    self.gen_add_code_line(f'int t_idx = t_index_map[jid][ancestor_j]*36;')
     self.gen_add_code_line('if (ancestor_j < jid) {', True)
-    self.gen_add_code_line(f'if (i < {len(jids)}) d2tau_dvdq[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + ancestor_j] = -dot_prod<T, 36, 1, 1>(&t[t_idx], &D3[st_j*36]);')
-    self.gen_add_code_line(f'else if (i < {2*len(jids)}) d2tau_dq2[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + st_j] = dot_prod<T, 36, 1, 1>(&t[t_idx], &D2[st_j*36]);')
-    self.gen_add_code_line('else d2tau_dvdq[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + st_j] = dot_prod<T, 36, 1, 1>(&t[t_idx], &D3[st_j*36]);')
+    self.gen_add_code_line(f'if (i < {len(jids)}) d2tau_dvdq[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + ancestor_j] = -idsva_so_outer_dot<T>(&S[ancestor_j*6], &psid[jid*6], &D3[st_j*36]);')
+    self.gen_add_code_line(f'else if (i < {2*len(jids)}) d2tau_dq2[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + st_j] = idsva_so_outer_dot<T>(&S[ancestor_j*6], &psid[jid*6], &D2[st_j*36]);')
+    self.gen_add_code_line('else d2tau_dvdq[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + st_j] = idsva_so_outer_dot<T>(&S[ancestor_j*6], &psid[jid*6], &D3[st_j*36]);')
     self.gen_add_end_control_flow()
     self.gen_add_end_control_flow()
     self.gen_add_sync()
@@ -2592,9 +2554,8 @@ def gen_idsva_so_body_frame_inner(self):
     # Compute t7
     self.gen_add_code_line('\n\n')
     jids_a, ancestors = self.robot.get_jid_ancestor_ids(include_joint=True)
-    self.gen_add_code_line('// Compute t7 = outer(S[ancestor], psidd[joint])')
-    self.gen_add_code_line('// t7[j][k] is stored at t[((j*(j+1)/2) + k)*36]')
-    _emit_t_outer(self, len(jids_a), '&S[ancestor_j*6]', '&psidd[jid*6]')
+    self.gen_add_code_line('// t7 = outer(S[ancestor], psidd[joint]) (re-formed in registers by each consumer)')
+    # (t7 is no longer materialized: each consumer re-forms outer(S[ancestor_j*6], psidd[jid*6]) in registers)
 
     # Perform all computations with t7
     self.gen_add_code_line('\n\n')
@@ -2605,8 +2566,7 @@ def gen_idsva_so_body_frame_inner(self):
     self.gen_add_code_line(f'int jid = jids_compute[index];')
     self.gen_add_code_line(f'int ancestor_j = ancestors_j_compute[index];')
     self.gen_add_code_line(f'int st_j = st[index];')
-    self.gen_add_code_line(f'int t_idx = t_index_map[jid][ancestor_j]*36;')
-    self.gen_add_code_line(f'if (ancestor_j < jid) d2tau_dq2[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + st_j] += dot_prod<T, 36, 1, 1>(&t[t_idx], &D1[st_j*36]);')
+    self.gen_add_code_line(f'if (ancestor_j < jid) d2tau_dq2[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + st_j] += idsva_so_outer_dot<T>(&S[ancestor_j*6], &psidd[jid*6], &D1[st_j*36]);')
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 
@@ -2614,9 +2574,8 @@ def gen_idsva_so_body_frame_inner(self):
     # Compute t8
     self.gen_add_code_line('\n\n')
     jids_a, ancestors = self.robot.get_jid_ancestor_ids(include_joint=True)
-    self.gen_add_code_line('// Compute t8 = outer(S[ancestor], S[joint])')
-    self.gen_add_code_line('// t8[j][k] is stored at t[((j*(j+1)/2) + k)*36]')
-    _emit_t_outer(self, len(jids_a), '&S[ancestor_j*6]', '&S[jid*6]')
+    self.gen_add_code_line('// t8 = outer(S[ancestor], S[joint]) (re-formed in registers by each consumer)')
+    # (t8 is no longer materialized: each consumer re-forms outer(S[ancestor_j*6], S[jid*6]) in registers)
 
     # Perform all computations with t8
     self.gen_add_code_line('\n\n')
@@ -2633,18 +2592,17 @@ def gen_idsva_so_body_frame_inner(self):
     self.gen_add_code_line(f'int jid = jids_compute[index];')
     self.gen_add_code_line(f'int ancestor_j = ancestors_j_compute[index];')
     self.gen_add_code_line(f'int st_j = st[index];')
-    self.gen_add_code_line(f'int t_idx = t_index_map[jid][ancestor_j]*36;')
     self.gen_add_code_line('if (ancestor_j < jid) {', True)
-    self.gen_add_code_line(f'if (i < {len(jids)}) dM_dq[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + jid] = dot_prod<T, 36, 1, 1>(&t[t_idx], &D4[st_j*36]);')
-    self.gen_add_code_line(f'else if (i < {2*len(jids)}) dM_dq[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + jid] = dot_prod<T, 36, 1, 1>(&t[t_idx], &D4[st_j*36]);')
+    self.gen_add_code_line(f'if (i < {len(jids)}) dM_dq[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + jid] = idsva_so_outer_dot<T>(&S[ancestor_j*6], &S[jid*6], &D4[st_j*36]);')
+    self.gen_add_code_line(f'else if (i < {2*len(jids)}) dM_dq[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + jid] = idsva_so_outer_dot<T>(&S[ancestor_j*6], &S[jid*6], &D4[st_j*36]);')
     self.gen_add_code_line('if (st_j != jid) {', True)
-    self.gen_add_code_line(f'if (i < {3*len(jids)}) d2tau_dqd2[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + st_j] = dot_prod<T, 36, 1, 1>(&t[t_idx], &D3[st_j*36]);')
-    self.gen_add_code_line(f'else if (i < {4*len(jids)}) d2tau_dqd2[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + jid] = dot_prod<T, 36, 1, 1>(&t[t_idx], &D3[st_j*36]);')
-    self.gen_add_code_line(f'else if (i < {5*len(jids)}) d2tau_dvdq[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + jid] = dot_prod<T, 36, 1, 1>(&t[t_idx], &D2[st_j*36]);')
+    self.gen_add_code_line(f'if (i < {3*len(jids)}) d2tau_dqd2[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + st_j] = idsva_so_outer_dot<T>(&S[ancestor_j*6], &S[jid*6], &D3[st_j*36]);')
+    self.gen_add_code_line(f'else if (i < {4*len(jids)}) d2tau_dqd2[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + jid] = idsva_so_outer_dot<T>(&S[ancestor_j*6], &S[jid*6], &D3[st_j*36]);')
+    self.gen_add_code_line(f'else if (i < {5*len(jids)}) d2tau_dvdq[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + jid] = idsva_so_outer_dot<T>(&S[ancestor_j*6], &S[jid*6], &D2[st_j*36]);')
     self.gen_add_end_control_flow()
     self.gen_add_end_control_flow()
-    self.gen_add_code_line(f'if (jid != st_j && i < {6*len(jids)}) dM_dq[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + st_j] = dot_prod<T, 36, 1, 1>(&t[t_idx], &D1[st_j*36]);')
-    self.gen_add_code_line(f'else if (jid != st_j) dM_dq[jid*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + st_j] = dot_prod<T, 36, 1, 1>(&t[t_idx], &D1[st_j*36]);')
+    self.gen_add_code_line(f'if (jid != st_j && i < {6*len(jids)}) dM_dq[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + st_j] = idsva_so_outer_dot<T>(&S[ancestor_j*6], &S[jid*6], &D1[st_j*36]);')
+    self.gen_add_code_line(f'else if (jid != st_j) dM_dq[jid*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + st_j] = idsva_so_outer_dot<T>(&S[ancestor_j*6], &S[jid*6], &D1[st_j*36]);')
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 
@@ -2652,9 +2610,8 @@ def gen_idsva_so_body_frame_inner(self):
     # Compute t9
     self.gen_add_code_line('\n\n')
     jids_a, ancestors = self.robot.get_jid_ancestor_ids(include_joint=True)
-    self.gen_add_code_line('// Compute t9 = outer(S[ancestor], (Sd+psid)[joint])')
-    self.gen_add_code_line('// t9[j][k] is stored at t[((j*(j+1)/2) + k)*36]')
-    _emit_t_outer(self, len(jids_a), '&S[ancestor_j*6]', '&psid_Sd[jid*6]')
+    self.gen_add_code_line('// t9 = outer(S[ancestor], (Sd+psid)[joint]) (re-formed in registers by each consumer)')
+    # (t9 is no longer materialized: each consumer re-forms outer(S[ancestor_j*6], psid_Sd[jid*6]) in registers)
 
     # Perform all computations with t9
     self.gen_add_code_line('\n\n')
@@ -2666,35 +2623,23 @@ def gen_idsva_so_body_frame_inner(self):
     self.gen_add_code_line(f'int jid = jids_compute[index];')
     self.gen_add_code_line(f'int ancestor_j = ancestors_j_compute[index];')
     self.gen_add_code_line(f'int st_j = st[index];')
-    self.gen_add_code_line(f'int t_idx = t_index_map[jid][ancestor_j]*36;')
-    self.gen_add_code_line(f'if (i < {len(jids)} && ancestor_j < jid && st_j != jid) d2tau_dvdq[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + jid] += dot_prod<T, 36, 1, 1>(&t[t_idx], &D1[st_j*36]);')
+    self.gen_add_code_line(f'if (i < {len(jids)} && ancestor_j < jid && st_j != jid) d2tau_dvdq[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + jid] += idsva_so_outer_dot<T>(&S[ancestor_j*6], &psid_Sd[jid*6], &D1[st_j*36]);')
     self.gen_add_code_line(f'else if (ancestor_j < jid & st_j != jid) d2tau_dq2[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + jid] = d2tau_dq2[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + st_j];')
     self.gen_add_end_control_flow()
     self.gen_add_sync()
     
-    # Compute p1..p6 in parallel
+    # p1..p6 (legacy block-shared 6-vector slabs per (joint, ancestor) pair) are no longer
+    # materialised: each consumer below re-forms the needed p rows in registers (same rounded
+    # per-row values, same r order -> bit-identical), so the p stage and its barrier are gone.
     jids_a, ancestors = self.robot.get_jid_ancestor_ids(include_joint=True)
     self.gen_add_code_line('\n\n')
-    self.gen_add_code_line('// Compute p1..p6 in parallel')
-    self.gen_add_code_lines(['// p1 = self.crm(psid_c) @ S_d', \
+    self.gen_add_code_lines(['// p1..p6 re-formed in registers by each consumer (no shared slab, no fill barrier):', \
+                             '// p1 = self.crm(psid_c) @ S_d', \
                              '// p2 = self.crm(psidd[:, k]) @ S_d', \
                              '// p3 = self.crm(S_c) @ S_d', \
                              '// p4 = self.crm(Sd_c + psid_c) @ S_d - 2 * self.crm(psid_d) @ S_c', \
                              '// p5 = self.crm(S_d) @ S_c', \
                              '// p6 = IC_S[joint] @ crm(S[ancestor]) + S[ancestor] @ crf_S_IC[joint]'])
-    self.gen_add_parallel_loop('i',f'{6*6*len(jids_a)}')
-    self.gen_add_code_line(f'int index = i % {6*len(jids_a)};')
-    self.gen_add_code_line(f'int jid = jids[index / 6];')
-    self.gen_add_code_line(f'int ancestor_j = ancestors_j[index / 6];')
-    self.gen_add_code_line(f'int p_idx = t_index_map[jid][ancestor_j]*6;')
-    self.gen_add_code_line(f'if (i < {len(jids_a)*6}) p1[p_idx + i % 6] = crm_mul<T>(i % 6, &psid[ancestor_j*6], &S[jid*6]);')
-    self.gen_add_code_line(f'else if (i < {2*len(jids_a)*6}) p2[p_idx + i % 6] = crm_mul<T>(i % 6, &psidd[ancestor_j*6], &S[jid*6]);')
-    self.gen_add_code_line(f'else if (i < {3*len(jids_a)*6}) p3[p_idx + i % 6] = crm_mul<T>(i % 6, &S[ancestor_j*6], &S[jid*6]);')
-    self.gen_add_code_line(f'else if (i < {4*len(jids_a)*6}) p4[p_idx + i % 6] = crm_mul<T>(i % 6, &psid_Sd[ancestor_j*6], &S[jid*6]) - 2 * crm_mul<T>(i % 6, &psid[jid*6], &S[ancestor_j*6]);')
-    self.gen_add_code_line(f'else if (i < {5*len(jids_a)*6}) p5[p_idx + i % 6] = crm_mul<T>(i % 6, &S[jid*6], &S[ancestor_j*6]);')
-    self.gen_add_code_line(f'else p6[p_idx + i % 6] = dot_prod<T, 6, 1, 1>(&IC_S[jid*6], &crm_S[ancestor_j*36 + (i % 6)*6]) + dot_prod<T, 6, 1, 1>(&S[ancestor_j*6], &crf_S_IC[jid*36 + (i % 6)*6]);')
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
 
     # Finish all computations with p1..p6
     self.gen_add_code_line('\n\n')
@@ -2710,14 +2655,13 @@ def gen_idsva_so_body_frame_inner(self):
     self.gen_add_code_line(f'int jid = jids_compute[index];')
     self.gen_add_code_line(f'int ancestor_j = ancestors_j_compute[index];')
     self.gen_add_code_line(f'int st_j = st[index];')
-    self.gen_add_code_line(f'int p_idx = t_index_map[jid][ancestor_j]*6;')
-    self.gen_add_code_line(f'if (i < {len(jids)}) d2tau_dq2[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + jid] += -dot_prod<T, 6, 1, 1>(&p1[p_idx], &T2[st_j*6]) + dot_prod<T, 6, 1, 1>(&p2[p_idx], &T1[st_j*6]);')
+    self.gen_add_code_line(f'if (i < {len(jids)}) d2tau_dq2[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + ancestor_j * SECOND_ORDER_COORDS + jid] += -idsva_so_crm_dot<T>(&psid[ancestor_j*6], &S[jid*6], &T2[st_j*6]) + idsva_so_crm_dot<T>(&psidd[ancestor_j*6], &S[jid*6], &T1[st_j*6]);')
     self.gen_add_code_line('else if (ancestor_j < jid) {', True)
-    self.gen_add_code_line(f'if (i < {2*len(jids)}) d2tau_dq2[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + ancestor_j] += -dot_prod<T, 6, 1, 1>(&p1[p_idx], &T2[st_j*6]) + dot_prod<T, 6, 1, 1>(&p2[p_idx], &T1[st_j*6]);')
-    self.gen_add_code_line(f'else if (i < {3*len(jids)}) d2tau_dvdq[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + ancestor_j] += -dot_prod<T, 6, 1, 1>(&p3[p_idx], &T2[st_j*6]) + dot_prod<T, 6, 1, 1>(&p4[p_idx], &T1[st_j*6]);')
-    self.gen_add_code_line(f'else if (i < {4*len(jids)}) d2tau_dq2[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + st_j] -= dot_prod<T, 6, 1, 1>(&p5[p_idx], &T3[st_j*6]);')
-    self.gen_add_code_line(f'else if (i < {5*len(jids)} && st_j != jid) d2tau_dq2[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + jid] -= dot_prod<T, 6, 1, 1>(&p5[p_idx], &T3[st_j*6]);')
-    self.gen_add_code_line(f'else if (i >= {5*len(jids)}) d2tau_dvdq[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + st_j] -= dot_prod<T, 6, 1, 1>(&p5[p_idx], &T4[st_j*6]);')
+    self.gen_add_code_line(f'if (i < {2*len(jids)}) d2tau_dq2[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + ancestor_j] += -idsva_so_crm_dot<T>(&psid[ancestor_j*6], &S[jid*6], &T2[st_j*6]) + idsva_so_crm_dot<T>(&psidd[ancestor_j*6], &S[jid*6], &T1[st_j*6]);')
+    self.gen_add_code_line(f'else if (i < {3*len(jids)}) d2tau_dvdq[st_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + ancestor_j] += -idsva_so_crm_dot<T>(&S[ancestor_j*6], &S[jid*6], &T2[st_j*6]) + idsva_so_crm2_dot<T>(&psid_Sd[ancestor_j*6], &S[jid*6], &psid[jid*6], &S[ancestor_j*6], &T1[st_j*6]);')
+    self.gen_add_code_line(f'else if (i < {4*len(jids)}) d2tau_dq2[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + st_j] -= idsva_so_crm_dot<T>(&S[jid*6], &S[ancestor_j*6], &T3[st_j*6]);')
+    self.gen_add_code_line(f'else if (i < {5*len(jids)} && st_j != jid) d2tau_dq2[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + st_j * SECOND_ORDER_COORDS + jid] -= idsva_so_crm_dot<T>(&S[jid*6], &S[ancestor_j*6], &T3[st_j*6]);')
+    self.gen_add_code_line(f'else if (i >= {5*len(jids)}) d2tau_dvdq[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + st_j] -= idsva_so_crm_dot<T>(&S[jid*6], &S[ancestor_j*6], &T4[st_j*6]);')
     self.gen_add_end_control_flow()
     self.gen_add_end_control_flow()
     # NO sync: the p6 finish reads p6/S (published at the p barrier) and writes d2tau_dqd2 only,
@@ -2730,8 +2674,7 @@ def gen_idsva_so_body_frame_inner(self):
     self.gen_add_parallel_loop('i',f'{len(jids_a)}')
     self.gen_add_code_line(f'int jid = jids[i];')
     self.gen_add_code_line(f'int ancestor_j = ancestors_j[i];')
-    self.gen_add_code_line(f'int p_idx = t_index_map[jid][ancestor_j]*6;')
-    self.gen_add_code_line(f'if (ancestor_j < jid) d2tau_dqd2[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + jid] = dot_prod<T, 6, 1, 1>(&p6[p_idx], &S[jid*6]);')
+    self.gen_add_code_line(f'if (ancestor_j < jid) d2tau_dqd2[ancestor_j*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS + jid * SECOND_ORDER_COORDS + jid] = idsva_so_p6_dot<T>(&IC_S[jid*6], &crm_S[ancestor_j*36], &S[ancestor_j*6], &crf_S_IC[jid*36], &S[jid*6]);')
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 
@@ -2828,9 +2771,10 @@ def _emit_idsva_so_body_frame_kernel_body_for_flags(self, n, NUM_POS, use_qdd_in
       - use_global_output: 4*NV^3 output tensor lives in d_idsva_so (global) vs s_idsva_so (smem).
       - s_temp_in_global:  the whole inner s_temp arena routes to d_workspace (guaranteed-fit fallback).
       - bc_in_global:      surgical — only the cold BC buffer routes to d_workspace (inner BC_IN_SMEM=false).
-      - tp_in_global:      surgical — only the ancestor-pair scratch t/p1..p6 (36*len(jids_a))
-                           routes to d_workspace (inner TP_IN_SMEM=false); BC slides down to fill
-                           the vacated smem so the arena shrinks by exactly that span.
+      - tp_in_global:      surgical — only the backward-accumulation region IC_tot/BC_tot/f_tot
+                           (idsva_so_body_frame_tot_span) routes to d_workspace (inner
+                           TP_IN_SMEM=false); BC slides down to fill the vacated smem so the
+                           arena shrinks by exactly that span.
     bc_in_global and tp_in_global are mutually exclusive (separate rungs). Floating-base
     (diagnostic) uses the gravity-shim spill at the SO offset regardless of flags.
     """
@@ -2841,8 +2785,7 @@ def _emit_idsva_so_body_frame_kernel_body_for_flags(self, n, NUM_POS, use_qdd_in
         extra_t_buffers.append(("s_qdd", n))
     inner_temp = self.gen_idsva_so_body_frame_inner_temp_mem_size()
     bc_slab = 36 * self.robot.get_num_bodies()
-    jids_a, _ = self.robot.get_jid_ancestor_ids(include_joint=True)
-    tp_slab = 36 * len(jids_a)
+    tp_slab = idsva_so_body_frame_tot_span(self.robot.get_num_bodies())
     # smem s_temp allocation per rung:
     #   - s_temp_in_global (whole-arena rung): 0 (inner repoints s_temp -> d_workspace).
     #   - bc_in_global (surgical BC rung): inner_temp - BC. BC is the LAST (top) 36*NB
@@ -2850,9 +2793,9 @@ def _emit_idsva_so_body_frame_kernel_body_for_flags(self, n, NUM_POS, use_qdd_in
     #     every hot buffer below in place. This MUST match the per-tier launch smem bytes
     #     (GRiDCodeGenerator.py: _idsva_bf_out - _idsva_bf_BC) or the kernel arena and the
     #     launch disagree and the top slab reads OOB.
-    #   - tp_in_global (surgical t/p rung): inner_temp - 36*len(jids_a). t/p sits just below
-    #     BC; when it spills, BC slides down to fill it so the smem arena shrinks by exactly
-    #     the t/p span. MUST match GRiDCodeGenerator.py: _idsva_bf_out - _idsva_bf_TP.
+    #   - tp_in_global (surgical tot rung): inner_temp - idsva_so_body_frame_tot_span. The tot
+    #     region sits just below BC; when it spills, BC slides down to fill it so the smem arena
+    #     shrinks by exactly that span. MUST match _constants_arena.py: _idsva_bf_out - _idsva_bf_TP.
     #   - otherwise (PERF / global_output rungs): full inner_temp.
     if s_temp_in_global:
         smem_temp = 0
