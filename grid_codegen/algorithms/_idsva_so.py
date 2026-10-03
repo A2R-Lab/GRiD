@@ -3503,7 +3503,8 @@ def gen_idsva_so_world_frame_inner(self):
     self.gen_add_code_line("int vel = wf_body_v_index[vc_begin + lane];")
     self.gen_add_code_line("for (int row = 0; row < 6; ++row) Sd_vel[vel*6 + row] = crm_mul<T>(row, &v_w[jid*6], &S_vel[vel*6]);")
     self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    # NO sync: the I_Xup build below reads only Ipool/Xup (published long before), so the
+    # Sd writes ride the next barrier (guide §7.z39: a barrier that orders nothing is free).
 
     # --- IC[jid] = Xup[jid]^T @ I_body @ Xup[jid]: two block-parallel idx-over-36 builds.
     self.gen_add_code_line("// IC[jid] = Xup[jid]^T @ I_body @ Xup[jid] (block-parallel over the 36 elements).")
@@ -3539,7 +3540,7 @@ def gen_idsva_so_world_frame_inner(self):
     self.gen_add_code_line("T t_IC_crmv = dot_prod<T, 6, 6, 1>(&IC[jid*36 + row], crm_v_col);")
     self.gen_add_code_line("BC[jid*36 + idx] = t_crfv_IC + icrf<T>(idx, fs_IC_v) - t_IC_crmv;")
     self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    # NO sync: f[jid] reads IC/a_w/v_w/fs_IC_v (all published at the IC_v barrier), never BC.
     # f[jid] = IC @ a + crf(v) @ IC @ v. Rows are independent: parallelize one row per thread.
     self.gen_add_code_line("// f[jid] = IC[jid] @ a[jid] + crf(v[jid]) @ (IC[jid] @ v[jid]) (parallel over the 6 rows).")
     self.gen_add_parallel_loop("row", "6")
@@ -3547,7 +3548,10 @@ def gen_idsva_so_world_frame_inner(self):
     self.gen_add_code_line("for (int kk = 0; kk < 6; ++kk) crf_v_row2[kk] = -crm<T>(kk + 6*row, &v_w[jid*6]);")
     self.gen_add_code_line("f_w[jid*6 + row] = dot_prod<T, 6, 6, 1>(&IC[jid*36 + row], &a_w[jid*6]) + dot_prod<T, 6, 1, 1>(crf_v_row2, fs_IC_v);")
     self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    # NO loop-end sync: the next body's thread-0 prologue writes v_w/a_w[jid+1] and fs_vJ/fs_aJ,
+    # none of which the still-running BC/f stages of body jid read (they read v_w/a_w[jid],
+    # IC[jid], fs_IC_v); the prologue's own barrier then publishes BC/f. The trailing sync
+    # after the loop closes the last body.
     self.gen_add_end_control_flow()  # end forward jid loop
     self.gen_add_sync()
 
