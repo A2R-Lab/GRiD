@@ -2895,15 +2895,16 @@ def gen_idsva_so_body_frame_kernel(self, use_qdd_input = False, single_call_timi
     self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER, bool MUJOCO_OUTPUT = false>")
     self.gen_add_code_line("__global__")
     # Register cap instead of __launch_bounds__ (2026-10-04, measured on iiwa14 after the barrier
-    # fusions): the fused inner keeps more values live, and at the LITE tier (704-thread bound)
-    # ptxas took 80 regs, so the website's 512-thread launch fell to ONE resident block per SM:
-    # -17 % at N <= 128 but +25 % / +50 % at N = 256 / 1024. __maxnreg__(64) there (2 resident
-    # blocks, 32 B of spill) wins at every N: -12..-15 % (N <= 128), -21 % (256), -1 % (1024).
-    # The SHARED tier (MAX_PERF_LEVEL_THREADS-bound, 320-thread launch) is latency-bound and
-    # wants the registers (a 64-cap cost +10 % at N = 1024 there), so it keeps ptxas' choice,
-    # bounded only by what its max block can launch. __maxnreg__ and __launch_bounds__ are
-    # mutually exclusive; the cap guarantees every tier's max block still launches.
-    self.gen_add_code_line("__maxnreg__(RESOURCE_TIER == TIER_SHARED ? ((65536 / tier_max_threads<TIER_SHARED>()) < 80 ? (65536 / tier_max_threads<TIER_SHARED>()) : 80) : 64)")
+    # fusions): the fused inner keeps more values live, and ptxas took 80 regs (vs 40-56 before),
+    # which halves the resident blocks per SM. The kernel is now throughput-bound, so wave
+    # quantisation at large N dominates: at the release 512-thread launch 80 regs = ONE block/SM
+    # (+25 % / +50 % at N = 256 / 1024, -17 % below); __maxnreg__(64) = two blocks there (-12..-21 %
+    # at N <= 256, -1 % at 1024), and at the wrappers' SHARED launch 64 regs x 256 threads = four
+    # blocks (N = 1024: -18 % vs the old kernel at its best count; 320 threads = three blocks and
+    # +25 %, hence the re-autotuned 256-thread pick in config/launch_configs/iiwa14). 64 x 1024
+    # fits the register file, so every tier's max block still launches. __maxnreg__ and
+    # __launch_bounds__ are mutually exclusive.
+    self.gen_add_code_line("__maxnreg__(64)")
     self.gen_add_code_line(func_def, True)
 
     table = self._idsva_so_body_tier_table  # [(name, t_count, use_global_output, s_temp_in_global, bc_in_global, tp_in_global), ...]

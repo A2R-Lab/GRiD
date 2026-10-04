@@ -80,7 +80,7 @@
       "fdsva_so": {
         "threads": 192,
         "tier": "shared",
-        "us_at_optimal": 72.22
+        "us_at_optimal": 61.39
       },
       "forward_dynamics_parameter_gradient": {
         "threads": 112,
@@ -113,14 +113,14 @@
         "us_at_optimal": 22.6
       },
       "idsva_so": {
-        "threads": 320,
-        "tier": "shared",
-        "us_at_optimal": 43.08
+        "threads": 512,
+        "tier": "lite",
+        "us_at_optimal": 30.8
       },
       "idsva_so_body_frame": {
-        "threads": 352,
+        "threads": 512,
         "tier": "lite",
-        "us_at_optimal": 43.35
+        "us_at_optimal": 30.8
       },
       "idsva_so_world_frame": {
         "threads": 80,
@@ -950,7 +950,7 @@
       "kernel"
     ]
   },
-  "source": "GRiD autotune sweep 2026-08-26",
+  "source": "GRiD autotune sweep 2026-08-26; idsva_so/idsva_so_body_frame/fdsva_so (fixed) re-swept 2026-10-04 after the barrier-fusion kernels (per_algo_bench --mode autotune --algos idsva_so,fdsva_so, N=256); torch idsva_so set to lite/256 from a torch-path sweep (lite/384 and lite/512 lose 17-24 % at N=1024 on the fused kernel, 256 wins at every N)",
   "torch_bases": {
     "fixed": {
       "aba": {
@@ -990,7 +990,7 @@
         "tier": "shared"
       },
       "idsva_so": {
-        "threads": 384,
+        "threads": 256,
         "tier": "lite"
       },
       "minv": {
