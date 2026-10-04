@@ -613,6 +613,8 @@ def gen_collision_namespace(self, tiers):
     self.gen_add_code_line('#include "grid_collision_geometry.cuh"  // W3 Component E: SDF primitives (grid_collision::)')
     self.gen_add_func_doc("Collision namespace: baked sphere data + config_free composed over "
                           "grid::multi_target_position + the static SDF geometry header")
+    # consumers (and the warp runner) pick the config_free signature by tier count at preprocess time
+    self.gen_add_code_line("#define GRID_COLLISION_NUM_TIERS " + str(len(tiers)))
     self.gen_add_code_line("namespace " + self.file_namespace + "_collision {", True)
     # Bring the tier enum into scope so GRID_DEFAULT_RESOURCE_TIER (a macro expanding to a
     # bare TIER_* name defined in namespace grid) resolves inside this sibling namespace,
@@ -649,6 +651,21 @@ def gen_collision_namespace(self, tiers):
             ", ".join(_c_float_literal(rad) for rad in (t["radius"] or [0.0])) + "};",
             "__device__ const int g_collision_self_cc_ranges" + sfx + "[" + str(max(3 * r, 1)) + "] = {" + flat_ranges + "};",
         ])
+        # G1 (HJCD asks 2026-10-04): the sphere batch as device data, so a consumer that already
+        # holds the joint world transforms (e.g. a warp-scoped IK refinement) can place the
+        # spheres itself: anchor = movable-joint slot (index into s_Xworld[16*slot], the same
+        # table multi_target_position_inner bakes as mt_anchor), offset = local xyz in that frame
+        # with welded frames folded in, radius == g_collision_sphere_r. Same order as the FK
+        # extractor's batch; base-link spheres (anchor < 0) were dropped at bake time. fp32.
+        self.gen_add_code_lines([
+            "constexpr int NUM_SPHERES" + cap + " = NUM_COLLISION_SPHERES" + cap + ";",
+            "__device__ __constant__ int   sphere_anchor" + sfx + "[" + str(max(n, 1)) + "] = {" +
+            ", ".join(str(a) for a in (t["anchor"] or [0])) + "};",
+            "__device__ __constant__ float sphere_offset" + sfx + "[" + str(max(3 * n, 1)) + "] = {" +
+            ", ".join(_c_float_literal(v) for v in (t["offset"] or [0.0])) + "};",
+            "__device__ __constant__ float sphere_radius" + sfx + "[" + str(max(n, 1)) + "] = {" +
+            ", ".join(_c_float_literal(rad) for rad in (t["radius"] or [0.0])) + "};",
+        ])
         if len(tiers) > 1:
             # sphere -> anchor (GRiD frame/joint) id: the bit index into the broad-phase link_CC
             # hit-mask (W3 Inc4a). The mask lets the fine pass skip spheres whose link the broad pass
@@ -682,20 +699,32 @@ def gen_collision_namespace(self, tiers):
         func_notes = [
             "Returns true iff the current configuration q is COLLISION-FREE (self + environment).",
             "Sphere world positions via the W1b batched extractor; SDF self/env checks via the static header.",
-            "Every thread computes the same verdict; the self/env range loops are serial (parallelize = W3 perf TODO)."]
+            "Block-parallel (G4, 2026-10-04): thread-per-self-range + thread-per-sphere env checks OR-ed into a",
+            "shared flag; every thread returns the same verdict; thread-count invariant; single block."]
         self.gen_add_func_doc("Collision-free test for configuration q (self + environment)", func_notes, func_params, None)
         self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
         self.gen_add_code_line("__device__")
         self.gen_add_code_line("bool config_free(const T *s_q, const grid::robotModel<T> *d_robotModel, "
                                "const Environment<T> &env, T *s_sphere_pos, T *s_sphere_r, T *d_workspace = nullptr) {", True)
+        self.gen_add_code_line("__shared__ int s_cc_hit;")
+        self.gen_add_code_line("if (threadIdx.x == 0 && threadIdx.y == 0) s_cc_hit = 0;   // published by the extractor's barriers")
         self.gen_add_code_line("grid::multi_target_position_device<T, RESOURCE_TIER>(s_sphere_pos, s_q, d_robotModel, d_workspace);")
         self.gen_add_code_line("load_collision_radii<T>(s_sphere_r);")
         self.gen_add_sync()
-        self.gen_add_code_line("if (grid_cc_self_collision<T>(s_sphere_pos, s_sphere_r, g_collision_self_cc_ranges, NUM_COLLISION_SELF_CC_RANGES)) return false;")
-        self.gen_add_code_line("for (int i = 0; i < NUM_COLLISION_SPHERES; ++i) {", True)
-        self.gen_add_code_line("if (grid_cc_sphere_in_environment<T>(env, s_sphere_pos[3*i], s_sphere_pos[3*i+1], s_sphere_pos[3*i+2], s_sphere_r[i])) return false;")
+        self.gen_add_parallel_loop("k", "NUM_COLLISION_SELF_CC_RANGES")
+        self.gen_add_code_line("const int i = g_collision_self_cc_ranges[3*k], j0 = g_collision_self_cc_ranges[3*k+1], j1 = g_collision_self_cc_ranges[3*k+2];")
+        self.gen_add_code_line("const T ix = s_sphere_pos[3*i], iy = s_sphere_pos[3*i+1], iz = s_sphere_pos[3*i+2], ir = s_sphere_r[i];")
+        self.gen_add_code_line("for (int j = j0; j <= j1; ++j) {", True)
+        self.gen_add_code_line("if (grid_cc_sphere_sphere<T>(ix, iy, iz, ir, s_sphere_pos[3*j], s_sphere_pos[3*j+1], s_sphere_pos[3*j+2], s_sphere_r[j]) < static_cast<T>(0)) { s_cc_hit = 1; break; }")
         self.gen_add_end_control_flow()
-        self.gen_add_code_line("return true;")
+        self.gen_add_end_control_flow()
+        self.gen_add_parallel_loop("i", "NUM_COLLISION_SPHERES")
+        self.gen_add_code_line("if (grid_cc_sphere_in_environment<T>(env, s_sphere_pos[3*i], s_sphere_pos[3*i+1], s_sphere_pos[3*i+2], s_sphere_r[i])) s_cc_hit = 1;")
+        self.gen_add_end_control_flow()
+        self.gen_add_sync()
+        self.gen_add_code_line("const bool is_free = (s_cc_hit == 0);")
+        self.gen_add_sync()   # every thread has read the flag before a later call resets it
+        self.gen_add_code_line("return is_free;")
         self.gen_add_end_function()
     else:
         # Multi-tier: broad-phase reject (COARSEST tier) -> fine confirm (FINEST tier) via the
@@ -719,7 +748,9 @@ def gen_collision_namespace(self, tiers):
             "Returns true iff the current configuration q is COLLISION-FREE (self + environment).",
             "Broad tier '" + broad["name"] + "' rejects clear configs; only possible collisions run the fine tier '" +
             fine["name"] + "'. Verdict == fine-only (covering spheres make the broad reject conservative).",
-            "Every thread computes the same verdict; the self/env range loops are serial (parallelize = W3 perf TODO)."]
+            "Block-parallel (G4, 2026-10-04): thread-per-range / thread-per-sphere for both tiers, the broad",
+            "link hit-mask OR-reduced through shared memory (same mask semantics as grid_cc_config_free);",
+            "every thread returns the same verdict; thread-count invariant; single block."]
         self.gen_add_func_doc("Collision-free test for configuration q (broad->fine, self + environment)", func_notes, func_params, None)
         self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
         self.gen_add_code_line("__device__")
@@ -727,16 +758,57 @@ def gen_collision_namespace(self, tiers):
                                "const Environment<T> &env, T *s_broad_pos, T *s_broad_r, "
                                "T *s_fine_pos, T *s_fine_r, T *d_workspace = nullptr, "
                                "int *dbg_fine_rechecked = nullptr) {", True)
+        self.gen_add_code_line("__shared__ int s_cc_hit;")
+        self.gen_add_code_line("__shared__ unsigned long long s_cc_mask;")
+        self.gen_add_code_line("if (threadIdx.x == 0 && threadIdx.y == 0) { s_cc_hit = 0; s_cc_mask = 0ull; }   // published by the extractor's barriers")
         self.gen_add_code_line("grid::multi_target_position" + bsfx + "_device<T, RESOURCE_TIER>(s_broad_pos, s_q, d_robotModel, d_workspace);")
         self.gen_add_code_line("load_collision_radii" + bsfx + "<T>(s_broad_r);")
         self.gen_add_sync()
         self.gen_add_code_line("grid::multi_target_position_device<T, RESOURCE_TIER>(s_fine_pos, s_q, d_robotModel, d_workspace);")
         self.gen_add_code_line("load_collision_radii<T>(s_fine_r);")
         self.gen_add_sync()
-        self.gen_add_code_line("return grid_cc_config_free<T>(env,")
-        self.gen_add_code_line("    s_broad_pos, s_broad_r, g_collision_self_cc_ranges" + bsfx + ", NUM_COLLISION_SELF_CC_RANGES" + bcap + ", NUM_COLLISION_SPHERES" + bcap + ", g_collision_sphere_link" + bsfx + ",")
-        self.gen_add_code_line("    s_fine_pos, s_fine_r, g_collision_self_cc_ranges, NUM_COLLISION_SELF_CC_RANGES, NUM_COLLISION_SPHERES, g_collision_sphere_link, dbg_fine_rechecked);")
+        self.gen_add_code_line("// broad tier in FULL (no early-out: the mask needs every hit), thread-per-range / thread-per-sphere")
+        self.gen_add_code_line("unsigned long long my_mask = 0ull;")
+        self.gen_add_parallel_loop("k", "NUM_COLLISION_SELF_CC_RANGES" + bcap)
+        self.gen_add_code_line("const int i = g_collision_self_cc_ranges" + bsfx + "[3*k], j0 = g_collision_self_cc_ranges" + bsfx + "[3*k+1], j1 = g_collision_self_cc_ranges" + bsfx + "[3*k+2];")
+        self.gen_add_code_line("const T ix = s_broad_pos[3*i], iy = s_broad_pos[3*i+1], iz = s_broad_pos[3*i+2], ir = s_broad_r[i];")
+        self.gen_add_code_line("for (int j = j0; j <= j1; ++j) {", True)
+        self.gen_add_code_line("if (grid_cc_sphere_sphere<T>(ix, iy, iz, ir, s_broad_pos[3*j], s_broad_pos[3*j+1], s_broad_pos[3*j+2], s_broad_r[j]) < static_cast<T>(0)) my_mask |= (1ull << g_collision_sphere_link" + bsfx + "[i]) | (1ull << g_collision_sphere_link" + bsfx + "[j]);")
+        self.gen_add_end_control_flow()
+        self.gen_add_end_control_flow()
+        self.gen_add_parallel_loop("i", "NUM_COLLISION_SPHERES" + bcap)
+        self.gen_add_code_line("if (grid_cc_sphere_in_environment<T>(env, s_broad_pos[3*i], s_broad_pos[3*i+1], s_broad_pos[3*i+2], s_broad_r[i])) my_mask |= 1ull << g_collision_sphere_link" + bsfx + "[i];")
+        self.gen_add_end_control_flow()
+        self.gen_add_code_line("if (my_mask) atomicOr(&s_cc_mask, my_mask);")
+        self.gen_add_sync()
+        self.gen_add_code_line("const unsigned long long hit_mask = s_cc_mask;")
+        self.gen_add_sync()   # every thread holds the mask before a later call resets s_cc_mask
+        self.gen_add_code_line("if (dbg_fine_rechecked != nullptr) {", True)
+        self.gen_add_code_line("int survive = 0;")
+        self.gen_add_code_line("for (int i = 0; i < NUM_COLLISION_SPHERES; ++i) if ((hit_mask >> g_collision_sphere_link[i]) & 1ull) ++survive;")
+        self.gen_add_code_line("*dbg_fine_rechecked = survive;")
+        self.gen_add_end_control_flow()
+        self.gen_add_code_line("if (hit_mask == 0ull) return true;                 // uniform: no link flagged -> definitely free")
+        self.gen_add_code_line("// fine tier, NARROWED to flagged links (same rule as grid_cc_config_free)")
+        self.gen_add_parallel_loop("k", "NUM_COLLISION_SELF_CC_RANGES")
+        self.gen_add_code_line("const int i = g_collision_self_cc_ranges[3*k], j0 = g_collision_self_cc_ranges[3*k+1], j1 = g_collision_self_cc_ranges[3*k+2];")
+        self.gen_add_code_line("if (((hit_mask >> g_collision_sphere_link[i]) & 1ull) == 0ull) continue;")
+        self.gen_add_code_line("const T ix = s_fine_pos[3*i], iy = s_fine_pos[3*i+1], iz = s_fine_pos[3*i+2], ir = s_fine_r[i];")
+        self.gen_add_code_line("for (int j = j0; j <= j1; ++j) {", True)
+        self.gen_add_code_line("if (grid_cc_sphere_sphere<T>(ix, iy, iz, ir, s_fine_pos[3*j], s_fine_pos[3*j+1], s_fine_pos[3*j+2], s_fine_r[j]) < static_cast<T>(0)) { s_cc_hit = 1; break; }")
+        self.gen_add_end_control_flow()
+        self.gen_add_end_control_flow()
+        self.gen_add_parallel_loop("i", "NUM_COLLISION_SPHERES")
+        self.gen_add_code_line("if (((hit_mask >> g_collision_sphere_link[i]) & 1ull) == 0ull) continue;")
+        self.gen_add_code_line("if (grid_cc_sphere_in_environment<T>(env, s_fine_pos[3*i], s_fine_pos[3*i+1], s_fine_pos[3*i+2], s_fine_r[i])) s_cc_hit = 1;")
+        self.gen_add_end_control_flow()
+        self.gen_add_sync()
+        self.gen_add_code_line("const bool is_free = (s_cc_hit == 0);")
+        self.gen_add_sync()   # every thread has read the flag before a later call resets it
+        self.gen_add_code_line("return is_free;")
         self.gen_add_end_function()
+
+    _gen_collision_warp_namespace(self, tiers)
 
     # ---- differentiable collision PRIMITIVES + cost (value / gradient / Gauss-Newton hessian) ----
     # The raw building blocks are exposed SEPARATELY from the cost so consumers can assemble any
@@ -964,6 +1036,126 @@ def gen_collision_namespace(self, tiers):
 
 
 # --------------------------------------------------------------------------- capsule namespace emitter
+def _gen_collision_warp_namespace(self, tiers):
+    """G2 (HJCD asks 2026-10-04): warp-scoped collision verdict + per-sphere clearance from
+    joint world transforms the caller already holds (`s_Xworld[16*slot]`, column-major 4x4 per
+    movable joint — what ee_pose_inner_warp / the multi_target chain-up fill). The FULL warp
+    enters, lanes stride spheres / self ranges, `__any_sync` reduces, every lane returns the
+    same verdict; a trailing `__syncwarp` lets the caller reuse `w_scratch` immediately. Sphere
+    positions are formed in float even for T = double (lifted verbatim from HJCD-IK's
+    `warp_config_free`, hjcd_kernel.cu 33d312f). With 2+ tiers the verdict runs the broad
+    tier first and the fine spheres only for anchors the broad pass flagged (G3 cascade; the
+    covering-sphere property keeps the verdict identical to a fine-only check)."""
+    fine = tiers[-1]
+    broad = tiers[0] if len(tiers) > 1 else None
+    self.gen_add_code_line("")
+    self.gen_add_func_doc("Warp-scoped collision API over caller-held joint world transforms (G2/G3, 2026-10-04)",
+                          ["The whole warp calls these; lanes stride the sphere batch, the verdict is warp-uniform.",
+                           "s_Xworld = column-major 4x4 per movable joint (what ee_pose_inner_warp / the multi_target chain-up fill).",
+                           "w_scratch = per-warp float scratch of 3*NUM_SPHERES" + (" + 3*NUM_SPHERES" + broad["suffix"].upper() if broad else "") + " floats.",
+                           "Sphere positions are float even for T = double (HJCD-IK convention)."], [], None)
+    self.gen_add_code_line("namespace warp {", True)
+    self.gen_add_code_line("constexpr unsigned FULL_MASK = 0xffffffffu;")
+    self.gen_add_code_line("constexpr int W_SCRATCH_FLOATS = 3*NUM_SPHERES" + (" + 3*NUM_SPHERES" + broad["suffix"].upper() if broad else "") + ";")
+
+    def emit_place(sfx, cap, dst):
+        # lanes stride spheres: world position of sphere s = R[anchor] @ offset + p (same expression
+        # order as multi_target_position_inner, so the float path is bit-identical to the block path)
+        self.gen_add_code_line("for (int s = lane; s < NUM_SPHERES" + cap + "; s += 32) {", True)
+        self.gen_add_code_line("const T *X = &s_Xworld[16 * sphere_anchor" + sfx + "[s]];")
+        self.gen_add_code_line("const float ox = sphere_offset" + sfx + "[3*s], oy = sphere_offset" + sfx + "[3*s+1], oz = sphere_offset" + sfx + "[3*s+2];")
+        self.gen_add_code_line(dst + "[3*s]   = static_cast<float>(X[0]*ox + X[4]*oy + X[8]*oz  + X[12]);")
+        self.gen_add_code_line(dst + "[3*s+1] = static_cast<float>(X[1]*ox + X[5]*oy + X[9]*oz  + X[13]);")
+        self.gen_add_code_line(dst + "[3*s+2] = static_cast<float>(X[2]*ox + X[6]*oy + X[10]*oz + X[14]);")
+        self.gen_add_end_control_flow()
+
+    # --- config_free ---
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__device__ bool config_free(const T *s_Xworld, const Environment<float> &env, float *w_scratch) {", True)
+    self.gen_add_code_line("const int lane = threadIdx.x & 31;")
+    self.gen_add_code_line("float *w_pos = w_scratch;")
+    self.gen_add_code_line("bool hit = false;")
+    if broad is None:
+        emit_place("", "", "w_pos")
+        self.gen_add_code_line("for (int s = lane; s < NUM_SPHERES; s += 32) {", True)
+        self.gen_add_code_line("hit |= grid_cc_sphere_in_environment<float>(env, w_pos[3*s], w_pos[3*s+1], w_pos[3*s+2], sphere_radius[s]);")
+        self.gen_add_end_control_flow()
+        self.gen_add_code_line("__syncwarp(FULL_MASK);")
+        self.gen_add_code_line("for (int k = lane; k < NUM_COLLISION_SELF_CC_RANGES; k += 32) {", True)
+        self.gen_add_code_line("const int i = g_collision_self_cc_ranges[3*k], j0 = g_collision_self_cc_ranges[3*k+1], j1 = g_collision_self_cc_ranges[3*k+2];")
+        self.gen_add_code_line("const float ix = w_pos[3*i], iy = w_pos[3*i+1], iz = w_pos[3*i+2], ir = sphere_radius[i];")
+        self.gen_add_code_line("for (int j = j0; j <= j1 && !hit; ++j) {", True)
+        self.gen_add_code_line("hit |= grid_cc_sphere_sphere<float>(ix, iy, iz, ir, w_pos[3*j], w_pos[3*j+1], w_pos[3*j+2], sphere_radius[j]) < 0.0f;")
+        self.gen_add_end_control_flow()
+        self.gen_add_end_control_flow()
+    else:
+        bsfx, bcap = broad["suffix"], broad["suffix"].upper()
+        # G3 cascade: broad spheres first -> per-anchor hit mask (env hits and self-pair hits both
+        # flag their anchors); fine spheres only for flagged anchors. Covering spheres make a
+        # clear broad sphere a proof of clearance for every fine sphere it covers, so the verdict
+        # equals the fine-only one.
+        self.gen_add_code_line("float *w_broad = w_scratch + 3*NUM_SPHERES;")
+        emit_place(bsfx, bcap, "w_broad")
+        self.gen_add_code_line("unsigned long long flagged = 0ull;")
+        self.gen_add_code_line("for (int s = lane; s < NUM_SPHERES" + bcap + "; s += 32) {", True)
+        self.gen_add_code_line("if (grid_cc_sphere_in_environment<float>(env, w_broad[3*s], w_broad[3*s+1], w_broad[3*s+2], sphere_radius" + bsfx + "[s])) flagged |= 1ull << sphere_anchor" + bsfx + "[s];")
+        self.gen_add_end_control_flow()
+        self.gen_add_code_line("__syncwarp(FULL_MASK);")
+        self.gen_add_code_line("for (int k = lane; k < NUM_COLLISION_SELF_CC_RANGES" + bcap + "; k += 32) {", True)
+        self.gen_add_code_line("const int i = g_collision_self_cc_ranges" + bsfx + "[3*k], j0 = g_collision_self_cc_ranges" + bsfx + "[3*k+1], j1 = g_collision_self_cc_ranges" + bsfx + "[3*k+2];")
+        self.gen_add_code_line("const float ix = w_broad[3*i], iy = w_broad[3*i+1], iz = w_broad[3*i+2], ir = sphere_radius" + bsfx + "[i];")
+        self.gen_add_code_line("for (int j = j0; j <= j1; ++j) {", True)
+        self.gen_add_code_line("if (grid_cc_sphere_sphere<float>(ix, iy, iz, ir, w_broad[3*j], w_broad[3*j+1], w_broad[3*j+2], sphere_radius" + bsfx + "[j]) < 0.0f) flagged |= (1ull << sphere_anchor" + bsfx + "[i]) | (1ull << sphere_anchor" + bsfx + "[j]);")
+        self.gen_add_end_control_flow()
+        self.gen_add_end_control_flow()
+        self.gen_add_code_line("// warp-OR the per-lane masks (butterfly; every lane ends with the full mask)")
+        self.gen_add_code_line("for (int o = 16; o > 0; o >>= 1) flagged |= __shfl_xor_sync(FULL_MASK, flagged, o);")
+        self.gen_add_code_line("if (flagged == 0ull) { __syncwarp(FULL_MASK); return true; }")
+        # fine pass, narrowed exactly like grid_cc_config_free: every fine sphere is placed (cheap,
+        # lanes stride), env-tested only when its anchor is flagged; a self range {i, j0..j1} is
+        # skipped when link(i) is unflagged and otherwise scans all its j.
+        self.gen_add_code_line("for (int s = lane; s < NUM_SPHERES; s += 32) {", True)
+        self.gen_add_code_line("const int a = sphere_anchor[s];")
+        self.gen_add_code_line("const T *X = &s_Xworld[16 * a];")
+        self.gen_add_code_line("const float ox = sphere_offset[3*s], oy = sphere_offset[3*s+1], oz = sphere_offset[3*s+2];")
+        self.gen_add_code_line("const float px = static_cast<float>(X[0]*ox + X[4]*oy + X[8]*oz  + X[12]);")
+        self.gen_add_code_line("const float py = static_cast<float>(X[1]*ox + X[5]*oy + X[9]*oz  + X[13]);")
+        self.gen_add_code_line("const float pz = static_cast<float>(X[2]*ox + X[6]*oy + X[10]*oz + X[14]);")
+        self.gen_add_code_line("w_pos[3*s] = px; w_pos[3*s+1] = py; w_pos[3*s+2] = pz;")
+        self.gen_add_code_line("if ((flagged >> a) & 1ull) hit |= grid_cc_sphere_in_environment<float>(env, px, py, pz, sphere_radius[s]);")
+        self.gen_add_end_control_flow()
+        self.gen_add_code_line("__syncwarp(FULL_MASK);")
+        self.gen_add_code_line("for (int k = lane; k < NUM_COLLISION_SELF_CC_RANGES; k += 32) {", True)
+        self.gen_add_code_line("const int i = g_collision_self_cc_ranges[3*k], j0 = g_collision_self_cc_ranges[3*k+1], j1 = g_collision_self_cc_ranges[3*k+2];")
+        self.gen_add_code_line("if (!((flagged >> sphere_anchor[i]) & 1ull)) continue;")
+        self.gen_add_code_line("const float ix = w_pos[3*i], iy = w_pos[3*i+1], iz = w_pos[3*i+2], ir = sphere_radius[i];")
+        self.gen_add_code_line("for (int j = j0; j <= j1 && !hit; ++j) {", True)
+        self.gen_add_code_line("hit |= grid_cc_sphere_sphere<float>(ix, iy, iz, ir, w_pos[3*j], w_pos[3*j+1], w_pos[3*j+2], sphere_radius[j]) < 0.0f;")
+        self.gen_add_end_control_flow()
+        self.gen_add_end_control_flow()
+    self.gen_add_code_line("const bool any_hit = __any_sync(FULL_MASK, hit);")
+    self.gen_add_code_line("__syncwarp(FULL_MASK);   // scratch reads done before the caller reuses it")
+    self.gen_add_code_line("return !any_hit;")
+    self.gen_add_end_function()
+
+    # --- collision_distance (per-sphere min signed env distance + unit normal) ---
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__device__ void collision_distance(const T *s_Xworld, const Environment<float> &env, float *s_dist, float *s_normal, float *w_scratch) {", True)
+    self.gen_add_code_line("const int lane = threadIdx.x & 31;")
+    self.gen_add_code_line("float *w_pos = w_scratch;")
+    emit_place("", "", "w_pos")
+    self.gen_add_code_line("__syncwarp(FULL_MASK);")
+    self.gen_add_code_line("for (int s = lane; s < NUM_SPHERES; s += 32) {", True)
+    self.gen_add_code_line("float nx, ny, nz;")
+    self.gen_add_code_line("s_dist[s] = grid_cc_nearest_obstacle<float>(env, w_pos[3*s], w_pos[3*s+1], w_pos[3*s+2], sphere_radius[s], &nx, &ny, &nz);")
+    self.gen_add_code_line("s_normal[3*s] = nx; s_normal[3*s+1] = ny; s_normal[3*s+2] = nz;")
+    self.gen_add_end_control_flow()
+    self.gen_add_code_line("__syncwarp(FULL_MASK);")
+    self.gen_add_end_function()
+    self.gen_add_end_control_flow()  # namespace warp
+    self.gen_add_code_line("")
+
+
 def _gen_collision_namespace_capsule(self, tiers):
     """Native CAPSULE-ROW twin of the sphere emission above (dispatched when the finest tier
     carries "pb"). Public shapes: NUM_COLLISION_ROWS rows; the row's two endpoints ride the
