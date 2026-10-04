@@ -162,6 +162,21 @@ Transfers can reverse a compute-only advantage: for iiwa14's RNEA gradient
 at batch 32, GRiD's compute-only call takes 14.8 µs versus 15.8 µs for
 Pinocchio codegen, but GRiD's full C++ host call takes 24.6 µs.
 
+Figure 2b — GRiD kernel against the CPU libraries, no I/O
+--------------------------------------------------------
+
+.. image:: _static/release/speedup_cpu_compute.svg
+   :alt: Core-operation speedups of GRiD's CUDA compute-only call against Pinocchio codegen, Pinocchio standard API and MuJoCo CPU host calls.
+   :target: _static/release/speedup_cpu_compute.svg
+
+The same ratios at the compute-only boundary for all three CPU baselines:
+GRiD's row excludes its host–device transfers (launch and synchronization
+only, data resident on the GPU), while each CPU library is its warmed
+host-array call — Pinocchio through its thread pool as above, MuJoCo CPU as a
+per-sample ``mj_inverse`` loop in fp64. This is the view for a solver that
+keeps its state on the device; Figure 2's bottom row and the homepage figure
+are the host-to-host view.
+
 Figure 3 — Speedup against the GPU libraries
 --------------------------------------------
 
@@ -217,7 +232,9 @@ for inputs and outputs with non-blocking copies
 (``pinned_host_like`` / ``copy_to_host``); JAX — ``grid_rbd.jax.to_host``.
 ``to_host`` uses its page-locked route only for arrays of at least 256 KiB and
 is otherwise the default download itself, so a JAX allocate-once bar is drawn
-only where that route was taken (23 of 54 cells). A short black tick marks the
+only where that route was taken (23 of 54 cells); for RNEA every JAX slot is one
+solid bar because its outputs stay below that floor, where the page-locked route
+would be slower than the default download. A short black tick marks the
 one cell where the default call was not the slower of the two (JAX, iiwa14
 gradient at batch 1024, by 6%).
 

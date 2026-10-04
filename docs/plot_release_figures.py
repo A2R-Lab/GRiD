@@ -13,6 +13,8 @@ Input: a directory written by ``python -m test.benchmarks.release.report`` (its
                       host call with the copies, GPU libraries at the resident boundary
   speedup_pinocchio   GRiD kernel (compute-only) and CUDA host call (with memory)
                       against Pinocchio's code-generated and standard C++ APIs
+  speedup_cpu_compute GRiD kernel (no host-device I/O) against the CPU libraries' host
+                      calls: Pinocchio codegen, Pinocchio standard and MuJoCo CPU
   speedup_gpu_*       GRiD against MJX, MuJoCo Warp, BARD and Frax at three matched
                       boundaries: kernel (compute-only) vs the library's resident call,
                       JAX resident vs resident (no memory traffic on either side, the
@@ -253,6 +255,12 @@ def main():
         "Pinocchio: warmed batch through a persistent C++ thread pool, best of the recorded thread counts, host arrays in and out. "
         "GRiD kernel row: data already resident on the GPU; host-call row: includes the host↔device copies."))
     outputs.append(out / "speedup_pinocchio.png")
+    outputs.append(speedup_grid(rows, out, "speedup_cpu_compute", purpose,
+        [GRID_SIDE["kernel"]], PINOCCHIO + ("mujoco_cpu",), "host_us",
+        "GRiD kernel (no host-device I/O) against the CPU libraries' host calls",
+        "GRiD row: data already resident on the GPU, launch + synchronisation only. CPU libraries: their warmed host-array "
+        "call (Pinocchio through its C++ thread pool; MuJoCo CPU = a per-sample mj_inverse loop in fp64). Different boundaries by construction."))
+    outputs.append(out / "speedup_cpu_compute.png")
     outputs.append(speedup_grid(rows, out, "speedup_gpu_resident", purpose,
         [GRID_SIDE["kernel"]], GPU_LIBRARIES, "resident_us",
         "GRiD kernel against GPU libraries, inputs and outputs resident on the device",
