@@ -36,14 +36,14 @@
     {
       "backend": "grid_jax",
       "cells": 54,
-      "host_flags": 3,
-      "resident_flags": 9,
+      "host_flags": 2,
+      "resident_flags": 7,
       "boundary_flags": 0
     },
     {
       "backend": "grid_jax_prealloc",
       "cells": 54,
-      "host_flags": 5,
+      "host_flags": 7,
       "resident_flags": 0,
       "boundary_flags": 0
     },
@@ -57,7 +57,7 @@
     {
       "backend": "grid_numpy",
       "cells": 54,
-      "host_flags": 0,
+      "host_flags": 1,
       "resident_flags": 0,
       "boundary_flags": 0
     },
@@ -150,5 +150,50 @@
       "test/benchmarks/release/protocol.py"
     ],
     "published_comparisons_unchanged": true
+  },
+  "addendum_2026_10_04": {
+    "purpose": "Hessian (idsva_so) cells of every GRiD surface re-collected after the barrier-fusion kernels (idsva_so body + world frame: fewer block barriers, same bits; iiwa14 launch config re-tuned); drift check on the untouched RNEA kernel within 0.62 % of the September values on all 36 cells",
+    "workers": 63,
+    "measurements": 378,
+    "superseded_published_cells": 216,
+    "captures": {
+      "release-barrier-iiwa14c-S-20261004": {
+        "commit": "effabf8698fa6af191d5c24867471e971a76880e",
+        "manifest_sha256": "80165cab263ed58a9420807eb91fba4697f0616ca0b3fc2f14a7243d1ba11820"
+      },
+      "release-barrier-S-20261004": {
+        "commit": "02cee489aed7c30cf88a7bdcc83015dfc1ac9eee",
+        "manifest_sha256": "08444794700096000466d44e008391de08884a85a0235db78111333e8c586610"
+      },
+      "release-prealloc-P-20261002": {
+        "commit": "53119f2d4c0b1297af19b9bd266879828001c566",
+        "manifest_sha256": "7c4bd7d692f361d3f78e73db6c4caf5ff57f1f213bb7879f3e60556130deab02"
+      },
+      "release-prealloc-N-20261002": {
+        "commit": "53119f2d4c0b1297af19b9bd266879828001c566",
+        "manifest_sha256": "9d9dcec30a59c6f43ff2d434e6ad76f81aae52c472c893bc8b04ef0931d09499"
+      },
+      "release-prealloc-H-20261002": {
+        "commit": "53119f2d4c0b1297af19b9bd266879828001c566",
+        "manifest_sha256": "d9568ea2ca6b6123f09b07edcfbc45700384526303322a66d2207cf936921374"
+      }
+    },
+    "accepted_source_drift": [
+      "test/benchmarks/release/grid_adapter.py",
+      "test/benchmarks/release/pin_adapter.py",
+      "test/benchmarks/release/protocol.py"
+    ],
+    "published_comparisons_unchanged_except": "idsva_so",
+    "idsva_so_comparison_results": {
+      "before": {
+        "range_loss": 50,
+        "range_win": 22
+      },
+      "after": {
+        "range_loss": 48,
+        "range_win": 22,
+        "overlap": 2
+      }
+    }
   }
 }
