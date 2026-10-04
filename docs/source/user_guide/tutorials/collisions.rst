@@ -33,6 +33,28 @@ The integration notes in ``grid_codegen/collision/HANDOFF.md`` describe scratch
 layouts and device calls; older module-name examples there predate the current
 ``grid-generate`` entry point.
 
+Device API surfaces
+-------------------
+
+Two device entry points share the same baked sphere batch (``NUM_COLLISION_SPHERES`` spheres,
+``sphere_anchor`` / ``sphere_offset`` / ``sphere_radius`` in ``namespace grid_collision``,
+``_broad``-suffixed twins for the broad tier of a two-tier model):
+
+* ``grid_collision::config_free<T>(s_q, d_robotModel, env, ...)`` — the block-cooperative check
+  from joint positions: it runs the batched sphere extractor, then checks self pairs and the
+  environment thread-per-range / thread-per-sphere and returns one block-uniform verdict. With a
+  two-tier model the broad tier runs first and the fine tier only for the links it flags; the
+  verdict equals a fine-only check.
+* ``grid_collision::warp::config_free<T>(s_Xworld, env, w_scratch)`` and
+  ``grid_collision::warp::collision_distance<T>(s_Xworld, env, s_dist, s_normal, w_scratch)`` — the
+  same verdict / per-sphere clearance for a caller that already holds the joint world transforms
+  (column-major 4x4 per movable joint, e.g. from ``ee_pose_inner_warp``), evaluated by ONE warp
+  with lanes striding the spheres (``w_scratch`` = ``grid_collision::warp::W_SCRATCH_FLOATS``
+  floats per warp). This is the entry point for multi-warp solvers that need a verdict inside one
+  warp of a block (one IK candidate per warp); sphere positions are formed in ``float`` even for
+  ``T = double``. The two surfaces are gated against each other on random configurations and
+  environments (``test/cuda_equivalents/test_cuda_collision_warp.py``).
+
 Geometry coverage and correctness
 ---------------------------------
 

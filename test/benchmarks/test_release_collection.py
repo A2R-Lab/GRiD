@@ -439,8 +439,9 @@ def test_website_api_plot_uses_requested_boundaries_and_palette(tmp_path, monkey
     from matplotlib.axes import Axes
     monkeypatch.setattr(Axes, "errorbar", reject_whiskers)
     from docs.plot_release_figures import API_BOUNDARIES, api_boundaries
-    assert [x[0] for x in API_BOUNDARIES] == ["CUDA Device", "C++ Host", "NumPy", "PyTorch", "JAX"]
-    assert [x[3] for x in API_BOUNDARIES] == ["#00693e", "#c4dd88", "#267aba", "#d94415", "#8a6996"]
+    # a resident (no-I/O) group — CUDA Device, PyTorch resident, JAX resident — then the host-call group
+    assert [x[0] for x in API_BOUNDARIES] == ["CUDA Device", "PyTorch resident", "JAX resident", "C++ Host", "NumPy", "PyTorch", "JAX"]
+    assert [x[3] for x in API_BOUNDARIES] == ["#00693e", "#f0a58a", "#c3adcb", "#c4dd88", "#267aba", "#d94415", "#8a6996"]
     rows = []
     for op in p.WRAPPER_OPS:
         for backend, host in (("grid_cuda", 20.), ("grid_native", 25.), ("grid_numpy", 30.),
@@ -456,7 +457,7 @@ def test_website_api_plot_uses_requested_boundaries_and_palette(tmp_path, monkey
         return original(ax, x, height, *args, **kwargs)
     monkeypatch.setattr(Axes, "bar", capture)
     path = api_boundaries(rows, tmp_path)
-    assert heights == [10., 20., 30., 40., 50.]*2
+    assert heights == [10., 10., 10., 20., 30., 40., 50.]*2   # resident group (all 10.) then the host calls
     svg = path.read_text()
     assert "C ABI" not in svg and "DRAFT" not in svg
 

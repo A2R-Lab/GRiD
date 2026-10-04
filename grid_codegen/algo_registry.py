@@ -26,6 +26,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from .algorithms._idsva_so import idsva_so_body_frame_tot_span
+
 
 @dataclass(frozen=True)
 class AlgoEntry:
@@ -477,7 +479,7 @@ class ArenaCtx:
     fdsva_fdg_inline: int      # gen_fdsva_so_fd_gradient_inline_temp_mem_size()
     fdsva_fdg_inline_spilled: int  # ..._spilled()
     idsva_world_cold: int      # gen_idsva_so_world_cold_floats()
-    idsva_bf_jids_a: int       # len(get_jid_ancestor_ids(include_joint=True)[0]) — body t/p scratch span
+    idsva_bf_tot_span: int     # idsva_so_body_frame_tot_span(NB) — body backward-accumulation region (ex t/p scratch)
     idgrad_selective_shared: int   # id_gradient_temp_layout()["selective_shared_count"] (sparse da_df band)
     has_spherical: bool
 
@@ -621,7 +623,7 @@ def arena_ctx_from_codegen(gen, xi=None, xhom=None, rt=None) -> ArenaCtx:
         fdsva_fdg_inline=gen.gen_fdsva_so_fd_gradient_inline_temp_mem_size(),
         fdsva_fdg_inline_spilled=gen.gen_fdsva_so_fd_gradient_inline_temp_mem_size_spilled(),
         idsva_world_cold=gen.gen_idsva_so_world_cold_floats(),
-        idsva_bf_jids_a=len(robot.get_jid_ancestor_ids(include_joint=True)[0]),
+        idsva_bf_tot_span=idsva_so_body_frame_tot_span(robot.get_num_bodies()),
         idgrad_selective_shared=gen.gen_inverse_dynamics_gradient_temp_layout()["selective_shared_count"],
         has_spherical=bool(gen.robot.robot_has_spherical()),
     )
@@ -788,7 +790,7 @@ _ARENA_RUNG_FNS: dict[str, tuple[Callable[[ArenaCtx], int], ...]] = {
         lambda c: (3*c.n) + c.idsva_body_inner + c.XI + 4*c.nv**3 + c.rt,   # full: output + s_temp + BC in smem
         lambda c: (3*c.n) + c.idsva_body_inner + c.XI + c.rt,               # global_output: 4nv³ output -> ws
         lambda c: (3*c.n) + c.idsva_body_inner + c.XI + c.rt - 36*c.NB,     # output_bc: + BC(36NB) -> ws
-        lambda c: (3*c.n) + c.idsva_body_inner + c.XI + c.rt - 36*c.idsva_bf_jids_a,  # output_tp: + t/p scratch -> ws
+        lambda c: (3*c.n) + c.idsva_body_inner + c.XI + c.rt - c.idsva_bf_tot_span,  # output_tp: + IC/BC/f totals -> ws
         lambda c: (3*c.n) + c.XI,                                           # output_temp: whole s_temp -> ws (no rt)
     ),
     "idsva_so_world_frame": (

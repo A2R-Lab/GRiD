@@ -1325,7 +1325,11 @@ def gen_load_update_XmatsHom_helpers(self, include_base_inertia = False, include
                     cpp_ind = str(self.gen_static_array_ind_3d(ind,col,row,ind_stride=16,col_stride=4))
                     self.gen_add_code_line("s_XmatsHom[" + cpp_ind + "] = static_cast<T>(" + str_val + ");")
     self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    # The three serial sections are all thread-0 work on disjoint outputs: one barrier after
+    # the last of them publishes everything (barrier audit 2026-10-03). They stay separate
+    # blocks (not one) to keep the per-thread register peak of the largest group only.
+    if not (include_gradients or include_hessians):
+        self.gen_add_sync()
     if include_gradients:
         self.gen_add_serial_ops()
         dXmats_hom, dXhom_owners = _global_hom_derivative_matrices_by_q(self)
@@ -1342,7 +1346,8 @@ def gen_load_update_XmatsHom_helpers(self, include_base_inertia = False, include
                         cpp_ind = str(self.gen_static_array_ind_3d(ind,col,row,ind_stride=16,col_stride=4))
                         self.gen_add_code_line("s_dXmatsHom[" + cpp_ind + "] = static_cast<T>(" + str_val + ");")
         self.gen_add_end_control_flow()
-        self.gen_add_sync()
+        if not include_hessians:
+            self.gen_add_sync()
     if include_hessians:
         self.gen_add_serial_ops()
         d2Xmats_hom, d2Xhom_owners = _global_hom_second_derivative_matrices(self)

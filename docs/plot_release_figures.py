@@ -13,6 +13,8 @@ Input: a directory written by ``python -m test.benchmarks.release.report`` (its
                       host call with the copies, GPU libraries at the resident boundary
   speedup_pinocchio   GRiD kernel (compute-only) and CUDA host call (with memory)
                       against Pinocchio's code-generated and standard C++ APIs
+  speedup_cpu_compute GRiD kernel (no host-device I/O) against the CPU libraries' host
+                      calls: Pinocchio codegen, Pinocchio standard and MuJoCo CPU
   speedup_gpu_*       GRiD against MJX, MuJoCo Warp, BARD and Frax at three matched
                       boundaries: kernel (compute-only) vs the library's resident call,
                       JAX resident vs resident (no memory traffic on either side, the
@@ -49,6 +51,7 @@ GPU_LIBRARIES = ("mjx", "mujoco_warp", "bard", "frax")
 GRID_SIDE = {"kernel": ("grid_cuda", "resident_us", "GRiD CUDA compute-only call (launch + sync)"),
              "host": ("grid_cuda", "host_us", "GRiD CUDA host call (with memory)"),
              "jax_resident": ("grid_jax", "resident_us", "GRiD JAX resident call (device in, device out)"),
+             "torch_resident": ("grid_torch", "resident_us", "GRiD PyTorch resident call (device in, device out)"),
              "jax_full": ("grid_jax", "host_us", "GRiD JAX full call (host in, host out)")}
 
 
@@ -145,7 +148,11 @@ def speedup_core(rows, out, purpose):
 
 API_BOUNDARIES = (
     # label, default backend, field, color, allocate-once companion backend
+    # resident group (no host-device I/O: data already on the device, outputs left there)
     ("CUDA Device", "grid_cuda", "resident_us", "#00693e", None),
+    ("PyTorch resident", "grid_torch", "resident_us", "#f0a58a", None),
+    ("JAX resident", "grid_jax", "resident_us", "#c3adcb", None),
+    # host group (host arrays in and out)
     ("C++ Host", "grid_cuda", "host_us", "#c4dd88", None),
     ("NumPy", "grid_numpy", "host_us", "#267aba", "grid_numpy_prealloc"),
     ("PyTorch", "grid_torch", "host_us", "#d94415", "grid_torch_prealloc"),
@@ -158,7 +165,10 @@ def api_boundaries(rows, out):
     """Directly measured call totals; no C ABI or inferred overhead stacks.
 
     CUDA Device is the synchronized native compute-only call with data resident,
-    NOT a new CUDA-event measurement. All other bars use the full host call.
+    NOT a new CUDA-event measurement. "PyTorch resident" / "JAX resident" are the
+    same no-I/O boundary through each framework (device tensors/arrays in and out,
+    synchronised), so the gap to CUDA Device is the framework's dispatch alone. All
+    other bars use the full host call.
     Each Python surface shows two measured calls in one slot: the solid bar is the
     allocate-once call (I/O buffers created once, outside the timed window, and
     reused), the hatched cap above it reaches the default call, which allocates its
@@ -216,8 +226,8 @@ def api_boundaries(rows, out):
     handles = [Patch(color=color, label=label) for label, _, _, color, _ in API_BOUNDARIES]
     handles.append(Patch(facecolor="white", edgecolor=".3", hatch="//////",
                          label="default call (allocates its output); solid = allocate-once"))
-    fig.legend(handles=handles, loc="lower center", ncol=6, frameon=False, bbox_to_anchor=(.5, .004), fontsize=10)
-    fig.tight_layout(rect=(0, .16/(len(ops)+.6), 1, 1))
+    fig.legend(handles=handles, loc="lower center", ncol=4, frameon=False, bbox_to_anchor=(.5, .004), fontsize=10)
+    fig.tight_layout(rect=(0, .24/(len(ops)+.6), 1, 1))
     fig.savefig(out / "wrappers.svg")
     fig.savefig(out / "wrappers.png", dpi=150)
     plt.close(fig)
@@ -253,14 +263,20 @@ def main():
         "Pinocchio: warmed batch through a persistent C++ thread pool, best of the recorded thread counts, host arrays in and out. "
         "GRiD kernel row: data already resident on the GPU; host-call row: includes the host↔device copies."))
     outputs.append(out / "speedup_pinocchio.png")
+    outputs.append(speedup_grid(rows, out, "speedup_cpu_compute", purpose,
+        [GRID_SIDE["kernel"]], PINOCCHIO + ("mujoco_cpu",), "host_us",
+        "GRiD kernel (no host-device I/O) against the CPU libraries' host calls",
+        "GRiD row: data already resident on the GPU, launch + synchronisation only. CPU libraries: their warmed host-array "
+        "call (Pinocchio through its C++ thread pool; MuJoCo CPU = a per-sample mj_inverse loop in fp64). Different boundaries by construction."))
+    outputs.append(out / "speedup_cpu_compute.png")
     outputs.append(speedup_grid(rows, out, "speedup_gpu_resident", purpose,
         [GRID_SIDE["kernel"]], GPU_LIBRARIES, "resident_us",
         "GRiD kernel against GPU libraries, inputs and outputs resident on the device",
         "Competitor resident call = its warmed device-to-device evaluation including the framework's dispatch; GRiD = CUDA host call compute-only."))
     outputs.append(out / "speedup_gpu_resident.png")
     outputs.append(speedup_grid(rows, out, "speedup_gpu_jax_resident", purpose,
-        [GRID_SIDE["jax_resident"]], GPU_LIBRARIES, "resident_us",
-        "GRiD JAX API against GPU libraries, both resident: no memory traffic, each framework's own dispatch",
+        [GRID_SIDE["jax_resident"], GRID_SIDE["torch_resident"]], GPU_LIBRARIES, "resident_us",
+        "GRiD JAX and PyTorch APIs against GPU libraries, both resident: no memory traffic, each framework's own dispatch",
         "Both sides: inputs already on the device, outputs left on the device, synchronised; the strictest like-for-like comparison."))
     outputs.append(out / "speedup_gpu_jax_resident.png")
     outputs.append(speedup_grid(rows, out, "speedup_gpu_full", purpose,

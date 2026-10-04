@@ -2512,7 +2512,7 @@ def _emit_d2ee_kernel_body_for_flags(self, n, num_ees, use_workspace_output,
             _emit_eepose_grad_mjx_reframe(self, "s_end_effector_pose_gradient", nv, num_ees)
             self.gen_add_end_control_flow()
         if not use_workspace_output:
-            self.gen_kernel_save_result("end_effector_pose_hessian",str(output_count),stride=str(output_count))
+            self.gen_kernel_save_result("end_effector_pose_hessian",str(output_count),stride=str(output_count), sync=False)
             self.gen_kernel_save_result("end_effector_pose_gradient",str(6*nv*num_ees),stride=str(6*nv*num_ees))
         else:
             # gradient still needs the smem -> global copy; the Hessian was already written to d_end_effector_pose_hessian directly via s_end_effector_pose_hessian_ws.
@@ -2547,7 +2547,7 @@ def _emit_d2ee_kernel_body_for_flags(self, n, num_ees, use_workspace_output,
         self.gen_anti_licm_output_write("end_effector_pose_hessian")
         self.gen_add_end_control_flow()
         if not use_workspace_output:
-            self.gen_kernel_save_result("end_effector_pose_hessian",str(output_count))
+            self.gen_kernel_save_result("end_effector_pose_hessian",str(output_count), sync=False)
             self.gen_kernel_save_result("end_effector_pose_gradient",str(6*nv*num_ees))
         else:
             self.gen_kernel_save_result("end_effector_pose_gradient",str(6*nv*num_ees))

@@ -729,7 +729,9 @@ def gen_integrator_gradient_multistage(self, compute_x_kp1=False,
             f"s_stage_grad_qdd[{stage_idx * n} + ind] = s_qdd[ind];"
         )
         self.gen_add_end_control_flow()
-        self.gen_add_sync()
+        # NO sync (barrier audit 2026-10-03): the D_qdd build below never reads
+        # s_stage_grad_qdd (its first reader is the next stage's p build, after the D_qdd
+        # barrier), so the snapshot rides that barrier.
 
         # Compute D_qdd_{stage_num} into s_D_qdd_stage[stage_idx * (n*3n)].
         # For stage 1 we use the unified formula with c_0 = 0 (i.e. no chain).
@@ -902,7 +904,10 @@ def gen_integrator_gradient_multistage(self, compute_x_kp1=False,
     self.gen_add_code_line("}")
     self.gen_add_code_line("s_dAB[ind] = val;")
     self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    # The x_{k+1} velocity assembly below reads only s_stage_grad_qdd / s_qd_orig, never s_dAB,
+    # so when it follows, dAB rides its barrier (barrier audit 2026-10-03).
+    if not compute_x_kp1:
+        self.gen_add_sync()
 
     # Optionally also assemble x_{k+1}.
     if compute_x_kp1:
@@ -1444,7 +1449,7 @@ def gen_integrator_gradient_kernel(self, compute_x_kp1=False, single_call_timing
             _emit_spill_pointers("k * GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()")
             _emit_device_call("k * GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()")
             self.gen_add_sync()
-            self.gen_kernel_save_result("dAB",str(2 * n * 3 * n),stride=str(2 * n * 3 * n))
+            self.gen_kernel_save_result("dAB",str(2 * n * 3 * n),stride=str(2 * n * 3 * n), sync=not compute_x_kp1)
             if compute_x_kp1:
                 self.gen_kernel_save_result("x_kp1",str(nq + n),stride=str(nq + n))
             self.gen_add_end_control_flow()
@@ -1458,7 +1463,7 @@ def gen_integrator_gradient_kernel(self, compute_x_kp1=False, single_call_timing
             _emit_device_call("0")
             self.gen_anti_licm_output_write("dAB")
             self.gen_add_end_control_flow()
-            self.gen_kernel_save_result("dAB",str(2 * n * 3 * n))
+            self.gen_kernel_save_result("dAB",str(2 * n * 3 * n), sync=not compute_x_kp1)
             if compute_x_kp1:
                 self.gen_kernel_save_result("x_kp1",str(nq + n))
 

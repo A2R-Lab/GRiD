@@ -341,7 +341,8 @@ def gen_coriolis_matrix_inner(self):
     self.gen_add_code_line("else if (sub_idx != 6 && sub_idx != 9 && sub_idx != 13 && sub_idx != 16 && sub_idx != 12 && sub_idx != 15) { Xdn[flat] = Xup[flat]; }")
     self.gen_add_end_control_flow()
     self.gen_add_end_control_flow()  # parallel jid
-    self.gen_add_sync()
+    # NO sync (barrier audit 2026-10-03): oY below reads only iX0 / I_loc; oXi rides the oY
+    # barrier (its first reader, Sw, comes after it).
 
     self.gen_add_code_line("// oY[i] = iX0[i]^T . I_loc . iX0[i]  (world single-body spatial inertia)")
     self.gen_add_parallel_loop("ind", str(36 * NB))
@@ -410,10 +411,14 @@ def gen_coriolis_matrix_inner(self):
     self.gen_add_code_line("int row = idx % 6; int col = idx / 6;")
     self.gen_add_code_line("T t1 = static_cast<T>(0); T t2 = static_cast<T>(0);")
     self.gen_add_code_line("for (int kk = 0; kk < 6; ++kk) { t1 += Crf[row + 6*kk]*oY[kk + 6*col]; t2 += oY[row + 6*kk]*Crm[kk + 6*col]; }")
-    self.gen_add_code_line("Bi[idx] = t1 - t2 + Icrf[idx];")
+    self.gen_add_code_line("T bi = t1 - t2 + Icrf[idx];")
+    self.gen_add_code_line("Bi[idx] = bi;")
+    # init composites here (oYc = oY, Bc = B): the same thread already holds both values, so
+    # the legacy copy stage and its barrier are gone (barrier audit 2026-10-03).
+    self.gen_add_code_line("s_oYc[jid*36 + idx] = oY[idx]; s_Bc[jid*36 + idx] = bi;")
     self.gen_add_end_control_flow()
     self.gen_add_end_control_flow()  # parallel jid
-    self.gen_add_sync()
+    # NO sync: dJ below reads only ov / Sw; B / oYc / Bc ride the dJ barrier.
 
     self.gen_add_code_line("// dJ[c] = crm(ov[body(c)]) . Sw[c]")
     self.gen_add_parallel_loop("c", str(n_int))
@@ -428,11 +433,7 @@ def gen_coriolis_matrix_inner(self):
     # processed first so oYc[i]/Bc[i] are final when we compute dFdv. Mirror the
     # oracle: init oYc=oY, Bc=B; reverse loop computes dFdv[i]'s columns then adds
     # into parent.
-    self.gen_add_code_line("// init composites oYc = oY, Bc = B")
-    self.gen_add_parallel_loop("ind", str(36 * NB))
-    self.gen_add_code_line("s_oYc[ind] = s_oY[ind]; s_Bc[ind] = s_B[ind];")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    # (composites oYc = oY, Bc = B were initialised inside the B[i] stage above)
 
     self.gen_add_code_line("// backward composite accumulation + per-column dFdv (serial, reverse body order)")
     self.gen_add_code_line("if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0) {", True)

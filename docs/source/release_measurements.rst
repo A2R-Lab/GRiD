@@ -7,8 +7,13 @@ Release measurements
    1,260 measurements, all passing the existing strict numerical checks.
    **Wrapper addendum, 2 October 2026:** 108 further worker processes and
    648 measurements under the same protocol, for the allocate-once calls
-   in Figure 4. The published table now holds 300 workers and 1,800
-   measurements; every GRiD-versus-baseline comparison is unchanged.
+   in Figure 4. **Hessian addendum, 4 October 2026:** the 63 Hessian
+   (∇²RNEA) workers of every GRiD surface were re-collected (378
+   measurements) after the second-order kernels lost most of their block
+   barriers; a same-session drift check on the untouched RNEA kernel landed
+   within 0.62% of the September values on all 36 cells. The published
+   table still holds 300 workers and 1,800 measurements; only the Hessian
+   GRiD-versus-baseline comparisons changed.
 
 These measurements cover **iiwa14** (fixed base, 7 velocities), **go2** (floating
 base, 18 velocities), and **G1** (floating base, 35 velocities) on one NVIDIA
@@ -30,6 +35,16 @@ allocate-once cells). Between the two collections the bindings changed in the
 ways Figure 4 describes; the generated CUDA did not. A same-day drift check
 re-measured GRiD's native CUDA call on all 18 RNEA-gradient cells: both its
 compute-only and its host call landed within 0.6% of the September values.
+
+The Hessian addendum used commit ``effabf8698fa6af191d5c24867471e971a76880e``.
+It changed only the generated second-order CUDA (``idsva_so`` in both frames,
+plus the ``crba``, Coriolis, integrator-gradient and end-effector kernels):
+block barriers that ordered nothing were removed and a few small
+intermediates are re-formed in registers instead of shared memory, with the
+output verified bit-identical to the previous kernels before timing. The iiwa14
+launch configuration was re-tuned for the new kernel (its best block size
+moved). Every other timed kernel is byte-identical; the drift check above
+was repeated on all 36 RNEA cells of the three robots (worst deviation 0.62%).
 
 What the measurements show
 --------------------------
@@ -84,8 +99,8 @@ compute-only boundary.
   the go2 and G1 gradients and Hessians (from 1% faster to 9% slower). G1's RNEA gradient at batch 1024
   takes 1.13 ms in C++, 1.18 ms through NumPy and 1.14 ms through PyTorch,
   against 2.79 ms and 3.32 ms for their default calls; its Hessian takes
-  38.0 ms, 38.0 ms and 39.5 ms against 107.0 ms and 235.5 ms. JAX's
-  ``to_host`` helps on large outputs (41.5 ms against 140.9 ms on that
+  37.3 ms, 37.5 ms and 38.7 ms against 107.9 ms and 236.4 ms. JAX's
+  ``to_host`` helps on large outputs (40.9 ms against 130.1 ms on that
   Hessian) and is the default download below 256 KiB.
 
 Figure 1 — Where the time goes
@@ -147,6 +162,21 @@ Transfers can reverse a compute-only advantage: for iiwa14's RNEA gradient
 at batch 32, GRiD's compute-only call takes 14.8 µs versus 15.8 µs for
 Pinocchio codegen, but GRiD's full C++ host call takes 24.6 µs.
 
+Figure 2b — GRiD kernel against the CPU libraries, no I/O
+-----------------------------------------------------------
+
+.. image:: _static/release/speedup_cpu_compute.svg
+   :alt: Core-operation speedups of GRiD's CUDA compute-only call against Pinocchio codegen, Pinocchio standard API and MuJoCo CPU host calls.
+   :target: _static/release/speedup_cpu_compute.svg
+
+The same ratios at the compute-only boundary for all three CPU baselines:
+GRiD's row excludes its host–device transfers (launch and synchronization
+only, data resident on the GPU), while each CPU library is its warmed
+host-array call — Pinocchio through its thread pool as above, MuJoCo CPU as a
+per-sample ``mj_inverse`` loop in fp64. This is the view for a solver that
+keeps its state on the device; Figure 2's bottom row and the homepage figure
+are the host-to-host view.
+
 Figure 3 — Speedup against the GPU libraries
 --------------------------------------------
 
@@ -155,7 +185,7 @@ Figure 3 — Speedup against the GPU libraries
    :target: _static/release/speedup_gpu_resident.svg
 
 .. image:: _static/release/speedup_gpu_jax_resident.svg
-   :alt: GRiD JAX resident calls against GPU-library resident calls, including each framework's dispatch and synchronization.
+   :alt: GRiD JAX and PyTorch resident calls against GPU-library resident calls, including each framework's dispatch and synchronization.
    :target: _static/release/speedup_gpu_jax_resident.svg
 
 .. image:: _static/release/speedup_gpu_full.svg
@@ -165,7 +195,8 @@ Figure 3 — Speedup against the GPU libraries
 **Top:** native CUDA compute-only calls against competitors' resident API
 calls. Both include launch and synchronization, but only the competitors pay
 framework dispatch. **Middle:** resident API calls with framework dispatch on
-both sides. **Bottom:** full host-to-host calls on both sides. These boundaries
+both sides — GRiD through JAX (top row) and through PyTorch (bottom row).
+**Bottom:** full host-to-host calls on both sides. These boundaries
 answer different application questions and must not be combined into one
 unqualified speedup claim.
 
@@ -195,6 +226,14 @@ measurements in one slot:
 * the **hatched cap** above it reaches the *default* call, which allocates its
   output on every call.
 
+The three left-most bars of each slot are the **no-I/O** boundary: CUDA
+Device (the native compute-only call, data resident), then the same boundary
+through PyTorch and JAX (device tensors or arrays in and out, synchronised).
+The gap between CUDA Device and a resident framework bar is that framework's
+dispatch alone; the host-call bars to their right add the I/O mechanism on top,
+and the hatched caps add the per-call output allocation on top of that. Resident,
+the wrappers are low-overhead; what they add is I/O and allocation.
+
 The allocate-once calls are, per surface: NumPy — ``out=`` with a page-locked
 buffer from ``handle.pinned_empty`` (the gradient and Hessian; RNEA has no
 ``out=``, so its bar is the default call); PyTorch — page-locked host tensors
@@ -202,7 +241,9 @@ for inputs and outputs with non-blocking copies
 (``pinned_host_like`` / ``copy_to_host``); JAX — ``grid_rbd.jax.to_host``.
 ``to_host`` uses its page-locked route only for arrays of at least 256 KiB and
 is otherwise the default download itself, so a JAX allocate-once bar is drawn
-only where that route was taken (23 of 54 cells). A short black tick marks the
+only where that route was taken (23 of 54 cells); for RNEA every JAX slot is one
+solid bar because its outputs stay below that floor, where the page-locked route
+would be slower than the default download. A short black tick marks the
 one cell where the default call was not the slower of the two (JAX, iiwa14
 gradient at batch 1024, by 6%).
 
@@ -221,8 +262,9 @@ September measurements they replace in the table.
 
 **Which collection each bar comes from.** CUDA Device, C++ Host, the PyTorch
 and JAX default calls and NumPy's RNEA are the 27 September measurements. The
-allocate-once calls, NumPy's default gradient and the NumPy and PyTorch default
-Hessians are from 2 October. JAX full calls vary more between sessions than
+allocate-once calls and NumPy's default gradient are from 2 October. Every
+Hessian bar (CUDA Device and all Python surfaces, default and allocate-once)
+is from 4 October. JAX full calls vary more between sessions than
 the other surfaces (its default gradient re-measured between 0.80× and 1.20×
 of the September values on 2 October), so read small JAX differences with
 that in mind.
