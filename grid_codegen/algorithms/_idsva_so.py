@@ -2894,7 +2894,16 @@ def gen_idsva_so_body_frame_kernel(self, use_qdd_input = False, single_call_timi
     self.gen_add_func_doc("Computes the second order derivatives of inverse dynamics",func_notes,func_params,None)
     self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER, bool MUJOCO_OUTPUT = false>")
     self.gen_add_code_line("__global__")
-    self.gen_add_code_line("__launch_bounds__(tier_max_threads<RESOURCE_TIER>())")
+    # Register cap instead of __launch_bounds__ (2026-10-04, measured on iiwa14 after the barrier
+    # fusions): the fused inner keeps more values live, and at the LITE tier (704-thread bound)
+    # ptxas took 80 regs, so the website's 512-thread launch fell to ONE resident block per SM:
+    # -17 % at N <= 128 but +25 % / +50 % at N = 256 / 1024. __maxnreg__(64) there (2 resident
+    # blocks, 32 B of spill) wins at every N: -12..-15 % (N <= 128), -21 % (256), -1 % (1024).
+    # The SHARED tier (MAX_PERF_LEVEL_THREADS-bound, 320-thread launch) is latency-bound and
+    # wants the registers (a 64-cap cost +10 % at N = 1024 there), so it keeps ptxas' choice,
+    # bounded only by what its max block can launch. __maxnreg__ and __launch_bounds__ are
+    # mutually exclusive; the cap guarantees every tier's max block still launches.
+    self.gen_add_code_line("__maxnreg__(RESOURCE_TIER == TIER_SHARED ? ((65536 / tier_max_threads<TIER_SHARED>()) < 80 ? (65536 / tier_max_threads<TIER_SHARED>()) : 80) : 64)")
     self.gen_add_code_line(func_def, True)
 
     table = self._idsva_so_body_tier_table  # [(name, t_count, use_global_output, s_temp_in_global, bc_in_global, tp_in_global), ...]
