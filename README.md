@@ -249,7 +249,7 @@ Microseconds per complete batch on a log axis. GRiD's bar splits into its CUDA c
 increment, and the JAX wrapper increment. These are differences of measured call times, not isolated measurements of
 each component.
 
-![Call wall times for CUDA Device, C++ Host, NumPy, PyTorch, and JAX, in that order, for RNEA, its gradient and its Hessian on three robots; Python bars are solid to the allocate-once call and hatched up to the default call.](docs/source/_static/release/wrappers.png)
+![Call wall times for RNEA, its gradient and its Hessian on three robots: a no-I/O group (CUDA Device, PyTorch resident, JAX resident) beside a host-call group (C++ Host, NumPy, PyTorch, JAX); Python host bars are solid to the allocate-once call and hatched up to the default call.](docs/source/_static/release/wrappers.png)
 
 Call wall times through each API boundary: native CUDA, the C++ host call, NumPy, PyTorch, and JAX. Pick the
 boundary your application uses. For the Python surfaces the solid bar is the call with its buffers allocated once

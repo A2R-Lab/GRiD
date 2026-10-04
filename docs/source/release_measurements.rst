@@ -185,7 +185,7 @@ Figure 3 — Speedup against the GPU libraries
    :target: _static/release/speedup_gpu_resident.svg
 
 .. image:: _static/release/speedup_gpu_jax_resident.svg
-   :alt: GRiD JAX resident calls against GPU-library resident calls, including each framework's dispatch and synchronization.
+   :alt: GRiD JAX and PyTorch resident calls against GPU-library resident calls, including each framework's dispatch and synchronization.
    :target: _static/release/speedup_gpu_jax_resident.svg
 
 .. image:: _static/release/speedup_gpu_full.svg
@@ -195,7 +195,8 @@ Figure 3 — Speedup against the GPU libraries
 **Top:** native CUDA compute-only calls against competitors' resident API
 calls. Both include launch and synchronization, but only the competitors pay
 framework dispatch. **Middle:** resident API calls with framework dispatch on
-both sides. **Bottom:** full host-to-host calls on both sides. These boundaries
+both sides — GRiD through JAX (top row) and through PyTorch (bottom row).
+**Bottom:** full host-to-host calls on both sides. These boundaries
 answer different application questions and must not be combined into one
 unqualified speedup claim.
 
@@ -224,6 +225,14 @@ measurements in one slot:
   once, outside the timed window, and every timed call reuses them;
 * the **hatched cap** above it reaches the *default* call, which allocates its
   output on every call.
+
+The three left-most bars of each slot are the **no-I/O** boundary: CUDA
+Device (the native compute-only call, data resident), then the same boundary
+through PyTorch and JAX (device tensors or arrays in and out, synchronised).
+The gap between CUDA Device and a resident framework bar is that framework's
+dispatch alone; the host-call bars to their right add the I/O mechanism on top,
+and the hatched caps add the per-call output allocation on top of that. Resident,
+the wrappers are low-overhead; what they add is I/O and allocation.
 
 The allocate-once calls are, per surface: NumPy — ``out=`` with a page-locked
 buffer from ``handle.pinned_empty`` (the gradient and Hessian; RNEA has no
