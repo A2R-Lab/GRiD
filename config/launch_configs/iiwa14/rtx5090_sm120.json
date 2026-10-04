@@ -113,14 +113,14 @@
         "us_at_optimal": 22.6
       },
       "idsva_so": {
-        "threads": 512,
+        "threads": 256,
         "tier": "lite",
-        "us_at_optimal": 30.8
+        "us_at_optimal": 33.6
       },
       "idsva_so_body_frame": {
-        "threads": 512,
+        "threads": 256,
         "tier": "lite",
-        "us_at_optimal": 30.8
+        "us_at_optimal": 33.6
       },
       "idsva_so_world_frame": {
         "threads": 80,
@@ -301,7 +301,7 @@
         "tier": "shared"
       },
       "idsva_so": {
-        "threads": 512,
+        "threads": 256,
         "tier": "lite"
       },
       "minv": {
@@ -396,7 +396,7 @@
           "tier": "shared"
         },
         "idsva_so": {
-          "threads": 384,
+          "threads": 512,
           "tier": "lite"
         },
         "minv": {
@@ -950,7 +950,7 @@
       "kernel"
     ]
   },
-  "source": "GRiD autotune sweep 2026-08-26; idsva_so/idsva_so_body_frame/fdsva_so (fixed) re-swept 2026-10-04 after the barrier-fusion kernels (per_algo_bench --mode autotune --algos idsva_so,fdsva_so, N=256); torch idsva_so set to lite/256 from a torch-path sweep (lite/384 and lite/512 lose 17-24 % at N=1024 on the fused kernel, 256 wins at every N)",
+  "source": "GRiD autotune sweep 2026-08-26; idsva_so (fixed) re-tuned 2026-10-04 for the barrier-fusion kernel: the fused inner is throughput-bound, so the pick is wave-quantisation-driven \u2014 lite/512 is best at N<=256 (29-31 us) but 1 resident block/SM costs +17-24 % at N=1024 on the torch/host paths; lite/256 (4 blocks/SM) is a no-loss pick (33.6 us at N=256, -33 % at N=1024) and is baked for host/torch/ffi, with the jax small-batch switch (ffi_bases_by_n, batch<=64) at lite/512; fdsva_so shared/192 re-swept (61.4 us)",
   "torch_bases": {
     "fixed": {
       "aba": {
