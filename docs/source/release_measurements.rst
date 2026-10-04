@@ -163,7 +163,7 @@ at batch 32, GRiD's compute-only call takes 14.8 µs versus 15.8 µs for
 Pinocchio codegen, but GRiD's full C++ host call takes 24.6 µs.
 
 Figure 2b — GRiD kernel against the CPU libraries, no I/O
---------------------------------------------------------
+-----------------------------------------------------------
 
 .. image:: _static/release/speedup_cpu_compute.svg
    :alt: Core-operation speedups of GRiD's CUDA compute-only call against Pinocchio codegen, Pinocchio standard API and MuJoCo CPU host calls.
