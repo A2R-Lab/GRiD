@@ -7,8 +7,13 @@ Release measurements
    1,260 measurements, all passing the existing strict numerical checks.
    **Wrapper addendum, 2 October 2026:** 108 further worker processes and
    648 measurements under the same protocol, for the allocate-once calls
-   in Figure 4. The published table now holds 300 workers and 1,800
-   measurements; every GRiD-versus-baseline comparison is unchanged.
+   in Figure 4. **Hessian addendum, 4 October 2026:** the 63 Hessian
+   (∇²RNEA) workers of every GRiD surface were re-collected (378
+   measurements) after the second-order kernels lost most of their block
+   barriers; a same-session drift check on the untouched RNEA kernel landed
+   within 0.62% of the September values on all 36 cells. The published
+   table still holds 300 workers and 1,800 measurements; only the Hessian
+   GRiD-versus-baseline comparisons changed.
 
 These measurements cover **iiwa14** (fixed base, 7 velocities), **go2** (floating
 base, 18 velocities), and **G1** (floating base, 35 velocities) on one NVIDIA
@@ -30,6 +35,16 @@ allocate-once cells). Between the two collections the bindings changed in the
 ways Figure 4 describes; the generated CUDA did not. A same-day drift check
 re-measured GRiD's native CUDA call on all 18 RNEA-gradient cells: both its
 compute-only and its host call landed within 0.6% of the September values.
+
+The Hessian addendum used commit ``effabf8698fa6af191d5c24867471e971a76880e``.
+It changed only the generated second-order CUDA (``idsva_so`` in both frames,
+plus the ``crba``, Coriolis, integrator-gradient and end-effector kernels):
+block barriers that ordered nothing were removed and a few small
+intermediates are re-formed in registers instead of shared memory, with the
+output verified bit-identical to the previous kernels before timing. The iiwa14
+launch configuration was re-tuned for the new kernel (its best block size
+moved). Every other timed kernel is byte-identical; the drift check above
+was repeated on all 36 RNEA cells of the three robots (worst deviation 0.62%).
 
 What the measurements show
 --------------------------
@@ -84,8 +99,8 @@ compute-only boundary.
   the go2 and G1 gradients and Hessians (from 1% faster to 9% slower). G1's RNEA gradient at batch 1024
   takes 1.13 ms in C++, 1.18 ms through NumPy and 1.14 ms through PyTorch,
   against 2.79 ms and 3.32 ms for their default calls; its Hessian takes
-  38.0 ms, 38.0 ms and 39.5 ms against 107.0 ms and 235.5 ms. JAX's
-  ``to_host`` helps on large outputs (41.5 ms against 140.9 ms on that
+  37.3 ms, 37.5 ms and 38.7 ms against 107.9 ms and 236.4 ms. JAX's
+  ``to_host`` helps on large outputs (40.9 ms against 130.1 ms on that
   Hessian) and is the default download below 256 KiB.
 
 Figure 1 — Where the time goes
@@ -221,8 +236,9 @@ September measurements they replace in the table.
 
 **Which collection each bar comes from.** CUDA Device, C++ Host, the PyTorch
 and JAX default calls and NumPy's RNEA are the 27 September measurements. The
-allocate-once calls, NumPy's default gradient and the NumPy and PyTorch default
-Hessians are from 2 October. JAX full calls vary more between sessions than
+allocate-once calls and NumPy's default gradient are from 2 October. Every
+Hessian bar (CUDA Device and all Python surfaces, default and allocate-once)
+is from 4 October. JAX full calls vary more between sessions than
 the other surfaces (its default gradient re-measured between 0.80× and 1.20×
 of the September values on 2 October), so read small JAX differences with
 that in mind.
