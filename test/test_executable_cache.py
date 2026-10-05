@@ -83,6 +83,22 @@ def test_second_build_is_a_hit(toolkit):
     assert len(toolkit.entries()) == 1
 
 
+def test_inventory_uses_build_key_without_writes_or_compiles(toolkit):
+    def inventory():
+        return cached_nvcc_executable([toolkit.runner, toolkit.header], ['-O0'],
+            exe_name='runner.exe', fallback_dir=toolkit.root / 'fallback',
+            include_dirs=[toolkit.extra.parent], inspect_only=True)
+    cold = inventory()
+    assert cold['status'] == 'miss'
+    assert toolkit.builds() == 0 and not (toolkit.root / 'cache').exists()
+    exe, _ = toolkit.build()
+    warm = inventory()
+    assert warm['status'] == 'hit' and warm['key'] == cold['key'] == exe.parent.name
+    exe.write_text('corrupt')
+    assert inventory()['status'] == 'miss'
+    assert toolkit.builds() == 1 and exe.read_text() == 'corrupt'
+
+
 @pytest.mark.parametrize("change", ["header", "transitive_include", "runner"])
 def test_any_input_byte_invalidates(toolkit, change):
     first, _ = toolkit.build()

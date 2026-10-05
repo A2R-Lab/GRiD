@@ -158,6 +158,9 @@ int main(int argc, char **argv) {
         int requested = std::atoi(argv[1]);
         g_num_threads = requested > 0 ? requested : 0;
     }
-    run<float>();
+#ifndef GRID_CUDA_EEPOSE_RT_SCALAR
+#define GRID_CUDA_EEPOSE_RT_SCALAR float
+#endif
+    run<GRID_CUDA_EEPOSE_RT_SCALAR>();
     return 0;
 }

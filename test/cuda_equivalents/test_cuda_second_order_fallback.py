@@ -165,7 +165,7 @@ def _second_order_thread_count() -> int:
     return _random_thread_count()
 
 
-def _compile_second_order_runner(build_dir: Path, *, enable_fdsva=True):
+def _compile_second_order_runner(build_dir: Path, *, enable_fdsva=True, inspect_only=False):
     arch = _detect_cuda_arch()
     flags = [
         "-std=c++11", "-O0",
@@ -177,6 +177,7 @@ def _compile_second_order_runner(build_dir: Path, *, enable_fdsva=True):
         [RUNNER_SOURCE, build_dir / "grid.cuh"], flags,
         exe_name="cuda_second_order_smoke_runner.exe", fallback_dir=build_dir,
         what="CUDA second-order smoke runner",
+        inspect_only=inspect_only,
     )
 
 
@@ -190,6 +191,7 @@ def _build_second_order_case(
     enable_fdsva=True,
     algorithm_list=None,
     enable_idsva_so_body_frame=None,
+    inspect_only=False,
 ):
     build_dir = tmp_path / label
     build_dir.mkdir()
@@ -201,7 +203,8 @@ def _build_second_order_case(
         algorithm_list=algorithm_list,
         enable_idsva_so_body_frame=enable_idsva_so_body_frame,
     )
-    return _compile_second_order_runner(build_dir, enable_fdsva=enable_fdsva)
+    return _compile_second_order_runner(build_dir, enable_fdsva=enable_fdsva,
+                                        inspect_only=inspect_only)
 
 
 def _run_second_order_sample(executable, compile_cmd, sample, thread_count):

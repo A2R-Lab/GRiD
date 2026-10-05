@@ -18,6 +18,7 @@ joints` transform (`Fixed_Joint.get_transformation_matrix_hom()`), keeping GRiD'
 the single source of truth.
 """
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import numpy as np
 
@@ -34,6 +35,56 @@ def _c_float_literal(v):
 
 
 # --------------------------------------------------------------------------- foam parse
+def resolve_spherized_urdf(value, source_urdf):
+    """Resolve an explicit sphere model or the sole named preset, foam.
+
+    No downloads or implicit substitutions. The optional foam checkout is
+    not bundled by GRiD; an unavailable preset requests an explicit path.
+    """
+    if value == 'foam':
+        root = Path(__file__).resolve().parents[2]
+        path = root / 'external/foam/assets/panda/smaller_panda_spherized.urdf'
+        if not path.is_file():
+            raise ValueError('foam preset is not installed in this checkout; pass the explicit path to your foam sphere URDF')
+    else:
+        path = Path(value).expanduser().resolve()
+    if not path.is_file():
+        raise ValueError(f'Spherized URDF not found: {path}')
+    validate_sphere_model(source_urdf, path)
+    return path
+
+
+def validate_sphere_model(source, spheres):
+    """Reject omitted links, non-spheres and mismatched kinematic frames."""
+    a, b = ET.parse(source).getroot(), ET.parse(spheres).getroot()
+    def joints(root):
+        def vector(j, tag, attr, default):
+            e = j.find(tag)
+            return tuple(float(v) for v in (e.get(attr, default) if e is not None else default).split())
+        return {j.get('name'): (j.get('type'), j.find('parent').get('link'),
+                j.find('child').get('link'), vector(j, 'origin', 'xyz', '0 0 0'),
+                vector(j, 'origin', 'rpy', '0 0 0'), vector(j, 'axis', 'xyz', '1 0 0'),
+                tuple(sorted(j.find('mimic').attrib.items())) if j.find('mimic') is not None else ())
+                for j in root.findall('joint')}
+    if joints(a) != joints(b):
+        raise ValueError('Spherized URDF kinematic frames do not match the source URDF')
+    names = {l.get('name') for l in a.findall('link')}
+    if names != {l.get('name') for l in b.findall('link')}:
+        raise ValueError('Spherized URDF link set does not match source URDF')
+    for link in b.findall('link'):
+        for col in link.findall('collision'):
+            geom = col.find('geometry')
+            if geom is None or len(geom) != 1 or geom[0].tag != 'sphere':
+                raise ValueError('Spherized URDF must contain sphere-only collision geometry')
+    parsed = parse_spherized_urdf(spheres)
+    for link in a.findall('link'):
+        if link.findall('collision') and not parsed.get(link.get('name')):
+            raise ValueError(f"Spherized URDF omits collision geometry for {link.get('name')}")
+    for rows in parsed.values():
+        if any(not np.isfinite(row).all() or row[3] <= 0 for row in rows):
+            raise ValueError('Spherized URDF contains invalid spheres')
+
+
 def parse_spherized_urdf(path):
     """foam output: per link, one `<collision><geometry><sphere radius/></geometry>
     <origin xyz/></collision>` per sphere (center in the LINK frame; rpy irrelevant for a
@@ -49,7 +100,7 @@ def parse_spherized_urdf(path):
                 continue
             r = float(sph.get("radius"))
             origin = col.find("origin")
-            xyz = (origin.get("xyz") if origin is not None else "0 0 0").split()
+            xyz = (origin.get("xyz", "0 0 0") if origin is not None else "0 0 0").split()
             x, y, z = (float(v) for v in xyz)
             spheres.append((x, y, z, r))
         if spheres:

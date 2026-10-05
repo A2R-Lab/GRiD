@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Check local page/asset targets, homepage anchors, and legacy redirects."""
+import argparse
 import hashlib
 import json
 import sys
@@ -28,7 +29,9 @@ class Links(HTMLParser):
                 self.links.append(attrs[key])
 
 
-def check(root):
+def check(root, allow_preview=False):
+    if allow_preview and not (root / 'LOCAL_PREVIEW.txt').is_file():
+        raise SystemExit('Preview validation requires a locally assembled preview marker')
     errors = []
     parsed = {}
 
@@ -82,7 +85,7 @@ def check(root):
     assets = root / "docs/_static/release"
     if (assets / "manifest.json").exists():
         manifest = json.loads((assets / "manifest.json").read_text())
-        if not manifest.get("approved"):
+        if not manifest.get("approved") and not allow_preview:
             raise SystemExit("Release figures are tracked but not approved (docs/plot_release_figures.py --approve)")
         for name, digest in manifest["outputs"].items():
             path = assets / name
@@ -92,4 +95,9 @@ def check(root):
 
 
 if __name__ == "__main__":
-    check(Path(sys.argv[1]).resolve())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('root', type=Path)
+    parser.add_argument('--allow-preview', action='store_true',
+                        help='Validate a marked local preview without approving publication')
+    args = parser.parse_args()
+    check(args.root.resolve(), args.allow_preview)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Codegen byte-gate: generate grid.cuh for 7 representative cells (iiwa14
-fixed ×4 incl. full/multi-target/collision, go2 floating ×2, fr3 mimic) into
+"""Codegen byte-gate: generate grid.cuh for 8 representative cells (iiwa14
+fixed ×5 incl. full/multi-target/collision/contact, go2 floating ×2, fr3 mimic) into
 <outdir> and print sha256 per cell. Run BEFORE and AFTER a codegen change and
 diff the hashes — the byte-identical-codegen discipline's harness (CLAUDE.md).
 
@@ -8,15 +8,14 @@ Usage: .venv/bin/python tools/byte_gate.py <outdir>
 (promoted from docs/open-tasks/tools_byte_gate.py, 2026-09-09; the repo root
 is derived from this file's location — no hardcoded paths)
 """
-import hashlib, shutil, subprocess, sys, os
+import hashlib, sys, os
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "bindings"))
 os.chdir(REPO)
-# never let stale codegen bytecode leak between A and B
-shutil.rmtree(REPO / "grid_codegen" / "__pycache__", ignore_errors=True)
+# Each invocation uses a new interpreter. Do not delete another worker's caches.
 
 from config import robot_urdf  # noqa: E402
 from URDFParser import URDFParser  # noqa: E402

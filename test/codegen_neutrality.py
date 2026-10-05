@@ -53,7 +53,20 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # triggers the proof. Submodule pin bumps for URDFParser show up in git diff
 # under its path.
 CODEGEN_INPUT_PATHS = ("grid_codegen", "config/robot_assets",
-                      "external/URDFParser")
+                      "external/URDFParser", "external/GLASS")
+
+
+def reference_inputs_changed(old_sha: str) -> bool:
+    """An oracle gitlink change cannot be certified by CUDA header equality.
+
+    Conservative for legacy narrow fingerprints: any RBDReference pin change
+    (or unavailable ancestor) invalidates their carry, including wrapper tests.
+    Newly recorded shards include this gitlink directly in their fingerprint.
+    """
+    result = subprocess.run(
+        ["git", "diff", "--quiet", old_sha, "--", "external/RBDReference"],
+        cwd=REPO_ROOT, capture_output=True)
+    return result.returncode != 0
 
 # (name, robot_id, floating_base, gen_all_code kwargs) — one row per
 # Python-conditional emission family; see the scope note above.

@@ -1,14 +1,9 @@
 """Per-algorithm C-ABI body metadata (P0 of the table-driven wrapper collapse).
 
-Each AbiSpec row transcribes ONE algorithm's hand-written body in
-bindings/grid_rbd/wrapper_template.cu into declarative fields, so the P1
-collapse can generate the body from the row (and H6 can derive the python
-mirrors from the same source of truth). Until P1 lands, NOTHING consumes
-these rows at emission time — the contract is enforced by the CPU cross-check
-test (test/test_abi_spec_crosscheck.py), which parses wrapper_template.cu and
-validates every field against the actual code. Field shapes may still be
-refined when P1 consumes them; the cross-check is what keeps transcription
-honest in the meantime.
+AbiSpec rows drive generated C ABI bodies, framework handlers, pybind bodies,
+and shared Python shape/VJP metadata. Bespoke rows are explicitly marked.
+CPU cross-checks and generated-region drift gates keep the table and emitted
+surfaces aligned; see grid_codegen/README.md for regeneration commands.
 
 Width contract (2026-09-26 clean break): on EVERY public surface — C ABI, pybind/NumPy,
 JAX FFI, torch ops — `q` is NUM_POS (== NUM_JOINTS) wide and `qd`/`qdd`/`u` are NUM_VEL

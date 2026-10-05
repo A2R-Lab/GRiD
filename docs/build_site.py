@@ -30,13 +30,19 @@ def redirect_page(target):
 '''
 
 
-def assemble(sphinx, landing, output):
+def assemble(sphinx, landing, output, preview_assets=None):
     if not (sphinx / "index.html").is_file():
         raise ValueError(f"Missing Sphinx HTML build: {sphinx}")
     if output.exists():
         raise ValueError(f"Output exists; choose a fresh directory: {output}")
     if output.is_relative_to(sphinx) or sphinx.is_relative_to(output):
         raise ValueError("Sphinx source and site output must not overlap")
+    if preview_assets is not None:
+        preview_assets = preview_assets.resolve()
+        if not (preview_assets / 'audit.json').is_file():
+            raise ValueError('Preview assets require an audited export')
+        if output.is_relative_to(preview_assets) or preview_assets.is_relative_to(output):
+            raise ValueError('Preview assets and site output must not overlap')
     for target in LEGACY_ROUTES.values():
         if not (sphinx / target).is_file():
             raise ValueError(f"Missing legacy route destination: {target}")
@@ -56,6 +62,22 @@ def assemble(sphinx, landing, output):
     shutil.copytree(landing, output / "landing",
                     ignore=shutil.ignore_patterns("README.md", "index.html"))
     shutil.copyfile(landing / "index.html", output / "index.html")
+    if preview_assets is not None:
+        for base in (output, output / 'docs'):
+            shutil.copytree(preview_assets, base / '_static/release', dirs_exist_ok=True)
+            # Sphinx copies image directives to _images; targets still use _static.
+            for image in preview_assets.iterdir():
+                copied_image = base / '_images' / image.name
+                if image.suffix in ('.svg', '.png') and copied_image.is_file():
+                    shutil.copyfile(image, copied_image)
+            # Download directives get hashed directories too. Keep their data
+            # aligned with the preview figures rather than the published set.
+            for download in (base / '_downloads').glob('*/*'):
+                replacement = preview_assets / download.name
+                if download.is_file() and replacement.is_file():
+                    shutil.copyfile(replacement, download)
+        (output / 'LOCAL_PREVIEW.txt').write_text(
+            'Local review only. Assets overlaid from ' + str(preview_assets) + '\n')
     (output / ".nojekyll").touch()
     print(f"Review site: {output}")
 
@@ -65,8 +87,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sphinx", type=Path, default=docs / "build" / "html")
     parser.add_argument("--output", type=Path, default=docs / "build" / "site")
+    parser.add_argument("--preview-assets", type=Path,
+                        help="Overlay audited local figure/table exports without changing tracked assets")
     args = parser.parse_args()
-    assemble(args.sphinx.resolve(), docs / "landing", args.output.resolve())
+    assemble(args.sphinx.resolve(), docs / "landing", args.output.resolve(), args.preview_assets)
 
 
 if __name__ == "__main__":

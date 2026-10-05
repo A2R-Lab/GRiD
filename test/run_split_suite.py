@@ -324,7 +324,7 @@ def _shard_fingerprint_paths(member_mods: set[str]) -> list[str]:
     cuda_X_runner.cu convention) — finer than the whole-directory fingerprint
     the monolithic shard used. Paths must stay comma-free (plugin flag is
     comma-joined)."""
-    paths = []
+    paths = ["external/RBDReference"]
     for mod in sorted(member_mods):
         paths.append(f"test/cuda_equivalents/{mod}.py")
         runner = mod.removeprefix("test_") + "_runner.cu"
@@ -450,8 +450,19 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
     _bad_ids = {t.get("node_id") for t in (old_receipt.get("tests") or [])
                 if t.get("outcome") not in ("passed", "skipped")}
 
+    # The oracle can change expected values with byte-identical CUDA headers.
+    # Legacy shards omitted its gitlink: compare the old receipt's pin before
+    # consulting any codegen proof. Never bypass this with assume-neutral.
+    import codegen_neutrality
+    old_sha = (old_receipt.get("repo") or {}).get("commit_sha")
+    oracle_changed = bool(old_sha and codegen_neutrality.reference_inputs_changed(old_sha))
+    if oracle_changed:
+        print("  carry soundness: RBDReference changed; all oracle-dependent shards stale")
     carried, stale = [], []
     for s in shards:
+        if oracle_changed:
+            stale.append(s)
+            continue
         if _bad_ids.intersection(s.get("node_ids") or []):
             stale.append(s)
             continue
@@ -741,8 +752,9 @@ def aggregate_header_keys(rdir: Path, results: list[dict],
     """A4 (2026-09-11): fold the per-shard header content-key sidecars
     (receipts/<shard>.header_keys.jsonl, recorded by the cuda conftest) into
     the COMMITTED aggregate test/gpu-proof-header-keys.json, carrying forward
-    the old aggregate's rows for every shard the MERGED receipt still attests
-    without a fresh sidecar. Wave A' refresh planning reads the aggregate:
+    the old aggregate's rows only for CARRIED shards in the merged receipt.
+    Fresh shards must retain their actual sidecars; changed row counts are
+    permitted but a missing recording cannot reuse old rows. Refresh planning reads the aggregate:
     a cell whose header CONTENT hash still reproduces CPU-side need not
     re-run; a shard with no rows stays conservatively fingerprint-ruled.
 
@@ -777,9 +789,18 @@ def aggregate_header_keys(rdir: Path, results: list[dict],
     if merged_receipt is not None:
         attested = {s["name"] for s in
                     json.loads(merged_receipt.read_text()).get("shards", [])}
+    carried = attested
+    if merged_receipt is not None:
+        carried = {s['name'] for s in json.loads(merged_receipt.read_text())['shards']
+                   if s.get('carried')}
     for shard, rows in old.items():
-        if shard not in new and shard in attested:
+        if shard not in new and shard in carried:
             new[shard] = rows
+    new = {k: v for k, v in new.items() if k in attested}
+    if merged_receipt is not None:
+        from test.receipt_integrity import verify_header_keys
+        verify_header_keys({'shards': old}, {'shards': new},
+                           json.loads(merged_receipt.read_text()), rdir)
     HEADER_KEYS_PATH.write_text(json.dumps(
         {"schema": 1, "shards": {k: new[k] for k in sorted(new)}},
         indent=1, sort_keys=True) + "\n")
@@ -994,13 +1015,62 @@ def _kill_group(proc: subprocess.Popen) -> None:
     proc.wait()
 
 
+def _locked_compile_dependency(pgid: int, owner_groups: list[int],
+                               processes: str, locks: str) -> bool:
+    """A blocked flock belongs to this shard AND its owner is compiling.
+
+    /proc/locks identifies the exact blocking lock, including dependencies not
+    discovered by the prewarm planner. Unrelated pool activity cannot mask a
+    hung shard. Process rows are `pid pgid comm` from ps, without arguments.
+    """
+    groups, compilers = {}, set()
+    for line in processes.splitlines():
+        fields = line.split()
+        if len(fields) != 3:
+            continue
+        pid, group = map(int, fields[:2])
+        groups[pid] = group
+        if fields[2] in ('nvcc', 'cicc', 'ptxas', 'fatbinary', 'cudafe++', 'nvlink'):
+            compilers.add(group)
+    owners = {}
+    waits = []
+    for line in locks.splitlines():
+        fields = line.split()
+        blocked = len(fields) > 1 and fields[1] == '->'
+        if blocked:
+            fields.pop(1)
+        if len(fields) < 6 or fields[1] != 'FLOCK':
+            continue
+        lock_id, pid = fields[0], int(fields[4])
+        if blocked:
+            waits.append((lock_id, pid))
+        else:
+            owners[lock_id] = pid
+    return any(groups.get(waiter) == pgid and
+               groups.get(owners.get(key)) in set(owner_groups) & compilers
+               for key, waiter in waits)
+
+
+def _waiting_for_compile(pgid: int, owner_groups: list[int]) -> bool:
+    if not owner_groups:
+        return False
+    try:
+        processes = subprocess.check_output(
+            ['ps', '-eo', 'pid=,pgid=,comm='], text=True, timeout=5)
+        return _locked_compile_dependency(pgid, owner_groups, processes,
+                                          Path('/proc/locks').read_text())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False  # no evidence of progress: retain normal stall detection
+
+
 class _ShardRun:
     """One in-flight shard: its pytest process + progress-aware stall detection
     (the no-leg-timeouts rule — the 08-12 night pass killed a healthy module
     mid-test at a 7200s cap while it was legitimately cold-building 5 robots).
 
-    Progress = the shard's log grew OR its process group has a live compiler
-    child. ``poll()`` returns None while healthy, the rc once it exited,
+    Progress = the shard's log grew, its process group has a live compiler,
+    or its blocked cache lock is owned by a compiling pool/sibling group.
+    Unrelated compiler activity is not progress. ``poll()`` returns None while healthy, the rc once it exited,
     "STALL" after GRID_SPLIT_STALL_SECS (default 900) with NEITHER, or
     "TIMEOUT" past the OPT-IN GRID_SPLIT_HARD_TIMEOUT wall-clock cap (unset/0 =
     none). Several of these are polled side by side when GRID_SPLIT_SHARD_JOBS>1.
@@ -1015,6 +1085,7 @@ class _ShardRun:
         self._hard = int(os.environ.get("GRID_SPLIT_HARD_TIMEOUT", "0"))
         self._last_progress = self.t0
         self._last_size = -1
+        self.compile_owners = lambda: []
 
     def poll(self):
         rc = self.proc.poll()
@@ -1029,6 +1100,8 @@ class _ShardRun:
             self._last_size = size
             self._last_progress = now
         elif _compiler_child_alive(self.proc.pid):
+            self._last_progress = now
+        elif _waiting_for_compile(self.proc.pid, self.compile_owners()):
             self._last_progress = now
         if (now - self._last_progress) > self._stall_limit:
             _kill_group(self.proc)
@@ -1130,12 +1203,12 @@ def build_compile_pool(out_dir: Path, *, warm: bool, cuda_shards: list,
 
     if cuda_shards and os.environ.get("GRID_SPLIT_PREWARM", "1") != "0":
         import prewarm_cuda_flagship as pw  # noqa: PLC0415
-        flagship_ids = [t for s in cuda_shards for t in s.targets
-                        if "test_cuda_executable_equivalence" in t]
-        if flagship_ids:
+        prewarm_ids = [t for s in cuda_shards for t in s.targets
+                       if 'test_cuda_executable_equivalence' in t or pw.smoke_jobs([t])[0]]
+        if prewarm_ids:
             cache_env = cuda_worker_env()
-            ids_file = cdir / "flagship_ids.txt"
-            ids_file.write_text("\n".join(flagship_ids))
+            ids_file = cdir / "prewarm_ids.txt"
+            ids_file.write_text("\n".join(prewarm_ids))
             plan_path = cdir / "prewarm_plan.json"
             env = os.environ.copy()
             env.update(cache_env)
@@ -1159,7 +1232,8 @@ def build_compile_pool(out_dir: Path, *, warm: bool, cuda_shards: list,
                         log_path=str(cdir / f"{jname}.log")))
                 atom_to_job = plan.get("atom_to_job", {})
                 for s in cuda_shards:
-                    names = set()
+                    names = {plan['node_to_job'][t] for t in s.targets
+                             if t in plan.get('node_to_job', {})}
                     for robot, base, cell in pw._parse_atoms(list(s.targets)):
                         jn = atom_to_job.get(f"{robot}|{base}|{cell}")
                         if jn:
@@ -1229,7 +1303,8 @@ def report_pool(pool, out_dir: Path) -> int:
                 log_text = (cdir / f"{name}.log").read_text(errors="replace")
             except OSError:
                 log_text = res.stdout_tail
-            real_build = "compiling runner" in log_text or "cache miss" in log_text
+            real_build = ("compiling runner" in log_text or "cache miss" in log_text
+                          or "executable miss" in log_text)
         if res.rc not in (0,):
             failed += 1
             print(f"  POOL-FAIL {name}: rc={res.rc} {detail} "
@@ -1372,7 +1447,13 @@ def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
                     break
                 waiting = False
                 pending.remove(spec)
-                running.append(_launch_shard(spec, out_dir, receipts, extra_args))
+                run = _launch_shard(spec, out_dir, receipts, extra_args)
+                # Resolve the owner on each poll: workers can finish or start
+                # while this shard waits for their content-key lock.
+                run.compile_owners = lambda: (
+                    (pool.running_pids() if pool is not None and hasattr(pool, 'running_pids') else [])
+                    + [r.proc.pid for r in running if hasattr(r.proc, 'pid')])
+                running.append(run)
             if not running:
                 if paused or not pending:
                     break
@@ -1612,7 +1693,7 @@ def main() -> int:
         # cuda domain (grid_codegen inputs there would turn every codegen edit
         # into a multi-day full-domain refresh; that class stays covered by the
         # byte-gates + equivalence smokes + release-policy full passes).
-        _BINDINGS_FP = ["bindings/grid_rbd", "bindings/src"]
+        _BINDINGS_FP = ["bindings/grid_rbd", "bindings/src", "external/RBDReference"]
         specs += [ShardSpec(name=mod, domain="wrappers",
                             targets=[f"test/python_wrappers/{mod}.py"],
                             fingerprint_paths=[f"test/python_wrappers/{mod}.py"]
@@ -1670,7 +1751,6 @@ def main() -> int:
                   f"{pool_jobs_n} slots, budget "
                   f"{pool.budget_kb // (1024 * 1024)} GiB "
                   f"(overlaps GPU shard execution) ===")
-            pool.run_async(pool_jobs)
 
     import signal
 
@@ -1681,6 +1761,9 @@ def main() -> int:
 
     print(f"=== Phase B: per-shard runs -> {out_dir} ===")
     try:
+        # Start workers only after cancellation handling and cleanup are active.
+        if pool is not None:
+            pool.run_async(pool_jobs)
         results, paused = phase_run(to_run, out_dir, args.receipts,
                                     args.pytest_args, prior,
                                     pool=pool, prereqs=prereqs)

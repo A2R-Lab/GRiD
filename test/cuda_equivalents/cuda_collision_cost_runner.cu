@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cmath>
 #include <vector>
+#include <cstdlib>
 
 using T = double;
 namespace gc = grid_collision;
@@ -56,7 +57,7 @@ __global__ void fd_kernel(const T *q0, const grid::robotModel<T> *m, int vi, int
     if (threadIdx.x == 0) { for (int i = 0; i < NS; ++i) d_dist_out[i] = s_dist[i]; *d_cost_out = s_out[0]; }
 }
 
-int main(){
+int main(int argc, char **argv){
     const grid::robotModel<T> *m = grid::init_robotModel<T>();
     size_t s1 = grid::MULTI_TARGET_POSITION_DYNAMIC_SHARED_MEM_BYTES<T>();
     size_t s2 = grid::MULTI_TARGET_POSITION_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
@@ -66,7 +67,10 @@ int main(){
 
     // q0: a bent config so distal spheres have nonzero Jacobian; obstacle placed near the arm.
     std::vector<T> hq(NQ); for(int i=0;i<NQ;++i) hq[i]=0.3*sin(0.9*i)+0.2;
-    T margin=0.25, weight=5.0, eps=1e-6;
+    // At h=1e-6, subtraction noise (~1e-10) dominates tiny mesh-row derivatives.
+    // The harness checks h=1e-4 and 3e-4 with the unchanged relative tolerance.
+    T margin=0.25, weight=5.0, eps=argc > 1 ? std::atof(argv[1]) : 1e-4;
+    if (!(eps > 0) || !std::isfinite(eps)) return 2;
     CK(cudaMemcpyToSymbol(d_margin,&margin,sizeof(T)));
     CK(cudaMemcpyToSymbol(d_weight,&weight,sizeof(T)));
     CK(cudaMemcpyToSymbol(d_eps,&eps,sizeof(T)));
@@ -102,7 +106,11 @@ int main(){
 
     // compare
     auto maxerr = [](const std::vector<T>&a, const std::vector<T>&b){
-        T e=0; for(size_t k=0;k<a.size();++k){ T d=fabs(a[k]-b[k]); T s=fabs(a[k])+fabs(b[k])+1e-9; e=fmax(e, d/s); } return e; };
+        T e=0; size_t worst=0;
+        for(size_t k=0;k<a.size();++k){ T d=fabs(a[k]-b[k]); T s=fabs(a[k])+fabs(b[k])+1e-9;
+            if(d/s > e){e=d/s; worst=k;} }
+        printf("FD worst index=%zu analytic=%.17g fd=%.17g abs=%.3g\n",worst,a[worst],b[worst],fabs(a[worst]-b[worst]));
+        return e; };
     T e_ddist = maxerr(ddist, fd_ddist);
     T e_grad  = maxerr(grad,  fd_grad);
     // active-sphere count (nonzero cost gradient contributions) for a meaningful test

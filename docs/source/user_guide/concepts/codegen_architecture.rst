@@ -20,15 +20,12 @@ The three emission layers
 For each algorithm ``X`` (e.g. ``inverse_dynamics``, ``forward_dynamics``,
 ``crba``, ``fdsva_so``), the codegen emits:
 
-* ``X_device`` — a ``__device__`` function with the **canonical caller-supplied
-  buffer contract**. The caller passes pointers to inputs, outputs, ``s_temp``
-  (shared scratch pool), and ``d_workspace`` (global scratch). The ``_device``
-  function owns its **scratch placement**: a single ``if constexpr (!SCRATCH_IN_SMEM)
-  { s_temp = d_workspace; }`` at the top routes the whole pool to global for
-  spilled tiers. After that repoint, every consumer below (XImats helper, sub-
-  inners, etc.) follows the placement, so the kernel never repoints ``s_temp``
-  from the outside. This is the *inner-owns-placement* discipline; see
-  :doc:`design_principles`.
+* ``X_device`` — a ``__device__`` entry point. Scratch arguments are
+  algorithm-specific: simple wrappers such as RNEA declare their helper
+  storage internally, while composing orchestrators accept caller-supplied
+  buffers and workspace. Placement belongs to the owning device routine;
+  do not infer one algorithm's signature from another's. See
+  :doc:`design_principles` and the generated header for the selected model.
 
 * ``X_kernel`` — a ``__global__`` entry point that handles **batch scheduling**
   (``blockIdx.x`` loops over timesteps) and **global ↔ shared memory transfer**.
@@ -47,29 +44,14 @@ external surface. Sub-algorithm composition routes through other algorithms'
 ``fdsva_so_device`` calls ``minv_inner`` and ``forward_dynamics_inner``
 to reuse one XImats load across all of them).
 
-Why orchestration moved into ``_device`` (history)
---------------------------------------------------
+Scratch ownership
+-----------------
 
-Pre-2026 the emitter shipped *four* layers: ``_inner`` (math),
-``_full_inner`` (orchestrator + placement), ``_device`` (auto-allocating
-training-wheels wrapper), ``_kernel``. The auto-allocating ``_device`` had
-exactly one consumer (the equivalence runner) and its existence forced two
-confusing things:
-
-1. **Two functions with overlapping roles** — orchestration was duplicated in
-   ``_full_inner`` (called from the kernel) and in the auto-allocating
-   ``_device`` (which essentially re-emitted the same orchestration under
-   ``SCRATCH_IN_SMEM=true``).
-2. **Inconsistent placement contract** — some algorithms repointed ``s_temp``
-   from the kernel (around the now-removed ``_device``), others repointed it
-   inside ``_full_inner``. Reviewers had to chase which.
-
-The 2026 rename collapses the two: ``_full_inner`` becomes the canonical
-``_device`` (caller-supplied ``s_temp`` + ``d_workspace`` + spill flags;
-``__device__ __forceinline__``; owns its placement), and the old auto-
-allocating ``_device`` is gone. Inline-CUDA users either embed ``_device``
-inside their own kernel (passing their own ``s_temp``) or call ``_kernel``
-directly for batches. The host wrapper is unchanged.
+Composing algorithms reuse placement-free ``_inner`` helpers. Public device
+entry points perform the required setup; their buffer and resource-tier
+contracts vary. The shared emitter helper ``gen_device_wrapper`` implements
+the simple device-wrapper pattern. Inspect the generated signature rather
+than relying on historical ``_full_inner`` names.
 
 Nested composition
 ------------------
@@ -120,8 +102,13 @@ If the ``_inner`` building blocks were collapsed into their owning ``_device``,
 the compositional algorithms would pay the XImats load three times instead of
 once. The separation is a performance contract, not a stylistic preference.
 
-Concrete signatures (RNEA / inverse_dynamics)
----------------------------------------------
+Schematic layers (RNEA / inverse_dynamics)
+------------------------------------------------------------
+
+The following sketches explain the layers; they are **not callable API
+declarations**. Exact signatures depend on generated options, including
+external-force and acceleration inputs. Use the generated ``grid.cuh`` or
+the runnable walkthrough in ``examples/cuda/`` for integration.
 
 .. code-block:: cuda
 
@@ -132,11 +119,11 @@ Concrete signatures (RNEA / inverse_dynamics)
        /* topology + scratch */ T *s_temp,
        const T gravity);
 
-   // canonical _device: caller-supplied buffers + scratch; owns placement
+   // simple device wrapper: declares helper scratch internally
    template <typename T>
    __device__ void inverse_dynamics_device(
        T *s_c, const T *s_q, const T *s_qd,
-       const robotModel<T> *d_robotModel, const T gravity);
+       const robotModel<T> *d_robotModel, T *d_f_ext, const T gravity);
 
    // global entry, batched over timesteps; per-tier RESOURCE_TIER dispatch
    template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>

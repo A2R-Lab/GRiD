@@ -62,12 +62,58 @@ Geometry coverage and correctness
   are intended to match the fine-only verdict for the same representation.
 * Covering geometry is an approximation of the original robot. Agreement with
   a fine-tier sphere check is not proof of exact mesh collision detection.
-* Mesh resolution failures can produce warnings and partial coverage. Resolve
-  every intended collision asset and inspect generated coverage before relying
-  on a verdict. Self-collision pair exclusions must also match your application.
+* Missing or unusable meshes fail generation. A failed voxel fill may use an
+  explicitly warned bounding-box cover, but geometry is never dropped to
+  produce a partial model. Self-collision pair exclusions must also match your application.
 * Correctness tests live under ``test/cuda_equivalents/test_cuda_collision_*``;
   they cover geometry, pairs, tiering, costs, and native representations.
 
 The :doc:`release measurements <../../release_measurements>` do not include
 collision timings. When benchmarking collisions, report latency alongside
 geometry coverage and fine-tier verdict agreement.
+
+Sphere models and fidelity reports
+------------------------------------------------------------
+
+Generate an interchangeable sphere URDF without compiling CUDA::
+
+   python -m grid_codegen.spherize robot.urdf --out spheres.urdf --mesh-mode bounded-bulge --report
+   grid-generate robot.urdf --spherized-urdf spheres.urdf
+
+``grid-spherize`` is the installed entry point for the same module. The
+bounded-bulge mode uses one fixed mesh policy: 2.5 mm voxels and a 10 mm bulge
+budget relative to the voxel approximation. Coarse candidate centres fall
+back to the full lattice for thin geometry. Primitive geometry retains its
+analytic sphere cover. The input is the URDF's **collision** geometry, not
+its visual meshes. Unresolved assets and incomplete fits are errors.
+
+For ``package://`` meshes, the importer checks paths relative to the URDF and
+explicit ``ROS_PACKAGE_PATH`` roots (either a package directory or its parent).
+It never downloads assets. Drake's collision meshes for iiwa14 links 6 and 7
+are bundled under ``config/robot_assets/drake`` with their upstream licenses,
+revision and hashes; the bundled URDF resolves them without environment setup.
+The historical iiwa14 sphere asset omits those meshes and is not a complete
+replacement for the source collision model.
+
+The complete-model CUDA gate checks the supplied-model CLI, every transformed
+sphere against CPU forward kinematics, and collision verdicts at 1, 32 and
+100 threads (``test_cuda_collision_complete.py``).
+
+To evaluate an existing model against the original collision geometry::
+
+   python -m grid_codegen.spherize robot.urdf --report spheres.urdf
+
+The per-link report gives sphere count, voxel-estimated maximum/p99 bulge,
+and the uncovered fraction of 2,000 seeded mesh-surface samples. Bulge uses
+400 samples per sphere. These are reproducible diagnostics, **not a proof
+of continuous mesh coverage or a certified bulge bound**. Primitive meshes
+used for this report are tessellated. Inspect the report alongside the model.
+
+``--spherized-urdf`` rejects missing collision links, non-sphere geometry,
+invalid spheres, and mismatched joint frames. It cannot prove that an
+arbitrary supplied sphere model covers its source mesh. The sole named
+lookup is ``foam``; it requires an optional local
+``external/foam/assets/panda/smaller_panda_spherized.urdf``. GRiD does not
+download that asset or substitute another model when absent. Pass an explicit
+path to a model from your own checkout instead. No cuRobo or fairness-study
+assets are bundled by this mechanism.

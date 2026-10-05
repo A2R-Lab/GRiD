@@ -51,7 +51,8 @@ grid-generate path/to/robot.urdf [-f] [-t EE_JOINT] [-n NAMESPACE] [-c] [-d]
 Always use `.venv/bin/python` (never bare `python`). The editable install puts `grid_codegen`,
 `URDFParser`, `RBDReference`, and `grid_rbd` on the venv path, so no `PYTHONPATH` is needed. Box CUDA
 arch: `sm_120`/`compute_120` (per-machine notes belong in the gitignored `docs/STARTUP_PROMPT.md`).
-Clear `grid_codegen/__pycache__` after codegen changes.
+Generated artifacts are content-keyed. Diagnose cache identity before removing a
+cache entry; do not clear shared caches while another worker may be using them.
 
 ## Test
 
@@ -65,8 +66,10 @@ Clear `grid_codegen/__pycache__` after codegen changes.
 Markers: `pinocchio_equivalence`, `cuda_equivalence`, `python_wrappers`, `floating_base`,
 `robot_{smoke,curated,nightly}`, `gpu_proof`, `notebooks`, `developer_only`. GPU test outcomes are captured in a signed
 `gpu-proof.json` receipt (see `test/run_gpu_proof.sh`) that CPU-only CI verifies against the committed
-test fingerprints (red when fingerprinted tests change without a refreshed receipt; the workflow passes
-when no receipt exists). A release needs one fresh full run verified under the RELEASE policy.
+test fingerprints (red when correctness inputs change without a refreshed receipt).
+Main requires a receipt covering `test/gpu-proof-scope.json`; diagnostic smoke
+receipts do not replace that evidence. A release needs one fresh full run
+verified under the RELEASE policy.
 
 Prefer the crash-isolated split driver for full GPU passes:
 `test/run_split_suite.py` runs `python_wrappers` as per-module shards (compile-warm
@@ -82,9 +85,10 @@ all shard receipts into the same repo-root `gpu-proof.json` the monolithic path
 writes (`SPLIT_RESUME=<out>` to continue an interrupted pass). CPU-only gates for
 the partition logic live in `test/test_split_partition.py`.
 Compiles run through a RAM-aware parallel pool (`test/compile_sched.py`): Phase A
-wrapper `.so` warms and cuda flagship header/exe pre-warms
-(`test/prewarm_cuda_flagship.py` — imports the shared `cuda_harness.py` compile chain so
-cache keys match by construction) execute as admission-controlled parallel
+wrapper `.so` warms and CUDA flagship, integrator and second-order smoke pre-warms
+(`test/prewarm_cuda_flagship.py` — reuses the tests' actual builders and cache keys;
+`--inventory --node-ids test/gpu-proof-scope.json --out inventory.json` inspects
+integrator/SO hits without compiling) execute as admission-controlled parallel
 workers (predicted peak RSS from a rolling `/usr/bin/time -v` ledger at
 `test/.split_suite/compile_rss.json`, conservative default + margin + MemAvailable
 floor) and OVERLAP GPU shard execution — a shard only waits for its own compile
@@ -125,7 +129,7 @@ seconds of regeneration, never an nvcc rebuild.
   Test it. Floating-base reductions must also be **run-to-run bit-deterministic** (fixed-order sums).
 - **Byte-identical codegen discipline** — a refactor that shouldn't change emitted code must produce
   a byte-identical `grid.cuh` (regen before/after + `diff`; harness:
-  `.venv/bin/python tools/byte_gate.py <outdir>` — 7 representative cells, sha256 per cell). Never
+  `.venv/bin/python tools/byte_gate.py <outdir>` — 8 representative cells, sha256 per cell). Never
   advance on a non-identical diff without a CUDA-equivalence sign-off.
 - **Fix, don't guard** — no `xfail`/`skip`/defensive guards; fix the root cause.
 - **Physics**: gravity `-9.81`; Pinocchio is authoritative. Prefer extending GLASS primitives over

@@ -5,6 +5,27 @@ This page summarizes the developer CUDA validation flow for generated GRiD
 headers. The checks are intentionally staged so long GPU runs provide useful
 progress and can be resumed with cached generated artifacts.
 
+Everyday refresh entry point
+------------------------------------------------------------
+
+Plan without collecting tests or starting any compilation::
+
+   .venv/bin/python test/run_validation.py --out docs/open-tasks/validation-next
+
+Add ``--execute`` only on a clean committed candidate in a coordinated quiet
+window. The launcher holds ``/tmp/a2rlab-timing.lock`` throughout the run,
+records logs, validates fresh/carried header-key provenance, checks the
+reviewed minimum test-node set, and verifies the everyday signed receipt
+before publishing it. ``--resume <split-directory>`` reuses completed shards;
+choose a new ``--out`` directory for the resumed launch's logs.
+
+Main requires ``test/gpu-proof-scope.json``'s node IDs. A smoke receipt cannot
+replace full-scope evidence. Carried shards remain permitted by the everyday
+policy; this does not require a fresh release-policy run. After a reviewed
+full collection adds tests, explicitly extend the scope with
+``test/receipt_integrity.py --receipt gpu-proof.json --scope test/gpu-proof-scope.json --extend-scope``.
+Removing or renaming required tests requires a reviewed scope edit.
+
 Local Docs Build
 ----------------
 

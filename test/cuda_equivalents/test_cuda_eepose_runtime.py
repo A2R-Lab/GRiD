@@ -104,7 +104,7 @@ def _generate_header(project_model, build_dir):
     return header
 
 
-def _compile_runner(build_dir):
+def _compile_runner(build_dir, scalar='float'):
     nvcc = shutil.which("nvcc") or "/usr/local/cuda/bin/nvcc"
     if not Path(nvcc).exists() and shutil.which("nvcc") is None:
         pytest.skip("nvcc not found; install CUDA Toolkit to run CUDA tests.")
@@ -115,6 +115,7 @@ def _compile_runner(build_dir):
     glass_inc = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
     cmd = [
         nvcc, "-std=c++17", "-O0",
+        f"-DGRID_CUDA_EEPOSE_RT_SCALAR={scalar}",
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
         f"-I{glass_inc}", "-o", str(executable), str(runner_copy),
     ]
@@ -161,7 +162,7 @@ def _nonleaf_targets(robot):
 @pytest.mark.robot_smoke
 @pytest.mark.parametrize(("robot_id", "base_mode"), _robot_modes(),
                          ids=lambda v: v if isinstance(v, str) else None)
-def test_cuda_eepose_runtime_matches_reference(tmp_path, robot_id, base_mode):
+def test_cuda_eepose_runtime_matches_reference(tmp_path, robot_id, base_mode, scalar='float'):
     spec = _robot_spec(robot_id, base_mode)
     try:
         resolved = resolve_robot_spec(spec)
@@ -171,14 +172,14 @@ def test_cuda_eepose_runtime_matches_reference(tmp_path, robot_id, base_mode):
     build_dir = tmp_path / f"{robot_id}_{base_mode}_eepose_rt"
     build_dir.mkdir()
     _generate_header(project_model, build_dir)
-    executable, cmd = _compile_runner(build_dir)
+    executable, cmd = _compile_runner(build_dir, scalar=scalar)
 
     robot = project_model.robot
     nv = project_model.nv
     targets = _nonleaf_targets(robot)
     samples = _build_cuda_samples(project_model, random_count=3, include_corner_samples=True)
 
-    def close(actual, expected, msg, rtol=2e-3, atol=2e-3):
+    def close(actual, expected, msg, rtol=2e-5, atol=2e-6):
         expected = np.asarray(expected, dtype=np.float64)
         scale = float(np.max(np.abs(expected))) if expected.size else 0.0
         np.testing.assert_allclose(
@@ -186,42 +187,16 @@ def test_cuda_eepose_runtime_matches_reference(tmp_path, robot_id, base_mode):
             rtol=rtol, atol=max(atol, rtol * scale), err_msg=msg,
         )
 
-    def _chain_depth(target_jid):
-        return len(robot.get_ancestors_by_id(target_jid)) + 1
-
-    def _chain_world_scale(q, target_jid):
-        """Largest |world coordinate| over the target's ancestor chain. A float32
-        FK chain-up carries ~1e-6 RELATIVE error on coordinates of this size,
-        accumulated over the chain depth -- so the position error floor scales
-        with this (deep humanoid hands reach the EE via ~1m-scale torso/arm
-        intermediates even when the EE's own |position| is small). This keeps the
-        check a per-config float32 CONDITIONING floor, not a global loosen."""
-        chain = sorted(robot.get_ancestors_by_id(target_jid)) + [target_jid]
-        coords = [1.0]
-        for j in chain:
-            joint = robot.get_joint_by_id(j)
-            if joint is None or not joint.get_name():
-                continue
-            wpos = np.asarray(
-                project_model.end_effector_pose(q, joint.get_name(), None),
-                dtype=np.float64).reshape(-1)[:3]
-            coords.append(float(np.max(np.abs(wpos))))
-        # error ~ (per-matmul float32 epsilon) * world-scale * chain depth.
-        return max(coords) * _chain_depth(target_jid)
-
     for target_jid, target_name in targets:
         for sample in samples:
             q = np.asarray(sample.q, np.float64)
             out = _parse_runner_output(
                 _run_runner(executable, _stdin(target_jid, _XTOOL, q), cmd))
             tag = f"{robot_id}-{base_mode} tgt={target_name} @ {sample.name}"
-            # float32 FK-chain conditioning floor for the position rows: a
-            # single-precision world chain-up accumulates ~few*1e-3 absolute per
-            # matmul on ~1m-scale intermediates, so scale the floor by
-            # world-scale * chain-depth (see _chain_world_scale). Shallow chains
-            # (most robots) stay near the 2e-3 base; only deep humanoid hands
-            # (h1_2 thumb, depth ~14) widen it.
-            pos_atol = max(2e-3, 4e-3 * _chain_world_scale(q, target_jid))
+            # The former depth-scaled allowance hid an oracle bug: its pose
+            # chain omitted mimic multipliers, unlike CUDA and its gradient.
+            # No chain-depth exemption: all positions and nonsingular rpy rows
+            # must agree, including the H1 thumb (multiplier 1.6).
 
             # ---- POSE ----
             # pose0: identity tool (frame origin). poseN: the full SE(3) tool frame.
@@ -236,21 +211,16 @@ def test_cuda_eepose_runtime_matches_reference(tmp_path, robot_id, base_mode):
             # identity frame uses ref0's pitch, the tool frame uses refN's.
             def _rpy_ok(pitch):
                 near_gimbal = abs(abs(float(pitch)) - np.pi / 2) < _PITCH_GUARD
-                # rpy is a NONLINEAR function of R; a very deep float32 FK chain
-                # (e.g. h1_2's depth-11 thumb) corrupts R enough that rpy diverges
-                # even far from gimbal lock -- same float32 conditioning floor as the
-                # position (the float64 numpy mirror is exact). Skip rpy for deep chains.
-                return (not near_gimbal) and (_chain_depth(target_jid) <= 8)
+                return not near_gimbal
             rpy0_ok = _rpy_ok(ref0[4])
             rpyN_ok = _rpy_ok(refN[4])
 
-            # position (always valid; float32 FK-chain conditioning floor).
-            close(pose0[:3], ref0[:3], f"pose0 xyz {tag}", atol=pos_atol)
-            close(poseN[:3], refN[:3], f"poseN xyz {tag}", atol=pos_atol)
+            close(pose0[:3], ref0[:3], f"pose0 xyz {tag}")
+            close(poseN[:3], refN[:3], f"poseN xyz {tag}")
             if rpy0_ok:
-                close(pose0[3:], ref0[3:], f"pose0 rpy {tag}")
+                close((pose0[3:]-ref0[3:]+np.pi) % (2*np.pi)-np.pi, np.zeros(3), f"pose0 rpy {tag}")
             if rpyN_ok:
-                close(poseN[3:], refN[3:], f"poseN rpy (SE(3) tool) {tag}")
+                close((poseN[3:]-refN[3:]+np.pi) % (2*np.pi)-np.pi, np.zeros(3), f"poseN rpy (SE(3) tool) {tag}")
 
             # ---- GRADIENT ----
             grad0 = out["grad0"].reshape(6, nv, order="F")
@@ -261,10 +231,9 @@ def test_cuda_eepose_runtime_matches_reference(tmp_path, robot_id, base_mode):
             gN_ref = np.asarray(
                 project_model.end_effector_pose_gradient(q, target_name, _XTOOL),
                 dtype=np.float64)
-            # The Jv (xyz) rows carry the same float32 FK-chain conditioning floor
-            # as the position; the rpy rows are valid only away from gimbal lock.
-            close(grad0[:3, :], g0_ref[:3, :], f"grad0 Jv {tag}", atol=pos_atol)
-            close(gradN[:3, :], gN_ref[:3, :], f"gradN Jv (SE(3) tool) {tag}", atol=pos_atol)
+            # The rpy rows are valid only away from gimbal lock.
+            close(grad0[:3, :], g0_ref[:3, :], f"grad0 Jv {tag}")
+            close(gradN[:3, :], gN_ref[:3, :], f"gradN Jv (SE(3) tool) {tag}")
             if rpy0_ok:
                 close(grad0[3:, :], g0_ref[3:, :], f"grad0 rpy-rows {tag}")
             if rpyN_ok:
@@ -275,7 +244,7 @@ def test_cuda_eepose_runtime_matches_reference(tmp_path, robot_id, base_mode):
 @pytest.mark.developer_only
 @pytest.mark.robot_smoke
 @pytest.mark.parametrize(("robot_id", "base_mode"),
-                         [("iiwa14", "fixed"), ("fr3", "fixed")],
+                         [("iiwa14", "fixed"), ("fr3", "fixed"), ("h1_2", "fixed")],
                          ids=lambda v: v if isinstance(v, str) else None)
 def test_cuda_eepose_runtime_thread_invariance(tmp_path, robot_id, base_mode):
     """Single-block kernels are block-stride loops, so ANY thread count that fits
@@ -300,7 +269,7 @@ def test_cuda_eepose_runtime_thread_invariance(tmp_path, robot_id, base_mode):
     stdin = _stdin(target_jid, _XTOOL, np.asarray(sample.q, np.float64))
 
     ref = None
-    for nthreads in (1, 32, 256):
+    for nthreads in (1, 32, 100, 256):
         out = _parse_runner_output(_run_runner(executable, stdin, cmd, num_threads=nthreads))
         block = np.concatenate([out[k].reshape(-1) for k in ("pose0", "poseN", "grad0", "gradN")])
         if ref is None:
@@ -308,3 +277,11 @@ def test_cuda_eepose_runtime_thread_invariance(tmp_path, robot_id, base_mode):
         else:
             np.testing.assert_array_equal(
                 block, ref, err_msg=f"{robot_id}-{base_mode} thread-count {nthreads} diverged")
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.robot_smoke
+def test_cuda_eepose_runtime_h1_fp64(tmp_path):
+    """Deep mimic pose agreement must not depend on single-precision allowances."""
+    test_cuda_eepose_runtime_matches_reference(tmp_path, 'h1_2', 'fixed', scalar='double')

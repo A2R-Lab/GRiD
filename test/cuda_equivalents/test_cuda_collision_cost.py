@@ -62,7 +62,8 @@ def test_collision_cost_fd(tmp_path):
     result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(f"cost runner compile FAILED.\ncmd: {' '.join(cmd)}\nstderr:\n{result.stderr}")
-    run = subprocess.run([str(exe)], capture_output=True, text=True)
-    assert run.returncode == 0, f"cost runner FAILED:\nstdout:\n{run.stdout}\nstderr:\n{run.stderr}"
-    assert run.stdout.strip().endswith("RESULT: PASS"), run.stdout
-    print(run.stdout)
+    for step in ("1e-4", "3e-4"):
+        run = subprocess.run([str(exe), step], capture_output=True, text=True, timeout=600)
+        assert run.returncode == 0, f"cost runner FAILED at h={step}:\n{run.stdout}\n{run.stderr}"
+        assert run.stdout.strip().endswith("RESULT: PASS"), run.stdout
+        print(f"h={step}\n{run.stdout}")

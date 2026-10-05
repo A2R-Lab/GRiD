@@ -3,21 +3,16 @@ Release measurements
 
 .. note::
 
-   **Data from the 27 September 2026 run:** 210 worker processes,
-   1,260 measurements, all passing the existing strict numerical checks.
-   **Wrapper addendum, 2 October 2026:** 108 further worker processes and
-   648 measurements under the same protocol, for the allocate-once calls
-   in Figure 4. **Hessian addendum, 4 October 2026:** the 63 Hessian
-   (∇²RNEA) workers of every GRiD surface were re-collected (378
-   measurements) after the second-order kernels lost most of their block
-   barriers; a same-session drift check on the untouched RNEA kernel landed
-   within 0.62% of the September values on all 36 cells. The published
-   table still holds 300 workers and 1,800 measurements; only the Hessian
-   GRiD-versus-baseline comparisons changed.
+   **September/October 2026 Updated Results:** 300 selected worker
+   processes and 1,800 measurements, all passing the strict numerical checks.
+   The selection includes the Pinocchio 24-worker follow-up, allocate-once
+   wrapper calls, and the updated GRiD Hessian kernels. Capture hashes and
+   per-cell provenance are retained with the tables.
 
 These measurements cover **iiwa14** (fixed base, 7 velocities), **go2** (floating
 base, 18 velocities), and **G1** (floating base, 35 velocities) on one NVIDIA
-RTX 5090 and Intel Core Ultra 9 285K system. Batch sizes are 16, 32, 64, 128,
+RTX 5090 GPU and 24-core Intel Core Ultra 9 285K CPU system. Timings and relative
+speedups vary across platforms. Batch sizes are 16, 32, 64, 128,
 256, and 1024. The main figures compare RNEA, its analytical gradient, and its
 analytical Hessian. The wrapper study covers the same three operations
 through CUDA C++, the C ABI (RNEA and its gradient), NumPy, JAX, and PyTorch,
@@ -37,8 +32,8 @@ re-measured GRiD's native CUDA call on all 18 RNEA-gradient cells: both its
 compute-only and its host call landed within 0.6% of the September values.
 
 The Hessian addendum used commit ``effabf8698fa6af191d5c24867471e971a76880e``.
-It changed only the generated second-order CUDA (``idsva_so`` in both frames,
-plus the ``crba``, Coriolis, integrator-gradient and end-effector kernels):
+It optimized generated CUDA including ``idsva_so`` in both frames,
+plus the ``crba``, Coriolis, integrator-gradient and end-effector kernels:
 block barriers that ordered nothing were removed and a few small
 intermediates are re-formed in registers instead of shared memory, with the
 output verified bit-identical to the previous kernels before timing. The iiwa14
@@ -67,25 +62,30 @@ compute-only boundary.
   These are measured ranges, not statistical confidence intervals.
 * **Large-batch gradients show substantial compute and host-call gains.**
   At batch 1024, GRiD's compute-only CUDA calls for RNEA gradients are
-  11.7× faster on iiwa14 and 5.6× faster on go2 than Pinocchio codegen's
+  2.5× faster on iiwa14 and 3.7× faster on go2 than Pinocchio codegen's
   CPU calls. GRiD takes 30.8 µs and 116.6 µs, respectively, versus
-  361.3 µs and 657.8 µs for Pinocchio codegen. The compute-only comparison
+  78.2 µs and 433.5 µs for Pinocchio codegen. The compute-only comparison
   excludes GRiD's transfers but includes native launch and synchronization.
   Including transfers, GRiD's C++ host calls take 59.4 µs and 257.3 µs,
-  retaining 6.1× and 2.6× speedups at the matched host-to-host boundary.
+  retaining 1.3× and 1.7× speedups at the matched host-to-host boundary.
   These host-call wins remain separated across the observed repeat ranges.
 * **Larger batches turn compute gains into host-call wins.** Including
   transfers, GRiD's CUDA host call has a lower median than the Pinocchio
-  codegen-mode adapter in 14 of 45 core cells at batches 16–256; 13 of those
-  wins remain separated across observed ranges. At batch 1024, it wins 8 of
-  9 cells across those ranges; the remaining comparison overlaps. Both
+  codegen-mode adapter in 10 of 45 core cells at batches 16–256; 8 of those
+  wins remain separated across observed ranges. At batch 1024, it wins 5 of
+  9 cells across those ranges. Both
   Pinocchio modes use the same standard analytical fp64 path for Hessians,
   not a code-generated Hessian. Pinocchio wins many small-batch comparisons,
   particularly the lighter RNEA workload when GRiD's transfers are included.
-  The batch-1024 wins include all three robots' Hessians. There are also
-  selective wins with JAX overhead included: iiwa14's RNEA gradient at batch
-  1024 takes 303.6 µs through GRiD JAX versus 361.4 µs through Pinocchio
-  codegen, a 1.2× median speedup for complete host-to-host calls.
+  The batch-1024 wins include all three robots' Hessians and the iiwa14 and
+  go2 gradients. Full GRiD JAX calls do not beat the updated Pinocchio
+  codegen-mode adapter in these core cells.
+* **Peak Hessian gains reach 3.3× including I/O and 13× compute-only.**
+  The host-call peak is iiwa14 at batch 256: GRiD takes 111.8 µs versus
+  Pinocchio's 365.6 µs. The compute-only peak is G1 at batch 1024:
+  GRiD takes 4.58 ms versus Pinocchio's 59.56 ms. Both compare GRiD fp32
+  with Pinocchio's standard analytical fp64 Hessian path; neither is a
+  JAX speedup or a same-precision comparison.
 * **Wrapper costs matter.** GRiD JAX resident calls beat MuJoCo Warp on all
   18 matched RNEA cells across observed ranges, but the host-to-host results
   are mixed. On iiwa14 RNEA at batch 256, median full calls are 23.3 µs in
@@ -151,15 +151,15 @@ favors the baseline. The top row excludes GRiD's host–device transfers and is
 therefore a different workload boundary from Pinocchio's host-array call.
 The bottom row includes GRiD's transfers and compares host arrays in and out
 on both sides. Pinocchio uses a persistent C++ thread pool, choosing the best
-recorded candidate from ``{1, max(1, batch//16), 8}``, excluding counts above
-eight or the batch size. Eight is this study's configured worker ceiling,
-not a Pinocchio limit; counts above eight were not evaluated. All 24 logical
-CPUs were available to the processes. All tested variants are retained in
-the raw captures.
+recorded candidate from ``{1, 2, 4, 8, 16, 24}``, excluding counts above the
+batch size. All 24 logical CPUs were available. The 24-worker ceiling is a
+study setting, not a Pinocchio limit. Selected counts and all tested variants
+are retained in the raw captures. The secondary-operation table retains its
+original eight-worker ceiling and is not part of this follow-up.
 
 Pinocchio's CPU paths are strong at small batches, particularly for RNEA.
 Transfers can reverse a compute-only advantage: for iiwa14's RNEA gradient
-at batch 32, GRiD's compute-only call takes 14.8 µs versus 15.8 µs for
+at batch 32, GRiD's compute-only call takes 14.8 µs versus 22.0 µs for
 Pinocchio codegen, but GRiD's full C++ host call takes 24.6 µs.
 
 Figure 2b — GRiD kernel against the CPU libraries, no I/O
@@ -282,8 +282,8 @@ Protocol
   consistently improve results and is not included in release timing data.
 * The box was reserved for serial measurement, with quiet checks between
   workers. Native CUDA, C ABI, NumPy, PyTorch, Warp and the other stable paths
-  were not exempted from variability checks. Of 600 supported groups, 22
-  full-call groups span more than 1.5× across process means; 23 of 240
+  were not exempted from variability checks. Of 600 supported groups, 28
+  full-call groups span more than 1.5× across process means; 21 of 240
   resident groups do so. These are marked, not selectively rerun.
 * Resident means inputs already on the GPU and outputs left there, including
   synchronization and any device-side copies. Full call includes host input
@@ -340,7 +340,7 @@ From the repository root, plan without launching GPU work:
    .venv/bin/python -m test.benchmarks.release.collect --stage core --iterations 300
    .venv/bin/python -m test.benchmarks.release.collect --stage wrappers --iterations 300
    .venv/bin/python -m test.benchmarks.release.report <matched-capture> --output <report>
-   .venv/bin/python docs/plot_release_figures.py <report>
+   .venv/bin/python docs/release_pipeline.py --output <new-review-directory>
 
 Add ``--execute --output <fresh-capture>`` only in a coordinated quiet window.
 Raw captures remain in ``test/benchmarks/results/``; published assets contain
@@ -352,8 +352,9 @@ Measurement scope
 * One desktop CPU/GPU system and three robots do not establish performance on
   every robot or on Jetson. Some JAX, MJX and Pinocchio cells remain variable;
   these measurements do not establish a root cause.
-* Pinocchio's candidate thread counts are capped at eight. This is not a claim
-  of optimal CPU threading. Its fp64 Hessians are a precision exception, not
+* Core Pinocchio candidate thread counts extend to 24; secondary operations
+  retain the original eight-worker cap. Neither establishes optimal CPU
+  threading. Its fp64 Hessians are a precision exception, not
   an equal-precision comparison with GRiD's fp32 Hessians.
 * Boundary increments do not separately identify framework dispatch, staging,
   or large-output costs.

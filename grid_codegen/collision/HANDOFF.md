@@ -59,8 +59,9 @@ its position in that frame (welded-link spheres are pre-folded onto the movable 
 `self_cc_ranges` = the adjacency-pruned self-collision pair table.
 
 Checked-in examples: `collision/assets/go2_spherized.urdf` (all-primitive, full coverage) and
-`collision/assets/iiwa14_spherized.urdf` (arm; the two drake collision meshes need the drake
-package to be spherized — see §4). These are the **foam interchange format**, so a foam-produced
+`collision/assets/iiwa14_spherized.urdf` (historical partial arm model, missing link 6/7 meshes).
+Regenerate iiwa from its source URDF for current use: the two pinned collision meshes and
+their licenses are bundled under `config/robot_assets/drake/`. These use the **foam interchange format**, so a foam-produced
 spherized URDF is drop-in interchangeable (`parse_spherized_urdf` reads either).
 
 ---
@@ -74,10 +75,13 @@ spheres and returns a spherized URDF:
   A cylinder becomes a line of spheres along its axis; a box a voxel grid. Radii are chosen so
   the union **fully contains** the source surface (conservative — no missed collisions;
   see `test/test_collision_spherize.py`).
-- **Meshes** → voxel-filled via `trimesh` (one sphere per interior voxel). If a mesh path can't
-  be resolved, that collision is **skipped with a warning** (never silently dropped) and you get
-  partial (primitive) coverage rather than an abort. `file://`, absolute, and relative paths
+- **Meshes** → voxel-filled via `trimesh`, or the opt-in bounded-bulge fit.
+  Unresolved or unusable collision meshes now **fail generation**; historical
+  partial examples are not complete collision models. `file://`, absolute, and relative paths
   resolve directly; `package://` is tried relative to the URDF dir.
+
+The current generation/report CLI and geometry contract are documented in
+`docs/source/user_guide/tutorials/collisions.rst`.
 
 Coarse `resolution` ⇒ broad tier, fine ⇒ fine tier. Pass several to `--collision-res` (or
 `multi_tier_collision_spec_from_urdf`) and each density is spherized independently, then wired into
@@ -155,8 +159,8 @@ headers.
   granularity or (future) supply an allowed-collision matrix that prunes more pairs.
 - **Root/pedestal spheres are dropped.** Spheres on the base/world link (anchor = −1) are skipped
   (they can't move); this matches HJCD.
-- **Unresolvable meshes are skipped** (loud warning). iiwa14's `package://drake/...` collision
-  meshes fall in this bucket unless the drake package is on disk; its cylinder links still cover.
+- **Unresolvable meshes fail generation.** The bundled iiwa14 collision meshes resolve
+  without external caches. Custom package URIs can use explicit `ROS_PACKAGE_PATH` roots.
 - **q convention** is GRiD's (`grid::NUM_POS`, pinocchio joint order). Feed the same `s_q` you
   feed the rest of GRiD.
 

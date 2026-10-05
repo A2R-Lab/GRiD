@@ -17,8 +17,9 @@ Consumers:
   - `test/benchmarks/generate_report.py` builds ALGO_DISPLAY and ALGO_SECTIONS.
   - (Future) per-algo `gen_*_host` codegen functions read `printf_label` here.
 
-Adding a new algo touches exactly this file (plus the corresponding codegen
-emission of the kernel + the bench's `#if GRID_HAS_X` measure wrappers).
+This registry owns benchmark names and resource metadata, not the entire API.
+Adding an algorithm also requires its emitter, ABI metadata (abi_specs.py),
+wrapper regeneration where exposed, reference implementation and tests.
 """
 
 from __future__ import annotations

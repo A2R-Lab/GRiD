@@ -1,0 +1,25 @@
+{
+  "captures": [
+    "test/benchmarks/results/release-pinocchio24-final-20260928-VAl4Dj",
+    "test/benchmarks/results/release-barrier-iiwa14c-S-20261004",
+    "test/benchmarks/results/release-barrier-S-20261004",
+    "test/benchmarks/results/release-prealloc-P-20261002",
+    "test/benchmarks/results/release-prealloc-N-20261002",
+    "test/benchmarks/results/release-prealloc-H-20261002",
+    "test/benchmarks/results/release-final-core-20260927-nevcJ2"
+  ],
+  "accepted_source_drift": [
+    "test/benchmarks/release/grid_adapter.py",
+    "test/benchmarks/release/pin_adapter.py",
+    "test/benchmarks/release/protocol.py"
+  ],
+  "required_baseline": {
+    "capture": "release-pinocchio24-final-20260928-VAl4Dj",
+    "manifest_sha256": "496d0b98049f33a203d4b97a5a49b4fddb23ab0305be5ee2f0e057579769ccec",
+    "backends": ["pinocchio", "pinocchio_plain"],
+    "robots": ["iiwa14", "go2", "g1"],
+    "operations": ["inverse_dynamics", "inverse_dynamics_gradient", "idsva_so"],
+    "batches": [16, 32, 64, 128, 256, 1024],
+    "repeats": [0, 1, 2]
+  }
+}

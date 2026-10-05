@@ -119,7 +119,10 @@ policy lives in the
 
 
 ## Current Support
-GRiD currently fully supports any robot model consisting of revolute, prismatic, and fixed joints that does not have closed kinematic loops. Arbitrary/skew joint axes (a non-cardinal `<axis>`) are also supported via a dense 6-vector motion subspace — currently for `inverse_dynamics` and `crba` only (cardinal-axis robots stay byte-identical; other algorithms and the helical/planar/spherical joint types are later stages).
+GRiD supports open-chain and tree models with revolute, prismatic, fixed,
+floating, mimic, and additional joint types. Support is operation-specific;
+see the [joint and algorithm restrictions](https://a2r-lab.github.io/GRiD/docs/user_guide/tutorials/cuda_support_status.html)
+and [backend inventory](https://a2r-lab.github.io/GRiD/docs/user_guide/tutorials/backend_coverage.html).
 
 GRiD implements the full modern rigid-body-dynamics stack: RNEA / CRBA / ABA /
 Minv / forward dynamics; analytical first-order gradients (ID + FD, incl.
@@ -161,10 +164,11 @@ Additional algorithms and features are in development. If you have a particular 
 | `install/` | install scripts (`base_install.sh`, `developer_install.sh`) + requirements files | [installation guide](https://a2r-lab.github.io/GRiD/user_guide/getting_started/installation.html) |
 
 ## C++ API
-For each algorithm GRiD emits four layers: `*_inner` (core math on
-shared-mem inputs), `*_device` (allocates scratch + calls `_inner`),
+The generated external interface has three layers: `*_device` (algorithm-specific
+buffer and scratch contract, with placement owned by the device function),
 `*_kernel` (global entry point with batched timestep loop), and the
-host wrapper (CPU launcher with H↔D copies). See the
+host wrapper (CPU launcher with H↔D copies). Internal `*_inner` helpers support
+composition without repeating shared setup. See the
 [codegen architecture docs](https://a2r-lab.github.io/GRiD/user_guide/concepts/codegen_architecture.html)
 for the rationale and concrete signatures.
 
@@ -200,7 +204,7 @@ qdd.sum().backward()                      # gradients flow to q, qd, u
 The `torch` backend exposes autograd-aware `inverse_dynamics` / `forward_dynamics` /
 `aba` / `integrator` (analytic backward passes) plus CUDA-Graphs capture,
 and the handle also surfaces the `grid_plant` cost/barrier methods. `inverse_dynamics`
-(alias `rnea`) / `forward_dynamics` (alias `fd`) take an optional `qdd=` (the
+(alias `rnea`) takes an optional `qdd=` (the
 autograd gradient is qdd-aware, returning the correct ∂τ/∂(q,q̇) including the
 ∂(M·q̈)/∂q term), and all three backends expose the value ops `coriolis_matrix`,
 `kinetic_energy_regressor`, `potential_energy_regressor`, `dccrba`, and

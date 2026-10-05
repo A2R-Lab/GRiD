@@ -109,6 +109,7 @@ def test_plan_refresh_per_shard_replay(monkeypatch, tmp_path):
     computed at most once."""
     import codegen_neutrality
     import run_split_suite as rss
+    monkeypatch.setattr(codegen_neutrality, "reference_inputs_changed", lambda sha: False)
 
     ids = ["test/cuda_equivalents/test_a.py::t1",
            "test/cuda_equivalents/test_b.py::t2",

@@ -39,10 +39,11 @@ emitting CUDA C++ from URDFs; numpy/pinocchio reference oracle lives in `RBDRefe
 ---
 
 ## 0. The validation checklist (do these EVERY time — they each caught a real bug)
-1. **Clean the generated-header cache before re-validating.** A stale `grid.cuh` gives phantom
-   pass/fail. The CUDA equivalence harness keys its cache on a hash of the whole
-   `grid_codegen/*.py` tree (`_header_cache_key`), so codegen edits self-invalidate — but
-   manual/ad-hoc `gen_all_code` runs into temp dirs do not. When in doubt, clear it.
+1. **Verify build identity before re-validating.** The content-keyed caches
+   self-invalidate when their inputs change. Preserve them; inspect the recorded
+   source/header/toolchain hashes before blaming a stale build. For an ad-hoc
+   runner, explicitly regenerate its header and verify the executable embeds
+   it. Do not clear shared caches while another process may be using them.
 2. **Gate-A byte-identical** for any refactor or opt-in algorithm: capture the generated `grid.cuh`
    for representative robots (iiwa14-fixed + a floating + a big robot) BEFORE your change, regen
    AFTER, `diff`. Must be empty (refactor) or confined to your new opt-in kernel (additive).
@@ -2806,3 +2807,31 @@ ones); world-frame forward sweep 9 → 4 per body. Arena: body-frame 36·pairs t
 POST (worktree) headers for one robot, compiles a stdin runner against each, same inputs,
 `BEGIN <tag> … END <tag>` block must be byte-identical and thread-invariant. The general
 `cuda_equivalence_runner.cu` works with `--defines GRID_RUN_SPLIT=1,RUN_<ALGO>=1`.
+
+### 7.z41 A deep-chain pose error can be an oracle mimic bug, not fp32 conditioning (2026-10-05)
+
+The H1 runtime-EE thumb error persisted in fp64: 2.79 cm position and about
+1 radian wrapped RPY. The reference pose/rotation helpers indexed the independent
+q slot directly, ignoring the thumb's 1.6 mimic multiplier; the generated CUDA
+and the reference gradient already handled it. Use `robot.q_for_joint` on every
+transform in both articulated and fixed-frame chains. Pinocchio matched the
+corrected transform to 1.7e-16 m. Add mimic targets to the Pinocchio comparisons,
+not just the ordinary root/leaf choices. Remove obsolete chain-depth exemptions
+after the fix; the runtime GPU gate now checks H1 in fp32/fp64 and at 1/32/100/256
+threads with 2e-5 relative / 2e-6 absolute tolerances (plus the RPY singularity guard).
+
+G1 floating FD-parameter-gradient cancellation was different: a near-zero tensor
+had fp32 residual 0.388, versus about 8e-10 with diagnostic fp64 arithmetic and
+global scratch. Its production fp64 shared arena does not fit the RTX 5090.
+The narrow 0.45 near-zero floor stays; diagnostic scratch is not a production fix.
+
+Complete collision meshes also stress tests built for partial geometry. Pair
+outputs grow quadratically; use caller-owned global output buffers instead of
+oversized static-shared arrays in the test harness. For tiny (~1e-6) clearance
+derivatives, central FD at h=1e-6 amplifies ~1e-16 value rounding into ~1e-10
+derivative noise. A step sweep separated truncation from cancellation; the gates
+now check h=1e-4 and 3e-4 with the SAME 1e-6 relative threshold, not a looser one.
+
+Receipt implication: byte-identical generated headers say nothing about changed
+CPU expectations. Oracle gitlink changes must invalidate carries independently
+of header replay, for both CUDA and wrapper shards.

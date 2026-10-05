@@ -1,7 +1,7 @@
-"""Pre-warm the cuda flagship module's header + runner-exe caches (2026-08-18).
+"""Pre-warm flagship, integrator and second-order CUDA executable caches.
 
-The flagship module (test_cuda_executable_equivalence) is the only cached cuda
-compile path; cold, its ~180 (robot, base, cell) header+exe compiles dominate a
+The flagship module (test_cuda_executable_equivalence) has ~180 cold
+(robot, base, cell) header+exe compiles that dominate a
 full gpu-proof pass. This tool compiles them OUTSIDE pytest — in parallel under
 test/compile_sched.py's RAM-aware scheduler — by importing the test module and
 calling ITS OWN model/codegen/compile functions, so every cache key is equal by
@@ -23,6 +23,11 @@ Two modes (driven by test/run_split_suite.py):
       Execute one job: for each cell, generate/fetch the header and compile
       the runner exe into the shared cache. Exit 0 even when every cell was a
       cache hit; nonzero only on a real failure.
+
+  --inventory --node-ids FILE --out INVENTORY.json
+      Generate integrator/SO smoke headers in temporary directories and inspect
+      the exact cache keys without compiling. Flagship builds are not inventoried.
+      The same smoke builders are used for inventory, prewarm, and pytest.
 
 Safety: workers only ever WRITE distinct cache dirs (distinct keys) except
 within a mimic job, which is serial by construction. Test shards later only
@@ -49,6 +54,60 @@ _FLAGSHIP_TESTS = (
 )
 # node id param block: [<robot>-<base>-<cell_id>-threads<N>]
 _PARAM_RE = re.compile(r"\[([^\]]+)\]$")
+
+
+def smoke_jobs(node_ids):
+    """Exact supported test IDs -> shared compile jobs (no model load or nvcc)."""
+    jobs, node_to_job = {}, {}
+    for nid in sorted(set(node_ids)):
+        module, sep, test = nid.partition('::')
+        family, robot, base, tier = None, None, None, None
+        if module == 'test/cuda_equivalents/test_cuda_integrator_equivalence.py':
+            match = re.fullmatch(r'test_cuda_integrator_matches_python_reference\[([\w]+)-integrator-(fixed|floating)-(TIER_SHARED|TIER_LITE|TIER_MINIMAL)\]', test)
+            if match:
+                robot, base, tier = match.groups()
+            elif test == 'test_cuda_integrator_fext_matches_python_reference':
+                robot, base, tier = 'iiwa14', 'fixed', 'TIER_SHARED'
+            if robot:
+                family = 'integrator'
+        elif module == 'test/cuda_equivalents/test_cuda_second_order_fallback.py':
+            for base_name, test_name in (
+                ('fixed', 'test_fixed_second_order_forced_fallback_matches_python_reference'),
+                ('floating', 'test_floating_second_order_diagnostic_matches_python_reference'),
+            ):
+                match = re.fullmatch(re.escape(test_name) + r'\[([\w]+)-' + base_name + r'\]', test)
+                if match:
+                    family, robot, base = 'second_order', match[1], base_name
+        if family:
+            name = '_'.join(x for x in ('prewarm', family, robot, base, tier) if x)
+            jobs[name] = dict(family=family, robot=robot, base=base, tier=tier)
+            node_to_job[nid] = name
+    return jobs, node_to_job
+
+
+def run_smoke_job(job, *, inspect_only=False):
+    """Use the tests' actual header and compiler functions, including SO options."""
+    sys.path.insert(0, str(REPO_ROOT))
+    if job['family'] == 'integrator':
+        from test.cuda_equivalents import test_cuda_integrator_equivalence as mod
+    else:
+        from test.cuda_equivalents import test_cuda_second_order_fallback as mod
+    spec = mod._robot_spec(job['robot'], job['base'])
+    resolved = mod.resolve_robot_spec(spec)
+    with open(os.devnull, 'w') as dn, contextlib.redirect_stdout(dn):
+        model = mod.build_project_adapter(spec, resolved, base_mode=job['base'])
+    with tempfile.TemporaryDirectory(prefix='grid-prewarm-') as temp:
+        if job['family'] == 'integrator':
+            return mod._build_case(model, Path(temp), 'build', tier=job['tier'],
+                                   inspect_only=inspect_only)
+        kwargs = {}
+        if job['base'] == 'floating':
+            fdsva = os.environ.get('GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA', '0') == '1'
+            kwargs.update(enable_floating_second_order=True, enable_fdsva=fdsva,
+                          algorithm_list='idsva_so_body_frame,fdsva_so' if fdsva else 'idsva_so_body_frame',
+                          enable_idsva_so_body_frame=True)
+        return mod._build_second_order_case(model, Path(temp), 'build',
+            mod._second_order_target_shared_bytes(), inspect_only=inspect_only, **kwargs)
 
 
 def _import_flagship():
@@ -135,13 +194,20 @@ def build_plan(node_ids: list[str]) -> dict:
             name = f"prewarm_{robot}_{base}_{cell_id}"
             jobs[name] = {"robot": robot, "base": base, "cells": [cell_id], "mimic": False}
         atom_to_job[f"{robot}|{base}|{cell_id}"] = name
-    return {"jobs": jobs, "atom_to_job": atom_to_job, "dropped": dropped}
+    extra_jobs, node_to_job = smoke_jobs(node_ids)
+    jobs.update(extra_jobs)
+    return {"jobs": jobs, "atom_to_job": atom_to_job, "dropped": dropped,
+            "node_to_job": node_to_job}
 
 
 def run_job(plan: dict, name: str) -> int:
     import pytest  # noqa: PLC0415
 
     job = plan["jobs"][name]
+    if job.get('family') in ('integrator', 'second_order'):
+        run_smoke_job(job)
+        print(f'WARMED {name}', flush=True)
+        return 0
     mod = _import_flagship()
     from RBDReference.tests.model_sources import resolve_robot_spec  # noqa: PLC0415
     from RBDReference.equivalents.reference_backend import build_project_adapter  # noqa: PLC0415
@@ -209,14 +275,27 @@ def main() -> int:
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--plan", action="store_true")
     mode.add_argument("--worker", metavar="PLAN_JSON")
+    mode.add_argument("--inventory", action="store_true")
     ap.add_argument("--node-ids", metavar="FILE", help="plan: newline-separated node ids")
     ap.add_argument("--out", metavar="FILE", help="plan: output plan JSON")
     ap.add_argument("--job", metavar="NAME", help="worker: job name to run")
     args = ap.parse_args()
 
+    def node_ids():
+        text = Path(args.node_ids).read_text()
+        return json.loads(text)['node_ids'] if text.lstrip().startswith('{') else text.splitlines()
+
+    if args.inventory:
+        jobs, _ = smoke_jobs(node_ids())
+        inventory = {}
+        for name, job in jobs.items():
+            inventory[name] = dict(job, **run_smoke_job(job, inspect_only=True))
+            Path(args.out).write_text(json.dumps(inventory, indent=2, sort_keys=True) + '\n')
+            print(f"{name}: {inventory[name]['status']} {inventory[name]['key']}", flush=True)
+        return 0
+
     if args.plan:
-        node_ids = Path(args.node_ids).read_text().splitlines()
-        plan = build_plan([n for n in node_ids if n.strip()])
+        plan = build_plan([n for n in node_ids() if n.strip()])
         Path(args.out).write_text(json.dumps(plan, indent=1, sort_keys=True))
         print(f"plan: {len(plan['jobs'])} job(s), {len(plan['dropped'])} dropped")
         for d in plan["dropped"]:

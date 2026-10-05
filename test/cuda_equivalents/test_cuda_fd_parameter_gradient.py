@@ -170,13 +170,17 @@ def test_cuda_fd_parameter_gradient_matches_reference(robot_id, base_mode, tmp_p
         scale = max(1.0, ref_mag)
         atol = tol.atol + tol.rtol * scale + 5e-3 * scale  # float32 CUDA headroom
 
-        # Ill-conditioned reduced Minv (g1-floating, cond ~1e4) amplifies float32 noise to
-        # ~0.4 at the DEGENERATE zero sample, where the float64 ref fd_param = -M⁻¹·Y cancels
+        # Free-fall cancellation through reduced Minv (g1-floating) amplifies float32 noise to
+        # ~0.4 at near-zero nominal/zero samples, where float64 fd_param = -M⁻¹·Y cancels
         # to ~0 so |G_ref|≈0 makes the scale-relative tolerance vanish. Floor the atol for
         # those robots AT THE DEGENERATE SAMPLE ONLY (|G_ref| tiny); non-degenerate samples
         # keep the strict scale-relative tol, so real errors are still caught. (Floor bumped
         # 0.25 -> 0.45 once the genuine u-input mis-pack was fixed: the energetic samples now
         # pass the strict tol, leaving only this near-zero float32 noise on the nominal sample.)
+        # 2026-10-05 diagnosis: nominal/zero max errors 0.388/0.253 at 32 threads;
+        # identical emitted arithmetic with diagnostic global scratch in fp64 gives
+        # sub-1e-9 residuals. Production G1 fp64 needs 191936 B shared memory,
+        # above this GPU's 101376 B limit; that diagnostic is not a supported launch.
         _COND_ATOL_FLOOR = {"g1": 0.45}
         if ref_mag < 1e-2:
             atol = max(atol, _COND_ATOL_FLOOR.get(robot_id, 0.0))

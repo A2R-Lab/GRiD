@@ -50,7 +50,8 @@ receipt-refresh:
 	SPLIT=1 SPLIT_REFRESH=1 test/run_gpu_proof.sh
 
 verify:
-	.venv/bin/gpu-proof verify --receipt gpu-proof.json --policy test/gpu-proof-policy.yaml
+	.venv/bin/gpu-proof verify --receipt gpu-proof.json --policy test/gpu-proof-policy.yaml --expected-skips test/gpu-proof-expected-skips.txt
+	$(PY) test/receipt_integrity.py --receipt gpu-proof.json --scope test/gpu-proof-scope.json
 
 clean-pycache:
 	rm -rf grid_codegen/__pycache__ grid_codegen/algorithms/__pycache__
