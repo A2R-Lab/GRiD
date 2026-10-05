@@ -28,13 +28,6 @@
             "contributions": []
         },
         {
-            "login": "anncli",
-            "name": "Ann Li",
-            "avatar_url": "https://avatars.githubusercontent.com/anncli",
-            "profile": "https://github.com/anncli",
-            "contributions": []
-        },
-        {
             "login": "the-eater",
             "name": "=",
             "avatar_url": "https://avatars.githubusercontent.com/the-eater",
@@ -42,17 +35,17 @@
             "contributions": []
         },
         {
+            "login": "anncli",
+            "name": "Ann Li",
+            "avatar_url": "https://avatars.githubusercontent.com/anncli",
+            "profile": "https://github.com/anncli",
+            "contributions": []
+        },
+        {
             "login": "caelyasutake",
             "name": "Cael Yasutake",
             "avatar_url": "https://avatars.githubusercontent.com/caelyasutake",
             "profile": "https://github.com/caelyasutake",
-            "contributions": []
-        },
-        {
-            "login": "naren-loganathan",
-            "name": "Naren Loganathan",
-            "avatar_url": "https://avatars.githubusercontent.com/naren-loganathan",
-            "profile": "https://github.com/naren-loganathan",
             "contributions": []
         },
         {
