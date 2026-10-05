@@ -29,6 +29,9 @@ handoff.md
 *.lo
 *.o
 *.obj
+# Wavefront collision meshes are source data, not compiled objects.
+!config/robot_assets/drake/manipulation/models/iiwa_description/meshes/collision/link_6.obj
+!config/robot_assets/drake/manipulation/models/iiwa_description/meshes/collision/link_7.obj
 *.exp
 
 # Precompiled Headers
