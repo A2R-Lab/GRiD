@@ -40,8 +40,10 @@ gradient), the inertial-parameter (π) regressor family
 (`contact_fext` / `register_robot(contact_frames=...)`) — is bound and
 validated against
 [`RBDReference`](https://github.com/A2R-Lab/RBDReference) at float32 precision,
-and is available on **all three backends** (numpy / jax / torch; the value ops
-are forward-only on jax/torch). The per-method table (shapes, arguments,
+with operation-specific backend coverage. In particular, `*_wrt_params` and
+`forward_dynamics_parameter_gradient` are JAX/PyTorch interfaces, not NumPy
+handle methods. See the [backend inventory](https://a2r-lab.github.io/GRiD/docs/user_guide/tutorials/backend_coverage.html).
+The per-method table (shapes, arguments,
 conventions) lives in the
 [Python wrappers docs](https://a2r-lab.github.io/GRiD/user_guide/tutorials/python_wrappers.html)
 (`docs/source/user_guide/tutorials/python_wrappers.rst` in-repo).
@@ -51,7 +53,9 @@ velocity space)`, `NB = num_bodies`. Every handle also exposes the unambiguous
 read-only aliases `h.nq` / `h.nv` / `h.nb`. `q` is `NJ`-wide; `qd`, `qdd`, `u`,
 the value outputs (`c`, `qdd`) and every matrix/Jacobian axis are `NV`-wide
 (tangent space, Pinocchio / MuJoCo convention) on every surface. For a
-**FIXED base `NV == NJ`**. The per-method differentiability table (VJP inputs, fixed-base
+**fixed base without spherical joints, `NV == NJ`**; each independent spherical
+joint adds one quaternion coordinate beyond its three tangent coordinates.
+The per-method differentiability table (VJP inputs, fixed-base
 restrictions, output representations) lives in the Python wrappers docs and is
 cross-checked against the ABI specification by a CPU test.
 

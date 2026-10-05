@@ -71,6 +71,8 @@ def test_collision_distance_pairs_fd(tmp_path):
     build = subprocess.run(cmd, capture_output=True, text=True)
     assert build.returncode == 0, f"nvcc build failed:\n{build.stderr}"
 
-    run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=600)
-    assert "RESULT: PASS" in run.stdout, f"runner failed:\n{run.stdout}\n{run.stderr}"
-    assert run.returncode == 0, f"runner exit {run.returncode}:\n{run.stdout}"
+    for step in ("1e-4", "3e-4"):
+        run = subprocess.run([str(exe), step], capture_output=True, text=True, timeout=600)
+        assert "RESULT: PASS" in run.stdout, f"runner failed at h={step}:\n{run.stdout}\n{run.stderr}"
+        assert run.returncode == 0, f"runner exit {run.returncode}:\n{run.stdout}"
+        print(f"h={step}\n{run.stdout}")

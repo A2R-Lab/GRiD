@@ -1,9 +1,9 @@
-"""Audit and export the 27 September tables from pinned captures; CPU only.
+"""Export tables and audit metadata from an explicit report; never a stale hardcoded capture.
 
-Run docs/plot_release_figures.py with --approve first. This adds the full
-tables and their audit/provenance to the figure manifest without collecting
-new measurements or changing capture manifests.
+Run after plot_release_figures.py. The default output is a preview directory;
+writing tracked publication assets requires --approve after user review.
 """
+import argparse
 from collections import Counter
 import csv
 import html
@@ -14,36 +14,33 @@ import statistics
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-from test.benchmarks.release import report
-from test.benchmarks.release.protocol import CORE, digest
-
-RUN = ROOT / 'test/benchmarks/results/release-final-core-20260927-nevcJ2'
-OUT = ROOT / 'test/benchmarks/results/release-final-report-20260927'
 ASSETS = ROOT / 'docs/source/_static/release'
-OLD = ROOT / 'test/benchmarks/results/release-analysis-20260927/table.json'
+sys.path.insert(0, str(ROOT))
+from docs.release_pipeline import validate_baseline_selection
+from test.benchmarks.release import report
+from test.benchmarks.release.protocol import digest
 
 
 def save(path, value):
     path.write_text(json.dumps(value, indent=2, allow_nan=False) + '\n')
 
 
-def seal_assets():
-    manifest = json.loads((ASSETS/'manifest.json').read_text())
-    for path in ASSETS.glob('*.csv'):
-        path.write_text(path.read_text())
-    for path in ASSETS.glob('*.svg'):
-        path.write_text('\n'.join(line.rstrip() for line in path.read_text().splitlines()) + '\n')
-    manifest['outputs']={p.name:digest(p) for p in sorted(ASSETS.iterdir()) if p.is_file() and p.name!='manifest.json'}
-    save(ASSETS/'manifest.json',manifest)
-
-
-def main():
-    raw = list(report.records(RUN))  # validates every manifest entry and capture hash
-    rows = report.aggregate(raw)
-    assert len(raw) == 1782 and len(rows) == 594
-    assert Counter(r['status'] for r in rows) == {
-        'validated': 420, 'excluded_method': 90, 'adapter_pending': 60, 'model_mismatch': 24}
+def export(source, output, approved=False):
+    table = json.loads((source / 'table.json').read_text())
+    validate_baseline_selection(table)
+    raw, rows = table['raw_records'], table['cells']
+    if any(r['status'] in ('contract_mismatch', 'incomplete', 'validation_failed', 'not_collected') for r in rows):
+        raise ValueError('Report contains incompatible or incomplete cells')
+    # Re-read hashed manifests and captures before trusting a saved table.
+    report.ACCEPTED_SOURCE_DRIFT.update(table['accepted_source_drift'])
+    selected = {}
+    for path in table['capture_order']:
+        for r in report.records(path):
+            key = tuple(r[k] for k in ('robot', 'operation', 'backend', 'batch', 'repeat'))
+            if key not in selected or selected[key]['status'] == 'not_collected':
+                selected[key] = r
+    if list(selected.values()) != raw or report.aggregate(raw) != rows:
+        raise ValueError('Saved table does not reproduce from its pinned captures')
     cache = {}
     for r in raw:
         if r['status'] != 'validated':
@@ -55,69 +52,74 @@ def main():
         for side in ('host_to_host', 'resident'):
             if side in cell:
                 t = cell[side]
-                assert len(t['samples_us']) == 300
-                assert abs(statistics.mean(t['samples_us'])-t['mean_us']) < max(1e-6, t['mean_us']*1e-10)
-    lookup = {(r['robot'], r['operation'], r['backend'], r['batch']): r for r in rows if r['status']=='validated'}
+                if len(t['samples_us']) != 300 or abs(statistics.mean(t['samples_us']) - t['mean_us']) > max(1e-6, t['mean_us'] * 1e-10):
+                    raise ValueError(f'Sample count/mean mismatch: {path} {side}')
+    lookup = {(r['robot'], r['operation'], r['backend'], r['batch']): r for r in rows if r['status'] == 'validated'}
     comparisons = []
     for (robot, op, backend, batch), g in lookup.items():
         if backend not in ('grid_cuda', 'grid_jax'):
             continue
-        for cb in ('pinocchio','pinocchio_plain','mjx','mujoco_warp','mujoco_cpu','bard','frax'):
-            c = lookup.get((robot,op,cb,batch))
+        for cb in ('pinocchio', 'pinocchio_plain', 'mjx', 'mujoco_warp', 'mujoco_cpu', 'bard', 'frax'):
+            c = lookup.get((robot, op, cb, batch))
             if not c:
                 continue
-            for side in ('host','resident'):
-                field = side+'_us'
+            for side in ('host', 'resident'):
+                field = side + '_us'
                 if not g.get(field) or not c.get(field):
                     continue
-                lo = c[side+'_min_us']/g[side+'_max_us']
-                hi = c[side+'_max_us']/g[side+'_min_us']
-                comparisons.append(dict(robot=robot,operation=op,batch=batch,grid=backend,baseline=cb,
-                    boundary=side,ratio=c[field]/g[field],observed_lower=lo,observed_upper=hi,
-                    result='range_win' if lo>1 else 'range_loss' if hi<1 else 'overlap'))
-    save(OUT/'comparisons.json',dict(definition='Baseline / GRiD; observed min/max process-mean envelopes, not confidence intervals',cells=comparisons))
+                lo = c[side + '_min_us'] / g[side + '_max_us']
+                hi = c[side + '_max_us'] / g[side + '_min_us']
+                comparisons.append(dict(robot=robot, operation=op, batch=batch, grid=backend, baseline=cb,
+                    boundary=side, ratio=c[field]/g[field], observed_lower=lo, observed_upper=hi,
+                    result='range_win' if lo > 1 else 'range_loss' if hi < 1 else 'overlap'))
     variability = []
-    for b in sorted({r['backend'] for r in rows}):
-        rr = [r for r in rows if r['backend']==b and r['status']=='validated']
-        variability.append(dict(backend=b,cells=len(rr),host_flags=sum(report.unstable(r,'host_us') for r in rr),
-            resident_flags=sum(report.unstable(r,'resident_us') for r in rr),
+    for backend in sorted({r['backend'] for r in rows}):
+        rr = [r for r in rows if r['backend'] == backend and r['status'] == 'validated']
+        variability.append(dict(backend=backend, cells=len(rr),
+            host_flags=sum(report.unstable(r, 'host_us') for r in rr),
+            resident_flags=sum(report.unstable(r, 'resident_us') for r in rr),
             boundary_flags=sum(bool(r['boundary_flag']) for r in rr)))
-    audit = dict(publication_approved=True,commit=json.loads((RUN/'plan.json').read_text())['provenance']['commit'],
-        raw_manifest_sha256=digest(RUN/'manifest.json'),workers=210,measurements=1260,
-        status_counts=dict(Counter(r['status'] for r in rows)),variability=variability,
-        sample_counts_and_means_verified=True,hashes_and_contracts_verified=True,
-        comparison_definition='Ratios of medians of three run means; envelopes are observed ranges, not confidence intervals')
-    save(OUT/'audit.json',audit)
-    save(ASSETS/'audit.json',audit)
-    shutil.copyfile(OUT/'comparisons.json',ASSETS/'comparisons.json')
-    # Existing secondary results stay separate, retaining their earlier protocol.
-    old = json.loads(OLD.read_text())
-    for capture in old['capture_order']:
-        list(report.records(capture))  # validate raw manifests again, no new timing
-    secondary_raw = [r for r in old['raw_records'] if r['operation'] not in CORE]
-    secondary = report.aggregate(secondary_raw)
-    assert not any(r['status'] in ('contract_mismatch','incomplete','validation_failed') for r in secondary)
-    for r in secondary_raw:
-        assert json.loads(r['contract'])['iterations'] == 30
-    with (ASSETS/'secondary_table.csv').open('w',newline='') as f:
-        w=csv.DictWriter(f,fieldnames=list(secondary[0]),lineterminator='\n');w.writeheader();w.writerows(secondary)
-    save(ASSETS/'secondary_provenance.json',dict(publication_approved=True,iterations=30,repeats=3,
-         source_table_sha256=digest(OLD),capture_order=old['capture_order'],
-         accepted_source_drift=old['accepted_source_drift'],
-         status_counts=dict(Counter(r['status'] for r in secondary)),
-         manifests={str(p):digest(Path(p)/'manifest.json') for p in old['capture_order']}))
-    cols=['robot','operation','backend','batch','dtype','status','host_us','host_min_us','host_max_us',
-          'resident_us','resident_min_us','resident_max_us','boundary_flag','reason']
-    sections=[]
-    for title, data in [('Core and wrappers — 300 samples per repeat',rows),('Secondary operations — 30 samples per repeat',secondary)]:
-        head='<tr>'+''.join(f'<th>{c}</th>' for c in cols)+'</tr>'
-        body=''.join('<tr>'+''.join('<td>'+html.escape(str(round(r[c],3) if isinstance(r.get(c),float) else r.get(c) if r.get(c) is not None else '—'))+'</td>' for c in cols)+'</tr>' for r in data)
+    audit = dict(publication_approved=approved, workers=len(cache),
+        measurements=sum(r['status'] == 'validated' for r in raw),
+        status_counts=dict(Counter(r['status'] for r in rows)), variability=variability,
+        raw_manifests={p: digest(Path(p) / 'manifest.json') for p in table['capture_order']},
+        sample_counts_and_means_verified=True, hashes_and_contracts_verified=True,
+        pinocchio_thread_policy='Core: best of 1,2,4,8,16,24 workers capped by batch; secondary tables retain original policy',
+        comparison_definition='Ratios of medians of three run means; observed ranges are not confidence intervals')
+    output.mkdir(parents=True, exist_ok=True)
+    save(output / 'audit.json', audit)
+    save(output / 'comparisons.json', dict(cells=comparisons))
+    secondary = []
+    for name in ('secondary_table.csv', 'secondary_provenance.json'):
+        if output.resolve() != ASSETS.resolve():
+            shutil.copyfile(ASSETS / name, output / name)
+    with (output / 'secondary_table.csv').open() as f:
+        secondary = list(csv.DictReader(f))
+    sections = []
+    cols = ['robot', 'operation', 'backend', 'batch', 'dtype', 'status', 'threads',
+            'host_us', 'host_min_us', 'host_max_us',
+            'resident_us', 'resident_min_us', 'resident_max_us', 'reason']
+    for title, data in [('Core and wrappers — 300 samples per repeat', rows), ('Secondary operations — original 30-sample protocol', secondary)]:
+        head = '<tr>' + ''.join(f'<th>{c}</th>' for c in cols) + '</tr>'
+        body = ''.join('<tr>' + ''.join('<td>' + html.escape(str(r.get(c, '—'))) + '</td>' for c in cols) + '</tr>' for r in data)
         sections.append(f'<h2>{title}</h2><div class="scroll"><table>{head}{body}</table></div>')
-    (ASSETS/'tables.html').write_text('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GRiD benchmark tables</title><style>body{font:14px system-ui;margin:2rem}.scroll{overflow:auto;max-height:70vh}table{border-collapse:collapse}td,th{padding:.5rem;border:1px solid #ddd;white-space:nowrap}th{position:sticky;top:0;background:#eee}</style><h1>GRiD measurements</h1><p>Data from the 27 September 2026 collection. Times are microseconds per batch, median and observed range of three process means. Protocols remain separate; missing data is not zero.</p>'+''.join(sections)+'<footer>© 2026 A²R Lab</footer></html>\n')
-    seal_assets()
-    print(json.dumps(audit,indent=2))
-    print('secondary',len(secondary),Counter(r['status'] for r in secondary))
+    (output / 'tables.html').write_text('<!doctype html><html lang="en"><meta charset="utf-8"><title>GRiD benchmark tables</title><style>body{font:14px system-ui;margin:2rem}.scroll{overflow:auto;max-height:70vh}td,th{padding:.5rem;border:1px solid #ddd}</style><h1>GRiD measurements</h1><p>September/October 2026 Updated Results. Times are microseconds per batch. Secondary results retain their original protocol.</p>' + ''.join(sections) + '<footer>© 2026 A²R Lab</footer></html>\n')
+    manifest = json.loads((output / 'manifest.json').read_text())
+    manifest['outputs'] = {p.name: digest(p) for p in sorted(output.iterdir()) if p.is_file() and p.name != 'manifest.json'}
+    save(output / 'manifest.json', manifest)
+    print(json.dumps(audit, indent=2))
 
 
-if __name__=='__main__':
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--report', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--approve', action='store_true')
+    args = parser.parse_args()
+    if args.output.resolve() == ASSETS.resolve() and not args.approve:
+        parser.error('Publication requires --approve after user review')
+    export(args.report, args.output, args.approve)
+
+
+if __name__ == '__main__':
     main()

@@ -56,7 +56,9 @@ Fixed-base CUDA coverage includes the core dynamics and kinematics paths:
 * Optional runtime-mutable inertial parameters (flag-gated ``d_inertia_params``
   + ``set_inertia_params``; the baked default is byte-identical).
 * Arbitrary/skew joint ``<axis>`` (dense 6-vector ``S``) for
-  ``inverse_dynamics`` and ``crba`` (stage 1; cardinal axes byte-identical).
+  ``inverse_dynamics``, ``crba``, ``aba`` and ``minv``, including branching
+  models (``test_cuda_branching_skew_equivalence.py``). This is not a claim
+  of coverage for every skew-joint/backend/derivative combination.
 
 Second-order fixed-base diagnostics are still developer-only. The current
 green zero-sample set includes ``iiwa14``, ``go2``, ``gen3``, ``fr3``,
@@ -114,6 +116,10 @@ state to the generated workspace.
 Known Caveats
 -------------
 
+* The generated ``g1`` floating-base forward-dynamics inertial-parameter
+  gradient in fp64 requests about 187 KiB of shared memory even at the
+  minimal tier, exceeding the RTX 5090's per-block limit. An fp64
+  diagnostic with global scratch is not a supported production launch.
 * Floating IDSVA-SO/FDSVA-SO CUDA generation is now enabled (dispatcher
   picks ``idsva_so_world_frame`` for floating-base). FDSVA-SO on
   ``g1_floating`` requires the selective-spill tier under sm_120's

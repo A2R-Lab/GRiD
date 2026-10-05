@@ -17,6 +17,32 @@ FLAGSHIP = "test_cuda_executable_equivalence"
 _P = "test/cuda_equivalents"
 
 
+@pytest.fixture(autouse=True)
+def unchanged_oracle_for_synthetic_receipts(monkeypatch):
+    # Synthetic receipts below use fictitious commit SHAs; isolate their
+    # partition/codegen cases from the independently tested oracle-pin guard.
+    import codegen_neutrality
+    monkeypatch.setattr(codegen_neutrality, "reference_inputs_changed", lambda sha: False)
+
+
+def test_oracle_pin_change_demotes_cuda_and_wrapper_even_with_identical_headers(monkeypatch):
+    import codegen_neutrality
+    monkeypatch.setattr(codegen_neutrality, "reference_inputs_changed", lambda sha: True)
+    monkeypatch.setenv("GRID_REFRESH_ASSUME_NEUTRAL", "1")
+    ids = [_fid("iiwa14", "fixed", "end_effector_pose", 32)]
+    old = {"repo": {"commit_sha": "old"}, "shards": [
+        _mk_shard("cuda_00_pose", ids, ["test.py"], "same"),
+        _mk_shard("test_pose", ["test/python_wrappers/test_pose.py::t"],
+                  ["bindings/grid_rbd"], "same"),
+    ]}
+    stale, carried, wrappers, fresh = rss.plan_refresh(
+        old, ids, ["test_pose"], {}, 7200, lambda paths: "same")
+    assert set(stale) == {"cuda_00_pose", "test_pose"}
+    assert not carried and wrappers == ["test_pose"]
+    assert [n for s in fresh for n in s.targets] == ids
+    assert "external/RBDReference" in fresh[0].fingerprint_paths
+
+
 def _fid(robot, base, cell, threads):
     return (f"{_P}/{FLAGSHIP}.py::test_x[{robot}-{base}-{cell}-threads{threads}]")
 

@@ -11,10 +11,9 @@
 #   SCOPE=full  test/run_gpu_proof.sh     # every gpu_proof test — hours cold, the nightly job (DEFAULT)
 #   PYTEST_ARGS="-k go2" test/run_gpu_proof.sh   # ad-hoc scope on top of SCOPE
 #
-# Ship code first, tighten coverage later: CI verifies whatever receipt is
-# committed (and skips if none), so a smoke receipt can land with the code and a
-# full receipt can replace it after an overnight run. Re-running just re-signs
-# gpu-proof.json in place.
+# Main requires the reviewed node-ID scope in test/gpu-proof-scope.json.
+# Smoke/curated runs are diagnostics, not replacements for the main receipt.
+# Prefer test/run_validation.py for a locked, logged everyday refresh.
 #
 # The receipt records outcomes for every test carrying the gpu_proof marker
 # (auto-applied to cuda_equivalence + python_wrappers by test/conftest.py) and

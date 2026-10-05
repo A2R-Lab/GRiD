@@ -67,6 +67,7 @@ def parseInputs(NO_ARG_OPTION=False):
                              "box/mesh links keep spherized rows at --collision-res). Emits a "
                              "broad->fine cascade with covering spheres derived from the rows. "
                              "Implies -c.")
+    parser.add_argument('--spherized-urdf', help='Existing sphere URDF path, or the optional foam preset; implies -c')
     # N2.8 (2026-09-08): the two knobs that decide whether a humanoid build
     # fits in RAM, plus the output path — previously gen_all_code-only.
     parser.add_argument("--algorithm-list", default=None, type=str,
@@ -97,7 +98,9 @@ def parseInputs(NO_ARG_OPTION=False):
     # agrees (parseInputs returns the argparse Namespace as of 2026-09-08 —
     # the old grow-forever tuple had already drifted out of sync with one
     # consumer's unpack).
-    args.collision = args.collision or args.collision_native
+    if args.spherized_urdf and args.collision_native:
+        parser.error('--spherized-urdf and --collision-native select different geometry models')
+    args.collision = args.collision or args.collision_native or bool(args.spherized_urdf)
     args.collision_res = [float(x) for x in str(args.collision_res).split(",") if x.strip()]
     if args.floating_base:
         args.debug = False
@@ -146,7 +149,12 @@ def main():
     validateRobot(robot)
 
     collision_spec = None
-    if args.collision_native:
+    if args.spherized_urdf:
+        from grid_codegen.algorithms._collision import resolve_spherized_urdf, build_sphere_tiers
+        path = resolve_spherized_urdf(args.spherized_urdf, args.urdf_path)
+        tier = build_sphere_tiers(robot, {'fine': path})['fine']
+        collision_spec = {key: tier[key] for key in ('anchor', 'offset', 'radius', 'self_cc_ranges')}
+    elif args.collision_native:
         from grid_codegen.algorithms._collision import native_collision_spec_from_urdf
         collision_spec = native_collision_spec_from_urdf(robot, args.urdf_path, args.collision_res[-1])
         print("      collision rows = " + ", ".join(

@@ -1,6 +1,6 @@
 # GRiD release collection
 
-This is a new, validation-gated collector for the proposed release figures. It
+This validation-gated collector supplies the release figures. It
 does not reuse historical timing values or the old drivers' unmatched `with_mem`
 measurements. Collision work is deliberately excluded. Nothing here changes
 GPU/CPU clocks, deploys website data, or approves a performance claim.
@@ -11,17 +11,31 @@ Pinocchio core blocker is fixed. The reviewed `fp32-fd-warnings` policy now
 allows the expanded FD table's bounded fp32 discrepancies to be timed and
 included with explicit accuracy warnings, not strict validation-pass labels.
 
-**Local readiness, 2026-09-25:** policy v2 is tested; all 580 selected
-core/wrapper/table cells are prepared at B=16–256. Fresh cached checks retain
-all 10 G1 MJX FD/grad-FD cells with disclosed warnings, and all 16 representative
-wrapper checks pass strictly. The focused suite passes 133 tests plus two
-subtests. This is preparation/smoke evidence, not release benchmark data; the
-full collection still validates every cell. See the readiness notes for captures.
+## Reproduce the website data
+
+`docs/release_dataset.json` is the ordered capture recipe. Its required-baseline
+check prevents a later GRiD-only addendum from dropping the completed Pinocchio
+24-worker follow-up. Core Pinocchio calls choose among 1, 2, 4, 8, 16 and 24
+workers, capped by batch size; secondary tables retain their original policy.
+The worker count is retained per cell. It is not CPU affinity or a BLAS limit.
+
+```bash
+.venv/bin/python docs/release_pipeline.py --output docs/open-tasks/release-review
+```
+
+This CPU-only step verifies capture hashes and numerical statuses, rebuilds the
+report, and exports figures and tables under `website-preview/`. It requires
+the pinned local captures but performs no collection. Review the preview and
+its audit before publication; figure and table export to tracked assets both
+require an explicit `--approve`. Smoke and preparation captures are not
+substitutes for the release dataset.
+
+## Inspect or collect a new matrix
 
 Run from the repository root, using the existing development environment:
 
 ```bash
-cd /home/plancher/Desktop/GRiD
+# From the GRiD checkout
 # No GPU work and no files written. Inspect the exact job matrix first.
 .venv/bin/python -m test.benchmarks.release.collect --stage core
 
@@ -31,7 +45,7 @@ cd /home/plancher/Desktop/GRiD
 .venv/bin/python -m test.benchmarks.release.collect --stage wrappers --smoke \
   --execute --output test/benchmarks/results/release-wrapper-smoke
 
-# Export an auditable table and draft clustered-bar figures, not release claims.
+# Export a diagnostic report, not website assets.
 .venv/bin/python -m test.benchmarks.release.report \
   test/benchmarks/results/release-core-smoke \
   --output test/benchmarks/results/release-core-smoke-report
@@ -39,8 +53,8 @@ cd /home/plancher/Desktop/GRiD
 
 Open the resulting `index.html` directly, or serve its containing directory
 with `python -m http.server 8011 --bind 127.0.0.1 --directory PATH_TO_REPORT`.
-The actual website remains separate and its benchmark placeholders remain in
-place. All generated reports explicitly say **DRAFT** or **SMOKE TEST**.
+The website remains separate. Smoke reports are diagnostic artifacts, not
+publication-ready measurements.
 
 ## Prepare now, collect later
 
@@ -79,8 +93,10 @@ between preparation and collection.
 Omit `--smoke` to run B=16,32,64,128,256,1024, three isolated warmed repetitions,
 five warmups sustained for at least `--warm-seconds` (default 1.5 s) and 30
 timed samples per boundary. A displayed value is the median of the three **run
-means**, not a pooled single-call median. Whiskers show the range of those
-means. Adjust repetitions/iterations explicitly when needed.
+means**, not a pooled single-call median. Run-mean ranges are retained in the
+tables; the homepage bars omit whiskers. Published core and wrapper captures
+use 300 timed samples, selected explicitly with `--iterations 300`. Adjust
+repetitions/iterations explicitly when needed.
 
 The warm-up is time-based on purpose: a handful of microsecond calls never
 leaves the idle clock on a GPU that cannot be clock-locked without root (this
@@ -124,18 +140,12 @@ directory and choose which version to retain. Do not merge duplicate repeats.
 
 ## Measurement contract and implementation choices
 
-- **Core plot configuration:** GRiD's CUDA host call (`grid_cuda`) and its JAX
-  resident API, Pinocchio CPU codegen AND the standard Pinocchio API
-  (`pinocchio_plain`, the same fp32 algorithms without CppADCodeGen — the
-  stacked figure draws it as a cap over the codegen bar, exactly like the
-  memory/wrapper caps over GRiD's kernel), MJX, and MuJoCo Warp for RNEA; omit Warp
-  for the gradient; GRiD and analytical Pinocchio for the Hessian. GRiD JAX is
-  explicitly labeled, not presented as raw native kernel latency; the CUDA host
-  call IS that latency (see below). The wrapper figure includes the CUDA host
-  call, the native C ABI, NumPy/pybind, JAX, and PyTorch, and the report writes
-  an overhead decomposition (compute, memory traffic, C-ABI staging, Python,
-  framework dispatch, framework round trip) as differences of the same cells.
-  Review which bar is the headline before publishing.
+- **Core plot configuration:** GRiD CUDA compute-only, host-call and JAX
+  increments; separate Pinocchio codegen and standard API bars; MuJoCo CPU,
+  MuJoCo Warp and MJX where supported. Pinocchio Hessians use its standard
+  analytical fp64 path, never a codegen bar. BARD and Frax remain in the detailed
+  tables. The wrapper plot compares CUDA Device, C++ Host, NumPy, PyTorch and
+  JAX. C ABI measurements remain in the tables, not the homepage plot.
 - **`grid_cuda` — GRiD's own C++ host calls.** `kernel_bridge.cu` is compiled
   per robot/operation against the SAME `grid.cuh` the wrapper `.so` was built
   from (same nvcc flags and arch; content-keyed on the header, the bridge, the
@@ -154,8 +164,8 @@ directory and choose which version to retain. Do not merge duplicate repeats.
   time includes ordinary API dispatch and synchronization. Input generation,
   oracle conversion, code generation/JIT, setup, and warmups are excluded.
 - Gray hatched caps are full-call minus resident wall time from the same job.
-  They are not separately measured PCIe or Python costs (for `grid_cuda` the
-  cap is exactly the H2D/D2H traffic of one host call). Negative differences
+  They are not separately measured PCIe or Python costs, even for `grid_cuda`:
+  differences can also include host dispatch and timing variation. Negative differences
   are flagged for recollection, never silently clamped. C ABI/NumPy and CPU
   baselines have full-call measurements only and are unstacked.
 - MuJoCo Warp is timed as a captured CUDA graph replay (its own benchmark

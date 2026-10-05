@@ -37,5 +37,8 @@ required_fingerprint_paths:
   - test/prewarm_cuda_flagship.py
   - test/codegen_neutrality.py
   - test/header_key_replay.py
+  - test/receipt_integrity.py
+  - test/gpu-proof-scope.json
+  - test/run_validation.py
 required_fingerprint_extra_paths: []
 required_fingerprint_excluded_paths: [gpu-proof.json]

@@ -1,7 +1,7 @@
 """CUDA gate for NATIVE capsule-row collision (Bundle 1a: `--collision-native`).
 
 Certifies the full native pipeline end-to-end on iiwa14 (whose URDF collision geometry is
-all cylinders -> pure capsule rows, one per movable link, pedestal skipped):
+five moving cylinders plus mesh-cover sphere rows, pedestal skipped):
   * broad(covering spheres derived from rows) -> fine(capsules) config_free verdict ==
     an independent fine-only capsule check on every (config, obstacle) pair;
   * the link_CC narrowing is non-vacuous (partial mask flags observed);
@@ -55,20 +55,23 @@ def test_parse_native_rows():
     native = parse_native_urdf(str(urdf))
     n_rows_all = sum(len(d["rows"]) for d in native.values())
     assert n_rows_all == 6, f"expected 6 cylinder rows in the raw parse, got {n_rows_all}"
-    # links 6/7 carry drake package:// collision meshes that cannot resolve locally — they are
-    # residual-flagged, and the spherizer warns + skips them (SAME behavior as the sphere path),
-    # so they contribute zero rows rather than failing the build.
+    # Links 6/7 carry bundled mesh geometry, represented by residual sphere rows.
     assert all(not d["rows"] for ln, d in native.items() if d["residual"]), \
         "residual (mesh) links unexpectedly also carry native rows on iiwa14"
     fine = spec["tiers"][-1]
-    assert "pb" in fine and len(fine["anchor"]) == 5, \
-        f"expected 5 anchored rows (pedestal skipped), got {len(fine['anchor'])}"
-    # every row is a genuine segment (cylinders, not spheres) with positive radius
+    assert "pb" in fine and len(fine["anchor"]) > 5
+    segments, mesh_anchors = 0, set()
     for i in range(len(fine["anchor"])):
         a = np.array(fine["offset"][3 * i:3 * i + 3])
         b = np.array(fine["pb"][3 * i:3 * i + 3])
-        assert np.linalg.norm(b - a) > 0.05, "cylinder row degenerated to a point"
+        if np.array_equal(a, b):
+            mesh_anchors.add(fine["anchor"][i])
+        else:
+            assert np.linalg.norm(b - a) > 0.05, "cylinder row degenerated to a point"
+            segments += 1
         assert fine["radius"][i] > 0.0
+    assert segments == 5
+    assert mesh_anchors == {5, 6}
 
 
 def test_broad_tier_covering_property():

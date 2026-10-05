@@ -327,7 +327,7 @@ def test_atomic_json_rejects_nan_without_overwriting(tmp_path):
 def row(repeat=0, **kw):
     return dict(robot="iiwa14", operation="inverse_dynamics", backend="grid_jax", batch=16,
         repeat=repeat, expected_repeats=1, purpose="smoke", dtype="float32", method="analytical",
-        status="validated", reason="", host_us=10., resident_us=4., contract="x",
+        status="validated", reason="", host_us=10., resident_us=4., contract='{"fixture": "x"}',
         urdf_sha256="u",input_values_sha256="i",max_abs_error=0.,relative_l2_error=0.,**kw)
 
 
@@ -350,7 +350,7 @@ def test_changed_input_or_contract_refuses_aggregation():
     for field in ("input_values_sha256","urdf_sha256","contract","dtype","input_storage_dtype"):
         aa,bb=row(0),row(1)
         aa["expected_repeats"]=bb["expected_repeats"]=2
-        bb[field]="changed"
+        bb[field]=json.dumps({"fixture": "changed"}) if field == "contract" else "changed"
         assert aggregate([aa,bb])[0]["status"] == "contract_mismatch"
 
 
@@ -463,7 +463,7 @@ def test_website_api_plot_uses_requested_boundaries_and_palette(tmp_path, monkey
 
 
 def test_different_backend_capture_contracts_do_not_make_a_comparison():
-    a,b=row(),row(); b.update(backend="mjx",contract="different machine")
+    a,b=row(),row(); b.update(backend="mjx",contract='{"fixture": "different machine"}')
     assert all(r["host_us"] is None and r["status"] == "contract_mismatch" for r in aggregate([a,b]))
 
 

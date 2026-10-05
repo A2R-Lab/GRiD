@@ -141,16 +141,32 @@ class RamScheduler:
         """Stop admitting new jobs; running jobs finish."""
         self._stop.set()
 
-    def kill_all(self) -> None:
-        """SIGTERM every running worker's process group and stop admissions."""
-        self._stop.set()
+    def running_pids(self) -> list[int]:
+        """Snapshot worker process-group leaders for dependency-aware stall checks."""
         with self._state_lock:
+            return [p.pid for p in self._procs.values() if p.poll() is None]
+
+    def kill_all(self) -> None:
+        """Stop admissions and reap owned worker groups before releasing the box."""
+        with self._state_lock:
+            self._stop.set()
             procs = list(self._procs.values())
         for p in procs:
             try:
-                os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+                os.killpg(p.pid, signal.SIGTERM)
             except (ProcessLookupError, PermissionError):
                 pass
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(timeout=5)
+        # A worker may have exited while an ignoring grandchild still lives in
+        # its group. Kill only groups whose leaders we created with setsid.
+        for p in procs:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(timeout=5)
 
     def run_async(self, jobs: list[Job]) -> threading.Thread:
         for j in jobs:
@@ -214,7 +230,9 @@ class RamScheduler:
                     if running and mem_available_kb() - pred < self.floor_kb:
                         continue
                     pending.remove(job)
-                    self._launch(job, pred, running, busy_groups)
+                    if not self._launch(job, pred, running, busy_groups):
+                        pending.append(job)
+                        break
                     predicted_sum += pred
                     launched = True
             elif not running:
@@ -228,7 +246,7 @@ class RamScheduler:
             self.results[job.name] = JobResult(job.name, -1, 0.0, 0, "not attempted (stopped)")
             self.done_events[job.name].set()
 
-    def _launch(self, job: Job, pred_kb: int, running: dict, busy_groups: set) -> None:
+    def _launch(self, job: Job, pred_kb: int, running: dict, busy_groups: set) -> bool:
         env = dict(os.environ)
         if job.env:
             env.update(job.env)
@@ -236,23 +254,25 @@ class RamScheduler:
         argv = ([_TIME_BIN, "-v", "-o", str(time_out)] + job.argv
                 if time_out is not None else [_TIME_BIN, "-v"] + job.argv)
         log_f = open(job.log_path, "w") if job.log_path else subprocess.DEVNULL
-        proc = subprocess.Popen(
-            argv,
-            stdout=log_f,
-            stderr=subprocess.STDOUT,
-            env=env,
-            start_new_session=True,
-        )
+        with self._state_lock:
+            if self._stop.is_set():
+                if job.log_path:
+                    log_f.close()
+                return False
+            proc = subprocess.Popen(
+                argv, stdout=log_f, stderr=subprocess.STDOUT, env=env,
+                start_new_session=True,
+            )
+            self._procs[job.name] = proc
         running[job.name] = (job, proc, pred_kb, time.monotonic(), log_f if job.log_path else None)
         if job.group:
             busy_groups.add(job.group)
-        with self._state_lock:
-            self._procs[job.name] = proc
         print(
             f"[{self.label}] + {job.name} (pred {pred_kb // 1024} MiB, "
             f"{len(running)} running, {mem_available_kb() // (1024 * 1024)} GiB avail)",
             flush=True,
         )
+        return True
 
     def _collect(self, job: Job, proc: subprocess.Popen, secs: float) -> JobResult:
         peak_kb = 0

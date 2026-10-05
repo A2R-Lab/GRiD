@@ -34,18 +34,16 @@ __global__ void analytic_kernel(const T *q0, const grid::robotModel<T> *m,
     __shared__ T s_pos[3*NS], s_r[NS], s_pg[3*NV*NS];
     __shared__ T s_dist[NS], s_norm[3*NS], s_ddist[NS*NV];
     __shared__ int s_partner[NS];
-    __shared__ T s_pdist[NP], s_pnorm[3*NP], s_pddist[NP*NV];
+    // The complete mesh cover has O(NS^2) pairs. Caller-owned output buffers
+    // need not fit in static shared memory; the algorithm remains single-block.
     gc::self_collision_distance_gradient<T>(s_dist, s_ddist, q0, m, s_pos, s_r, s_norm, s_partner, s_pg);
-    gc::self_collision_distance_pairs_gradient<T>(s_pdist, s_pddist, q0, m, s_pos, s_r, s_pnorm, s_pg);
+    gc::self_collision_distance_pairs_gradient<T>(d_pdist, d_pddist, q0, m, s_pos, s_r, d_pnorm, s_pg);
     __syncthreads();
     if (threadIdx.x == 0) {
         for (int k = 0; k < NS; ++k)      d_dist[k]    = s_dist[k];
         for (int k = 0; k < 3*NS; ++k)    d_norm[k]    = s_norm[k];
         for (int k = 0; k < NS; ++k)      d_partner[k] = s_partner[k];
         for (int k = 0; k < NS*NV; ++k)   d_ddist[k]   = s_ddist[k];
-        for (int k = 0; k < NP; ++k)      d_pdist[k]   = s_pdist[k];
-        for (int k = 0; k < 3*NP; ++k)    d_pnorm[k]   = s_pnorm[k];
-        for (int k = 0; k < NP*NV; ++k)   d_pddist[k]  = s_pddist[k];
     }
 }
 

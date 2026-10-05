@@ -155,7 +155,7 @@ def _generate_header(project_model, build_dir: Path) -> Path:
     return header
 
 
-def _compile_runner(build_dir: Path, tier: str | None = None):
+def _compile_runner(build_dir: Path, tier: str | None = None, *, inspect_only=False):
     arch = _detect_cuda_arch()
     glass_inc = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
     flags = ["-std=c++17", "-O0", "-gencode", f"arch=compute_{arch},code=sm_{arch}"]
@@ -174,14 +174,15 @@ def _compile_runner(build_dir: Path, tier: str | None = None):
         [RUNNER_SOURCE, build_dir / "grid.cuh"], flags,
         exe_name="cuda_integrator_smoke_runner.exe", fallback_dir=build_dir,
         include_dirs=[glass_inc], what="CUDA integrator smoke runner",
+        inspect_only=inspect_only,
     )
 
 
-def _build_case(project_model, tmp_path, label, tier=None):
+def _build_case(project_model, tmp_path, label, tier=None, *, inspect_only=False):
     build_dir = tmp_path / label
     build_dir.mkdir()
     _generate_header(project_model, build_dir)
-    return _compile_runner(build_dir, tier=tier)
+    return _compile_runner(build_dir, tier=tier, inspect_only=inspect_only)
 
 
 def _sample_stdin_with_dt(sample, dt: float) -> str:

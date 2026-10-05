@@ -83,8 +83,19 @@ def executable_cache_key(sources, flags, include_dirs=(), *, nvcc: str, variant=
     return _stable_json_hash(payload), payload
 
 
+def _valid_entry(final_dir, key, exe_name):
+    try:
+        manifest = json.loads((final_dir / 'manifest.json').read_text())
+        exe = final_dir / exe_name
+        return (manifest.get('key') == key and exe.is_file()
+                and _hash_file(exe) == manifest.get('executable_sha256'))
+    except (OSError, ValueError):
+        return False
+
+
 def cached_nvcc_executable(sources, flags, *, exe_name: str, fallback_dir: Path,
-                           include_dirs=(), variant=None, what: str = "CUDA runner"):
+                           include_dirs=(), variant=None, what: str = "CUDA runner",
+                           inspect_only: bool = False):
     """Build ``sources[0]`` with nvcc once per content key and return (exe, cmd).
 
     ``sources`` are copied side by side into a private build directory (so quoted
@@ -97,12 +108,22 @@ def cached_nvcc_executable(sources, flags, *, exe_name: str, fallback_dir: Path,
     its manifest, and a failed build is deleted, never cached. A hit re-checks the
     executable's sha256 against the manifest. GRID_CUDA_DISABLE_CACHE=1 builds in
     ``fallback_dir`` instead.
+
+    ``inspect_only`` returns a read-only key/hit inventory instead of compiling
+    or creating directories/locks. It uses the same identity and integrity check
+    as the build path. A hit is a snapshot, not a reservation of the cache entry.
     """
     nvcc = shutil.which("nvcc")
     if nvcc is None:
         pytest.skip("nvcc was not found; install CUDA Toolkit to run CUDA tests.")
     sources = [Path(src) for src in sources]
     include_dirs = [Path(d) for d in include_dirs]
+    if inspect_only:
+        key, _ = executable_cache_key(sources, flags, include_dirs, nvcc=nvcc, variant=variant)
+        final_dir = _cache_root() / 'executables' / key
+        return {'key': key, 'path': str(final_dir / exe_name),
+                'status': ('disabled' if not _cache_enabled() else
+                           'hit' if _valid_entry(final_dir, key, exe_name) else 'miss')}
 
     def _command(build_dir: Path) -> list[str]:
         return [nvcc, *flags, *(f"-I{d}" for d in include_dirs),
@@ -128,16 +149,11 @@ def cached_nvcc_executable(sources, flags, *, exe_name: str, fallback_dir: Path,
     root = _cache_root() / "executables"
     root.mkdir(parents=True, exist_ok=True)
     final_dir = root / key
-    manifest_path = final_dir / "manifest.json"
     with open(root / f"{key}.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if manifest_path.is_file():
-            manifest = json.loads(manifest_path.read_text())
-            exe = final_dir / exe_name
-            if (manifest.get("key") == key and exe.is_file()
-                    and _hash_file(exe) == manifest.get("executable_sha256")):
-                print(f"[cuda-cache] executable hit {what} key={key[:12]}", flush=True)
-                return exe, _command(final_dir)
+        if _valid_entry(final_dir, key, exe_name):
+            print(f"[cuda-cache] executable hit {what} key={key[:12]}", flush=True)
+            return final_dir / exe_name, _command(final_dir)
         if final_dir.exists():  # incomplete or corrupt entry: rebuild it
             shutil.rmtree(final_dir)
         staging = Path(tempfile.mkdtemp(prefix=f".build-{key[:12]}-", dir=root))

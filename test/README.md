@@ -14,18 +14,22 @@ receipt machinery. Commands + the receipt policy:
 | `benchmarks/` | the timing harness + orchestration scripts (never run during tests) | — | yes |
 | `diagnostics/` | manual probes (tier instantiation smoke, tier baselines) — not collected by CI | — | yes |
 
-⚠ `cuda_equivalents/` + `python_wrappers/` are the RECEIPT-FINGERPRINTED
-trees: editing any file there stales the corresponding `gpu-proof.json`
-shard(s) and turns CI's verify job red until a refresh
-(`SPLIT=1 SPLIT_REFRESH=1 test/run_gpu_proof.sh`). Root files are NOT
-fingerprinted.
+Receipt correctness inputs are listed in `pyproject.toml` under
+`tool.gpu_proof.fingerprint_paths`: generator, bindings, peer gitlinks,
+configuration, GPU tests and shared harness/driver files. Changes require a
+refresh (`SPLIT=1 SPLIT_REFRESH=1 test/run_gpu_proof.sh`); the driver determines
+which shards may carry. Documentation-only changes do not stale evidence.
+`test/gpu-proof-scope.json` is the reviewed minimum node-ID set for main;
+adding tests should extend it after collection, never replace it with a smoke set.
 
 ## Root files, bucketed
 
 **Receipt machinery** (the split driver stack):
 `run_gpu_proof.sh` (entry point), `run_split_suite.py` (shard
 partition/resume/carry), `compile_sched.py` (RAM-aware parallel compile
-pool), `prewarm_cuda_flagship.py` (header/exe pre-warm),
+pool), `prewarm_cuda_flagship.py` (flagship, integrator and SO smoke pre-warm;
+read-only integrator/SO cache inventory with `--inventory --node-ids
+test/gpu-proof-scope.json --out inventory.json`),
 `gpu-proof-policy.yaml` / `gpu-proof-policy-release.yaml` (everyday vs
 release verification), `gpu-proof-expected-skips.txt` (85-entry skip
 baseline CI applies), `codegen_neutrality.py` (refresh-soundness prover:

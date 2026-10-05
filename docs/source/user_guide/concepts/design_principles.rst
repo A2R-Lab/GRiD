@@ -4,7 +4,7 @@ Algorithm Design Principles & Best Practices
 **Read this first.** This page is the shared mental model for anyone — human or
 agent — writing or modifying a GRiD algorithm. It captures the *why* behind the
 generated-code structure so your changes match the existing grain instead of
-fighting it. The mechanics live in :doc:`codegen_architecture` (the four emission
+fighting it. The mechanics live in :doc:`codegen_architecture` (the emission
 layers) and :doc:`resource_tier_system` (tiers + spill); this page is the ethos
 that ties them together. If you internalize the rules below, your code will look
 like the code already here.
@@ -23,11 +23,15 @@ what spills, the *caller* only sizes the arenas and passes a flag.
 1. Smart inners, thin wrappers
 ------------------------------
 
-Each algorithm ``X`` is emitted in **three layers** (see :doc:`codegen_architecture`):
+Algorithms generally expose **three public layers** (see :doc:`codegen_architecture`):
 ``X_device`` (the canonical ``__device__`` orchestrator — *all the value is
-here*; takes caller-supplied ``s_temp`` + ``d_workspace``, owns its placement),
+here*; owns its placement),
 ``X_kernel`` (grid-stride loop over timesteps; allocates smem and calls
 ``_device``), and ``X`` (host launcher).
+
+Scratch signatures are algorithm-specific. Orchestrators accept caller-owned
+scratch; simpler device functions such as RNEA allocate scratch internally.
+Use the generated signature and resource constants, not a universal prototype.
 
 Internal ``X_inner`` helpers (and role-specific sub-step helpers like
 ``fdsva_so_contract``) still exist where useful — they are the placement-free
@@ -45,10 +49,7 @@ shared work (e.g. an XImats load).
 * **Compose by calling other algorithms' ``_inner``.** A higher-level algorithm
   (e.g. ``fdsva_so`` embeds ``idsva_so``) loads ``XImats`` once at the top of its
   ``_device`` and calls placement-free ``_inner`` variants of sub-algorithms so
-  the load is paid once, not per sub-algorithm. (Historically a separate
-  auto-allocating ``_device`` wrapper existed for orchestrators; that
-  training-wheels layer was dropped in 2026-05 — orchestrators are now a clean
-  three layers like every other algorithm.)
+  the load is paid once, not per sub-algorithm.
 
 
 2. The inner owns its memory placement (the central rule)
@@ -57,7 +58,7 @@ shared work (e.g. an XImats load).
 When an inner's scratch does not fit shared memory, **the decision of where it
 lives belongs to the inner, never the caller.**
 
-Every ``*_inner`` is templated on a placement flag (``SCRATCH_IN_SMEM`` — or,
+Spill-capable helpers use a placement flag (``SCRATCH_IN_SMEM`` — or,
 equivalently, the ``RESOURCE_TIER``) and takes **both** pointers, ``s_temp``
 (shared) and ``d_workspace`` (global). At the very top of the body it selects::
 
@@ -176,10 +177,9 @@ the most-spilled rung fits the device cap.
 * **Gate before a long timing sweep.** A per-algo TU that fails to compile empties
   an entire robot/tier column (the per-algo TUs link into one binary). Compile +
   equivalence-check a small robot first; only then launch the multi-hour sweep.
-* **Use non-blocking gates for near-misses.** Float32 second-order derivatives on
-  big robots accumulate error; let a borderline equivalence *log* rather than
-  abort an overnight run — but **never loosen a tolerance to mask a true
-  divergence.** Investigate near-misses; don't paper over them.
+* **Keep numerical gates strict.** Investigate fp32 near-misses and record the
+  failing inputs. A reviewed benchmark accuracy-warning policy is separate
+  from a correctness pass; never silently downgrade a failed assertion.
 * **Never run CPU-heavy work during a GPU timing sweep** — it skews the numbers.
 * **Spill rungs 0..N-1 that only relocate code must be numerically identical** to
   the unspilled path; the only difference is where a pointer points.

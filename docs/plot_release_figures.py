@@ -23,7 +23,8 @@ Input: a directory written by ``python -m test.benchmarks.release.report`` (its
   manifest.json       report identity (table.json hash, commits, capture order,
                       accepted source drift, status counts) and output hashes
 
-Homepage figures omit overall titles/banners; their context lives on the page.
+Website figures omit draft banners in previews as well as publication.
+Homepage figures also omit overall titles; their context lives on the page.
 This presentation choice does NOT approve the data. Without --approve, --output
 must not be the published asset directory. ``--approve`` writes the figures
 into docs/source/_static/release and marks the manifest approved; use it only
@@ -238,14 +239,18 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("report", type=Path, help="directory written by test.benchmarks.release.report")
     ap.add_argument("--output", type=Path, help="destination (default: <report>/website-preview; --approve forces the tracked asset directory)")
-    ap.add_argument("--approve", action="store_true", help="write banner-free figures into docs/source/_static/release (after the audit)")
+    ap.add_argument("--approve", action="store_true", help="approve and write figures into docs/source/_static/release (after the audit)")
     args = ap.parse_args()
     report = args.report.resolve()
     out = ASSETS if args.approve else (args.output or report / "website-preview").resolve()
     if not args.approve and out == ASSETS.resolve():
         ap.error("the tracked asset directory is written only with --approve")
-    purpose = "release" if args.approve else "collection"
+    # Rendering style is independent of approval. Preview provenance remains
+    # unapproved in the manifest; raw collection/smoke reports keep their banners.
+    purpose = "release"
     table, rows = load(report)
+    from docs.release_pipeline import validate_baseline_selection
+    validate_baseline_selection(table)
     if table.get("purpose") != "collection":
         ap.error(f"not a collection report (purpose={table.get('purpose')!r}); smoke captures are never published")
     out.mkdir(parents=True, exist_ok=True)
@@ -290,7 +295,8 @@ def main():
     outputs = [o for o in outputs if o and o.exists()]
     raw = table.get("raw_records", [])
     manifest = {
-        "approved": args.approve, "purpose": purpose, "report": str(report.relative_to(ROOT)) if report.is_relative_to(ROOT) else str(report),
+        "approved": args.approve, "purpose": "release" if args.approve else table["purpose"],
+        "presentation": "banner-free", "report": str(report.relative_to(ROOT)) if report.is_relative_to(ROOT) else str(report),
         "table_json_sha256": sha256(report / "table.json"),
         "commits": sorted({r.get("commit") for r in raw if r.get("commit")}),
         "capture_order": table.get("capture_order"), "accepted_source_drift": table.get("accepted_source_drift"),

@@ -41,6 +41,7 @@ dependencies = [
     # collision codegen: mesh <collision> elements are voxel-filled into spheres
     # (grid_codegen/algorithms/_spherize.py); iiwa14 and most robot assets have them
     "trimesh>=4",
+    "scipy>=1.9",  # mesh voxelization and bounded-bulge distance transforms
     # runtime wrapper (cache dirs; nvcc invoked at register_robot time)
     "platformdirs>=4.0",
 ]
@@ -72,6 +73,7 @@ dev = [
 
 [project.scripts]
 grid-generate = "grid_codegen.cli:main"
+grid-spherize = "grid_codegen.spherize:main"
 
 [project.urls]
 Homepage = "https://github.com/A2R-Lab/GRiD"
@@ -152,6 +154,7 @@ fingerprint_paths = [
     "test/helpers.py", "test/run_gpu_proof.sh", "test/run_split_suite.py",
     "test/compile_sched.py", "test/prewarm_cuda_flagship.py",
     "test/codegen_neutrality.py", "test/header_key_replay.py",
+    "test/receipt_integrity.py", "test/gpu-proof-scope.json", "test/run_validation.py",
 ]
 max_age_days = 30
 require_gpu = true

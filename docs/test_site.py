@@ -40,6 +40,30 @@ class SiteTests(unittest.TestCase):
         self.assertTrue((self.output / "_static/logo.svg").is_file())
         self.assertTrue((self.output / "docs/_static/logo.svg").is_file())
 
+    def test_preview_overlay_does_not_modify_source_assets(self):
+        preview = self.root / 'preview'
+        preview.mkdir()
+        (preview / 'audit.json').write_text('{"publication_approved": false}')
+        (preview / 'figure.svg').write_text('local candidate')
+        (preview / 'table.csv').write_text('updated preview data')
+        download = self.sphinx / '_downloads' / 'hash' / 'table.csv'
+        download.parent.mkdir(parents=True)
+        download.write_text('published data')
+        assemble(self.sphinx, self.landing, self.output, preview)
+        self.assertEqual((self.output / 'docs/_static/release/figure.svg').read_text(), 'local candidate')
+        self.assertTrue((self.output / 'LOCAL_PREVIEW.txt').is_file())
+        self.assertFalse((self.sphinx / '_static/release/figure.svg').exists())
+        for base in (self.output, self.output / 'docs'):
+            self.assertEqual((base / '_downloads/hash/table.csv').read_text(),
+                             'updated preview data')
+        self.assertEqual(download.read_text(), 'published data')
+        check(self.output, allow_preview=True)
+
+    def test_preview_validation_requires_local_marker(self):
+        self.assemble()
+        with self.assertRaisesRegex(SystemExit, 'preview marker'):
+            check(self.output, allow_preview=True)
+
     def test_redirects_keep_prefix_query_and_fragment(self):
         self.assemble()
         text = (self.output / "guide/topic.html").read_text()

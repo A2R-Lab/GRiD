@@ -33,6 +33,19 @@ BACKEND_HUE = {"grid_cuda": "#2a78d6", "grid_native": "#2a78d6", "grid_numpy": "
                "bard": "#008300", "frax": "#4a3aa7"}
 
 
+def cross_backend_contract(contract):
+    """Match hardware/inputs/protocol, not a baseline's tuning parameter.
+
+    cpu_threads is Pinocchio's candidate-pool ceiling, not CPU affinity or
+    BLAS threads (those remain in the contract). Retain it verbatim in every
+    raw record and require it to match WITHIN each backend's repeat group.
+    A GPU call has no Pinocchio pool and need not inherit that ceiling.
+    """
+    fields = json.loads(contract)
+    fields.pop('cpu_threads', None)
+    return json.dumps(fields, sort_keys=True)
+
+
 def stable_provenance(provenance):
     """The hardware identity that a cross-capture comparison must share, with
     the values that legitimately change between captures on one box removed:
@@ -198,7 +211,7 @@ def aggregate(rows):
             comparisons[(r["robot"],r["operation"],r["batch"])].append(r)
     for r in output:
         peers = comparisons[(r["robot"],r["operation"],r["batch"])]
-        if len({(p["contract"],p["urdf_sha256"],p["input_values_sha256"]) for p in peers}) > 1:
+        if len({(cross_backend_contract(p["contract"]),p["urdf_sha256"],p["input_values_sha256"]) for p in peers}) > 1:
             r.update(status="contract_mismatch", reason="cross-backend hardware/software/input contracts differ",
                 host_us=None,resident_us=None,host_min_us=None,host_max_us=None,resident_min_us=None,resident_max_us=None,overhead_us=None)
     return output

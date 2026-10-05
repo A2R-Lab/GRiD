@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cmath>
 #include <vector>
+#include <cstdlib>
 
 using T = double;
 namespace gc = grid_collision;
@@ -77,7 +78,7 @@ __global__ void fd_kernel(const T *q0, const grid::robotModel<T> *m, int vi, int
     if (threadIdx.x == 0) for (int k = 0; k < NPAIR; ++k) d_pdist[k] = s_pdist[k];
 }
 
-int main(){
+int main(int argc, char **argv){
     const grid::robotModel<T> *m = grid::init_robotModel<T>();
     size_t s1 = grid::MULTI_TARGET_POSITION_DYNAMIC_SHARED_MEM_BYTES<T>();
     size_t s2 = grid::MULTI_TARGET_POSITION_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
@@ -113,7 +114,10 @@ int main(){
     T pn[3] = {0.2, -0.1, 1.0};
     T pl = sqrt(pn[0]*pn[0]+pn[1]*pn[1]+pn[2]*pn[2]);
     gc::Plane<T> hpl{ pn[0]/pl, pn[1]/pl, pn[2]/pl, -0.30 };
-    T eps = 1e-6;
+    // Mesh rows include ~1e-6 derivatives; h=1e-6 loses relative precision in
+    // clearance subtraction. Check a convergence interval in the Python gate.
+    T eps = argc > 1 ? std::atof(argv[1]) : 1e-4;
+    if (!(eps > 0) || !std::isfinite(eps)) return 2;
     CK(cudaMemcpyToSymbol(c_sph, hs,  sizeof(hs)));
     CK(cudaMemcpyToSymbol(c_cap, hc,  sizeof(hc)));
     CK(cudaMemcpyToSymbol(c_box, hb,  sizeof(hb)));
@@ -164,13 +168,14 @@ int main(){
         CK(cudaMemcpy(dm.data(),d_fd,NPAIR*sizeof(T),cudaMemcpyDeviceToHost));
         for (int p=0;p<NPAIR;++p) fd[p*NV+vi] = (dp[p]-dm[p])/(2*eps);
     }
-    T e_jac = 0, jnorm = 0;
+    T e_jac = 0, jnorm = 0; int worst = 0;
     for (int k=0;k<NPAIR*NV;++k) {
         T d = fabs(pddist[k]-fd[k]), s = fabs(pddist[k])+fabs(fd[k])+1e-9;
-        e_jac = fmax(e_jac, d/s);
+        if(d/s > e_jac){e_jac=d/s; worst=k;}
         jnorm += pddist[k]*pddist[k];
     }
     jnorm = sqrt(jnorm);
+    printf("FD worst pair=%d vi=%d analytic=%.17g fd=%.17g abs=%.3g\n",worst/NV,worst%NV,pddist[worst],fd[worst],fabs(pddist[worst]-fd[worst]));
 
     printf("NS=%d NOBS=%d NV=%d NPAIR=%d  |J|=%.4f\n", NS, NOBS, NV, NPAIR, jnorm);
     printf("  reduce_mismatch=%d (min over pairs vs collision_distance, bit-exact)\n", red_mismatch);
