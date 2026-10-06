@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61", "pybind11>=2.11"]
+requires = ["setuptools>=77", "pybind11>=2.11"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,12 +9,13 @@ build-backend = "setuptools.build_meta"
 # always one distribution — now folded into one editable install.
 name = "grid-rbd"
 version = "0.5.0"
-description = "GPU-Accelerated Rigid Body Dynamics"
+description = "GPU robot dynamics, kinematics and collisions with analytical derivatives"
 readme = "README.md"
 # 3.10 floor: the runtime wrapper + its pybind11 _core ext require it; codegen
 # is 3.9-compatible but there is no reason to ship the split floor.
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE*"]
 authors = [
     {name = "A2R Lab"},
 ]
@@ -22,11 +23,11 @@ keywords = ["robotics", "rigid-body-dynamics", "cuda", "gpu", "code-generation",
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
-    "Environment :: GPU :: NVIDIA CUDA",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: C++",
     "Topic :: Scientific/Engineering",
     "Environment :: GPU :: NVIDIA CUDA",
@@ -76,20 +77,21 @@ grid-generate = "grid_codegen.cli:main"
 grid-spherize = "grid_codegen.spherize:main"
 
 [project.urls]
-Homepage = "https://github.com/A2R-Lab/GRiD"
+Homepage = "https://a2r-lab.org/GRiD/"
 Repository = "https://github.com/A2R-Lab/GRiD"
-Documentation = "https://a2r-lab.github.io/GRiD/"
+Documentation = "https://a2r-lab.org/GRiD/"
 
 [tool.setuptools]
 # The runtime wrapper ships a C++ extension (grid_rbd._core); a minimal root
-# setup.py owns the Extension declaration. include-package-data ships the
-# wrapper template + py.typed markers below.
-include-package-data = true
+# setup.py owns the Extension declaration. Explicit package-data patterns ship
+# the templates/markers; build hooks add the pinned resource bundle.
+include-package-data = false
 
 [tool.setuptools.packages.find]
 # grid_codegen at ./, grid_rbd under ./bindings, peer products under ./external.
 where = [".", "bindings", "external"]
-include = ["grid_codegen*", "grid_rbd*", "URDFParser*", "RBDReference*"]
+include = ["grid_codegen*", "grid_rbd*", "URDFParser", "RBDReference"]
+namespaces = false
 
 [tool.setuptools.package-data]
 # py.typed (PEP 561): ship inline type annotations so consumers' type checkers /
@@ -97,6 +99,7 @@ include = ["grid_codegen*", "grid_rbd*", "URDFParser*", "RBDReference*"]
 grid_rbd = ["wrapper_template.cu", "py.typed"]
 "grid_rbd.jax" = ["py.typed"]
 "grid_rbd.torch" = ["py.typed"]
+grid_codegen = ["collision/*.cuh", "collision/assets/*.urdf", "_data/**/*", "_data/provenance.json"]
 
 [tool.black]
 line-length = 88  # Sets the maximum line length; default is 88, but you can adjust it if needed.
@@ -149,12 +152,13 @@ required_marker = "gpu_proof"
 fingerprint_paths = [
     "grid_codegen", "bindings/grid_rbd", "bindings/src",
     "external/GLASS", "external/RBDReference", "external/URDFParser",
-    "config", "pyproject.toml", "setup.py",
+    "config", "pyproject.toml", "setup.py", "_build_resources.py", "MANIFEST.in",
     "test/cuda_equivalents", "test/python_wrappers", "test/conftest.py",
     "test/helpers.py", "test/run_gpu_proof.sh", "test/run_split_suite.py",
     "test/compile_sched.py", "test/prewarm_cuda_flagship.py",
     "test/codegen_neutrality.py", "test/header_key_replay.py",
     "test/receipt_integrity.py", "test/gpu-proof-scope.json", "test/run_validation.py",
+    "tools/check_installed_package.py",
 ]
 max_age_days = 30
 require_gpu = true

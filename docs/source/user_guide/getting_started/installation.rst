@@ -18,10 +18,60 @@ If you already cloned without ``--recursive``, populate the submodules with
 Source installation
 ~~~~~~~~~~~~~~~~~~~
 
-Use an **editable install from a Git checkout**. The generator, wrapper
-template, launch profiles, GLASS headers and model assets are resolved
-relative to the repository root, so keep the checkout in place. ``main`` is
-the branch documented here.
+An **editable install from a Git checkout** uses that checkout's generator,
+peer submodules, wrapper template and launch profiles, so keep it in place.
+``main`` is the branch documented here. Distribution wheels instead contain
+their own pinned resources and do not need Git or a retained checkout.
+
+Installing a distribution artifact
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Install a release wheel supplied by the maintainer, for example::
+
+   python -m pip install ./grid_rbd-VERSION-PYTHON-ABI-PLATFORM.whl
+
+This does not compile robot CUDA code or access a GPU. A source distribution
+also contains the resources, but building its small Python extension requires
+a C++17 compiler. Package-index publication is a separate release step; source
+installation above remains available.
+
+One distribution contains the NumPy, JAX and PyTorch adapters. The base install
+requires NumPy; ``jax``, ``torch`` and ``all`` extras select optional framework
+dependencies. Install a GPU-enabled framework build suitable for your hardware
+**before registering a robot**. Neither these extras nor GRiD install the system
+NVIDIA driver or CUDA Toolkit.
+
+Registration is explicit and can take substantial time for large robots::
+
+   import grid_rbd
+   robot = grid_rbd.register_robot(
+       "my_robot", urdf_path="robot.urdf",
+       algorithm_list=["inverse_dynamics", "inverse_dynamics_gradient"],
+       backend="numpy")
+
+Use ``backend="jax"`` or ``backend="torch"`` for the other interfaces. The
+adapters share the content-addressed registration cache. A subsequent
+registration with unchanged inputs reuses its compiled library; changed model,
+generator, toolkit or framework ABI inputs can require a new build. See
+:doc:`fast_robot_setup` for cache loading and subset selection.
+
+Bundled provenance
+~~~~~~~~~~~~~~~~~~
+
+Wheels and source distributions bundle URDFParser and RBDReference Python
+sources from GRiD's exact submodule commits, plus GLASS headers and launch
+profiles. They do not resolve newer peer versions during installation.
+Inspect the commit IDs, source hashes and resource hashes with::
+
+   from grid_codegen.resources import bundled_provenance
+   print(bundled_provenance())
+
+Third-party licenses are included under ``grid_codegen/_data/licenses``.
+User URDF files and referenced meshes remain user-supplied. The checkout's
+example robot collection and optional foam checkout are not bundled.
+
+Runtime requirements
+~~~~~~~~~~~~~~~~~~~~
 
 What each activity needs:
 
@@ -32,8 +82,8 @@ What each activity needs:
    * - Activity
      - Requirements
    * - Import ``grid_codegen`` / generate ``grid.cuh``
-     - Python ≥ 3.10, the ``external/`` submodules populated. No GPU, no
-       ``nvcc``.
+     - Python ≥ 3.10; populated submodules for an editable install, or the
+       bundled distribution resources. No GPU, no ``nvcc``.
    * - ``grid_rbd.register_robot`` / ``warm_robot`` (first call per robot)
      - the CUDA Toolkit's ``nvcc`` on ``PATH`` (the toolkit that matches your
        driver), a host C++ compiler, and an NVIDIA GPU present (the compute

@@ -13,6 +13,10 @@ the user calls register_robot().
 """
 from setuptools import setup
 from pybind11.setup_helpers import Pybind11Extension, build_ext
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _build_resources import BuildPy, Sdist
 
 
 ext_modules = [
@@ -30,5 +34,5 @@ ext_modules = [
 
 setup(
     ext_modules=ext_modules,
-    cmdclass={"build_ext": build_ext},
+    cmdclass={"build_ext": build_ext, "build_py": BuildPy, "sdist": Sdist},
 )

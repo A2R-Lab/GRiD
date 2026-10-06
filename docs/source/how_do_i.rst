@@ -36,7 +36,8 @@ then choose the task below.
        the bare revision, so the header is byte-identical to a git checkout's;
        a live checkout that disagrees is an error, and
        ``gen.glass_revision_source`` reports ``git`` / ``git-verified`` /
-       ``supplied-unverified`` / ``unknown``.
+       ``supplied-unverified`` / ``unknown``. Distribution artifacts record
+       their packaged pin automatically and report ``bundled``.
    * - **Embed the generated header in a library or interpreter (no exit() on CUDA errors)**
      - ``init_robotModel_checked`` / ``init_joint_limits_checked`` /
        ``free_robotModel_checked`` (or ``robotModel_owner<T>``):

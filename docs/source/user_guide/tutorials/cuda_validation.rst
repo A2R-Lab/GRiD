@@ -15,9 +15,25 @@ Plan without collecting tests or starting any compilation::
 Add ``--execute`` only on a clean committed candidate in a coordinated quiet
 window. The launcher holds ``/tmp/a2rlab-timing.lock`` throughout the run,
 records logs, validates fresh/carried header-key provenance, checks the
-reviewed minimum test-node set, and verifies the everyday signed receipt
-before publishing it. ``--resume <split-directory>`` reuses completed shards;
+reviewed minimum test-node set, and stages the generated receipt and header
+manifest. Its ``awaiting-evidence-commit`` state is successful recording, not
+a failed GPU run. Commit only those generated evidence files, then verify the
+clean descendant without rerunning any tests::
+
+   git add gpu-proof.json test/gpu-proof-header-keys.json
+   git commit -m "Record GPU correctness evidence"
+   .venv/bin/python test/run_validation.py --finalize docs/open-tasks/validation-next
+
+Finalization rejects altered evidence, dirty trees and source changes since
+the recorded candidate. It does not commit files or start GPU work.
+``--resume <split-directory>`` reuses completed shards;
 choose a new ``--out`` directory for the resumed launch's logs.
+
+For a formal release, add ``--full`` to both the dry plan and execution. This
+disables carried shards and selects the strict release policy at finalization.
+Resuming a full run also requires ``--full``. Freeze implementation and package
+inputs before starting this long run; installed-artifact checks complement,
+but do not replace, the source correctness receipt.
 
 Main requires ``test/gpu-proof-scope.json``'s node IDs. A smoke receipt cannot
 replace full-scope evidence. Carried shards remain permitted by the everyday

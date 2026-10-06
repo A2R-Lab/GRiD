@@ -1,0 +1,25 @@
+include _build_resources.py
+include LICENSE*
+include bindings/src/_core.cpp
+recursive-include grid_codegen *.py *.cuh *.urdf
+recursive-include grid_codegen/_data *
+recursive-include bindings/grid_rbd *.py *.cuh *.cu py.typed
+include external/URDFParser/*.py
+include external/RBDReference/*.py
+global-exclude __pycache__ *.pyc
+prune docs
+prune test
+prune examples
+prune install
+prune config
+prune .github
+prune external/GLASS
+prune external/URDFParser/tests
+prune external/URDFParser/docs
+prune external/RBDReference/tests
+prune external/RBDReference/docs
+prune external/RBDReference/equivalents
+prune bindings/tests
+prune bindings/examples
+prune tools
+exclude gpu-proof.json CLAUDE.md

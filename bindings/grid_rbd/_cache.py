@@ -131,11 +131,10 @@ def _codegen_source_hash() -> str:
     without this, changing how GRiDCodeGenerator emits code (tier macros, host wrappers,
     launch_cfg, spill logic, …) would silently reuse a stale .so. Mirrors
     _wrapper_template_hash for the same reason (editable dev installs don't bump the
-    package version per edit). Empty for an sdist install where the codegen package
-    isn't present (the .so is shipped prebuilt; nothing to re-key against)."""
-    # bindings/grid_rbd/_cache.py → repo_root = parent x3
-    repo = Path(__file__).resolve().parent.parent.parent
-    pkgs = [repo / "grid_codegen", repo / "external" / "URDFParser"]
+    package version per edit). Installed packages hash their bundled sources too;
+    robot-specific shared libraries are always compiled at registration time."""
+    from grid_codegen.resources import package_dir
+    pkgs = [package_dir('grid_codegen'), package_dir('URDFParser')]
     h = hashlib.sha256()
     found = False
     for pkg in pkgs:
@@ -143,7 +142,7 @@ def _codegen_source_hash() -> str:
             continue
         for py in sorted(pkg.rglob("*.py")):
             try:
-                h.update(py.relative_to(repo).as_posix().encode())
+                h.update((pkg.name + '/' + py.relative_to(pkg).as_posix()).encode())
                 h.update(py.read_bytes())
                 found = True
             except OSError:
@@ -289,16 +288,8 @@ def _nvcc_version_tag() -> str:
 def _glass_tag() -> str:
     """GLASS submodule HEAD (editable installs): its headers are -I compile
     inputs of wrapper.cu beyond what grid.cuh vendors."""
-    root = Path(__file__).resolve().parents[2]
-    glass = root / "external" / "GLASS"
-    if not glass.exists():
-        return ""
-    try:
-        return subprocess.check_output(
-            ["git", "-C", str(glass), "rev-parse", "HEAD"],
-            text=True, stderr=subprocess.DEVNULL).strip()
-    except Exception:
-        return "unknown"
+    from grid_codegen.helpers._lin_alg_helpers import _glass_commit
+    return _glass_commit()
 
 
 _HOST_CXX_TAG: str | None = None
@@ -340,8 +331,8 @@ def _nvcc_identity() -> str:
 
 
 def _glass_root() -> Path | None:
-    root = Path(__file__).resolve().parents[2] / "external" / "GLASS"
-    return root if root.exists() else None
+    from grid_codegen.resources import resource_path
+    return resource_path('GLASS')
 
 
 _GLASS_SNAPSHOT: tuple | None = None
@@ -390,8 +381,8 @@ def _glass_content_hash() -> str:
     behind a (path, mtime_ns, size) snapshot of the same files, so an edit
     AFTER an earlier registration in the same process is noticed on the next
     query (review R2); the snapshot is metadata, so a same-size edit with a
-    preserved timestamp needs `refresh_build_identity()`. Empty for an sdist
-    install without the submodule."""
+    preserved timestamp needs `refresh_build_identity()`. Wheels hash the same
+    bundled GLASS headers without requiring a submodule or Git."""
     global _GLASS_CONTENT_HASH, _GLASS_SNAPSHOT
     root, files = _glass_files()
     if root is None:
