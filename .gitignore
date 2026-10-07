@@ -75,6 +75,11 @@ __pycache__/
 .Python
 .eggs/
 *.egg-info/
+# in-tree `python -m build` / auditwheel outputs and the staged resource bundle
+/build/
+/dist/
+/wheelhouse/
+/grid_codegen/_data/
 .installed.cfg
 *.egg
 
