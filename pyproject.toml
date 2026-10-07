@@ -19,9 +19,9 @@ license-files = ["LICENSE*"]
 authors = [
     {name = "A2R Lab"},
 ]
-keywords = ["robotics", "rigid-body-dynamics", "cuda", "gpu", "code-generation", "trajectory-optimization"]
+keywords = ["robotics", "rigid-body-dynamics", "kinematics", "collision-checking", "analytical-derivatives", "cuda", "gpu", "code-generation", "trajectory-optimization", "jax", "pytorch", "mujoco", "pinocchio"]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3 :: Only",
@@ -30,7 +30,12 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: C++",
     "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Software Development :: Code Generators",
     "Environment :: GPU :: NVIDIA CUDA",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Typing :: Typed",
 ]
 
 dependencies = [
@@ -80,6 +85,9 @@ grid-spherize = "grid_codegen.spherize:main"
 Homepage = "https://a2r-lab.org/GRiD/"
 Repository = "https://github.com/A2R-Lab/GRiD"
 Documentation = "https://a2r-lab.org/GRiD/"
+Changelog = "https://github.com/A2R-Lab/GRiD/blob/main/CHANGELOG.md"
+Issues = "https://github.com/A2R-Lab/GRiD/issues"
+Paper = "https://a2r-lab.org/publication/grid/"
 
 [tool.setuptools]
 # The runtime wrapper ships a C++ extension (grid_rbd._core); a minimal root
