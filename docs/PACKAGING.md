@@ -36,8 +36,9 @@ PATH="$PWD/.venv/bin:$PATH" .venv/bin/auditwheel repair dist/*.whl --wheel-dir w
 Keep native `linux_x86_64` wheels for local diagnostics; upload only wheels whose
 portable tags have been verified. The October 2026 CPython 3.12 host build meets
 `manylinux_2_34_x86_64` (glibc 2.34 or newer), not an older manylinux baseline.
-The artifact workflow additionally checks CPython 3.11; do not advertise an
-untested interpreter/toolkit/framework combination. There are no Windows,
+The artifact workflow additionally builds and checks CPython 3.10 and 3.11
+wheels on a CPU runner; do not advertise an untested interpreter/toolkit/
+framework combination. There are no Windows,
 macOS, Jetson or precompiled robot wheels in this release path.
 
 ## Installed-artifact gates
@@ -74,6 +75,23 @@ TestPyPI rehearsal and production upload. Package ownership, publisher setup,
 tagging, pushes and uploads need maintainer approval; the artifact workflow
 has no publishing credentials and never uploads to a package index. TestPyPI
 is a distribution rehearsal, not a replacement for numerical evidence.
+
+`.github/workflows/publish.yml` is the only upload path. It uses PyPI trusted
+publishing (OIDC), so no token is stored anywhere. One-time set-up:
+
+1. On pypi.org and test.pypi.org, add a *pending* trusted publisher for the
+   project name `grid-rbd`: owner `A2R-Lab`, repository `GRiD`, workflow
+   `publish.yml`, environment `pypi` (resp. `testpypi`). The project is
+   created by its first upload.
+2. In the GitHub repository settings create environments `testpypi` and
+   `pypi`, each with a required reviewer; restrict `pypi` to tags `v*`.
+3. Rehearse: run the workflow by hand (`workflow_dispatch`), approve the
+   `testpypi` environment, then install from TestPyPI into a clean virtual
+   environment and run `tools/check_installed_package.py --gpu` on a GPU box.
+4. Release: push the tag `v<version>` (the workflow refuses a tag that does
+   not match `pyproject.toml`), approve `testpypi`, re-check, approve `pypi`.
+5. Write the GitHub release from `CHANGELOG.md` and attach the SHA256SUMS
+   files from the build artifacts.
 
 Build-hook behavior follows the [setuptools extension protocol](https://setuptools.pypa.io/en/stable/userguide/extension.html);
 the artifact sequence follows the [PyPA packaging flow](https://packaging.python.org/en/latest/flow/).

@@ -26,14 +26,16 @@ their own pinned resources and do not need Git or a retained checkout.
 Installing a distribution artifact
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Install a release wheel supplied by the maintainer, for example::
+Release wheels and the source distribution are published on PyPI as
+``grid-rbd`` (Linux x86-64, CPython 3.10–3.12)::
 
-   python -m pip install ./grid_rbd-VERSION-PYTHON-ABI-PLATFORM.whl
+   python -m pip install grid-rbd
 
-This does not compile robot CUDA code or access a GPU. A source distribution
-also contains the resources, but building its small Python extension requires
-a C++17 compiler. Package-index publication is a separate release step; source
-installation above remains available.
+This does not compile robot CUDA code or access a GPU. On a platform without
+a matching wheel pip builds the source distribution, whose small Python
+extension requires a C++17 compiler. The source installation above remains
+available for development. GRiD is alpha software: APIs may change between
+minor versions (see the repository ``CHANGELOG.md``).
 
 One distribution contains the NumPy, JAX and PyTorch adapters. The base install
 requires NumPy; ``jax``, ``torch`` and ``all`` extras select optional framework
