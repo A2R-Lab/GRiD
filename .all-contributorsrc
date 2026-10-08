@@ -28,13 +28,6 @@
             "contributions": []
         },
         {
-            "login": "the-eater",
-            "name": "=",
-            "avatar_url": "https://avatars.githubusercontent.com/the-eater",
-            "profile": "https://github.com/the-eater",
-            "contributions": []
-        },
-        {
             "login": "anncli",
             "name": "Ann Li",
             "avatar_url": "https://avatars.githubusercontent.com/anncli",
@@ -53,6 +46,13 @@
             "name": "pruyontrarakk",
             "avatar_url": "https://avatars.githubusercontent.com/pruyontrarakk",
             "profile": "https://github.com/pruyontrarakk",
+            "contributions": []
+        },
+        {
+            "login": "the-eater",
+            "name": "=",
+            "avatar_url": "https://avatars.githubusercontent.com/the-eater",
+            "profile": "https://github.com/the-eater",
             "contributions": []
         }
     ],
