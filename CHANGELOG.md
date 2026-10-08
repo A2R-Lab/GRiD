@@ -95,8 +95,10 @@ update on top of that, organised here by theme:
 - **Performance.** Branch-major packing, bit-identical barrier fusions in the
   second-order kernels, allocate-once host round trips, and the published
   [release measurements](https://a2r-lab.org/GRiD/release_measurements.html)
-  against Pinocchio, MuJoCo, mjx, MuJoCo Warp, BARD and Frax, including a
-  no-I/O comparison against the CPU libraries and a resident-wrapper group.
+  against Pinocchio, MuJoCo, mjx, MuJoCo Warp, BARD and Frax (including
+  Frax's floating-base model and end-effector pose gradients for every library
+  that exposes a Jacobian), a no-I/O comparison against the CPU libraries and
+  a resident-wrapper group.
 
 ### Known limitations
 

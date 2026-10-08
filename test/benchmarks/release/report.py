@@ -43,6 +43,11 @@ def cross_backend_contract(contract):
     """
     fields = json.loads(contract)
     fields.pop('cpu_threads', None)
+    # The accuracy policy decides whether a cell with bounded fp32 discrepancies is
+    # admitted (and labels it accuracy_warning); it does not change what is timed
+    # or how. A strict cell may stand beside a warning-policy peer; each row keeps
+    # its own policy and status columns. It still must match WITHIN a repeat group.
+    fields.pop('accuracy_policy', None)
     return json.dumps(fields, sort_keys=True)
 
 
