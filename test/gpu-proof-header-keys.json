@@ -27495,9 +27495,7 @@
     "header_key": "fdade42b0f3fd6d353144d5fe8c63df998e87c574af039165db250f89a8571d9",
     "kind": "flagship",
     "robot": "g1"
-   }
-  ],
-  "cuda_01_g1_h1_2_fr3_rizon4_gen3_fetch_ba": [
+   },
    {
     "algorithm_list": [
      "forward_dynamics",
@@ -28276,7 +28274,9 @@
     "opaque": {},
     "robot": "go2_description",
     "urdf_sha256": null
-   },
+   }
+  ],
+  "cuda_01_f_ext_gradient_equ_f_ext_gradien": [
    {
     "codegen": {
      "DEBUG_MODE": false,
@@ -28898,42 +28898,6 @@
     "urdf_sha256": null
    },
    {
-    "codegen": {
-     "DEBUG_MODE": false,
-     "MUJOCO_OUTPUT": false,
-     "USE_JOINT_DYNAMICS": false,
-     "file_namespace": "grid",
-     "gen_print_mat": true,
-     "launch_config_profile": "host",
-     "launch_config_robot": false,
-     "runtime_joint_dynamics": false,
-     "t_bytes": 4
-    },
-    "content_sha256": "950e1de486320a9aa3c1479ba66dab3a8490c8b748e9a253030474c8dcd4d152",
-    "env": {
-     "GRID_CODEGEN_PROFILE": null,
-     "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
-     "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
-     "GRID_ENABLE_MUJOCO_KERNELS": "0"
-    },
-    "floating": true,
-    "kind": "direct",
-    "kwargs": {
-     "algorithm_list": [
-      "inverse_dynamics",
-      "minv",
-      "forward_dynamics",
-      "aba",
-      "crba",
-      "end_effector_pose"
-     ],
-     "include_homogenous_transforms": true
-    },
-    "opaque": {},
-    "robot": "go2_description",
-    "urdf_sha256": null
-   },
-   {
     "algorithm_list": [
      "aba",
      "crba",
@@ -28953,42 +28917,6 @@
     "header_key": "63133c9525fce7fe166bcb05426b2663ddc0f0f3b7fa5b7b3860439af83a7dd6",
     "kind": "flagship",
     "robot": "go2"
-   },
-   {
-    "codegen": {
-     "DEBUG_MODE": false,
-     "MUJOCO_OUTPUT": false,
-     "USE_JOINT_DYNAMICS": false,
-     "file_namespace": "grid",
-     "gen_print_mat": true,
-     "launch_config_profile": "host",
-     "launch_config_robot": false,
-     "runtime_joint_dynamics": false,
-     "t_bytes": 4
-    },
-    "content_sha256": "181ac430b18655721d1518f1cada6686ea4f321565e35006cbeb22091497f657",
-    "env": {
-     "GRID_CODEGEN_PROFILE": null,
-     "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
-     "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
-     "GRID_ENABLE_MUJOCO_KERNELS": "0"
-    },
-    "floating": true,
-    "kind": "direct",
-    "kwargs": {
-     "algorithm_list": [
-      "inverse_dynamics",
-      "minv",
-      "forward_dynamics",
-      "aba",
-      "crba",
-      "end_effector_pose"
-     ],
-     "include_homogenous_transforms": true
-    },
-    "opaque": {},
-    "robot": "g1_29dof",
-    "urdf_sha256": null
    },
    {
     "algorithm_list": [
@@ -29706,36 +29634,6 @@
     "opaque": {},
     "robot": "h1_2",
     "urdf_sha256": "dcf7f22984a77adddb58a9f6a3baa2692c665c3700431f7bd96c6b887f9b164e"
-   }
-  ],
-  "cuda_02_integrator_equival_joint_dynamic": [
-   {
-    "codegen": {
-     "DEBUG_MODE": false,
-     "MUJOCO_OUTPUT": false,
-     "USE_JOINT_DYNAMICS": false,
-     "file_namespace": "grid",
-     "gen_print_mat": false,
-     "launch_config_profile": "host",
-     "launch_config_robot": false,
-     "runtime_joint_dynamics": false,
-     "t_bytes": 4
-    },
-    "content_sha256": "927e2ad548a8cc48b9146187a00060da99a78194210c169cd566c2c27fb381ee",
-    "env": {
-     "GRID_CODEGEN_PROFILE": null,
-     "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
-     "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
-     "GRID_ENABLE_MUJOCO_KERNELS": "0"
-    },
-    "floating": false,
-    "kind": "direct",
-    "kwargs": {
-     "codegen_profile": "integrators"
-    },
-    "opaque": {},
-    "robot": "iiwa14",
-    "urdf_sha256": "94a986da7077a211ea9a869cf25a61ed414b975ec59f564359f12b09e016ba34"
    },
    {
     "codegen": {
@@ -29773,97 +29671,9 @@
     "opaque": {},
     "robot": "iiwa14",
     "urdf_sha256": "94a986da7077a211ea9a869cf25a61ed414b975ec59f564359f12b09e016ba34"
-   },
-   {
-    "codegen": {
-     "DEBUG_MODE": false,
-     "MUJOCO_OUTPUT": false,
-     "USE_JOINT_DYNAMICS": false,
-     "file_namespace": "grid",
-     "gen_print_mat": true,
-     "launch_config_profile": "host",
-     "launch_config_robot": false,
-     "runtime_joint_dynamics": false,
-     "t_bytes": 4
-    },
-    "content_sha256": "bb4a719fc55108f184c7ff20c0071d6b2a3ce270602eb329657d6ab68aec8221",
-    "env": {
-     "GRID_CODEGEN_PROFILE": null,
-     "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
-     "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
-     "GRID_ENABLE_MUJOCO_KERNELS": "0"
-    },
-    "floating": false,
-    "kind": "direct",
-    "kwargs": {
-     "include_homogenous_transforms": true
-    },
-    "opaque": {},
-    "robot": "iiwa14",
-    "urdf_sha256": "94a986da7077a211ea9a869cf25a61ed414b975ec59f564359f12b09e016ba34"
-   },
-   {
-    "codegen": {
-     "DEBUG_MODE": false,
-     "MUJOCO_OUTPUT": false,
-     "USE_JOINT_DYNAMICS": false,
-     "file_namespace": "grid",
-     "gen_print_mat": false,
-     "launch_config_profile": "host",
-     "launch_config_robot": false,
-     "runtime_joint_dynamics": false,
-     "t_bytes": 4
-    },
-    "content_sha256": "43c5fede01d7ed5acca4893b1da4ad870c868e885f93818a82067baf949ad702",
-    "env": {
-     "GRID_CODEGEN_PROFILE": null,
-     "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
-     "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
-     "GRID_ENABLE_MUJOCO_KERNELS": "0"
-    },
-    "floating": false,
-    "kind": "direct",
-    "kwargs": {
-     "algorithm_list": [
-      "frame_jacobian",
-      "frame_jacobian_dot",
-      "osc_inertia"
-     ]
-    },
-    "opaque": {},
-    "robot": "iiwa14",
-    "urdf_sha256": "94a986da7077a211ea9a869cf25a61ed414b975ec59f564359f12b09e016ba34"
    }
   ],
-  "cuda_03_kinematics_thread__mjx_tier_inva": [
-   {
-    "codegen": {
-     "DEBUG_MODE": false,
-     "MUJOCO_OUTPUT": false,
-     "USE_JOINT_DYNAMICS": false,
-     "file_namespace": "grid",
-     "gen_print_mat": true,
-     "launch_config_profile": "host",
-     "launch_config_robot": false,
-     "runtime_joint_dynamics": false,
-     "t_bytes": 4
-    },
-    "content_sha256": "6a814d7f3449107e9a1f85fc686c0eaf9ad1812969c9f815070251bc62e21ca5",
-    "env": {
-     "GRID_CODEGEN_PROFILE": null,
-     "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
-     "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
-     "GRID_ENABLE_MUJOCO_KERNELS": "0"
-    },
-    "floating": true,
-    "kind": "direct",
-    "kwargs": {
-     "include_homogenous_transforms": true
-    },
-    "opaque": {},
-    "robot": "go2_description",
-    "urdf_sha256": null
-   },
+  "cuda_02_kinematics_thread__mjx_tier_inva": [
    {
     "codegen": {
      "DEBUG_MODE": false,
@@ -31707,9 +31517,7 @@
     "opaque": {},
     "robot": "mixed_spherical_arm",
     "urdf_sha256": null
-   }
-  ],
-  "cuda_04_spherical_fdsva_so_spherical_int": [
+   },
    {
     "codegen": {
      "DEBUG_MODE": false,
@@ -32186,42 +31994,6 @@
     "opaque": {},
     "robot": "go2_description",
     "urdf_sha256": null
-   },
-   {
-    "codegen": {
-     "DEBUG_MODE": false,
-     "MUJOCO_OUTPUT": false,
-     "USE_JOINT_DYNAMICS": false,
-     "file_namespace": "grid",
-     "gen_print_mat": true,
-     "launch_config_profile": "host",
-     "launch_config_robot": false,
-     "runtime_joint_dynamics": false,
-     "t_bytes": 4
-    },
-    "content_sha256": "bdf25eacbc17bbf9252c71c12a84a26fc9f5820ba896bcdedf15d5d2922371ab",
-    "env": {
-     "GRID_CODEGEN_PROFILE": null,
-     "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
-     "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
-     "GRID_ENABLE_MUJOCO_KERNELS": "0"
-    },
-    "floating": false,
-    "kind": "direct",
-    "kwargs": {
-     "algorithm_list": [
-      "aba",
-      "crba",
-      "end_effector_pose",
-      "forward_dynamics",
-      "inverse_dynamics",
-      "minv"
-     ],
-     "include_homogenous_transforms": true
-    },
-    "opaque": {},
-    "robot": "iiwa14",
-    "urdf_sha256": "94a986da7077a211ea9a869cf25a61ed414b975ec59f564359f12b09e016ba34"
    },
    {
     "algorithm_list": [
