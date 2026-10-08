@@ -1,5 +1,6 @@
 {
   "captures": [
+    "test/benchmarks/results/release-density-core-20261007",
     "test/benchmarks/results/release-pinocchio24-final-20260928-VAl4Dj",
     "test/benchmarks/results/release-barrier-iiwa14c-S-20261004",
     "test/benchmarks/results/release-barrier-S-20261004",
@@ -9,9 +10,14 @@
     "test/benchmarks/results/release-final-core-20260927-nevcJ2"
   ],
   "accepted_source_drift": [
+    "test/benchmarks/release/competitors.py",
+    "test/benchmarks/release/frax_floating.py",
     "test/benchmarks/release/grid_adapter.py",
     "test/benchmarks/release/pin_adapter.py",
-    "test/benchmarks/release/protocol.py"
+    "test/benchmarks/release/pin_bridge.cpp",
+    "test/benchmarks/release/protocol.py",
+    "test/benchmarks/release/report.py",
+    "test/benchmarks/release/warp_kernels.py"
   ],
   "required_baseline": {
     "capture": "release-pinocchio24-final-20260928-VAl4Dj",

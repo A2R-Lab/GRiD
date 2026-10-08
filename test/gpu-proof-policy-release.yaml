@@ -27,6 +27,9 @@ required_fingerprint_paths:
   - config
   - pyproject.toml
   - setup.py
+  - _build_resources.py
+  - MANIFEST.in
+  - tools/check_installed_package.py
   - test/cuda_equivalents
   - test/python_wrappers
   - test/conftest.py

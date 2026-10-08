@@ -87,20 +87,9 @@ def find_nvcc() -> str:
 
 
 def repo_root() -> Path | None:
-    """Locate the GRiD repo this package was installed from.
-
-    For development installs (`pip install -e .`), the parent of the
-    package's parent IS the repo root. For sdist installs once we publish to
-    PyPI, the repo isn't present and we ship the codegen submodules with the
-    sdist; the path resolution is different. For now, only the editable path
-    is implemented.
-    """
-    # bindings/grid_rbd/_compile.py  →  repo_root = .../bindings/..
-    pkg = Path(__file__).resolve().parent
-    candidate = pkg.parent.parent
-    if (candidate / "grid_codegen").exists() and (candidate / "external" / "URDFParser").exists():
-        return candidate
-    return None
+    """Editable source root, or None for an installed wheel."""
+    from grid_codegen.resources import checkout_root
+    return checkout_root()
 
 
 def configuration_layout_from_robot(robot):
@@ -711,12 +700,8 @@ def compile_sources(
     cuh_path = target_dir / "grid.cuh"
     wrapper_cu = target_dir / "wrapper.cu"
 
-    # GLASS submodule path — only used in editable installs. sdist installs
-    # ship the GLASS headers inside the package data (TODO).
-    glass_root = None
-    root = repo_root()
-    if root and (root / "external" / "GLASS").exists():
-        glass_root = root / "external" / "GLASS"
+    from grid_codegen.resources import resource_path
+    glass_root = resource_path('GLASS')
 
     so_path = target_dir / "robot.so"
     # The torch op-library namespace is keyed by the cache_key (== the entry's

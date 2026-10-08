@@ -52,19 +52,16 @@ def _grid_repo_root():
 
 
 def _glass_root():
-    root = _grid_repo_root() / "external" / "GLASS"
-    if not root.exists():
-        raise FileNotFoundError(
-            "GLASS submodule is missing. Run `git submodule update --init external/GLASS` "
-            "from the GRiD-A2R repository root."
-        )
-    return root
+    from ..resources import resource_path
+    return resource_path('GLASS')
 
 
 def _glass_git_head():
     """HEAD of the GLASS submodule via git, or None when git/.git is unavailable
     (an exported source archive)."""
     try:
+        if not (_glass_root() / '.git').exists():
+            return None  # Never accidentally discover a containing repository.
         return subprocess.check_output(
             ["git", "-C", str(_glass_root()), "rev-parse", "HEAD"],
             text=True, stderr=subprocess.DEVNULL,
@@ -90,6 +87,14 @@ def _glass_commit(supplied=None):
     import sys as _sys
     supplied = supplied or _os.environ.get("GRID_GLASS_REVISION") or None
     head = _glass_git_head()
+    from ..resources import bundled_provenance
+    provenance = bundled_provenance()
+    bundled = provenance['peers']['GLASS']['commit'] if provenance else None
+    if bundled:
+        if supplied and supplied != bundled:
+            raise ValueError('glass_revision disagrees with the bundled GLASS pin')
+        _glass_commit.source = 'bundled'
+        return bundled
     if supplied:
         if head is not None and head != supplied:
             raise ValueError(
@@ -398,5 +403,4 @@ def gen_matmul_trans(self):
     self.gen_add_code_line("dest[index] = dot_prod<T,6,6,6>(vec1, vec2);")
     self.gen_add_end_control_flow()
     self.gen_add_end_function()
-
 

@@ -1,0 +1,51 @@
+name: Package artifacts
+on:
+  pull_request:
+    paths:
+      - 'grid_codegen/**'
+      - 'bindings/**'
+      - 'external/**'
+      - 'config/launch_configs/**'
+      - 'pyproject.toml'
+      - 'setup.py'
+      - '_build_resources.py'
+      - 'MANIFEST.in'
+      - 'tools/check_installed_package.py'
+      - '.github/workflows/packages.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  artifacts:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ['3.10', '3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build sdist and wheel from that sdist (no CUDA)
+        run: |
+          python -m pip install build auditwheel patchelf twine
+          python -m build
+          auditwheel repair dist/*.whl --wheel-dir wheelhouse
+          python -m twine check dist/*.tar.gz wheelhouse/*.whl
+      - name: Test wheel outside checkout without GPU or build tools
+        env:
+          CUDA_VISIBLE_DEVICES: ''
+        run: |
+          python -m venv "$RUNNER_TEMP/package-test"
+          "$RUNNER_TEMP/package-test/bin/python" -m pip install --only-binary=:all: wheelhouse/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/package-test/bin/python" -I "$GITHUB_WORKSPACE/tools/check_installed_package.py" --work "$RUNNER_TEMP/package-smoke"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grid-rbd-cp${{ matrix.python }}
+          path: |
+            dist/*.tar.gz
+            wheelhouse/*.whl
+# Artifacts only. Publishing to TestPyPI/PyPI requires separate approval.

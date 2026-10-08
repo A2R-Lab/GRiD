@@ -19,7 +19,8 @@ from .protocol import digest, ROOT, timed
 
 OPS = ("inverse_dynamics", "inverse_dynamics_gradient", "idsva_so", "minv",
        "forward_dynamics", "forward_dynamics_gradient", "fdsva_so", "end_effector_pose",
-       "crba", "nonlinear_effects", "generalized_gravity", "ccrba", "coriolis_matrix")
+       "crba", "nonlinear_effects", "generalized_gravity", "ccrba", "coriolis_matrix",
+       "end_effector_pose_gradient")
 FP32_OPS = {0, 1, 3, 4, 5, 8, 9, 10, 11, 12}
 CODEGEN_ONLY_PENDING = {11, 12}      # no CppADCodeGen class; the plain API covers them
 MATRIX_OPS = {3, 8, 12}
@@ -111,7 +112,7 @@ class PinAdapter:
         self.ceiling = cpu_threads
         self.active = 1
         index = OPS.index(operation)
-        analytical = index in {2, 6, 7}
+        analytical = index in {2, 6, 7, 13}
         if plain:
             method = "analytical direct/composed" if analytical else "standard Pinocchio API (no codegen)"
         else:
@@ -156,7 +157,7 @@ class PinAdapter:
         t = np.ascontiguousarray([f.oracle._expand_project_v_to_pin(x.astype(np.float64)) for x in third[:batch]], dtype=dtype)
         n = f.nv
         size = (4*n**3 if index in {2, 6} else 2*n*n if index in {1, 5} else n*n if index in MATRIX_OPS
-                else 6 if index == 7 else 6*n + 6 if index == 11 else n)
+                else 6 if index == 7 else 6*n if index == 13 else 6*n + 6 if index == 11 else n)
         fp = ctypes.POINTER(ctypes.c_float if index in FP32_OPS else ctypes.c_double)
         pointers = tuple(a.ctypes.data_as(fp) for a in (q, v, t))
         evaluate = self.lib.pin_release_pool_eval if index in FP32_OPS else self.lib.pin_release_pool_eval_f64
@@ -176,6 +177,8 @@ class PinAdapter:
                 return out.reshape(batch,n,n)
             if index == 11:
                 return out[:, :6*n].reshape(batch,6,n), out[:, 6*n:]
+            if index == 13:
+                return out.reshape(batch,6,n)
             return out
         self.host, self.resident = call, None
         self.sync, self.download = lambda x: None, lambda x: x

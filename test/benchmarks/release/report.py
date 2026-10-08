@@ -18,7 +18,7 @@ from .protocol import TIMED_STATUSES, cell_accuracy_status, ACCURACY_FOOTNOTE
 LABELS = {"grid_cuda": "GRiD CUDA host call", "grid_native": "GRiD C ABI", "grid_numpy": "GRiD NumPy", "grid_jax": "GRiD JAX",
           "grid_torch": "GRiD PyTorch", "grid_numpy_prealloc": "GRiD NumPy (allocate-once)",
           "grid_torch_prealloc": "GRiD PyTorch (allocate-once)", "grid_jax_prealloc": "GRiD JAX (allocate-once)", "pinocchio": "Pinocchio CPU (codegen)", "pinocchio_plain": "Pinocchio CPU (standard API)", "mjx": "MJX",
-          "mujoco_warp": "MuJoCo Warp", "mujoco_cpu": "MuJoCo CPU", "bard": "BARD", "frax": "Frax"}
+          "mujoco_warp": "MuJoCo Warp", "mujoco_cpu": "MuJoCo CPU", "bard": "BARD", "frax": "Frax", "curobo": "cuRobo"}
 OP_LABELS = {**dict(zip(CORE, ("RNEA", "grad RNEA", "Hessian RNEA"))),
              "minv": "M⁻¹", "forward_dynamics": "FD", "forward_dynamics_gradient": "grad FD", "fdsva_so": "Hessian FD",
              "end_effector_pose": "EE pose", "end_effector_pose_gradient": "grad EE pose", "end_effector_pose_hessian": "Hessian EE pose",
@@ -30,7 +30,7 @@ BACKEND_HUE = {"grid_cuda": "#2a78d6", "grid_native": "#2a78d6", "grid_numpy": "
                "grid_jax": "#2a78d6", "grid_torch": "#2a78d6", "grid_numpy_prealloc": "#2a78d6",
                "grid_torch_prealloc": "#2a78d6", "grid_jax_prealloc": "#2a78d6", "pinocchio": "#eb6834", "pinocchio_plain": "#c94d1f",
                "mjx": "#1baf7a", "mujoco_warp": "#eda100", "mujoco_cpu": "#e87ba4",
-               "bard": "#008300", "frax": "#4a3aa7"}
+               "bard": "#008300", "frax": "#4a3aa7", "curobo": "#76b900"}
 
 
 def cross_backend_contract(contract):
@@ -43,6 +43,11 @@ def cross_backend_contract(contract):
     """
     fields = json.loads(contract)
     fields.pop('cpu_threads', None)
+    # The accuracy policy decides whether a cell with bounded fp32 discrepancies is
+    # admitted (and labels it accuracy_warning); it does not change what is timed
+    # or how. A strict cell may stand beside a warning-policy peer; each row keeps
+    # its own policy and status columns. It still must match WITHIN a repeat group.
+    fields.pop('accuracy_policy', None)
     return json.dumps(fields, sort_keys=True)
 
 
@@ -335,7 +340,7 @@ def plot(rows, directory, kind, purpose):
 # Pinocchio modes are separate full-call bars, not an inferred API-overhead stack.
 # (BACKEND_HUE is defined near the top of the module.)
 SEGMENT_HUE = {"compute": "#184f95", "memory": "#3987e5", "wrapper": "#86b6ef"}
-COMPETITOR_ORDER = ("pinocchio", "pinocchio_plain", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax")
+COMPETITOR_ORDER = ("pinocchio", "pinocchio_plain", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax", "curobo")
 SURFACE_LABELS = {"grid_native": "C ABI", "grid_numpy": "NumPy", "grid_jax": "JAX", "grid_torch": "PyTorch"}
 HOMEPAGE_SEGMENTS = {"compute": "#00693e", "memory": "#e2e2e2", "wrapper": "#707070"}
 HOMEPAGE_BASELINES = (
@@ -592,7 +597,7 @@ def plot_grid_composition(rows, directory, purpose):
 from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm  # noqa: E402
 import math  # noqa: E402
 
-COMPETITOR_ORDER_ALL = ("pinocchio", "pinocchio_plain", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax")
+COMPETITOR_ORDER_ALL = ("pinocchio", "pinocchio_plain", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax", "curobo")
 SHORT_OP = {"inverse_dynamics": "RNEA", "inverse_dynamics_gradient": "∇RNEA", "idsva_so": "∇²RNEA", "minv": "M⁻¹",
             "forward_dynamics": "FD", "forward_dynamics_gradient": "∇FD", "fdsva_so": "∇²FD",
             "end_effector_pose": "EE pose", "end_effector_pose_gradient": "∇EE", "end_effector_pose_hessian": "∇²EE",

@@ -10,6 +10,8 @@
 #include <pinocchio/algorithm/aba-derivatives.hpp>
 #include <pinocchio/algorithm/crba.hpp>
 #include <pinocchio/algorithm/centroidal.hpp>
+#include <pinocchio/algorithm/jacobian.hpp>
+#include <pinocchio/algorithm/frames.hpp>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -20,6 +22,8 @@
 //   0 inverse_dynamics  1 inverse_dynamics_gradient  2 idsva_so  3 minv
 //   4 forward_dynamics  5 forward_dynamics_gradient  6 fdsva_so  7 end_effector_pose
 //   8 crba  9 nonlinear_effects  10 generalized_gravity  11 ccrba  12 coriolis_matrix
+//   13 end_effector_pose_gradient (d[xyz; rpy]/dv: LOCAL_WORLD_ALIGNED frame Jacobian,
+//      rotational rows mapped by E(rpy)^-1; fp64 analytical in both modes like 7)
 // Two modes share every input, output layout and precision policy:
 //   codegen = CppADCodeGen libraries (RNEA, its derivatives, Minv, CRBA) in fp32,
 //             FD / grad FD / bias / gravity composed from them;
@@ -49,7 +53,7 @@ struct ReleasePin {
         modelf = model.cast<float>();
         dataf.reset(new pinocchio::DataTpl<float>(modelf));
         frame = model.getFrameId(target);
-        if (op == 7 && frame >= model.frames.size()) throw std::runtime_error("FK target frame missing");
+        if ((op == 7 || op == 13) && frame >= model.frames.size()) throw std::runtime_error("FK target frame missing");
         if (op == 11 || op == 12) {
             if (!plain) throw std::runtime_error("no CppADCodeGen class for this operation; use pinocchio_plain");
         }
@@ -96,6 +100,7 @@ static int sample_size(const ReleasePin &c) {
         case 2: case 6: return 4*n*n*n;
         case 3: case 8: case 12: return n*n;
         case 7: return 6;
+        case 13: return 6*n;
         case 11: return 6*n + 6;   // centroidal momentum matrix Ag (6 x nv) then the momentum hg (6)
         default: return -1;
     }
@@ -170,6 +175,18 @@ static int eval_one(ReleasePin &c, const double *q_in, const double *v_in, const
         *output++=std::atan2(r(2,1),r(2,2));
         *output++=std::atan2(-r(2,0),std::sqrt(r(2,2)*r(2,2)+r(2,1)*r(2,1)));
         *output++=std::atan2(r(1,0),r(0,0));
+    } else if(c.op==13) {
+        pinocchio::computeJointJacobians(c.model,*c.data,q);
+        pinocchio::updateFramePlacements(c.model,*c.data);
+        Eigen::MatrixXd J(6,n); J.setZero();
+        pinocchio::getFrameJacobian(c.model,*c.data,c.frame,pinocchio::LOCAL_WORLD_ALIGNED,J);
+        const auto &r=c.data->oMf[c.frame].rotation();
+        const double pitch=std::atan2(-r(2,0),std::sqrt(r(2,2)*r(2,2)+r(2,1)*r(2,1)));
+        const double yaw=std::atan2(r(1,0),r(0,0));
+        const double cp=std::cos(pitch), sp=std::sin(pitch), cy=std::cos(yaw), sy=std::sin(yaw);
+        Eigen::Matrix3d E; E << cp*cy, -sy, 0, cp*sy, cy, 0, -sp, 0, 1;   // omega_world = E d(rpy)/dt
+        Eigen::MatrixXd out(6,n); out.topRows(3)=J.topRows(3); out.bottomRows(3)=E.inverse()*J.bottomRows(3);
+        copy_matrix(out,output);
     } else return -2;
     return 0;
 }

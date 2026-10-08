@@ -65,7 +65,9 @@ jobs:
           python-version: "3.12"
 
       - name: Install GRiD (CPU deps only)
-        run: pip install -e . && pip install pytest matplotlib "pytest-gpu-proof==0.4.0" pyyaml
+        # Packaging unit tests import the build hooks outside pip's isolated
+        # build environment, so their setuptools dependency must be explicit.
+        run: pip install -e . && pip install pytest matplotlib "pytest-gpu-proof==0.4.0" pyyaml "setuptools>=77"
 
       # The BROAD CPU set (audit W00, 2026-09-19): every test/test_*.py + the
       # benchmark-spec guards + the CPU-only bindings modules. The former six-

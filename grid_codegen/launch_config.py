@@ -37,8 +37,9 @@ _ALGO_TO_SYMBOL = build_launch_config_algo_to_symbol()
 
 
 def _launch_configs_dir():
-    """Absolute path to the repo's config/launch_configs/ dir (sibling of GRiDCodeGenerator)."""
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "launch_configs")
+    """Absolute path to the checkout or wheel's bundled launch profiles."""
+    from .resources import resource_path
+    return str(resource_path('launch_configs'))
 
 
 _GPU_SELECT_WARNED = set()

@@ -50,8 +50,8 @@ def jax_pinned_route(row):
     leaves = 4 if row.get("operation") in SECOND_ORDER_OPS else 1
     return bool(row.get("entries")) and row["entries"] * 4 / leaves >= JAX_PINNED_MIN_BYTES
 WRAPPERS = ("grid_cuda", "grid_native", "grid_numpy", "grid_jax", "grid_torch") + tuple(PREALLOC)
-TABLE_BACKENDS = ("grid_cuda", "grid_jax", "pinocchio", "pinocchio_plain", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax")
-BACKENDS = WRAPPERS + ("pinocchio", "pinocchio_plain", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax")
+TABLE_BACKENDS = ("grid_cuda", "grid_jax", "pinocchio", "pinocchio_plain", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax", "curobo")
+BACKENDS = WRAPPERS + ("pinocchio", "pinocchio_plain", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax", "curobo")
 # Sustained warm-up before sampling: a handful of microsecond calls never
 # leaves the idle clock (this box idles far below its sustained boost and
 # cannot lock clocks without root), so every backend, CPU or GPU, is driven
@@ -125,8 +125,8 @@ def capability(backend, operation, robot):
     if backend.startswith("grid_"):
         return None
     if backend in {"pinocchio", "pinocchio_plain"}:
-        if operation in {"end_effector_pose_gradient", "end_effector_pose_hessian"}:
-            return "adapter_pending: Pinocchio spatial kinematic derivatives are not the requested RPY pose-coordinate derivatives"
+        if operation == "end_effector_pose_hessian":
+            return "adapter_pending: Pinocchio spatial kinematic Hessians are not the requested RPY pose-coordinate second derivatives"
         if backend == "pinocchio" and operation in {"ccrba", "coriolis_matrix"}:
             return "adapter_pending: no CppADCodeGen class for this operation; see pinocchio_plain"
         return None
@@ -137,13 +137,13 @@ def capability(backend, operation, robot):
     if backend in {"mujoco_warp", "mujoco_cpu"}:
         if backend == "mujoco_warp" and operation == "minv":
             return "adapter_pending: no dense inverse-inertia output path"
-        if operation in {"inverse_dynamics", "forward_dynamics", "end_effector_pose", "minv", "crba",
-                         "nonlinear_effects", "generalized_gravity"}:
+        if operation in {"inverse_dynamics", "forward_dynamics", "end_effector_pose", "end_effector_pose_gradient",
+                         "minv", "crba", "nonlinear_effects", "generalized_gravity"}:
             return None
         return "adapter_pending: no matched full tangent-space derivative adapter"
     if backend == "mjx":
         if operation in {"inverse_dynamics", "forward_dynamics", "inverse_dynamics_gradient", "forward_dynamics_gradient",
-                         "end_effector_pose", "crba", "nonlinear_effects", "generalized_gravity"}:
+                         "end_effector_pose", "end_effector_pose_gradient", "crba", "nonlinear_effects", "generalized_gravity"}:
             return None
         return "adapter_pending: selected operation not wired"
     if backend == "bard":
@@ -151,10 +151,22 @@ def capability(backend, operation, robot):
             return None
         return "adapter_pending: selected operation not wired; not a library capability claim"
     if backend == "frax":
-        if floating:
-            return "model_mismatch: existing Frax adapter uses a six-coordinate floating base; shared quaternion fixture needs a validated conversion"
-        if operation in {"inverse_dynamics", "forward_dynamics", "minv", "crba", "nonlinear_effects", "generalized_gravity"}:
+        if operation in {"inverse_dynamics", "forward_dynamics", "minv", "crba", "nonlinear_effects",
+                         "generalized_gravity", "end_effector_pose", "end_effector_pose_gradient"}:
             return None
+        if operation in {"inverse_dynamics_gradient", "forward_dynamics_gradient"}:
+            if floating:
+                return ("adapter_pending: autodiff gradient is taken on Frax's Euler floating-base coordinates; "
+                        "the transport of a full dynamics Jacobian to the shared tangent is not implemented")
+            return None
+        return "adapter_pending: selected operation not wired"
+    if backend == "curobo":
+        if floating:
+            return "adapter_pending: cuRobo Dynamics models fixed-base robots only (library scope)"
+        if operation == "inverse_dynamics":
+            return None
+        if operation == "inverse_dynamics_gradient":
+            return "adapter_pending: cuRobo exposes an RNEA backward (vector-Jacobian product), not the full tangent Jacobian compared here"
         return "adapter_pending: selected operation not wired"
     raise ValueError(backend)
 

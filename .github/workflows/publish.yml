@@ -1,0 +1,102 @@
+name: Publish to PyPI
+# Trusted publishing (OIDC): no API tokens are stored in this repository.
+# Both upload jobs are gated by a protected GitHub environment whose required
+# reviewer approves each run by hand. Nothing here runs on an ordinary push.
+#
+#   workflow_dispatch  -> builds + uploads to TestPyPI only (rehearsal)
+#   tag v*             -> builds, uploads to TestPyPI, then (after a second
+#                         approval) to PyPI
+#
+# Set-up checklist (one time, by a maintainer): see docs/PACKAGING.md,
+# "Freeze and publish".
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ['3.10', '3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Check the tag matches pyproject.toml
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          python - <<'EOF'
+          import os, re, sys, tomllib
+          version = tomllib.load(open('pyproject.toml', 'rb'))['project']['version']
+          tag = os.environ['GITHUB_REF_NAME']
+          sys.exit(0 if tag == f'v{version}' else f'tag {tag} != v{version}')
+          EOF
+      - name: Build sdist and wheel from that sdist, repair, check
+        run: |
+          python -m pip install build auditwheel patchelf twine
+          python -m build
+          auditwheel repair dist/*.whl --wheel-dir wheelhouse
+          python -m twine check dist/*.tar.gz wheelhouse/*.whl
+      - name: Test the wheel outside the checkout without GPU or build tools
+        env:
+          CUDA_VISIBLE_DEVICES: ''
+        run: |
+          python -m venv "$RUNNER_TEMP/package-test"
+          "$RUNNER_TEMP/package-test/bin/python" -m pip install --only-binary=:all: wheelhouse/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/package-test/bin/python" -I "$GITHUB_WORKSPACE/tools/check_installed_package.py" --work "$RUNNER_TEMP/package-smoke"
+      - name: Keep one sdist (the 3.12 job's) and every wheel
+        run: |
+          mkdir -p upload
+          cp wheelhouse/*.whl upload/
+          if [ "${{ matrix.python }}" = "3.12" ]; then cp dist/*.tar.gz upload/; fi
+          sha256sum upload/* > "upload/SHA256SUMS-cp${{ matrix.python }}.txt"
+          cat "upload/SHA256SUMS-cp${{ matrix.python }}.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-cp${{ matrix.python }}
+          path: upload/
+
+  testpypi:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/grid-rbd
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-cp*
+          merge-multiple: true
+          path: dist/
+      - run: rm -f dist/SHA256SUMS-*.txt && ls -l dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  pypi:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: testpypi
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/p/grid-rbd
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-cp*
+          merge-multiple: true
+          path: dist/
+      - run: rm -f dist/SHA256SUMS-*.txt && ls -l dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

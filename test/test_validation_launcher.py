@@ -110,17 +110,18 @@ def test_dirty_candidate_is_rejected_before_creating_evidence(launch):
     assert not launch.calls and not launch.out.exists()
 
 
-def test_verified_refresh_preserves_fresh_headers_and_promotes_receipt(launch):
+def test_recording_preserves_fresh_headers_and_awaits_evidence_commit(launch):
     launch.invoke('--execute')
     assert launch.receipt()['identity'] == 'new'
-    assert launch.status()['status'] == 'verified'
+    assert launch.status()['status'] == 'awaiting-evidence-commit'
     keys = json.loads((launch.root / 'test/gpu-proof-header-keys.json').read_text())
     assert len(keys['shards']['fresh']) == 2
-    assert '--expected-skips' in launch.calls[-1]
+    assert len(launch.calls) == 1  # no dirty-tree verifier or hidden retry
+    assert set(launch.status()['evidence_hashes']) == {'gpu-proof.json', 'test/gpu-proof-header-keys.json'}
 
 
 @pytest.mark.parametrize('outcome', [
-    'driver-fail', 'interrupt', 'missing-scope', 'bad-headers', 'head-moved', 'verify-fail',
+    'driver-fail', 'interrupt', 'missing-scope', 'bad-headers', 'head-moved',
 ])
 def test_failure_retains_evidence_without_promoting_receipt(launch, outcome):
     launch.outcome = outcome
@@ -166,4 +167,72 @@ def test_resume_requires_original_candidate_and_saved_plan(launch, candidate):
         launch.invoke('--execute', '--resume', str(shards))
         assert '--resume' in launch.calls[0]
         assert '--refresh-from' not in launch.calls[0]
-        assert launch.status()['status'] == 'verified'
+        assert launch.status()['status'] == 'awaiting-evidence-commit'
+
+
+def test_full_command_never_carries():
+    command = launcher.validation_command('/tmp/test-full', full=True)
+    assert '--refresh-from' not in command
+    assert '--receipts' in command
+
+
+def test_finalize_real_git_evidence_transition(tmp_path, monkeypatch):
+    """Real clean/dirty Git states; only GPU driver and signature CLI are stubbed."""
+    import subprocess
+    root = tmp_path / 'repo'
+    (root / 'test').mkdir(parents=True)
+    def git(*args):
+        return subprocess.check_output(['git', *args], cwd=root, text=True).strip()
+    git('init', '-q')
+    git('config', 'user.email', 'test@example.invalid')
+    git('config', 'user.name', 'Launcher Test')
+    (root / 'source.py').write_text('original\n')
+    (root / 'gpu-proof.json').write_text('{}')
+    (root / 'test/gpu-proof-header-keys.json').write_text('{"shards": {}}')
+    (root / 'test/gpu-proof-scope.json').write_text('{"node_ids": ["required"]}')
+    git('add', 'source.py', 'gpu-proof.json', 'test/gpu-proof-header-keys.json', 'test/gpu-proof-scope.json')
+    git('commit', '-qm', 'Candidate')
+    out = tmp_path / 'run'
+    monkeypatch.setattr(launcher, 'ROOT', root)
+    monkeypatch.setattr(launcher, 'LOCK_PATH', tmp_path / 'lock')
+    calls = []
+    def driver(command, **kwargs):
+        calls.append('driver')
+        assert '--refresh-from' not in command
+        shards = out / 'shards'
+        (shards / 'receipts').mkdir(parents=True)
+        receipt = {'tests': [{'node_id': 'required'}], 'shards': [{'name': 'fresh'}]}
+        row = {'content_sha256': 'new'}
+        (shards / 'receipts/fresh.header_keys.jsonl').write_text(json.dumps(row) + '\n')
+        (root / 'test/gpu-proof-header-keys.json').write_text(json.dumps({'shards': {'fresh': [row]}}))
+        (shards / 'gpu-proof.json').write_text(json.dumps(receipt))
+        return SimpleNamespace(returncode=0)
+    def verify(receipt, directory, *, full):
+        assert not git('status', '--porcelain')
+        assert full
+        calls.append('verify')
+    monkeypatch.setattr(launcher, 'run_driver', driver)
+    monkeypatch.setattr(launcher, 'verify_receipt', verify)
+    monkeypatch.setattr('sys.argv', ['run_validation', '--out', str(out), '--execute', '--full'])
+    launcher.main()
+    assert json.loads((out / 'state.json').read_text())['status'] == 'awaiting-evidence-commit'
+    with pytest.raises(ValueError, match='clean'):
+        launcher.finalize(out)
+    git('add', 'gpu-proof.json', 'test/gpu-proof-header-keys.json')
+    git('commit', '-qm', 'Evidence')
+    launcher.finalize(out)
+    assert calls == ['driver', 'verify']
+    assert json.loads((out / 'state.json').read_text())['status'] == 'verified'
+    # A clean source edit still must not pass the finalization gate.
+    (root / 'source.py').write_text('changed\n')
+    git('add', 'source.py'); git('commit', '-qm', 'Changed source')
+    with pytest.raises(ValueError, match='outside evidence'):
+        launcher.finalize(out)
+    assert calls == ['driver', 'verify']
+    (root / 'source.py').write_text('original\n')
+    git('add', 'source.py'); git('commit', '-qm', 'Restore candidate source')
+    (root / 'gpu-proof.json').write_text('{"tampered": true}')
+    git('add', 'gpu-proof.json'); git('commit', '-qm', 'Tamper evidence')
+    with pytest.raises(ValueError, match='evidence changed'):
+        launcher.finalize(out)
+    assert calls == ['driver', 'verify']

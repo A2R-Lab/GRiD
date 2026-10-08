@@ -59,7 +59,7 @@ def export(source, output, approved=False):
     for (robot, op, backend, batch), g in lookup.items():
         if backend not in ('grid_cuda', 'grid_jax'):
             continue
-        for cb in ('pinocchio', 'pinocchio_plain', 'mjx', 'mujoco_warp', 'mujoco_cpu', 'bard', 'frax'):
+        for cb in ('pinocchio', 'pinocchio_plain', 'mjx', 'mujoco_warp', 'mujoco_cpu', 'bard', 'frax', 'curobo'):
             c = lookup.get((robot, op, cb, batch))
             if not c:
                 continue

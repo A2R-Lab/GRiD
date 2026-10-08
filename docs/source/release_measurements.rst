@@ -41,6 +41,24 @@ launch configuration was re-tuned for the new kernel (its best block size
 moved). Every other timed kernel is byte-identical; the drift check above
 was repeated on all 36 RNEA cells of the three robots (worst deviation 0.62%).
 
+The baseline-density addendum of 7 October used commit ``11c23dab285971879145342aef8cb01281d359c9``.
+It changed no GRiD code: it added adapters so that more of the baselines'
+public operations are matched and timed. Frax's floating-base model (six
+prepended prismatic and Euler joints, ``nq == nv``) is now mapped to the shared
+quaternion fixture through the exact velocity map between the two coordinate
+systems, so go2 and G1 gain Frax cells for RNEA, gravity, bias, CRBA, M⁻¹,
+forward dynamics and the end-effector pose; Frax's autodiff gradients are
+timed on iiwa14. The end-effector pose gradient, ``d[xyz; rpy]/dv``, is now
+matched for Pinocchio (both API modes), MuJoCo CPU, MJX, MuJoCo Warp and Frax
+through one analytic map from each library's world-frame Jacobian to RPY
+rates (MJX and Frax by autodiff of the pose). cuRobo's native CUDA RNEA was
+also wired on the shared iiwa14 URDF and **failed the oracle gate** (23%
+relative L2 error: its development URDF parser doubles every inertial-origin
+offset and discards the parsed inertia tensor), so it has no timing row; the
+audit records the attempt. These cells follow each table's existing protocol
+(300 samples for RNEA and its gradient, 30 for the secondary table) and were
+collected on an otherwise idle machine.
+
 What the measurements show
 --------------------------
 
@@ -291,7 +309,10 @@ Protocol
   through a C++ timing harness.
 * fp32 arithmetic except marked ``*`` cells: Pinocchio analytical Hessians
   and MuJoCo CPU in this core study. Secondary tables also include fp64
-  Pinocchio end-effector pose. Input precision is recorded separately.
+  Pinocchio end-effector pose and pose gradient. Every JAX cell (GRiD, MJX,
+  Frax) runs with ``jax_default_matmul_precision="highest"``: TF32 matmuls,
+  JAX's GPU default, miss the oracle gate at the 1e-3 level on Frax's
+  matmul-based dynamics. Input precision is recorded separately.
 * Identical seeded states, normalized quaternions, URDF hashes and input-value
   hashes are used across backends. Every timed cell is checked before and
   after timing against RBDReference's Pinocchio-backed fp64 oracle, plus
@@ -320,10 +341,14 @@ Downloads and reproduction
 
 Every table row includes status, reason, dtype, times, run ranges and numerical
 error information. ``adapter_pending`` means our adapter is not wired;
-``excluded_method`` means outside the analytical study; ``model_mismatch``
-identifies Frax's unvalidated floating-base conversion; ``not_applicable``
-marks NumPy's allocate-once RNEA, which has no ``out=``. No unavailable result
-is treated as zero.
+``excluded_method`` means outside the analytical study; ``not_applicable``
+marks NumPy's allocate-once RNEA, which has no ``out=``; ``validation_failed``
+marks a cell whose output missed the oracle gate and was therefore not timed
+(one Frax M⁻¹ cell on G1 at batch 64, relative L2 error 1.1e-3 against the
+0.1% warning bound its other batches meet). Frax's floating-base gradients
+remain ``adapter_pending``: its autodiff Jacobian is taken on its Euler base
+coordinates and the transport of a full dynamics Jacobian to the shared
+tangent is not implemented. No unavailable result is treated as zero.
 
 Secondary fp32 forward-dynamics-family cells may carry ``accuracy_warning``:
 they exceed the strict entrywise gate while every output block remains within
