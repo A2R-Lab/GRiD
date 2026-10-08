@@ -90,7 +90,10 @@ def speedup_grid(rows, out, name, purpose, sides, comps, comp_field, title, note
                 lookup.get((ro, op, gb, b), {}).get(gf), lookup.get((ro, op, comp, b), {}).get(comp_field))
                 for b in batches] for op, ro in cells]
             marks = [[cell_marks(lookup.get((ro, op, gb, b)), gf, lookup.get((ro, op, comp, b)), comp_field) for b in batches] for op, ro in cells]
-            _ratio_heatmap(axes[si, ci], matrix, labels, batches, f"{side_label}\nvs {LABELS[comp]}", marks=marks)
+            # Break the boundary description onto its own line so panel titles never
+            # collide at 2.7 in per panel (the two-row JAX/PyTorch figure).
+            _ratio_heatmap(axes[si, ci], matrix, labels, batches,
+                           f"{side_label.replace(' (', chr(10) + '(', 1)}\nvs {LABELS[comp]}", marks=marks)
             axes[si, ci].set_xlabel("batch")
     if purpose != "release":
         fig.suptitle(banner(purpose, title), fontsize=12)

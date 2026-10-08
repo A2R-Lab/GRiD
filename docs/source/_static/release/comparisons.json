@@ -399,6 +399,30 @@
     {
       "robot": "g1",
       "operation": "inverse_dynamics",
+      "batch": 16,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 6.338952001028501,
+      "observed_lower": 5.793157388988711,
+      "observed_upper": 7.009967479014026,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
+      "batch": 16,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 6.3648232148388715,
+      "observed_lower": 4.349885679741214,
+      "observed_upper": 7.410903247119349,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
       "batch": 32,
       "grid": "grid_cuda",
       "baseline": "pinocchio",
@@ -502,6 +526,30 @@
       "ratio": 68.56462611314714,
       "observed_lower": 67.34564035222866,
       "observed_upper": 69.74137959476877,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
+      "batch": 32,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 6.242916476490067,
+      "observed_lower": 5.952764970057213,
+      "observed_upper": 6.675126871288099,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
+      "batch": 32,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 3.522824487849162,
+      "observed_lower": 3.4565512509529164,
+      "observed_upper": 9.537763807588542,
       "result": "range_win"
     },
     {
@@ -615,6 +663,30 @@
     {
       "robot": "g1",
       "operation": "inverse_dynamics",
+      "batch": 64,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 7.311643757022575,
+      "observed_lower": 6.0170469127135675,
+      "observed_upper": 8.234325030749549,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
+      "batch": 64,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 6.394334576173968,
+      "observed_lower": 6.034512891513432,
+      "observed_upper": 9.535413952396006,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
       "batch": 128,
       "grid": "grid_cuda",
       "baseline": "pinocchio",
@@ -718,6 +790,30 @@
       "ratio": 71.23596087670843,
       "observed_lower": 70.29058927182274,
       "observed_upper": 72.06753582787678,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
+      "batch": 128,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 5.62634519952621,
+      "observed_lower": 5.60500179728966,
+      "observed_upper": 6.474403609730588,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
+      "batch": 128,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 5.516655559981804,
+      "observed_lower": 4.619830740336524,
+      "observed_upper": 5.900269747415955,
       "result": "range_win"
     },
     {
@@ -831,6 +927,30 @@
     {
       "robot": "g1",
       "operation": "inverse_dynamics",
+      "batch": 256,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 6.262654458521505,
+      "observed_lower": 6.11883103996021,
+      "observed_upper": 6.721483521925528,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
+      "batch": 256,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 6.068317828760958,
+      "observed_lower": 3.7899782656813916,
+      "observed_upper": 7.17872923343127,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
       "batch": 1024,
       "grid": "grid_cuda",
       "baseline": "pinocchio",
@@ -934,6 +1054,30 @@
       "ratio": 38.489852154448165,
       "observed_lower": 38.26312107735246,
       "observed_upper": 39.18301251468091,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
+      "batch": 1024,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 3.7966088609328437,
+      "observed_lower": 3.548971964533818,
+      "observed_upper": 4.417973326109803,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
+      "batch": 1024,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 2.9172422546805974,
+      "observed_lower": 2.4532753625919033,
+      "observed_upper": 4.382856568826979,
       "result": "range_win"
     },
     {
@@ -1047,6 +1191,30 @@
     {
       "robot": "g1",
       "operation": "inverse_dynamics",
+      "batch": 16,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 1.366730548145669,
+      "observed_lower": 1.2153184527228909,
+      "observed_upper": 1.5445699788044116,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
+      "batch": 16,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 2.928181619842113,
+      "observed_lower": 1.827599476609145,
+      "observed_upper": 3.4259834156033673,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
       "batch": 32,
       "grid": "grid_jax",
       "baseline": "pinocchio",
@@ -1150,6 +1318,30 @@
       "ratio": 34.54068238558076,
       "observed_lower": 32.13761554769882,
       "observed_upper": 37.497884086349444,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
+      "batch": 32,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 1.4101054954488303,
+      "observed_lower": 1.3183865234172678,
+      "observed_upper": 1.5320110356390353,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
+      "batch": 32,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 1.7746871620672637,
+      "observed_lower": 1.6494804213464742,
+      "observed_upper": 5.128174460815522,
       "result": "range_win"
     },
     {
@@ -1263,6 +1455,30 @@
     {
       "robot": "g1",
       "operation": "inverse_dynamics",
+      "batch": 64,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 1.491476138100888,
+      "observed_lower": 1.1063467447685855,
+      "observed_upper": 1.798077682593396,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
+      "batch": 64,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 3.4258642618925474,
+      "observed_lower": 3.2309320261029755,
+      "observed_upper": 5.160676339045174,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
       "batch": 128,
       "grid": "grid_jax",
       "baseline": "pinocchio",
@@ -1366,6 +1582,30 @@
       "ratio": 37.782359482107815,
       "observed_lower": 37.05162824814291,
       "observed_upper": 38.42381905569476,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
+      "batch": 128,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 1.2488730638870769,
+      "observed_lower": 1.1590958001834144,
+      "observed_upper": 1.4628243813729063,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
+      "batch": 128,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 2.9259416303367516,
+      "observed_lower": 2.4352086521617653,
+      "observed_upper": 3.145811696628114,
       "result": "range_win"
     },
     {
@@ -1479,6 +1719,30 @@
     {
       "robot": "g1",
       "operation": "inverse_dynamics",
+      "batch": 256,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 1.4756933245473838,
+      "observed_lower": 0.8544746478036491,
+      "observed_upper": 1.5828224126369637,
+      "result": "overlap"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
+      "batch": 256,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 3.1632076782971223,
+      "observed_lower": 1.7252165868907758,
+      "observed_upper": 3.7985984083181963,
+      "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
       "batch": 1024,
       "grid": "grid_jax",
       "baseline": "pinocchio",
@@ -1583,6 +1847,30 @@
       "observed_lower": 14.839468249514601,
       "observed_upper": 26.245092263789495,
       "result": "range_win"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
+      "batch": 1024,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 1.2383523197818938,
+      "observed_lower": 0.7190961597840047,
+      "observed_upper": 1.4578218867170383,
+      "result": "overlap"
+    },
+    {
+      "robot": "g1",
+      "operation": "inverse_dynamics",
+      "batch": 1024,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 1.881048353413986,
+      "observed_lower": 0.9514462183286686,
+      "observed_upper": 2.9356720590261296,
+      "result": "overlap"
     },
     {
       "robot": "g1",
@@ -2559,6 +2847,30 @@
     {
       "robot": "go2",
       "operation": "inverse_dynamics",
+      "batch": 16,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 7.421039686186889,
+      "observed_lower": 6.437389423041981,
+      "observed_upper": 8.134545756531885,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
+      "batch": 16,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 4.769929776870342,
+      "observed_lower": 4.269854334046145,
+      "observed_upper": 4.98680490234685,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
       "batch": 32,
       "grid": "grid_cuda",
       "baseline": "pinocchio",
@@ -2662,6 +2974,30 @@
       "ratio": 78.0962505344749,
       "observed_lower": 76.78510404832356,
       "observed_upper": 78.9043673239675,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
+      "batch": 32,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 8.428657212656054,
+      "observed_lower": 7.12187353901431,
+      "observed_upper": 9.979173200861338,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
+      "batch": 32,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 4.690755642088193,
+      "observed_lower": 4.315103895258335,
+      "observed_upper": 4.7021600200581695,
       "result": "range_win"
     },
     {
@@ -2775,6 +3111,30 @@
     {
       "robot": "go2",
       "operation": "inverse_dynamics",
+      "batch": 64,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 7.97536349905789,
+      "observed_lower": 7.095195598879355,
+      "observed_upper": 10.585447746383048,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
+      "batch": 64,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 4.008500357973098,
+      "observed_lower": 3.9679575920825574,
+      "observed_upper": 4.990496634038369,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
       "batch": 128,
       "grid": "grid_cuda",
       "baseline": "pinocchio",
@@ -2878,6 +3238,30 @@
       "ratio": 78.65432297463046,
       "observed_lower": 72.8425048921455,
       "observed_upper": 81.79750470847506,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
+      "batch": 128,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 11.579426948236163,
+      "observed_lower": 9.076033500489833,
+      "observed_upper": 14.795057541441096,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
+      "batch": 128,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 4.858443010209583,
+      "observed_lower": 4.350592307035882,
+      "observed_upper": 5.544340480820463,
       "result": "range_win"
     },
     {
@@ -2991,6 +3375,30 @@
     {
       "robot": "go2",
       "operation": "inverse_dynamics",
+      "batch": 256,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 10.072679919921125,
+      "observed_lower": 7.1106597181441895,
+      "observed_upper": 12.011702188180603,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
+      "batch": 256,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 4.509284939519073,
+      "observed_lower": 4.489384462568122,
+      "observed_upper": 4.985850914732837,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
       "batch": 1024,
       "grid": "grid_cuda",
       "baseline": "pinocchio",
@@ -3094,6 +3502,30 @@
       "ratio": 51.59855913321084,
       "observed_lower": 49.1462477756733,
       "observed_upper": 52.319852235305795,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
+      "batch": 1024,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 7.151651341621141,
+      "observed_lower": 6.525623948698659,
+      "observed_upper": 7.403123750901746,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
+      "batch": 1024,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 3.584764727913085,
+      "observed_lower": 3.252367289310336,
+      "observed_upper": 5.779133069968339,
       "result": "range_win"
     },
     {
@@ -3207,6 +3639,30 @@
     {
       "robot": "go2",
       "operation": "inverse_dynamics",
+      "batch": 16,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 1.1414591054506442,
+      "observed_lower": 1.0841147937789946,
+      "observed_upper": 1.2594624384658686,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
+      "batch": 16,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 1.5342244251967092,
+      "observed_lower": 1.3279603047326238,
+      "observed_upper": 1.7128939767100286,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
       "batch": 32,
       "grid": "grid_jax",
       "baseline": "pinocchio",
@@ -3310,6 +3766,30 @@
       "ratio": 30.999742001911983,
       "observed_lower": 25.598918704910545,
       "observed_upper": 32.335512099328284,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
+      "batch": 32,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 1.2542622214939774,
+      "observed_lower": 1.0744485906166794,
+      "observed_upper": 1.538337785559108,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
+      "batch": 32,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 1.8619615372514715,
+      "observed_lower": 1.4385862360548907,
+      "observed_upper": 1.9269751140300173,
       "result": "range_win"
     },
     {
@@ -3423,6 +3903,30 @@
     {
       "robot": "go2",
       "operation": "inverse_dynamics",
+      "batch": 64,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 1.1780875711936005,
+      "observed_lower": 1.0748413873485778,
+      "observed_upper": 1.6812129999962735,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
+      "batch": 64,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 1.5894931424001195,
+      "observed_lower": 1.3540898057260342,
+      "observed_upper": 2.061412806630981,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
       "batch": 128,
       "grid": "grid_jax",
       "baseline": "pinocchio",
@@ -3526,6 +4030,30 @@
       "ratio": 31.10818838458525,
       "observed_lower": 30.157905542695726,
       "observed_upper": 32.36347191203249,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
+      "batch": 128,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 1.667000294811556,
+      "observed_lower": 1.2842037355875133,
+      "observed_upper": 2.194989500863606,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
+      "batch": 128,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 1.9215391437050406,
+      "observed_lower": 1.8012114224330362,
+      "observed_upper": 2.193637911832126,
       "result": "range_win"
     },
     {
@@ -3639,6 +4167,30 @@
     {
       "robot": "go2",
       "operation": "inverse_dynamics",
+      "batch": 256,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 1.5068174908157173,
+      "observed_lower": 1.087792332373765,
+      "observed_upper": 1.8114962590266395,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
+      "batch": 256,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 1.3772133089512675,
+      "observed_lower": 1.1950896072071682,
+      "observed_upper": 1.9554643310935453,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
       "batch": 1024,
       "grid": "grid_jax",
       "baseline": "pinocchio",
@@ -3742,6 +4294,30 @@
       "ratio": 23.70727090766877,
       "observed_lower": 23.426744569275876,
       "observed_upper": 25.697378879680347,
+      "result": "range_win"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
+      "batch": 1024,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 1.1522004971667825,
+      "observed_lower": 0.9955959269250431,
+      "observed_upper": 1.640178985702389,
+      "result": "overlap"
+    },
+    {
+      "robot": "go2",
+      "operation": "inverse_dynamics",
+      "batch": 1024,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 1.6470418936599995,
+      "observed_lower": 1.5503193261043942,
+      "observed_upper": 2.838474608589434,
       "result": "range_win"
     },
     {
@@ -4723,9 +5299,9 @@
       "grid": "grid_cuda",
       "baseline": "frax",
       "boundary": "host",
-      "ratio": 10.679859320952998,
-      "observed_lower": 9.621556240039753,
-      "observed_upper": 12.007572141934787,
+      "ratio": 11.368746517134705,
+      "observed_lower": 9.972607411290882,
+      "observed_upper": 15.233353734818515,
       "result": "range_win"
     },
     {
@@ -4735,9 +5311,9 @@
       "grid": "grid_cuda",
       "baseline": "frax",
       "boundary": "resident",
-      "ratio": 6.069026132622849,
-      "observed_lower": 6.008710549783166,
-      "observed_upper": 6.539970355564281,
+      "ratio": 6.017551360638723,
+      "observed_lower": 5.96235995057045,
+      "observed_upper": 6.738444898007283,
       "result": "range_win"
     },
     {
@@ -4855,9 +5431,9 @@
       "grid": "grid_cuda",
       "baseline": "frax",
       "boundary": "host",
-      "ratio": 9.619949206171913,
-      "observed_lower": 9.499938192256991,
-      "observed_upper": 13.038213672392828,
+      "ratio": 14.027304227888019,
+      "observed_lower": 13.976023046140979,
+      "observed_upper": 17.81268846315416,
       "result": "range_win"
     },
     {
@@ -4867,9 +5443,9 @@
       "grid": "grid_cuda",
       "baseline": "frax",
       "boundary": "resident",
-      "ratio": 5.993643865698473,
-      "observed_lower": 5.936119442944501,
-      "observed_upper": 6.816019666817578,
+      "ratio": 7.0921349948952,
+      "observed_lower": 6.817320597694149,
+      "observed_upper": 17.416883182753338,
       "result": "range_win"
     },
     {
@@ -4987,9 +5563,9 @@
       "grid": "grid_cuda",
       "baseline": "frax",
       "boundary": "host",
-      "ratio": 9.396022761489256,
-      "observed_lower": 9.269851994002108,
-      "observed_upper": 9.411908880304683,
+      "ratio": 12.19697348595635,
+      "observed_lower": 10.259293763409195,
+      "observed_upper": 13.039699709075887,
       "result": "range_win"
     },
     {
@@ -4999,9 +5575,9 @@
       "grid": "grid_cuda",
       "baseline": "frax",
       "boundary": "resident",
-      "ratio": 6.148782154821748,
-      "observed_lower": 5.344433277198525,
-      "observed_upper": 6.208096288559242,
+      "ratio": 5.471733002053936,
+      "observed_lower": 5.051468157481151,
+      "observed_upper": 10.173934756214408,
       "result": "range_win"
     },
     {
@@ -5119,9 +5695,9 @@
       "grid": "grid_cuda",
       "baseline": "frax",
       "boundary": "host",
-      "ratio": 9.154879579496251,
-      "observed_lower": 8.947288552349457,
-      "observed_upper": 9.295228436348449,
+      "ratio": 11.700444137154248,
+      "observed_lower": 10.185791866186067,
+      "observed_upper": 14.742969080774744,
       "result": "range_win"
     },
     {
@@ -5131,9 +5707,9 @@
       "grid": "grid_cuda",
       "baseline": "frax",
       "boundary": "resident",
-      "ratio": 5.227150405151565,
-      "observed_lower": 5.002722601781066,
-      "observed_upper": 5.782849881063451,
+      "ratio": 5.217953848429907,
+      "observed_lower": 5.192583593942691,
+      "observed_upper": 8.33555557956002,
       "result": "range_win"
     },
     {
@@ -5251,9 +5827,9 @@
       "grid": "grid_cuda",
       "baseline": "frax",
       "boundary": "host",
-      "ratio": 8.958652055272164,
-      "observed_lower": 8.750727877445142,
-      "observed_upper": 9.275661465324783,
+      "ratio": 11.022065800887129,
+      "observed_lower": 10.422282990605407,
+      "observed_upper": 17.442070620982136,
       "result": "range_win"
     },
     {
@@ -5263,9 +5839,9 @@
       "grid": "grid_cuda",
       "baseline": "frax",
       "boundary": "resident",
-      "ratio": 5.799498285449061,
-      "observed_lower": 5.537879761377954,
-      "observed_upper": 5.827691001506147,
+      "ratio": 6.472399609105378,
+      "observed_lower": 5.6570611304134015,
+      "observed_upper": 6.6192285562232005,
       "result": "range_win"
     },
     {
@@ -5383,9 +5959,9 @@
       "grid": "grid_cuda",
       "baseline": "frax",
       "boundary": "host",
-      "ratio": 9.005261198923966,
-      "observed_lower": 8.025493365547803,
-      "observed_upper": 9.500900233544714,
+      "ratio": 10.254289710228823,
+      "observed_lower": 9.6616274105733,
+      "observed_upper": 16.887141084757385,
       "result": "range_win"
     },
     {
@@ -5395,9 +5971,9 @@
       "grid": "grid_cuda",
       "baseline": "frax",
       "boundary": "resident",
-      "ratio": 5.761785448867045,
-      "observed_lower": 5.665021477299166,
-      "observed_upper": 7.715323494246761,
+      "ratio": 6.624110655975846,
+      "observed_lower": 6.190864666972603,
+      "observed_upper": 7.224094593453205,
       "result": "range_win"
     },
     {
@@ -5515,9 +6091,9 @@
       "grid": "grid_jax",
       "baseline": "frax",
       "boundary": "host",
-      "ratio": 1.113519439119644,
-      "observed_lower": 1.0006155269510557,
-      "observed_upper": 1.2720685228215836,
+      "ratio": 1.1853452245776972,
+      "observed_lower": 1.0371238883787475,
+      "observed_upper": 1.6138041524143512,
       "result": "range_win"
     },
     {
@@ -5527,9 +6103,9 @@
       "grid": "grid_jax",
       "baseline": "frax",
       "boundary": "resident",
-      "ratio": 1.5247350379754445,
-      "observed_lower": 1.2401497367813528,
-      "observed_upper": 1.6649241895016338,
+      "ratio": 1.5118029156380384,
+      "observed_lower": 1.230583344302124,
+      "observed_upper": 1.715451187140465,
       "result": "range_win"
     },
     {
@@ -5647,10 +6223,10 @@
       "grid": "grid_jax",
       "baseline": "frax",
       "boundary": "host",
-      "ratio": 1.0076365772662301,
-      "observed_lower": 0.9484319793511313,
-      "observed_upper": 1.415903705602427,
-      "result": "overlap"
+      "ratio": 1.469282687209296,
+      "observed_lower": 1.3953045728142077,
+      "observed_upper": 1.9343947135277237,
+      "result": "range_win"
     },
     {
       "robot": "iiwa14",
@@ -5659,9 +6235,9 @@
       "grid": "grid_jax",
       "baseline": "frax",
       "boundary": "resident",
-      "ratio": 1.5496595123360817,
-      "observed_lower": 1.5180907697982498,
-      "observed_upper": 1.7770772766606804,
+      "ratio": 1.8336749236151322,
+      "observed_lower": 1.7434473099115053,
+      "observed_upper": 4.540941612155837,
       "result": "range_win"
     },
     {
@@ -5779,10 +6355,10 @@
       "grid": "grid_jax",
       "baseline": "frax",
       "boundary": "host",
-      "ratio": 0.9536166140057869,
-      "observed_lower": 0.9160185585412847,
-      "observed_upper": 1.0195659446477485,
-      "result": "overlap"
+      "ratio": 1.2378893551075774,
+      "observed_lower": 1.013792182538653,
+      "observed_upper": 1.4125544478684484,
+      "result": "range_win"
     },
     {
       "robot": "iiwa14",
@@ -5791,9 +6367,9 @@
       "grid": "grid_jax",
       "baseline": "frax",
       "boundary": "resident",
-      "ratio": 1.3992332568651336,
-      "observed_lower": 1.1383369430906607,
-      "observed_upper": 1.6092940333336339,
+      "ratio": 1.2451621469719016,
+      "observed_lower": 1.0759368715556525,
+      "observed_upper": 2.6373386844651043,
       "result": "range_win"
     },
     {
@@ -5911,10 +6487,10 @@
       "grid": "grid_jax",
       "baseline": "frax",
       "boundary": "host",
-      "ratio": 0.9242929421448993,
-      "observed_lower": 0.8270516567806935,
-      "observed_upper": 0.9755691160409469,
-      "result": "range_loss"
+      "ratio": 1.1812976721346908,
+      "observed_lower": 0.941533961854891,
+      "observed_upper": 1.547329945943812,
+      "result": "overlap"
     },
     {
       "robot": "iiwa14",
@@ -5923,9 +6499,9 @@
       "grid": "grid_jax",
       "baseline": "frax",
       "boundary": "resident",
-      "ratio": 1.146847519405485,
-      "observed_lower": 1.0511352273362355,
-      "observed_upper": 1.468664523846293,
+      "ratio": 1.144829775999267,
+      "observed_lower": 1.0910274206565374,
+      "observed_upper": 2.1169726031341365,
       "result": "range_win"
     },
     {
@@ -6043,10 +6619,10 @@
       "grid": "grid_jax",
       "baseline": "frax",
       "boundary": "host",
-      "ratio": 0.9284482417761988,
-      "observed_lower": 0.8679453395248006,
-      "observed_upper": 0.9938413582804263,
-      "result": "range_loss"
+      "ratio": 1.142294348573663,
+      "observed_lower": 1.0337393729520958,
+      "observed_upper": 1.8688318048240715,
+      "result": "range_win"
     },
     {
       "robot": "iiwa14",
@@ -6055,9 +6631,9 @@
       "grid": "grid_jax",
       "baseline": "frax",
       "boundary": "resident",
-      "ratio": 1.5261468170524704,
-      "observed_lower": 1.4675316397543976,
-      "observed_upper": 1.5610534933222469,
+      "ratio": 1.7032218264313144,
+      "observed_lower": 1.49911456272585,
+      "observed_upper": 1.7730812869316646,
       "result": "range_win"
     },
     {
@@ -6175,10 +6751,10 @@
       "grid": "grid_jax",
       "baseline": "frax",
       "boundary": "host",
-      "ratio": 1.101318715206255,
-      "observed_lower": 0.9645255939106666,
-      "observed_upper": 1.2062733125004386,
-      "result": "overlap"
+      "ratio": 1.254071472171329,
+      "observed_lower": 1.1611606279971927,
+      "observed_upper": 2.1440607852138722,
+      "result": "range_win"
     },
     {
       "robot": "iiwa14",
@@ -6187,9 +6763,9 @@
       "grid": "grid_jax",
       "baseline": "frax",
       "boundary": "resident",
-      "ratio": 1.3163260860271613,
-      "observed_lower": 1.2567229359010859,
-      "observed_upper": 2.0671616750234927,
+      "ratio": 1.5133311940495864,
+      "observed_lower": 1.373375485198225,
+      "observed_upper": 1.9355470307196516,
       "result": "range_win"
     },
     {
@@ -6243,6 +6819,30 @@
     {
       "robot": "iiwa14",
       "operation": "inverse_dynamics_gradient",
+      "batch": 16,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 11.19010221221626,
+      "observed_lower": 10.449052019926462,
+      "observed_upper": 11.733923410274905,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
+      "batch": 16,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 8.478999828815398,
+      "observed_lower": 8.14071712783156,
+      "observed_upper": 9.633299493372938,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
       "batch": 32,
       "grid": "grid_cuda",
       "baseline": "pinocchio",
@@ -6286,6 +6886,30 @@
       "ratio": 24.37825873781795,
       "observed_lower": 23.822180742118153,
       "observed_upper": 30.117153522367424,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
+      "batch": 32,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 13.770937732938476,
+      "observed_lower": 10.324687925570881,
+      "observed_upper": 14.590009169807788,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
+      "batch": 32,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 21.236164669413327,
+      "observed_lower": 12.060787631784024,
+      "observed_upper": 24.813392630812448,
       "result": "range_win"
     },
     {
@@ -6339,6 +6963,30 @@
     {
       "robot": "iiwa14",
       "operation": "inverse_dynamics_gradient",
+      "batch": 64,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 12.060932454893127,
+      "observed_lower": 10.83702219345645,
+      "observed_upper": 14.596029694207688,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
+      "batch": 64,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 9.270408992710728,
+      "observed_lower": 8.310954343259617,
+      "observed_upper": 11.720855595222144,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
       "batch": 128,
       "grid": "grid_cuda",
       "baseline": "pinocchio",
@@ -6382,6 +7030,30 @@
       "ratio": 38.601600686624856,
       "observed_lower": 25.209984541866337,
       "observed_upper": 41.027132643212376,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
+      "batch": 128,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 13.993147473521425,
+      "observed_lower": 13.169364598888114,
+      "observed_upper": 15.530027622382327,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
+      "batch": 128,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 9.341745662991388,
+      "observed_lower": 9.043192397725747,
+      "observed_upper": 10.434834002731494,
       "result": "range_win"
     },
     {
@@ -6435,6 +7107,30 @@
     {
       "robot": "iiwa14",
       "operation": "inverse_dynamics_gradient",
+      "batch": 256,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 16.85877867872335,
+      "observed_lower": 13.491121184850378,
+      "observed_upper": 17.472107445089893,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
+      "batch": 256,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 11.825516448814689,
+      "observed_lower": 10.24747848645775,
+      "observed_upper": 23.276023405191214,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
       "batch": 1024,
       "grid": "grid_cuda",
       "baseline": "pinocchio",
@@ -6478,6 +7174,30 @@
       "ratio": 20.70924258695201,
       "observed_lower": 18.859541227061708,
       "observed_upper": 26.351068396749447,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
+      "batch": 1024,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 9.485174417312662,
+      "observed_lower": 9.144584666925153,
+      "observed_upper": 11.783387233902591,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
+      "batch": 1024,
+      "grid": "grid_cuda",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 11.639890241678271,
+      "observed_lower": 8.820065594866882,
+      "observed_upper": 14.413694956209298,
       "result": "range_win"
     },
     {
@@ -6531,6 +7251,30 @@
     {
       "robot": "iiwa14",
       "operation": "inverse_dynamics_gradient",
+      "batch": 16,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 1.373841906645754,
+      "observed_lower": 1.2666651882432678,
+      "observed_upper": 1.4470152721282186,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
+      "batch": 16,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 2.2960295209123127,
+      "observed_lower": 1.9048455942494444,
+      "observed_upper": 2.6091319010684795,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
       "batch": 32,
       "grid": "grid_jax",
       "baseline": "pinocchio",
@@ -6574,6 +7318,30 @@
       "ratio": 7.222118035632747,
       "observed_lower": 6.200260723959422,
       "observed_upper": 9.022358667049609,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
+      "batch": 32,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 1.6376589677807076,
+      "observed_lower": 1.1347646223740524,
+      "observed_upper": 1.7898212738040404,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
+      "batch": 32,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 6.2912650782852735,
+      "observed_lower": 3.139092456013201,
+      "observed_upper": 7.433482314165173,
       "result": "range_win"
     },
     {
@@ -6627,6 +7395,30 @@
     {
       "robot": "iiwa14",
       "operation": "inverse_dynamics_gradient",
+      "batch": 64,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 1.3672523955452789,
+      "observed_lower": 1.1730750171009996,
+      "observed_upper": 1.7229421941654284,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
+      "batch": 64,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 2.336974460339485,
+      "observed_lower": 1.986055295285026,
+      "observed_upper": 3.4349688908239098,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
       "batch": 128,
       "grid": "grid_jax",
       "baseline": "pinocchio",
@@ -6670,6 +7462,30 @@
       "ratio": 11.232176973379785,
       "observed_lower": 6.052647997056207,
       "observed_upper": 12.531959986850628,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
+      "batch": 128,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 1.7228404503552286,
+      "observed_lower": 1.4898468137164989,
+      "observed_upper": 1.914650392397146,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
+      "batch": 128,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 2.7182328882900206,
+      "observed_lower": 2.1711738958899227,
+      "observed_upper": 3.187376591215281,
       "result": "range_win"
     },
     {
@@ -6723,6 +7539,30 @@
     {
       "robot": "iiwa14",
       "operation": "inverse_dynamics_gradient",
+      "batch": 256,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 2.1417733596050907,
+      "observed_lower": 1.4918933221586137,
+      "observed_upper": 2.236411093072047,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
+      "batch": 256,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 3.540042261048521,
+      "observed_lower": 2.5998493593806806,
+      "observed_upper": 7.192187283232105,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
       "batch": 1024,
       "grid": "grid_jax",
       "baseline": "pinocchio",
@@ -6766,6 +7606,30 @@
       "ratio": 8.436633935779907,
       "observed_lower": 6.649524581373584,
       "observed_upper": 12.503073231241865,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
+      "batch": 1024,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "host",
+      "ratio": 1.8571119496433883,
+      "observed_lower": 1.7412600837162773,
+      "observed_upper": 2.3346185909539208,
+      "result": "range_win"
+    },
+    {
+      "robot": "iiwa14",
+      "operation": "inverse_dynamics_gradient",
+      "batch": 1024,
+      "grid": "grid_jax",
+      "baseline": "frax",
+      "boundary": "resident",
+      "ratio": 4.741916205258456,
+      "observed_lower": 3.1097916050173313,
+      "observed_upper": 6.839019991785114,
       "result": "range_win"
     }
   ]

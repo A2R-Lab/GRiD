@@ -2,8 +2,12 @@
   "publication_approved": true,
   "iterations": 30,
   "repeats": 3,
-  "source_table_sha256": "72557591ee4c7bf609db9e38b925738b5cdd57d45d6799422ddf09225ed8dbe0",
+  "source_table_sha256": "7369a4b0418c528b7942f71bbcb1d354130cea1b75bbe367304609ab99b56e6b",
   "capture_order": [
+    "/home/plancher/Desktop/GRiD-post/test/benchmarks/results/release-density-20261007/ee-grad-sims-strict",
+    "/home/plancher/Desktop/GRiD-post/test/benchmarks/results/release-density-20261007/frax-strict",
+    "/home/plancher/Desktop/GRiD-post/test/benchmarks/results/release-density-20261007/frax-fd-warnings",
+    "/home/plancher/Desktop/GRiD-post/test/benchmarks/results/release-density-20261007/curobo-strict",
     "/home/plancher/Desktop/GRiD/test/benchmarks/results/release-followup-20260927-UbHPGy/replacement-g1-grid_jax-strict",
     "/home/plancher/Desktop/GRiD/test/benchmarks/results/release-followup-20260927-UbHPGy/replacement-g1-pinocchio-fp32-fd-warnings",
     "/home/plancher/Desktop/GRiD/test/benchmarks/results/release-followup-20260927-UbHPGy/replacement-g1-pinocchio-strict",
@@ -42,17 +46,28 @@
     "/home/plancher/Desktop/GRiD/test/benchmarks/results/release-night-20260927-JkhDqi/grid-extra-core-baselines"
   ],
   "accepted_source_drift": [
+    "test/benchmarks/release/competitors.py",
+    "test/benchmarks/release/frax_floating.py",
+    "test/benchmarks/release/grid_adapter.py",
     "test/benchmarks/release/pin_adapter.py",
-    "test/benchmarks/release/pin_bridge.cpp"
+    "test/benchmarks/release/pin_bridge.cpp",
+    "test/benchmarks/release/protocol.py",
+    "test/benchmarks/release/report.py",
+    "test/benchmarks/release/warp_kernels.py"
   ],
   "status_counts": {
-    "adapter_pending": 540,
-    "validated": 960,
-    "model_mismatch": 96,
+    "adapter_pending": 444,
+    "validated": 1128,
     "excluded_method": 180,
-    "accuracy_warning": 168
+    "accuracy_warning": 190,
+    "validation_failed": 2
   },
+  "superseded_cells": 3528,
   "manifests": {
+    "/home/plancher/Desktop/GRiD-post/test/benchmarks/results/release-density-20261007/ee-grad-sims-strict": "5341639c888be423c699aa8b40a288cdcaaa60688996fe8e47e3ea5525afcef5",
+    "/home/plancher/Desktop/GRiD-post/test/benchmarks/results/release-density-20261007/frax-strict": "5ff76c916b277d5a61730bceb1fb9dfd40860248fa0bf148d0d83543d038a927",
+    "/home/plancher/Desktop/GRiD-post/test/benchmarks/results/release-density-20261007/frax-fd-warnings": "f488f342f3881011cd3c68a51a8becd0e3a898b5d36965fdec1c6ecc36be8b03",
+    "/home/plancher/Desktop/GRiD-post/test/benchmarks/results/release-density-20261007/curobo-strict": "8831d5812dc059b1fb36f6b02df925903739e081898341a13ddb22a40280b98a",
     "/home/plancher/Desktop/GRiD/test/benchmarks/results/release-followup-20260927-UbHPGy/replacement-g1-grid_jax-strict": "0b9f5cacb9a8b47eaf6d514ae0a3ef6df94adadc8198491e7260658faebc0cca",
     "/home/plancher/Desktop/GRiD/test/benchmarks/results/release-followup-20260927-UbHPGy/replacement-g1-pinocchio-fp32-fd-warnings": "c07c54471dfc61e749666d0fb0278e1a29794633870fa827f94fb96cc6d2541b",
     "/home/plancher/Desktop/GRiD/test/benchmarks/results/release-followup-20260927-UbHPGy/replacement-g1-pinocchio-strict": "2b2525e45067a4071d23aee403522b8f251d5af6093d1fab0187ba2925d7a489",

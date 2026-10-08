@@ -1,13 +1,12 @@
 {
   "publication_approved": true,
-  "workers": 300,
-  "measurements": 1800,
+  "workers": 309,
+  "measurements": 1854,
   "status_counts": {
     "excluded_method": 90,
-    "validated": 600,
-    "model_mismatch": 24,
+    "validated": 618,
     "not_applicable": 18,
-    "adapter_pending": 60
+    "adapter_pending": 66
   },
   "variability": [
     {
@@ -19,10 +18,10 @@
     },
     {
       "backend": "frax",
-      "cells": 6,
-      "host_flags": 0,
-      "resident_flags": 0,
-      "boundary_flags": 0
+      "cells": 24,
+      "host_flags": 5,
+      "resident_flags": 12,
+      "boundary_flags": 3
     },
     {
       "backend": "grid_cuda",
@@ -117,6 +116,7 @@
     }
   ],
   "raw_manifests": {
+    "test/benchmarks/results/release-density-core-20261007": "c2a8620c84dbe50fa97061c232b805f19442e9e4f7949b47382b3328f22238db",
     "test/benchmarks/results/release-pinocchio24-final-20260928-VAl4Dj": "496d0b98049f33a203d4b97a5a49b4fddb23ab0305be5ee2f0e057579769ccec",
     "test/benchmarks/results/release-barrier-iiwa14c-S-20261004": "80165cab263ed58a9420807eb91fba4697f0616ca0b3fc2f14a7243d1ba11820",
     "test/benchmarks/results/release-barrier-S-20261004": "08444794700096000466d44e008391de08884a85a0235db78111333e8c586610",
@@ -128,5 +128,50 @@
   "sample_counts_and_means_verified": true,
   "hashes_and_contracts_verified": true,
   "pinocchio_thread_policy": "Core: best of 1,2,4,8,16,24 workers capped by batch; secondary tables retain original policy",
-  "comparison_definition": "Ratios of medians of three run means; observed ranges are not confidence intervals"
+  "comparison_definition": "Ratios of medians of three run means; observed ranges are not confidence intervals",
+  "addendum_2026_10_07": {
+    "purpose": "Competitor density: Frax floating-base cells through a validated Euler/twist coordinate transport (x/y/z prismatic + intrinsic XYZ Euler base; v_pin = G qdot_frax) and Frax autodiff gradients on the fixed-base robot; end-effector pose gradient (d[xyz; rpy]/dv) for Pinocchio (both modes), MuJoCo CPU, mjx, MuJoCo Warp and Frax via the analytic world-Jacobian to RPY-rate map E(rpy)^-1 (mjx/Frax: autodiff of the pose); cuRobo native RNEA attempted on the shared iiwa14 URDF and recorded as validation_failed (its dev-checkout URDF parser doubles inertial-origin offsets and discards inertia tensors).",
+    "protocol": "secondary table: 30 samples x 3 repeats, batches 16-1024; JAX_DEFAULT_MATMUL_PRECISION=highest (TF32 off) as for every JAX cell; Frax floating gradients remain adapter_pending (Jacobian transport to the shared tangent not implemented)",
+    "captures": {
+      "ee-grad-sims-strict": {
+        "commit": "11c23dab285971879145342aef8cb01281d359c9",
+        "manifest_sha256": "5341639c888be423c699aa8b40a288cdcaaa60688996fe8e47e3ea5525afcef5",
+        "accuracy_policy": "strict"
+      },
+      "frax-strict": {
+        "commit": "11c23dab285971879145342aef8cb01281d359c9",
+        "manifest_sha256": "5ff76c916b277d5a61730bceb1fb9dfd40860248fa0bf148d0d83543d038a927",
+        "accuracy_policy": "strict"
+      },
+      "frax-fd-warnings": {
+        "commit": "11c23dab285971879145342aef8cb01281d359c9",
+        "manifest_sha256": "f488f342f3881011cd3c68a51a8becd0e3a898b5d36965fdec1c6ecc36be8b03",
+        "accuracy_policy": "fp32-fd-warnings"
+      },
+      "curobo-strict": {
+        "commit": "11c23dab285971879145342aef8cb01281d359c9",
+        "manifest_sha256": "8831d5812dc059b1fb36f6b02df925903739e081898341a13ddb22a40280b98a",
+        "accuracy_policy": "strict"
+      }
+    },
+    "accepted_source_drift": [
+      "test/benchmarks/release/competitors.py",
+      "test/benchmarks/release/frax_floating.py",
+      "test/benchmarks/release/grid_adapter.py",
+      "test/benchmarks/release/pin_adapter.py",
+      "test/benchmarks/release/pin_bridge.cpp",
+      "test/benchmarks/release/protocol.py",
+      "test/benchmarks/release/report.py",
+      "test/benchmarks/release/warp_kernels.py"
+    ],
+    "new_measurements": 660,
+    "secondary_status_counts": {
+      "adapter_pending": 444,
+      "validated": 1128,
+      "excluded_method": 180,
+      "accuracy_warning": 190,
+      "validation_failed": 2
+    },
+    "superseded_old_records": 3528
+  }
 }
