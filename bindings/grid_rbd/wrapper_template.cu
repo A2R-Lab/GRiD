@@ -215,6 +215,7 @@ static const char *grid_ctx_rc_message(int rc) {
     }
 }
 static int grid_ctx_create_locked(GridCtx **out, const grid::grid_device_pool_t &pool, bool make_default);
+static cudaError_t grid_rbd_init_kernel_attrs_checked(const char **failed_op);  // generated (family kernel attrs)
 struct GridCtxRef {
     GridCtx *ctx = nullptr; int rc = 0; bool exclusive = false;
     // `exclusive` = a MUTATOR: waits for every admitted call to finish and blocks
@@ -391,7 +392,12 @@ static int grid_ctx_create_locked(GridCtx **out, const grid::grid_device_pool_t 
     c->plant = new PlantBuffers();
     size_t free_b = 0, total_b = 0; cudaMemGetInfo(&free_b, &total_b);
     const char *failed_op = nullptr;
-    cudaError_t e = grid::init_grid_checked<T>(&c->streams, &failed_op);
+    // Streams first, then the per-family kernel-attribute registration (the
+    // generated grid_rbd_init_kernel_attrs_checked below): same registrations
+    // and failed_op naming as the header's init_grid_checked for every kernel
+    // the bindings launch, without address-taking the ones they do not.
+    cudaError_t e = grid::init_grid_streams_checked<T>(&c->streams, &failed_op);
+    if (e == cudaSuccess) e = grid_rbd_init_kernel_attrs_checked(&failed_op);
     if (e == cudaSuccess) e = grid::init_robotModel_checked<T>(&c->robot, &failed_op);
     if (e == cudaSuccess) e = grid::init_gridData_checked<T, kMaxBatch>(&c->data, &failed_op, &c->pool);
     if (e == cudaSuccess) {
@@ -898,6 +904,238 @@ extern "C" int grid_rbd_kernel_max_threads(const char* algo) {
     return -1;  // unknown / not-built algo key
 }
 #undef GRID_KERNEL_CEIL
+
+// ─── per-family kernel-attribute registration (multi-TU arc, 2026-10-09) ────
+// The context constructor registers dynamic-smem attributes family by family
+// through the header's library-safe per-algo `_checked` twins instead of the
+// all-kernel aggregate, so no unit address-takes kernels it does not launch
+// (the aggregate also pulled in the bench-only `_single_timing` twins).
+// ── BEGIN GENERATED FAMILY KERNEL ATTRS (grid_codegen/wrapper_body_gen.py — do not hand-edit) ──
+// Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen
+// Tables: abi_specs.FAMILIES / FAMILY_ATTR_SHORTS (crosschecked against
+// kernel_attrs.KERNEL_OVERLOADS by test/test_abi_spec_crosscheck.py).
+static cudaError_t grid_rbd_family_plant_hessian_init_attrs(const char **failed_op) {
+    (void)failed_op;
+    return cudaSuccess;
+}
+static cudaError_t grid_rbd_family_integrator_gradient_init_attrs(const char **failed_op) {
+#if GRID_HAS_INTEGRATOR_GRADIENT
+    { cudaError_t _e = grid::init_grid_kernel_attr_integrator_gradient_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#ifdef GRID_RBD_WITH_MUJOCO
+    { cudaError_t _e = grid::init_grid_kernel_attr_integrator_gradient_mjx_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#endif
+    (void)failed_op;
+    return cudaSuccess;
+}
+static cudaError_t grid_rbd_family_integrator_init_attrs(const char **failed_op) {
+#if GRID_HAS_INTEGRATOR
+    { cudaError_t _e = grid::init_grid_kernel_attr_integrator_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#ifdef GRID_RBD_WITH_MUJOCO
+    { cudaError_t _e = grid::init_grid_kernel_attr_integrator_mjx_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#endif
+    (void)failed_op;
+    return cudaSuccess;
+}
+static cudaError_t grid_rbd_family_plant_step_gradient_init_attrs(const char **failed_op) {
+    (void)failed_op;
+    return cudaSuccess;
+}
+static cudaError_t grid_rbd_family_plant_step_init_attrs(const char **failed_op) {
+    (void)failed_op;
+    return cudaSuccess;
+}
+static cudaError_t grid_rbd_family_fdsva_so_init_attrs(const char **failed_op) {
+#if GRID_HAS_FDSVA_SO
+    { cudaError_t _e = grid::init_grid_kernel_attr_fdsva_so_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#ifdef GRID_RBD_WITH_MUJOCO
+    { cudaError_t _e = grid::init_grid_kernel_attr_fdsva_so_mjx_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#endif
+    (void)failed_op;
+    return cudaSuccess;
+}
+static cudaError_t grid_rbd_family_idsva_so_init_attrs(const char **failed_op) {
+#if GRID_HAS_IDSVA_SO_BODY_FRAME
+    { cudaError_t _e = grid::init_grid_kernel_attr_idsva_so_body_frame_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#if GRID_HAS_IDSVA_SO_WORLD_FRAME
+    { cudaError_t _e = grid::init_grid_kernel_attr_idsva_so_world_frame_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#ifdef GRID_RBD_WITH_MUJOCO
+    { cudaError_t _e = grid::init_grid_kernel_attr_idsva_so_world_frame_mjx_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#endif
+    (void)failed_op;
+    return cudaSuccess;
+}
+static cudaError_t grid_rbd_family_dyn_values_init_attrs(const char **failed_op) {
+#if GRID_HAS_INVERSE_DYNAMICS
+    { cudaError_t _e = grid::init_grid_kernel_attr_inverse_dynamics_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#ifdef GRID_RBD_WITH_MUJOCO
+    { cudaError_t _e = grid::init_grid_kernel_attr_inverse_dynamics_mjx_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#endif
+#if GRID_HAS_MINV
+    { cudaError_t _e = grid::init_grid_kernel_attr_minv_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#ifdef GRID_RBD_WITH_MUJOCO
+    { cudaError_t _e = grid::init_grid_kernel_attr_minv_mjx_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#endif
+#if GRID_HAS_FORWARD_DYNAMICS
+    { cudaError_t _e = grid::init_grid_kernel_attr_forward_dynamics_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#ifdef GRID_RBD_WITH_MUJOCO
+    { cudaError_t _e = grid::init_grid_kernel_attr_forward_dynamics_mjx_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#endif
+#if GRID_HAS_ABA
+    { cudaError_t _e = grid::init_grid_kernel_attr_aba_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#ifdef GRID_RBD_WITH_MUJOCO
+    { cudaError_t _e = grid::init_grid_kernel_attr_aba_mjx_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#endif
+#if GRID_HAS_CRBA
+    { cudaError_t _e = grid::init_grid_kernel_attr_crba_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#ifdef GRID_RBD_WITH_MUJOCO
+    { cudaError_t _e = grid::init_grid_kernel_attr_crba_mjx_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#endif
+#if GRID_HAS_GENERALIZED_GRAVITY
+    { cudaError_t _e = grid::init_grid_kernel_attr_generalized_gravity_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#if GRID_HAS_NONLINEAR_EFFECTS
+    { cudaError_t _e = grid::init_grid_kernel_attr_nonlinear_effects_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#if GRID_HAS_CORIOLIS_MATRIX
+    { cudaError_t _e = grid::init_grid_kernel_attr_coriolis_matrix_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#if GRID_HAS_ENERGY
+    { cudaError_t _e = grid::init_grid_kernel_attr_energy_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+    (void)failed_op;
+    return cudaSuccess;
+}
+static cudaError_t grid_rbd_family_dyn_gradients_init_attrs(const char **failed_op) {
+#if GRID_HAS_INVERSE_DYNAMICS_GRADIENT
+    { cudaError_t _e = grid::init_grid_kernel_attr_inverse_dynamics_gradient_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#ifdef GRID_RBD_WITH_MUJOCO
+    { cudaError_t _e = grid::init_grid_kernel_attr_inverse_dynamics_gradient_mjx_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#endif
+#if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
+    { cudaError_t _e = grid::init_grid_kernel_attr_forward_dynamics_gradient_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#ifdef GRID_RBD_WITH_MUJOCO
+    { cudaError_t _e = grid::init_grid_kernel_attr_forward_dynamics_gradient_mjx_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#endif
+#if GRID_HAS_F_EXT_GRADIENT
+    { cudaError_t _e = grid::init_grid_kernel_attr_f_ext_gradient_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#if GRID_HAS_F_EXT_GRADIENT_DQ
+    { cudaError_t _e = grid::init_grid_kernel_attr_f_ext_gradient_dq_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+    (void)failed_op;
+    return cudaSuccess;
+}
+static cudaError_t grid_rbd_family_regressors_init_attrs(const char **failed_op) {
+#if GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
+    { cudaError_t _e = grid::init_grid_kernel_attr_inverse_dynamics_regressor_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#ifdef GRID_RBD_WITH_MUJOCO
+    { cudaError_t _e = grid::init_grid_kernel_attr_inverse_dynamics_regressor_mjx_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#endif
+#if GRID_HAS_INVERSE_DYNAMICS_REGRESSOR_GRADIENT
+    { cudaError_t _e = grid::init_grid_kernel_attr_inverse_dynamics_regressor_gradient_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#if GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
+    { cudaError_t _e = grid::init_grid_kernel_attr_forward_dynamics_parameter_gradient_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#if GRID_HAS_KINETIC_ENERGY_REGRESSOR
+    { cudaError_t _e = grid::init_grid_kernel_attr_kinetic_energy_regressor_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#if GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
+    { cudaError_t _e = grid::init_grid_kernel_attr_potential_energy_regressor_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+    (void)failed_op;
+    return cudaSuccess;
+}
+static cudaError_t grid_rbd_family_kinematics_init_attrs(const char **failed_op) {
+#if GRID_HAS_END_EFFECTOR_POSE
+    { cudaError_t _e = grid::init_grid_kernel_attr_end_effector_pose_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#ifdef GRID_RBD_WITH_MUJOCO
+    { cudaError_t _e = grid::init_grid_kernel_attr_end_effector_pose_mjx_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#endif
+#if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
+    { cudaError_t _e = grid::init_grid_kernel_attr_end_effector_pose_gradient_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#ifdef GRID_RBD_WITH_MUJOCO
+    { cudaError_t _e = grid::init_grid_kernel_attr_end_effector_pose_gradient_mjx_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#endif
+#if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
+    { cudaError_t _e = grid::init_grid_kernel_attr_end_effector_pose_hessian_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#ifdef GRID_RBD_WITH_MUJOCO
+    { cudaError_t _e = grid::init_grid_kernel_attr_end_effector_pose_hessian_mjx_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#endif
+#ifdef GRID_HAS_FRAME_JACOBIAN
+    { cudaError_t _e = grid::init_grid_kernel_attr_frame_jacobian_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#ifdef GRID_HAS_FRAME_JACOBIAN_DOT
+    { cudaError_t _e = grid::init_grid_kernel_attr_frame_jacobian_dot_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#ifdef GRID_HAS_OSC_INERTIA
+    { cudaError_t _e = grid::init_grid_kernel_attr_osc_inertia_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#ifdef GRID_RBD_WITH_MUJOCO
+    { cudaError_t _e = grid::init_grid_kernel_attr_osc_inertia_mjx_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#endif
+#ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
+    { cudaError_t _e = grid::init_grid_kernel_attr_end_effector_pose_runtime_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#ifdef GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
+    { cudaError_t _e = grid::init_grid_kernel_attr_end_effector_pose_gradient_runtime_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+    (void)failed_op;
+    return cudaSuccess;
+}
+static cudaError_t grid_rbd_family_centroidal_init_attrs(const char **failed_op) {
+#if GRID_HAS_COM
+    { cudaError_t _e = grid::init_grid_kernel_attr_com_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#if GRID_HAS_CCRBA
+    { cudaError_t _e = grid::init_grid_kernel_attr_ccrba_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#if GRID_HAS_DCCRBA
+    { cudaError_t _e = grid::init_grid_kernel_attr_dccrba_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#if GRID_HAS_CMM_TIME_VARIATION
+    { cudaError_t _e = grid::init_grid_kernel_attr_cmm_time_variation_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+    (void)failed_op;
+    return cudaSuccess;
+}
+static cudaError_t grid_rbd_family_plant_costs_init_attrs(const char **failed_op) {
+    (void)failed_op;
+    return cudaSuccess;
+}
+static cudaError_t grid_rbd_init_kernel_attrs_checked(const char **failed_op) {
+    { cudaError_t _e = grid_rbd_family_plant_hessian_init_attrs(failed_op); if (_e != cudaSuccess) return _e; }
+    { cudaError_t _e = grid_rbd_family_integrator_gradient_init_attrs(failed_op); if (_e != cudaSuccess) return _e; }
+    { cudaError_t _e = grid_rbd_family_integrator_init_attrs(failed_op); if (_e != cudaSuccess) return _e; }
+    { cudaError_t _e = grid_rbd_family_plant_step_gradient_init_attrs(failed_op); if (_e != cudaSuccess) return _e; }
+    { cudaError_t _e = grid_rbd_family_plant_step_init_attrs(failed_op); if (_e != cudaSuccess) return _e; }
+    { cudaError_t _e = grid_rbd_family_fdsva_so_init_attrs(failed_op); if (_e != cudaSuccess) return _e; }
+    { cudaError_t _e = grid_rbd_family_idsva_so_init_attrs(failed_op); if (_e != cudaSuccess) return _e; }
+    { cudaError_t _e = grid_rbd_family_dyn_values_init_attrs(failed_op); if (_e != cudaSuccess) return _e; }
+    { cudaError_t _e = grid_rbd_family_dyn_gradients_init_attrs(failed_op); if (_e != cudaSuccess) return _e; }
+    { cudaError_t _e = grid_rbd_family_regressors_init_attrs(failed_op); if (_e != cudaSuccess) return _e; }
+    { cudaError_t _e = grid_rbd_family_kinematics_init_attrs(failed_op); if (_e != cudaSuccess) return _e; }
+    { cudaError_t _e = grid_rbd_family_centroidal_init_attrs(failed_op); if (_e != cudaSuccess) return _e; }
+    { cudaError_t _e = grid_rbd_family_plant_costs_init_attrs(failed_op); if (_e != cudaSuccess) return _e; }
+    return cudaSuccess;
+}
+// ── END GENERATED FAMILY KERNEL ATTRS ──
 
 // ─── runtime-mutable inertia (D.4 / Phase 5) ─────────────────────────────────
 //

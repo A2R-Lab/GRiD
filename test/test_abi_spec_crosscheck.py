@@ -589,3 +589,19 @@ def test_plant_twin_symbols_resolve():
                         f"grid_rbd_{stem.removeprefix('plant_')}_mujoco"):
                 assert f'extern "C" int {sym}(' not in _SRC, (
                     f"{key}: has_mjx_twin=False but {sym} exists")
+
+
+def test_family_attr_tables_partition_the_kernel_manifest():
+    """Multi-TU arc (2026-10-09): every kernel_attrs manifest short is owned by
+    exactly one build family's registration function, or is explicitly listed
+    as never launched by the bindings (so nobody registers it in a bindings
+    build); family keys and ordering agree."""
+    from grid_codegen.abi_specs import (FAMILIES, FAMILY_ATTR_SHORTS,
+                                        NOT_LAUNCHED_BY_BINDINGS, OPT_IN_GATE_SHORTS)
+    from grid_codegen.kernel_attrs import KERNEL_OVERLOADS
+    assert tuple(FAMILY_ATTR_SHORTS) == FAMILIES or set(FAMILY_ATTR_SHORTS) == set(FAMILIES)
+    owned = [s for f in FAMILIES for s in FAMILY_ATTR_SHORTS[f]]
+    assert len(owned) == len(set(owned)), "a manifest short is owned by two families"
+    assert set(owned) | NOT_LAUNCHED_BY_BINDINGS == set(KERNEL_OVERLOADS)
+    assert not (set(owned) & NOT_LAUNCHED_BY_BINDINGS)
+    assert OPT_IN_GATE_SHORTS <= set(owned)

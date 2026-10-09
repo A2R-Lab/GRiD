@@ -1180,6 +1180,58 @@ def template_path() -> Path:
     return Path(__file__).resolve().parents[1] / "bindings" / "grid_rbd" / "wrapper_template.cu"
 
 
+# ── per-family kernel-attribute registration (multi-TU arc, 2026-10-09) ──────
+# One `grid_rbd_family_<f>_init_attrs` per build family (abi_specs.FAMILIES),
+# calling the header's library-safe `init_grid_kernel_attr_<short>_checked`
+# twins for the manifest shorts that family owns (+ the `_mjx_checked` twin
+# under GRID_RBD_WITH_MUJOCO), and the aggregator the context constructor
+# calls instead of the header's all-kernel `init_grid_kernel_attrs_checked`.
+# Same registrations as the aggregate for everything the bindings launch
+# (minus the bench-only `_single_timing` twins and the never-launched shorts in
+# NOT_LAUNCHED_BY_BINDINGS); failed_op naming unchanged. In the single-unit
+# build these are `static`; M2 moves each family's function into its own unit.
+FAMILY_BEGIN = ("// ── BEGIN GENERATED FAMILY KERNEL ATTRS "
+                "(grid_codegen/wrapper_body_gen.py — do not hand-edit) ──")
+FAMILY_END = "// ── END GENERATED FAMILY KERNEL ATTRS ──"
+
+
+def _attr_gate(short: str) -> str:
+    from .abi_specs import OPT_IN_GATE_SHORTS
+    gate = "GRID_HAS_" + short.upper()
+    return f"#ifdef {gate}" if short in OPT_IN_GATE_SHORTS else f"#if {gate}"
+
+
+def gen_family_attr_block() -> str:
+    from .abi_specs import FAMILIES, FAMILY_ATTR_SHORTS
+    from .kernel_attrs import MJX_KERNEL_OVERLOADS
+    parts = [FAMILY_BEGIN,
+             "// Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen",
+             "// Tables: abi_specs.FAMILIES / FAMILY_ATTR_SHORTS (crosschecked against",
+             "// kernel_attrs.KERNEL_OVERLOADS by test/test_abi_spec_crosscheck.py)."]
+    for fam in FAMILIES:
+        parts.append(f"static cudaError_t grid_rbd_family_{fam}_init_attrs(const char **failed_op) {{")
+        for short in FAMILY_ATTR_SHORTS[fam]:
+            parts.append(_attr_gate(short))
+            parts.append(f"    {{ cudaError_t _e = grid::init_grid_kernel_attr_{short}_checked<T>(failed_op); "
+                         "if (_e != cudaSuccess) return _e; }")
+            if short in MJX_KERNEL_OVERLOADS:
+                parts.append("#ifdef GRID_RBD_WITH_MUJOCO")
+                parts.append(f"    {{ cudaError_t _e = grid::init_grid_kernel_attr_{short}_mjx_checked<T>(failed_op); "
+                             "if (_e != cudaSuccess) return _e; }")
+                parts.append("#endif")
+            parts.append("#endif")
+        parts.append("    (void)failed_op;")
+        parts.append("    return cudaSuccess;")
+        parts.append("}")
+    parts.append("static cudaError_t grid_rbd_init_kernel_attrs_checked(const char **failed_op) {")
+    for fam in FAMILIES:
+        parts.append(f"    {{ cudaError_t _e = grid_rbd_family_{fam}_init_attrs(failed_op); if (_e != cudaSuccess) return _e; }}")
+    parts.append("    return cudaSuccess;")
+    parts.append("}")
+    parts.append(FAMILY_END)
+    return "\n".join(parts) + "\n"
+
+
 # Every generated region of the template: (begin marker, end marker, generator).
 REGIONS = (
     (BEGIN, END, gen_block),
@@ -1188,6 +1240,7 @@ REGIONS = (
     (TORCH_OPS_BEGIN, TORCH_OPS_END, gen_torch_ops_table),
     (TORCH_BODIES_BEGIN, TORCH_BODIES_END, gen_torch_bodies_block),
     (JAX_HANDLERS_BEGIN, JAX_HANDLERS_END, gen_jax_handlers_block),
+    (FAMILY_BEGIN, FAMILY_END, gen_family_attr_block),
 )
 
 
