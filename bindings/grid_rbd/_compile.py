@@ -822,15 +822,16 @@ def _build_units(cmd: list[str], source_dir: Path, out_so: Path, arch: str,
         _prune_object_cache(object_cache_dir)
 
 
-OBJECT_CACHE_MAX_AGE_DAYS = 14
+OBJECT_CACHE_MAX_AGE_DAYS = 0   # keep forever (user 2026-10-09); GRID_RBD_OBJECT_CACHE_DAYS=N opts in
 
 
 def _prune_object_cache(object_cache_dir: Path, max_age_days: float = OBJECT_CACHE_MAX_AGE_DAYS) -> int:
-    """Drop cached unit objects not produced or linked from (mtime) in
-    `max_age_days` (GRID_RBD_OBJECT_CACHE_DAYS overrides; 0 disables). Every
-    distinct build (robot x options x subset) adds its ~14 objects, so the cache
-    grows without bound otherwise; an object is only ever a shortcut, so losing
-    one costs that unit's compile and nothing else. Returns the number removed."""
+    """Opt-in GC: drop cached unit objects not produced or linked from (mtime)
+    in `max_age_days`. OFF by default (objects are kept forever, like store/
+    entries — compile once, keep); `GRID_RBD_OBJECT_CACHE_DAYS=N` enables it.
+    Every distinct build (robot x options x subset) adds its ~14 objects; an
+    object is only ever a shortcut, so losing one costs that unit's compile and
+    nothing else. Returns the number removed."""
     import time
     env = os.environ.get("GRID_RBD_OBJECT_CACHE_DAYS")
     if env is not None:

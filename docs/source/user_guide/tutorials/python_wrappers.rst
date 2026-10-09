@@ -281,8 +281,9 @@ compile inputs (unit text, ``grid.cuh``, ``wrapper_common.cuh``, flags,
 toolchain), so a content-key miss recompiles only the units whose inputs
 changed — a wrapper-template edit to one family costs that family's unit, a
 ``grid.cuh`` change costs every unit. ``force_rebuild`` recompiles every unit
-and refreshes the object cache; objects not built or linked from in 14 days are
-pruned after a successful build (``GRID_RBD_OBJECT_CACHE_DAYS``, ``0`` disables). CUDA arch and toolchain in
+and refreshes the object cache. Objects are kept forever, like ``store/``
+entries; ``GRID_RBD_OBJECT_CACHE_DAYS=N`` opts in to pruning objects not built
+or linked from in N days. CUDA arch and toolchain in
 the key mean a roaming home directory (e.g. NFS-mounted between a laptop and
 a desktop) safely keeps separate ``.so`` files per machine.
 

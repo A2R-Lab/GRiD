@@ -139,7 +139,7 @@ def test_no_cache_dir_deletes_objects_after_link(env):
     assert not list((src / "build").glob("*.o")) and (src / "robot.so").exists()
 
 
-def test_stale_objects_are_pruned_and_hits_refresh_mtime(env, monkeypatch):
+def test_object_prune_is_opt_in_and_hits_refresh_mtime(env, monkeypatch):
     import os, time
     fake, src, objects = env
     _build(src, objects)
@@ -147,17 +147,14 @@ def test_stale_objects_are_pruned_and_hits_refresh_mtime(env, monkeypatch):
     old = time.time() - 30 * 86400
     for o in objs:
         os.utime(o, (old, old))
-    # a hit refreshes the object it links from: the three live objects survive the prune
-    fake.compiled.clear()
-    _build(src, objects)
-    assert fake.compiled == [] and sorted(objects.glob("*.o")) == objs
-    # an object nothing links from any more ages out
+    # default: keep forever — nothing is pruned, however old
     stale = objects / "wrapper_kinematics-deadbeef.o"
     stale.write_bytes(b"x"); os.utime(stale, (old, old))
+    fake.compiled.clear()
     _build(src, objects)
-    assert not stale.exists() and len(list(objects.glob("*.o"))) == 3
-    # the knob: 0 disables pruning
-    stale.write_bytes(b"x"); os.utime(stale, (old, old))
-    monkeypatch.setenv("GRID_RBD_OBJECT_CACHE_DAYS", "0")
+    assert fake.compiled == [] and stale.exists() and len(list(objects.glob("*.o"))) == 4
+    # opt-in knob: a hit refreshes the object it links from, so the three live
+    # objects survive and only the unreferenced stale one ages out
+    monkeypatch.setenv("GRID_RBD_OBJECT_CACHE_DAYS", "14")
     _build(src, objects)
-    assert stale.exists()
+    assert not stale.exists() and sorted(objects.glob("*.o")) == objs
