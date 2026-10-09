@@ -8,7 +8,7 @@ Layout:
     ├── objects/                   # per-unit object cache: <unit>-<content key of that
     │                              #   unit's compile inputs>.o (multi-TU build, 2026-10-09;
     │                              #   _compile._unit_object_key); an unchanged unit links
-    │                              #   from here with no nvcc. No GC yet (like store/).
+    │                              #   from here with no nvcc; unused for 14 days -> pruned.
     └── store/
         ├── <content_key>/
         │   ├── grid.cuh           # generated header

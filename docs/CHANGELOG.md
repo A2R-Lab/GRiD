@@ -31,7 +31,8 @@ changes since the GLASS rollout for our own historical reference.
   keyed by exactly its compile inputs; only the core unit carries the torch
   op-namespace key, so a wrapper edit rebuilds the touched units only and
   family objects are shared across store entries. `force_rebuild` recompiles
-  every unit. No GC yet (same as `store/`).
+  every unit; objects unused for 14 days are pruned after a build
+  (`GRID_RBD_OBJECT_CACHE_DAYS`, `0` disables).
 - `algorithm_list` closure fixes found by the arc: `forward_dynamics_parameter_gradient`
   needs `forward_dynamics`; `integrator_gradient` / `integrator_with_gradient`
   need `integrator` (the closure test now also matches `_finish` / `_device`

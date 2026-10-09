@@ -776,6 +776,7 @@ def _build_units(cmd: list[str], source_dir: Path, out_so: Path, arch: str,
         if object_cache_dir is not None:
             cached = object_cache_dir / f"{unit.stem}-{_unit_object_key(unit, source_dir, ucmd)}.o"
             if reuse_objects and cached.is_file():
+                os.utime(cached)   # a hit is a use: keeps it out of _prune_object_cache
                 with lock, log_path.open("a") as log:
                     log.write(f"[{unit.stem}] cached {cached.name}\n")
                 return cached, 0, 0.0, ""
@@ -817,6 +818,38 @@ def _build_units(cmd: list[str], source_dir: Path, out_so: Path, arch: str,
     compiled = sum(1 for _, _, secs, _ in results if secs > 0)
     _log.info("grid_rbd: built %s from %d units (%d compiled, %d from the object cache; build log: %s)",
               out_so.name, len(units), compiled, len(units) - compiled, log_path)
+    if object_cache_dir is not None:
+        _prune_object_cache(object_cache_dir)
+
+
+OBJECT_CACHE_MAX_AGE_DAYS = 14
+
+
+def _prune_object_cache(object_cache_dir: Path, max_age_days: float = OBJECT_CACHE_MAX_AGE_DAYS) -> int:
+    """Drop cached unit objects not produced or linked from (mtime) in
+    `max_age_days` (GRID_RBD_OBJECT_CACHE_DAYS overrides; 0 disables). Every
+    distinct build (robot x options x subset) adds its ~14 objects, so the cache
+    grows without bound otherwise; an object is only ever a shortcut, so losing
+    one costs that unit's compile and nothing else. Returns the number removed."""
+    import time
+    env = os.environ.get("GRID_RBD_OBJECT_CACHE_DAYS")
+    if env is not None:
+        max_age_days = float(env)
+    if max_age_days <= 0:
+        return 0
+    cutoff = time.time() - max_age_days * 86400
+    removed = 0
+    for obj in object_cache_dir.glob("wrapper_*.o"):
+        try:
+            if obj.stat().st_mtime < cutoff:
+                obj.unlink()
+                removed += 1
+        except OSError:
+            pass   # a concurrent build published/removed it
+    if removed:
+        _log.info("grid_rbd: pruned %d cached unit objects older than %g days from %s",
+                  removed, max_age_days, object_cache_dir)
+    return removed
 
 
 def generate_sources(

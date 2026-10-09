@@ -242,5 +242,6 @@ peaks at ~2.5 GB). `GRID_RBD_BUILD_JOBS=N` caps the parallel units (default
 than the old single unit). Per-unit objects are cached under
 `<cache_dir>/objects/` keyed by their exact compile inputs, so a later build
 whose `grid.cuh` is unchanged recompiles only the units whose text changed;
-`force_rebuild=True` recompiles every unit. The per-unit `rc`/seconds/cache
-hits are in `robot.build.log`.
+`force_rebuild=True` recompiles every unit. Objects not built or linked from in
+14 days are pruned after a successful build (`GRID_RBD_OBJECT_CACHE_DAYS`, `0`
+disables). The per-unit `rc`/seconds/cache hits are in `robot.build.log`.
