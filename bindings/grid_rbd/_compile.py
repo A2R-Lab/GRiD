@@ -44,7 +44,7 @@ _NVCC_DEFAULT_FLAGS = [
     "-ftz=true",
     "-prec-div=false",
     "-prec-sqrt=false",
-    "--shared",
+    # (no --shared here: units are compiled with -c and host-linked into the .so)
     "--compiler-options=-fPIC",
     # We INTENTIONALLY do NOT set -fvisibility=hidden here — the
     # Runner dlsym's our `extern "C"` symbols, which must be exported.
@@ -434,6 +434,9 @@ def copy_wrapper_template(target_dir: Path) -> Path:
     src = Path(__file__).parent / "wrapper_template.cu"
     dst = target_dir / "wrapper.cu"
     shutil.copyfile(src, dst)
+    # The host-only header every unit of the multi-TU build includes (2026-10-09);
+    # copied beside wrapper.cu so `-I<target_dir>` resolves it like grid.cuh.
+    shutil.copyfile(Path(__file__).parent / "wrapper_common.cuh", target_dir / "wrapper_common.cuh")
     return dst
 
 
@@ -583,8 +586,6 @@ def compile_so(
         # default; this define is bindings-builds only).
         "-DGRID_GPUERRCHK_NO_EXIT",
         f"-I{wrapper_cu.parent}",  # so #include "grid.cuh" resolves
-        "-o", str(out_so),
-        str(wrapper_cu),
     ]
     if glass_root:
         cmd.extend([f"-I{glass_root}", f"-I{glass_root / 'src'}"])
@@ -651,22 +652,103 @@ def compile_so(
     if extra_flags:
         cmd.extend(extra_flags)
 
+    _build_units(cmd, wrapper_cu.parent, out_so, arch)
+
+
+def _build_jobs() -> int:
+    """Parallel unit compiles: GRID_RBD_BUILD_JOBS, else min(8, cores, free RAM / 3 GB)
+    (a unit peaks at ~2.5 GB on a humanoid; 1 = sequential, still a smaller peak
+    than the old single-unit build)."""
+    env = os.environ.get("GRID_RBD_BUILD_JOBS")
+    if env:
+        return max(1, int(env))
+    jobs = min(8, os.cpu_count() or 1)
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                jobs = max(1, min(jobs, int(line.split()[1]) // (3 * 1024 * 1024)))
+    except OSError:
+        pass
+    return jobs
+
+
+def _unit_order(units: list[Path]) -> list[Path]:
+    """Heavy families first (abi_specs.FAMILIES order), core last: the pool's
+    makespan is the slowest unit, so start it first."""
+    from grid_codegen.abi_specs import FAMILIES
+    rank = {f"wrapper_{fam}.cu": i for i, fam in enumerate(FAMILIES)}
+    return sorted(units, key=lambda p: rank.get(p.name, len(rank)))
+
+
+def _build_units(cmd: list[str], source_dir: Path, out_so: Path, arch: str) -> None:
+    """Multi-TU build (2026-10-09): compile every `wrapper_*.cu` unit beside
+    grid.cuh with `-c` in a bounded pool, then host-link the objects into
+    robot.so. No -rdc: each unit's kernels are launched only from that unit.
+    `cmd` is the full nvcc flag list; library/rpath flags are link-only."""
+    import concurrent.futures
+    import threading
+    import time
+
+    units = _unit_order(sorted(source_dir.glob("wrapper_*.cu")))
+    if not units:
+        raise RuntimeError(f"no wrapper units beside {source_dir / 'grid.cuh'} (generate_sources writes them)")
+    compile_cmd, link_flags = [], []
+    i = 0
+    while i < len(cmd):
+        a = cmd[i]
+        if a == "-Xlinker":
+            link_flags.extend([a, cmd[i + 1]]); i += 2; continue
+        if a.startswith(("-L", "-l")) and not a.startswith("-lineinfo"):
+            link_flags.append(a)
+        else:
+            compile_cmd.append(a)
+        i += 1
+    # nvcc compresses the embedded device image only when it produces the final
+    # link itself; a `-c` object keeps it raw (5.4x larger, measured on iiwa14),
+    # so ask for it explicitly — the .so stays the size of the old single-unit build.
+    compile_cmd += ["-Xfatbin", "-compress-all"]
+    nvcc = compile_cmd[0]
+    jobs = _build_jobs()
     log_path = out_so.with_suffix(".build.log")
-    # First-run compile can take seconds–minutes (single-block fully-unrolled
-    # kernels are cicc-bound). Emit a one-line notice so the wait isn't read as
-    # a hang, and point at the live build log.
-    _log.info("grid_rbd: compiling %s for %s (first run; nvcc, may take "
-              "seconds–minutes) — log: %s", out_so.name, arch, log_path)
+    build_dir = source_dir / "build"
+    build_dir.mkdir(exist_ok=True)
+    lock = threading.Lock()
+    _log.info("grid_rbd: compiling %s for %s (%d units, %d parallel; nvcc, may take "
+              "seconds–minutes) — log: %s", out_so.name, arch, len(units), jobs, log_path)
     with log_path.open("w") as log:
-        log.write("$ " + " ".join(cmd) + "\n\n")
+        log.write("$ " + " ".join(compile_cmd) + " -c <unit> -o <unit>.o   # x" + str(len(units)) + "\n")
+        log.write("$ " + " ".join([nvcc, "--shared", "-o", str(out_so), "<units>.o"] + link_flags) + "\n\n")
+
+    def one(unit: Path) -> tuple[Path, int, float, str]:
+        obj = build_dir / (unit.stem + ".o")
+        ulog = build_dir / (unit.stem + ".log")
+        t0 = time.monotonic()
+        with ulog.open("w") as f:
+            r = subprocess.run(compile_cmd + ["-c", str(unit), "-o", str(obj)], stdout=f, stderr=subprocess.STDOUT)
+        secs = time.monotonic() - t0
+        with lock, log_path.open("a") as log:
+            log.write(f"[{unit.stem}] rc={r.returncode} {secs:.1f}s\n")
+        return obj, r.returncode, secs, ulog.read_text()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
+        results = list(ex.map(one, units))
+    failed = [(obj, rc, out) for obj, rc, _, out in results if rc != 0]
+    if failed:
+        obj, rc, out = failed[0]
+        raise RuntimeError(f"nvcc failed (exit {rc}) compiling unit {obj.stem}. Unit log:\n{out}")
+    objs = [str(obj) for obj, _, _, _ in results]
+    link = [nvcc, "--shared", "-o", str(out_so)] + objs + link_flags
+    t0 = time.monotonic()
+    with log_path.open("a") as log:
+        log.write("\n$ " + " ".join(link) + "\n")
         log.flush()
-        result = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"nvcc failed (exit {result.returncode}). Build log:\n"
-            + log_path.read_text()
-        )
-    _log.info("grid_rbd: built %s (build log: %s)", out_so.name, log_path)
+        r = subprocess.run(link, stdout=log, stderr=subprocess.STDOUT)
+        log.write(f"[link] rc={r.returncode} {time.monotonic() - t0:.1f}s\n")
+    if r.returncode != 0:
+        raise RuntimeError(f"nvcc link failed (exit {r.returncode}). Build log:\n" + log_path.read_text())
+    for obj in objs:   # objects are not cached yet (per-unit cache = M4); keep the store lean
+        Path(obj).unlink(missing_ok=True)
+    _log.info("grid_rbd: built %s from %d units (build log: %s)", out_so.name, len(units), log_path)
 
 
 def generate_sources(
@@ -683,7 +765,13 @@ def generate_sources(
     """
     target_dir.mkdir(parents=True, exist_ok=True)
     meta = generate_grid_cuh(urdf_path, options, target_dir / "grid.cuh")
-    copy_wrapper_template(target_dir)
+    wrapper = copy_wrapper_template(target_dir)
+    # Multi-TU build: one unit per build family + the core, split from the
+    # fenced template (bindings/grid_rbd/_units.py). wrapper.cu stays beside them
+    # as the hashed source of truth; the units are what nvcc compiles.
+    from . import _units
+    for name, text in _units.split(wrapper.read_text()).items():
+        (target_dir / f"wrapper_{name}.cu").write_text(text)
     return meta
 
 

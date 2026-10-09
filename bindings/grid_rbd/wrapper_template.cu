@@ -16,169 +16,8 @@
 //   * Functions return 0 on success, non-zero on a CUDA error (caller can
 //     log + reraise as a Python exception).
 
-#include "grid.cuh"
-#include <cuda_runtime.h>
-#include <algorithm>
-#include <cstring>
+#include "wrapper_common.cuh"
 
-// C4 EE binding aliases (codegen emits these in grid.cuh whenever kinematics are
-// built; see gen_all_code). A single named fixed target routes them to the
-// _<name> launchers + a 1-EE count. Fallback to the all-leaf default so a
-// kinematics-free subset profile (where grid_rbd_num_ees() still references
-// GRID_RBD_NUM_EES unconditionally) compiles; the FN/KERNEL aliases are only used
-// under GRID_HAS_END_EFFECTOR_POSE* guards, so they need no fallback here.
-#ifndef GRID_RBD_NUM_EES
-#define GRID_RBD_NUM_EES grid::NUM_EES
-#endif
-
-// fp64 (Phase 8): the buffer/compute element type. Default float (byte-identical
-// fp32 ABI). A .so built with -DGRID_WRAPPER_T_DOUBLE uses double — same symbol
-// names, doubled smem footprint, re-derived spill tiers (see the matching codegen
-// knob GRiDCodeGenerator(dtype="double")). The dtype is a property of WHICH .so
-// you dlopen; the Runner (Runner vs RunnerF64) must match.
-#ifdef GRID_WRAPPER_T_DOUBLE
-using T = double;
-#else
-using T = float;
-#endif
-
-// Compile-time max batch size (overridable via -DGRID_RBD_MAX_BATCH=N).
-#ifndef GRID_RBD_MAX_BATCH
-#define GRID_RBD_MAX_BATCH 256
-#endif
-static constexpr int kMaxBatch = GRID_RBD_MAX_BATCH;
-
-// ─── mirror retarget for the allocate-once numpy round trip (2026-10-01) ──────
-// The generated grid::<op> host wrappers copy their output D2H into the pinned
-// g_data->h_<out> mirror; the C ABI used to std::memcpy that into the caller's
-// array (a second full-size host copy: 28 ms of a 67 ms g1 idsva_so@1024 call).
-// A body that constructs this guard aims the mirror at the caller's buffer for
-// the duration of the call, so the wrapper's own D2H lands there directly (at the
-// PCIe rate when the buffer came from handle.pinned_empty). The destructor
-// restores the mirror on EVERY exit path — launch-check / sync early returns
-// included — so an error never leaves the context pointing at caller memory.
-struct GridMirrorRetarget {
-    T **slot; T *saved;
-    GridMirrorRetarget(T **s, T *to) : slot(s), saved(*s) { *s = to; }
-    ~GridMirrorRetarget() { *slot = saved; }
-    GridMirrorRetarget(const GridMirrorRetarget &) = delete;
-    GridMirrorRetarget &operator=(const GridMirrorRetarget &) = delete;
-};
-
-// Sync + consume the NO_EXIT sticky error slot (see the comment in
-// grid_rbd_sync_consume). Returns 0 on success, 100+cudaError_t on failure.
-static inline int grid_rbd_sync_consume() {
-    cudaError_t e = cudaDeviceSynchronize();
-    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
-    // recorded in the sticky slot (the stream stays empty, so the sync above
-    // returns success — the silent stale-buffer class). Consume it here so the
-    // caller gets a loud rc instead of plausible garbage.
-    if (e == cudaSuccess) e = grid_consume_last_error();
-    return (e != cudaSuccess) ? 100 + (int)e : 0;
-}
-
-// ─── runtime contexts (W04-B B1, K1+K5; codex constraints C1-C3, 2026-09-24) ─────
-// The .so no longer owns ONE set of device buffers. Every call names a context by
-// id; a context owns its arena (and the allocator pool it was carved from — K1),
-// its robot tables, streams, plant staging, launch overrides and a device-profile
-// record. Ids are 64-bit, salted per loaded .so (high 32 bits) so an id minted by
-// another artifact is rejected (C1); 0 is an ALIAS for "this artifact's default
-// context" (created lazily, closed by grid_rbd_close, re-created on the next
-// call — the legacy lifecycle), never a real id; a closed id is tombstoned and
-// never resolves again (C1). Lookup takes a strong execution reference under the
-// registry mutex atomically with the open check; close refuses new admissions,
-// drains admitted calls, completes the device, then frees (C2).
-#include <atomic>
-#include <chrono>
-#include <mutex>
-#include <random>
-#include <shared_mutex>
-#include <string>
-#include <thread>
-#include <unordered_map>
-#include <unordered_set>
-
-struct PlantBuffers {
-    // generic packed in/out (large enough for the biggest per-call need)
-    T* d_in_a   = nullptr;   // var / x / u / q
-    T* d_in_b   = nullptr;   // des / lower / p_des / qd / h_des
-    T* d_in_c   = nullptr;   // weight / upper / W
-    T* d_out    = nullptr;   // scalar cost (1 per timestep)
-    T* d_grad   = nullptr;   // gradient / dAB ([A|B], 2*NV*3*NV)
-    T* d_hess   = nullptr;   // dense hessian / hess-diagonal
-    T* d_d2AB   = nullptr;   // plant_step_hessian s_d2AB (2*NV*3*NV*3*NV) — too
-                             // big to share d_grad, so lazily allocated below.
-    unsigned char* d_d2AB_workspace = nullptr;  // plant_step_hessian spill band
-                             // (per-timestep s_d2AB + fdsva tensors + pool) for
-                             // big robots whose arena overflows the smem cap.
-    T* d_end_effector_pose  = nullptr;   // ee-pose / com / ccrba scratch (reused per call)
-    T* d_end_effector_pose_gradient = nullptr;   // ee-jacobian scratch
-    bool allocated = false;
-};
-
-// release a context's plant staging (always compiled: the close path needs it even on a subset build)
-// codex R4 (2026-09-24): safe for PARTIALLY built storage — every non-null pointer is
-// released regardless of the success flag (plant_alloc builds into a temporary and
-// publishes only on complete success; a failed build is torn down through here).
-static void plant_free(PlantBuffers *p) {
-    if (!p) return;
-    if (p->d_in_a) cudaFree(p->d_in_a);
-    if (p->d_in_b) cudaFree(p->d_in_b);
-    if (p->d_in_c) cudaFree(p->d_in_c);
-    if (p->d_out) cudaFree(p->d_out);
-    if (p->d_grad) cudaFree(p->d_grad);
-    if (p->d_hess) cudaFree(p->d_hess);
-    if (p->d_d2AB) cudaFree(p->d_d2AB);
-    if (p->d_d2AB_workspace) cudaFree(p->d_d2AB_workspace);
-    if (p->d_end_effector_pose) cudaFree(p->d_end_effector_pose);
-    if (p->d_end_effector_pose_gradient) cudaFree(p->d_end_effector_pose_gradient);
-    *p = PlantBuffers();
-}
-struct LaunchOverrides {
-    int threads_override = -1;                          // set_threads_per_block: -1 = per-algo autotuned default
-    int threads_per_algo[grid::GRID_ALGO_COUNT];        // E6 per-algo overlay (-1 = baked launch_cfg)
-    int threads_per_algo_small[grid::GRID_ALGO_COUNT];  // E6 batch-switch small-batch pick
-    int batch_threshold_per_algo[grid::GRID_ALGO_COUNT];// E6 batch-switch threshold (0 = off)
-    LaunchOverrides() {
-        for (int i = 0; i < grid::GRID_ALGO_COUNT; ++i) { threads_per_algo[i] = -1; threads_per_algo_small[i] = -1; batch_threshold_per_algo[i] = 0; }
-    }
-};
-// Recorded at context creation; exposed through grid_rbd_ctx_profile so a
-// deployment can assert what it is running on (portability contract, T5).
-struct GridDeviceProfile {
-    int device_cc;              // compute capability of the device (major*10+minor)
-    int artifact_cc;            // the arch this .so was compiled for (GRID_RBD_ARCH), 0 if unknown
-    long long total_bytes;      // device memory at creation
-    long long free_bytes;       // free device memory at creation (before the arena)
-    long long arena_bytes;      // gridData_device_bytes at the fitted slot count
-    int workspace_slots;        // the auto-fit (or declared) workspace slot count
-    int max_batch;              // kMaxBatch baked into this .so
-    long long smem_optin_bytes; // cudaDevAttrMaxSharedMemoryPerBlockOptin
-    int slab_installed;         // 1 = the arena was carved from a caller-owned slab
-};
-struct GridCtx {
-    long long id = 0;
-    grid::gridData<T>   *data    = nullptr;
-    grid::robotModel<T> *robot   = nullptr;
-    cudaStream_t        *streams = nullptr;
-    grid::grid_device_pool_t pool = {nullptr, 0, 0, 0};   // THIS context's allocator (base=nullptr: cudaMalloc path)
-    PlantBuffers *plant = nullptr;                        // plant staging (allocated lazily by plant_alloc)
-    LaunchOverrides launch;
-    GridDeviceProfile profile = {};
-    std::atomic<int> inflight{0};                         // admitted calls (strong execution references)
-    bool closing = false;
-    // W04-B B2: admission lock + model version. Every compute call holds
-    // `admission` SHARED for its whole submission; every MODEL mutator (the
-    // runtime-parameter setters — tool attach/detach is one — and the launch
-    // overrides) holds it EXCLUSIVE, so a mutation is ordered after every admitted
-    // call and before every later one (no torn table reads, no launch-override
-    // races). `version` bumps on every model mutation (never on a launch
-    // override); autograd forwards stamp it ON DEVICE at execution time and their
-    // backwards compare that stamp with their own admission version (K4) — a
-    // traced Python int would be trace-time, not execution-time.
-    std::shared_mutex admission;
-    unsigned long long version = 1;
-};
 static std::mutex &grid_ctx_mutex() { static std::mutex m; return m; }
 static std::unordered_map<long long, GridCtx *> &grid_ctx_registry() { static std::unordered_map<long long, GridCtx *> r; return r; }
 static std::unordered_set<long long> &grid_ctx_tombstones() { static std::unordered_set<long long> t; return t; }
@@ -203,7 +42,7 @@ static grid::grid_device_pool_t g_ctx_pending_default_pool = {nullptr, 0, 0, 0};
 static LaunchOverrides g_ctx_pending_launch;
 // rc codes (the pybind rc decoder names them): 10 unknown or foreign id, 11 closed id,
 // 12 context closing, 13 artifact/device arch mismatch, 14 pool/arena creation failed.
-static const char *grid_ctx_rc_message(int rc) {
+const char *grid_ctx_rc_message(int rc) {
     switch (rc) {
         case 10: return "unknown context id, or a context of another robot artifact";
         case 11: return "context is closed";
@@ -216,160 +55,31 @@ static const char *grid_ctx_rc_message(int rc) {
 }
 static int grid_ctx_create_locked(GridCtx **out, const grid::grid_device_pool_t &pool, bool make_default);
 static cudaError_t grid_rbd_init_kernel_attrs_checked(const char **failed_op);  // generated (family kernel attrs)
-struct GridCtxRef {
-    GridCtx *ctx = nullptr; int rc = 0; bool exclusive = false;
-    // `exclusive` = a MUTATOR: waits for every admitted call to finish and blocks
-    // new admissions until it returns. The registry mutex is released BEFORE the
-    // admission lock is taken (lock order: registry -> admission; a long setter
-    // must not stall create/close/lookup of other contexts). The strong ref
-    // (inflight) is taken under the registry mutex atomically with the open check,
-    // so close (which drains inflight to 0) never frees a context we are waiting on.
-    explicit GridCtxRef(long long id, bool excl = false) : exclusive(excl) {
-        {
-            std::lock_guard<std::mutex> lk(grid_ctx_mutex());
-            auto &reg = grid_ctx_registry();
-            long long real = id;
-            if (id == 0) {
-                if (g_ctx_default_id == 0) {
-                    GridCtx *c = nullptr;
-                    int e = grid_ctx_create_locked(&c, g_ctx_pending_default_pool, /*make_default=*/true);
-                    if (e != 0) { rc = e; return; }
-                }
-                real = g_ctx_default_id;
-            } else if ((id & ~0xffffffffLL) != grid_ctx_salt()) { rc = 10; return; }
-            auto it = reg.find(real);
-            if (it == reg.end()) { rc = grid_ctx_tombstones().count(real) ? 11 : 10; return; }
-            if (it->second->closing) { rc = 12; return; }
-            it->second->inflight.fetch_add(1, std::memory_order_acq_rel);
-            ctx = it->second;
+// Registry lookup + strong execution reference for GridCtxRef (wrapper_common.cuh):
+// the registry mutex is held atomically with the open check and the inflight
+// increment; context 0 resolves (creating) the default context. Returns nullptr
+// and sets *rc on refusal (10 unknown/foreign, 11 closed, 12 closing, create rc).
+GridCtx *grid_rbd_ctx_acquire(long long id, int *rc) {
+    std::lock_guard<std::mutex> lk(grid_ctx_mutex());
+    auto &reg = grid_ctx_registry();
+    long long real = id;
+    if (id == 0) {
+        if (g_ctx_default_id == 0) {
+            GridCtx *c = nullptr;
+            int e = grid_ctx_create_locked(&c, g_ctx_pending_default_pool, /*make_default=*/true);
+            if (e != 0) { *rc = e; return nullptr; }
         }
-        if (exclusive) ctx->admission.lock(); else ctx->admission.lock_shared();
-    }
-    ~GridCtxRef() {
-        if (!ctx) return;
-        if (exclusive) ctx->admission.unlock(); else ctx->admission.unlock_shared();
-        ctx->inflight.fetch_sub(1, std::memory_order_acq_rel);   // AFTER the unlock: close frees at 0
-    }
-    GridCtxRef(const GridCtxRef &) = delete; GridCtxRef &operator=(const GridCtxRef &) = delete;
-};
-// Shadow locals: the bodies below keep the historical names; they now alias the
-// resolved context. (void)-casts keep -Wunused quiet where a body uses a subset.
-#define GRID_RBD_CTX_LOCALS(ctxptr) \
-    GridCtx *g_ctx = (ctxptr); grid::gridData<T> *g_data = g_ctx->data; grid::robotModel<T> *g_robot = g_ctx->robot; \
-    cudaStream_t *g_streams = g_ctx->streams; PlantBuffers &g_plant = *g_ctx->plant; \
-    (void)g_ctx; (void)g_data; (void)g_robot; (void)g_streams; (void)g_plant
-#define GRID_RBD_CTX_OR_RETURN(id) GridCtxRef _cref(id); if (!_cref.ctx) return _cref.rc; GRID_RBD_CTX_LOCALS(_cref.ctx)
-// Mutators (B2): exclusive admission — every admitted call has completed its
-// submission and no new one is admitted until the mutator returns.
-#define GRID_RBD_CTX_MUT_OR_RETURN(id) GridCtxRef _cref(id, /*exclusive=*/true); if (!_cref.ctx) return _cref.rc; GRID_RBD_CTX_LOCALS(_cref.ctx)
-#define GRID_RBD_CTX_OR_FFI(id) GridCtxRef _cref(id); if (!_cref.ctx) return ffi::Error::Internal(grid_ctx_rc_message(_cref.rc)); GRID_RBD_CTX_LOCALS(_cref.ctx)
-#define GRID_RBD_CTX_OR_THROW(id) GridCtxRef _cref(id); TORCH_CHECK(_cref.ctx != nullptr, "grid_rbd: ", grid_ctx_rc_message(_cref.rc)); GRID_RBD_CTX_LOCALS(_cref.ctx)
-
-// ─── W04-B B2: execution-time model-version stamps (K4) ──────────────────────
-// A differentiable FORWARD writes the version it was admitted under into a
-// caller-owned int32 device slot, stream-ordered after its own work: under jit /
-// graph replay the stamp is a data dependency of the backward, produced when the
-// forward EXECUTES. The matching GRADIENT call reads that slot (4-byte D2H + a
-// stream sync, inside its own admission scope so no mutation can interleave) and
-// refuses to run if the model has moved on (rc 15): backward never silently
-// differentiates a model the forward did not see. Version wraps at 2^31 (the
-// slot is int32 so JAX needs no x64 mode).
-__global__ void grid_rbd_stamp_kernel(int *dst, int v) { if (threadIdx.x == 0) *dst = v; }
-static inline int grid_ctx_stamp_value(const GridCtx *c) { return (int)(c->version & 0x7fffffffULL); }
-static inline cudaError_t grid_rbd_stamp_write(GridCtx *ctx, cudaStream_t stream, int *dst) {
-    grid_rbd_stamp_kernel<<<1, 1, 0, stream>>>(dst, grid_ctx_stamp_value(ctx));
-    return cudaGetLastError();   // launch-configuration errors surface to the caller
+        real = g_ctx_default_id;
+    } else if ((id & ~0xffffffffLL) != grid_ctx_salt()) { *rc = 10; return nullptr; }
+    auto it = reg.find(real);
+    if (it == reg.end()) { *rc = grid_ctx_tombstones().count(real) ? 11 : 10; return nullptr; }
+    if (it->second->closing) { *rc = 12; return nullptr; }
+    it->second->inflight.fetch_add(1, std::memory_order_acq_rel);
+    return it->second;
 }
-static inline int grid_rbd_stamp_check(GridCtx *ctx, cudaStream_t stream, const int *src, int *seen) {
-    int h = 0;
-    cudaMemcpyAsync(&h, src, sizeof(int), cudaMemcpyDeviceToHost, stream);
-    cudaError_t e = cudaStreamSynchronize(stream);
-    if (e != cudaSuccess) return (int)e;
-    *seen = h;
-    return (h == grid_ctx_stamp_value(ctx)) ? 0 : 15;
-}
-static std::string grid_ctx_stamp_message(int seen, const GridCtx *ctx) {
-    return std::string("model mutated between forward and backward (version ") + std::to_string(seen)
-        + " -> " + std::to_string(grid_ctx_stamp_value(ctx)) + "); recompute the forward";
-}
-
-// Per-algo launch threads = the autotuned default unless the user forced an override.
-// (GRID_ALGO_COUNT hits the primary launch_cfg template = MAX_PERF_LEVEL_THREADS, i.e.
-// the historical default — use it for algos with no baked entry / plant kernels.)
-//
-// PER-ALGO TIER: the host-wrapper / direct-kernel launches below pass
-// grid::launch_cfg<GRID_ALGO_X>::TIER (per-algo autotuned resource tier). A FEW calls
-// INTENTIONALLY do NOT pass a tier — do not "fix" them:
-//   * grid::idsva_so(...)            — a DISPATCHER wrapper with NO RESOURCE_TIER param
-//                                       (it bakes the per-frame tier internally).
-//   * the non-mjx grid::integrator / grid::com / grid::ccrba / grid::energy calls —
-//     com/ccrba/energy have no baked launch_cfg entry (GRID_ALGO_COUNT == default tier,
-//     so a tier would be a no-op); the non-mjx integrator's MUJOCO_OUTPUT gate is plain
-//     floating_base (incl. mimic/skew) with no reliable floating-only macro here
-//     (tracked: backlog item L / the descriptor-table refactor will unify this).
-// All OTHER algos thread the tier through both the jax/torch direct launch AND the
-// numpy/pybind C-ABI host-wrapper call (Transform A + the C-ABI tier wiring).
-template <int ALGO>
-static inline dim3 grid_rbd_launch_threads_n(const GridCtx *ctx, int batch) {
-    // Priority: explicit override > small-batch regime pick > per-algo profile
-    // overlay > baked launch_cfg — all PER CONTEXT (B1). The small-batch pick
-    // fires only when this call's batch is <= the algo's threshold.
-    const LaunchOverrides &lo = ctx->launch;
-    if (lo.threads_override >= 1) return dim3((unsigned)lo.threads_override, 1, 1);
-    // ALGO == GRID_ALGO_COUNT (plant / no-entry path) hits the primary launch_cfg
-    // template; constexpr-exclude it so the per-algo array is never indexed OOB.
-    if constexpr (ALGO >= 0 && ALGO < grid::GRID_ALGO_COUNT) {
-        if (lo.batch_threshold_per_algo[ALGO] >= 1 && batch >= 1
-            && batch <= lo.batch_threshold_per_algo[ALGO]
-            && lo.threads_per_algo_small[ALGO] >= 1) {
-            return dim3((unsigned)lo.threads_per_algo_small[ALGO], 1, 1);
-        }
-        if (lo.threads_per_algo[ALGO] >= 1) return dim3((unsigned)lo.threads_per_algo[ALGO], 1, 1);
-    }
-    int n = grid::launch_cfg<ALGO>::THREADS;
-    return dim3((unsigned)n, 1, 1);
-}
-
-
-// Clamp a requested thread count to a specific kernel's register-limited maxThreadsPerBlock.
-// Register-heavy kernels (e.g. momentum_cost at ~140 regs/thread => max 384) cannot
-// launch at the default MAX_PERF_LEVEL_THREADS (448); without this clamp the launch
-// fails with cudaErrorInvalidConfiguration ("too many resources requested"), which
-// cudaDeviceSynchronize() does NOT report — the kernel silently never runs and the
-// output buffers are left stale. All GRID single-block kernels are thread-count-
-// invariant (block-stride SIMT loops), so launching with fewer threads is correct.
-template <typename KernelPtr>
-static dim3 grid_clamp_threads_for(KernelPtr kernel, dim3 requested) {
-    cudaFuncAttributes attr;
-    if (cudaFuncGetAttributes(&attr, (const void*)kernel) != cudaSuccess) {
-        cudaGetLastError();  // swallow — fall back to the requested dims
-        return requested;
-    }
-    unsigned cap = (attr.maxThreadsPerBlock > 0) ? (unsigned)attr.maxThreadsPerBlock : requested.x;
-    if (requested.x > cap) requested.x = cap;
-    return requested;
-}
-
-// Grid dim for a direct batch launch. Kernels index the per-block workspace
-// arena by blockIdx and grid-stride over timesteps, so launching more blocks
-// than init_gridData actually fitted (workspace_timestep_slots can be FEWER
-// than kMaxBatch under device memory pressure) aliases live workspace across
-// blocks — silent wrong results. Clamping is exactly what the generated host
-// wrappers do (_grid_ws_n); grid-striding makes it correct for every batch
-// kernel, workspace-consuming or not.
-static inline dim3 grid_rbd_grid_for(const GridCtx *ctx, int batch) {
-    int slots = (ctx->data && ctx->data->workspace_timestep_slots > 0)
-                    ? ctx->data->workspace_timestep_slots : batch;
-    int blocks = batch < slots ? batch : slots;
-    return dim3((unsigned)(blocks > 0 ? blocks : 1), 1, 1);
-}
-
 // ─── lifecycle ───────────────────────────────────────────────────────────────
 
 // ─── context lifecycle ───────────────────────────────────────────────────────
-#ifndef GRID_RBD_ARCH
-#define GRID_RBD_ARCH 0
-#endif
 static int grid_ctx_create_locked(GridCtx **out, const grid::grid_device_pool_t &pool, bool make_default) {
     // registry mutex HELD by the caller. Library-safe construction (parts 1+2):
     // every stage publishes only on success; a later failure rolls the earlier
@@ -721,29 +431,85 @@ extern "C" int grid_rbd_get_batch_switch(long long ctx_id, int algo, int *thresh
 // __launch_bounds__) are disambiguated with an explicit function-pointer cast to
 // one overload's signature — either reports the identical ceiling (mirrors the
 // codegen's own static_cast<void(*)(...)> kernel aliases).
-static int grid_kernel_ceiling(const void* fp) {
-    cudaFuncAttributes attr;
-    if (cudaFuncGetAttributes(&attr, fp) != cudaSuccess) {
-        cudaGetLastError();  // swallow — report "unknown" so Python falls back
-        return -1;
-    }
-    return (attr.maxThreadsPerBlock > 0) ? attr.maxThreadsPerBlock : -1;
-}
-
-// Take the address of grid::KERN<T, launch_cfg<ALGO>::TIER>, cast to SIG (selects
-// one overload for the overloaded kernels; a no-op for single-definition ones),
-// and read its maxThreadsPerBlock.
-#define GRID_KERNEL_CEIL(KERN, ALGO, ...) \
-    grid_kernel_ceiling((const void*)static_cast<__VA_ARGS__>( \
-        &grid::KERN<T, grid::launch_cfg<grid::ALGO>::TIER>))
-
-extern "C" int grid_rbd_kernel_max_threads(const char* algo) {
-    if (!algo) return -1;
-    using RM = const grid::robotModel<T>*;
+// grid_kernel_ceiling + GRID_KERNEL_CEIL live in wrapper_common.cuh (every family unit
+// queries its own kernels); the per-family ceiling functions and the exported
+// dispatcher are generated below.
 // ── BEGIN GENERATED KERNEL_MAX_THREADS BRANCHES (grid_codegen/wrapper_body_gen.py — do not hand-edit) ──
 // Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen
 // Rows: CEIL_ROWS (keys crosschecked against the descriptor table's
-// autotune_keys by test/test_abi_spec_crosscheck.py).
+// autotune_keys by test/test_abi_spec_crosscheck.py), grouped by build family.
+// [[unit: plant_hessian]]
+int grid_rbd_family_plant_hessian_kernel_ceiling(const char* algo) {
+    using RM = const grid::robotModel<T>*;
+    (void)algo; (void)sizeof(RM);
+    return -2;  // not this family's key
+}
+// [[unit: end]]
+// [[unit: integrator_gradient]]
+int grid_rbd_family_integrator_gradient_kernel_ceiling(const char* algo) {
+    using RM = const grid::robotModel<T>*;
+    (void)algo; (void)sizeof(RM);
+    return -2;  // not this family's key
+}
+// [[unit: end]]
+// [[unit: integrator]]
+int grid_rbd_family_integrator_kernel_ceiling(const char* algo) {
+    using RM = const grid::robotModel<T>*;
+    (void)algo; (void)sizeof(RM);
+    return -2;  // not this family's key
+}
+// [[unit: end]]
+// [[unit: plant_step_gradient]]
+int grid_rbd_family_plant_step_gradient_kernel_ceiling(const char* algo) {
+    using RM = const grid::robotModel<T>*;
+    (void)algo; (void)sizeof(RM);
+    return -2;  // not this family's key
+}
+// [[unit: end]]
+// [[unit: plant_step]]
+int grid_rbd_family_plant_step_kernel_ceiling(const char* algo) {
+    using RM = const grid::robotModel<T>*;
+    (void)algo; (void)sizeof(RM);
+    return -2;  // not this family's key
+}
+// [[unit: end]]
+// [[unit: fdsva_so]]
+int grid_rbd_family_fdsva_so_kernel_ceiling(const char* algo) {
+    using RM = const grid::robotModel<T>*;
+#if GRID_HAS_FDSVA_SO
+    if (std::strcmp(algo, "fdsva_so") == 0)
+        return GRID_KERNEL_CEIL(fdsva_so_kernel, GRID_ALGO_FDSVA_SO,
+                                void(*)(T*, unsigned char*, const T*, const int, T*, RM, const T, const int));
+#endif
+    (void)algo; (void)sizeof(RM);
+    return -2;  // not this family's key
+}
+// [[unit: end]]
+// [[unit: idsva_so]]
+int grid_rbd_family_idsva_so_kernel_ceiling(const char* algo) {
+    using RM = const grid::robotModel<T>*;
+    if (std::strcmp(algo, "idsva_so") == 0) {
+        // Dispatcher: the codegen emits EXACTLY ONE concrete frame kernel per robot
+        // (world for floating/spherical, body for cardinal fixed). Query whichever
+        // variant is present, at its frame-specific tier. Frame-specific ceilings can
+        // differ (different register footprints) — correct, we want the one that runs.
+#if GRID_HAS_IDSVA_SO_WORLD_FRAME
+        return GRID_KERNEL_CEIL(idsva_so_world_frame_kernel, GRID_ALGO_IDSVA_SO_WORLD_FRAME,
+                                void(*)(T*, unsigned char*, const T*, const int, RM, const T, const int));
+#elif GRID_HAS_IDSVA_SO_BODY_FRAME
+        return GRID_KERNEL_CEIL(idsva_so_body_frame_kernel, GRID_ALGO_IDSVA_SO_BODY_FRAME,
+                                void(*)(T*, unsigned char*, const T*, const int, RM, const T, const int));
+#else
+        return -1;
+#endif
+    }
+    (void)algo; (void)sizeof(RM);
+    return -2;  // not this family's key
+}
+// [[unit: end]]
+// [[unit: dyn_values]]
+int grid_rbd_family_dyn_values_kernel_ceiling(const char* algo) {
+    using RM = const grid::robotModel<T>*;
 #if GRID_HAS_INVERSE_DYNAMICS
     if (std::strcmp(algo, "id") == 0)
         return GRID_KERNEL_CEIL(inverse_dynamics_kernel, GRID_ALGO_INVERSE_DYNAMICS,
@@ -769,6 +535,33 @@ extern "C" int grid_rbd_kernel_max_threads(const char* algo) {
         return GRID_KERNEL_CEIL(crba_kernel, GRID_ALGO_CRBA,
                                 void(*)(T*, unsigned char*, const T*, const int, RM, const T, const int));
 #endif
+#if GRID_HAS_GENERALIZED_GRAVITY
+    if (std::strcmp(algo, "generalized_gravity") == 0)
+        return GRID_KERNEL_CEIL(generalized_gravity_kernel, GRID_ALGO_GENERALIZED_GRAVITY,
+                                void(*)(T*, unsigned char*, const T*, const int, RM, const T, const int));
+#endif
+#if GRID_HAS_NONLINEAR_EFFECTS
+    if (std::strcmp(algo, "nonlinear_effects") == 0)
+        return GRID_KERNEL_CEIL(nonlinear_effects_kernel, GRID_ALGO_NONLINEAR_EFFECTS,
+                                void(*)(T*, unsigned char*, const T*, const int, RM, const T, const int));
+#endif
+#if GRID_HAS_ENERGY
+    if (std::strcmp(algo, "energy") == 0)
+        return GRID_KERNEL_CEIL(energy_kernel, GRID_ALGO_ENERGY,
+                                void(*)(T*, unsigned char*, const T*, const int, RM, const T, const int));
+#endif
+#if GRID_HAS_CORIOLIS_MATRIX
+    if (std::strcmp(algo, "coriolis_matrix") == 0)
+        return GRID_KERNEL_CEIL(coriolis_matrix_kernel, GRID_ALGO_CORIOLIS_MATRIX,
+                                void(*)(T*, unsigned char*, const T*, const int, RM, const T, const int));
+#endif
+    (void)algo; (void)sizeof(RM);
+    return -2;  // not this family's key
+}
+// [[unit: end]]
+// [[unit: dyn_gradients]]
+int grid_rbd_family_dyn_gradients_kernel_ceiling(const char* algo) {
+    using RM = const grid::robotModel<T>*;
 #if GRID_HAS_INVERSE_DYNAMICS_GRADIENT
     if (std::strcmp(algo, "id_du") == 0)
         return GRID_KERNEL_CEIL(inverse_dynamics_gradient_kernel, GRID_ALGO_INVERSE_DYNAMICS_GRADIENT,
@@ -779,42 +572,6 @@ extern "C" int grid_rbd_kernel_max_threads(const char* algo) {
         return GRID_KERNEL_CEIL(forward_dynamics_gradient_kernel, GRID_ALGO_FORWARD_DYNAMICS_GRADIENT,
                                 void(*)(T*, unsigned char*, const T*, const int, T*, RM, const T, const int));
 #endif
-#if GRID_HAS_END_EFFECTOR_POSE
-    if (std::strcmp(algo, "ee_pose") == 0)
-        return GRID_KERNEL_CEIL(GRID_RBD_EE_POSE_KERNEL, GRID_ALGO_END_EFFECTOR_POSE,
-                                void(*)(T*, const T*, const int, RM, const int));
-#endif
-#if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
-    if (std::strcmp(algo, "ee_pose_gradient") == 0)
-        return GRID_KERNEL_CEIL(GRID_RBD_EE_POSE_GRADIENT_KERNEL, GRID_ALGO_END_EFFECTOR_POSE_GRADIENT,
-                                void(*)(T*, unsigned char*, const T*, const int, RM, const int));
-#endif
-#if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
-    if (std::strcmp(algo, "ee_pose_hessian") == 0)
-        return GRID_KERNEL_CEIL(GRID_RBD_EE_POSE_HESSIAN_KERNEL, GRID_ALGO_END_EFFECTOR_POSE_HESSIAN,
-                                void(*)(T*, T*, unsigned char*, const T*, const int, RM, const int));
-#endif
-    if (std::strcmp(algo, "idsva_so") == 0) {
-        // Dispatcher: the codegen emits EXACTLY ONE concrete frame kernel per robot
-        // (world for floating/spherical, body for cardinal fixed). Query whichever
-        // variant is present, at its frame-specific tier. Frame-specific ceilings can
-        // differ (different register footprints) — correct, we want the one that runs.
-#if GRID_HAS_IDSVA_SO_WORLD_FRAME
-        return GRID_KERNEL_CEIL(idsva_so_world_frame_kernel, GRID_ALGO_IDSVA_SO_WORLD_FRAME,
-                                void(*)(T*, unsigned char*, const T*, const int, RM, const T, const int));
-#elif GRID_HAS_IDSVA_SO_BODY_FRAME
-        return GRID_KERNEL_CEIL(idsva_so_body_frame_kernel, GRID_ALGO_IDSVA_SO_BODY_FRAME,
-                                void(*)(T*, unsigned char*, const T*, const int, RM, const T, const int));
-#else
-        return -1;
-#endif
-    }
-#if GRID_HAS_FDSVA_SO
-    if (std::strcmp(algo, "fdsva_so") == 0)
-        return GRID_KERNEL_CEIL(fdsva_so_kernel, GRID_ALGO_FDSVA_SO,
-                                void(*)(T*, unsigned char*, const T*, const int, T*, RM, const T, const int));
-#endif
-    // ─ batch-2 coverage extension (2026-08-26): keys are the FULL symbol names ─
 #if GRID_HAS_F_EXT_GRADIENT
     if (std::strcmp(algo, "f_ext_gradient") == 0)
         return GRID_KERNEL_CEIL(f_ext_gradient_kernel, GRID_ALGO_F_EXT_GRADIENT,
@@ -825,6 +582,13 @@ extern "C" int grid_rbd_kernel_max_threads(const char* algo) {
         return GRID_KERNEL_CEIL(f_ext_gradient_dq_kernel, GRID_ALGO_F_EXT_GRADIENT_DQ,
                                 void(*)(T*, unsigned char*, const T*, const int, RM, const int));
 #endif
+    (void)algo; (void)sizeof(RM);
+    return -2;  // not this family's key
+}
+// [[unit: end]]
+// [[unit: regressors]]
+int grid_rbd_family_regressors_kernel_ceiling(const char* algo) {
+    using RM = const grid::robotModel<T>*;
 #if GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
     if (std::strcmp(algo, "inverse_dynamics_regressor") == 0)
         return GRID_KERNEL_CEIL(inverse_dynamics_regressor_kernel, GRID_ALGO_INVERSE_DYNAMICS_REGRESSOR,
@@ -845,6 +609,28 @@ extern "C" int grid_rbd_kernel_max_threads(const char* algo) {
         return GRID_KERNEL_CEIL(potential_energy_regressor_kernel, GRID_ALGO_POTENTIAL_ENERGY_REGRESSOR,
                                 void(*)(T*, const T*, const int, RM, const T, const int));
 #endif
+    (void)algo; (void)sizeof(RM);
+    return -2;  // not this family's key
+}
+// [[unit: end]]
+// [[unit: kinematics]]
+int grid_rbd_family_kinematics_kernel_ceiling(const char* algo) {
+    using RM = const grid::robotModel<T>*;
+#if GRID_HAS_END_EFFECTOR_POSE
+    if (std::strcmp(algo, "ee_pose") == 0)
+        return GRID_KERNEL_CEIL(GRID_RBD_EE_POSE_KERNEL, GRID_ALGO_END_EFFECTOR_POSE,
+                                void(*)(T*, const T*, const int, RM, const int));
+#endif
+#if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
+    if (std::strcmp(algo, "ee_pose_gradient") == 0)
+        return GRID_KERNEL_CEIL(GRID_RBD_EE_POSE_GRADIENT_KERNEL, GRID_ALGO_END_EFFECTOR_POSE_GRADIENT,
+                                void(*)(T*, unsigned char*, const T*, const int, RM, const int));
+#endif
+#if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
+    if (std::strcmp(algo, "ee_pose_hessian") == 0)
+        return GRID_KERNEL_CEIL(GRID_RBD_EE_POSE_HESSIAN_KERNEL, GRID_ALGO_END_EFFECTOR_POSE_HESSIAN,
+                                void(*)(T*, T*, unsigned char*, const T*, const int, RM, const int));
+#endif
 #if GRID_HAS_FRAME_JACOBIAN
     if (std::strcmp(algo, "frame_jacobian") == 0)
         return GRID_KERNEL_CEIL(frame_jacobian_kernel, GRID_ALGO_FRAME_JACOBIAN,
@@ -860,21 +646,13 @@ extern "C" int grid_rbd_kernel_max_threads(const char* algo) {
         return GRID_KERNEL_CEIL(osc_inertia_kernel, GRID_ALGO_OSC_INERTIA,
                                 void(*)(T*, unsigned char*, const T*, const int, RM, const int));
 #endif
-#if GRID_HAS_GENERALIZED_GRAVITY
-    if (std::strcmp(algo, "generalized_gravity") == 0)
-        return GRID_KERNEL_CEIL(generalized_gravity_kernel, GRID_ALGO_GENERALIZED_GRAVITY,
-                                void(*)(T*, unsigned char*, const T*, const int, RM, const T, const int));
-#endif
-#if GRID_HAS_NONLINEAR_EFFECTS
-    if (std::strcmp(algo, "nonlinear_effects") == 0)
-        return GRID_KERNEL_CEIL(nonlinear_effects_kernel, GRID_ALGO_NONLINEAR_EFFECTS,
-                                void(*)(T*, unsigned char*, const T*, const int, RM, const T, const int));
-#endif
-#if GRID_HAS_ENERGY
-    if (std::strcmp(algo, "energy") == 0)
-        return GRID_KERNEL_CEIL(energy_kernel, GRID_ALGO_ENERGY,
-                                void(*)(T*, unsigned char*, const T*, const int, RM, const T, const int));
-#endif
+    (void)algo; (void)sizeof(RM);
+    return -2;  // not this family's key
+}
+// [[unit: end]]
+// [[unit: centroidal]]
+int grid_rbd_family_centroidal_kernel_ceiling(const char* algo) {
+    using RM = const grid::robotModel<T>*;
 #if GRID_HAS_COM
     if (std::strcmp(algo, "com") == 0)
         return GRID_KERNEL_CEIL(com_kernel, GRID_ALGO_COM,
@@ -884,11 +662,6 @@ extern "C" int grid_rbd_kernel_max_threads(const char* algo) {
     if (std::strcmp(algo, "ccrba") == 0)
         return GRID_KERNEL_CEIL(ccrba_kernel, GRID_ALGO_CCRBA,
                                 void(*)(T*, unsigned char*, const T*, const int, RM, const int));
-#endif
-#if GRID_HAS_CORIOLIS_MATRIX
-    if (std::strcmp(algo, "coriolis_matrix") == 0)
-        return GRID_KERNEL_CEIL(coriolis_matrix_kernel, GRID_ALGO_CORIOLIS_MATRIX,
-                                void(*)(T*, unsigned char*, const T*, const int, RM, const T, const int));
 #endif
 #if GRID_HAS_DCCRBA
     if (std::strcmp(algo, "dccrba") == 0)
@@ -900,10 +673,49 @@ extern "C" int grid_rbd_kernel_max_threads(const char* algo) {
         return GRID_KERNEL_CEIL(cmm_time_variation_kernel, GRID_ALGO_CMM_TIME_VARIATION,
                                 void(*)(T*, unsigned char*, const T*, const int, RM, const int));
 #endif
-// ── END GENERATED KERNEL_MAX_THREADS BRANCHES ──
+    (void)algo; (void)sizeof(RM);
+    return -2;  // not this family's key
+}
+// [[unit: end]]
+// [[unit: plant_costs]]
+int grid_rbd_family_plant_costs_kernel_ceiling(const char* algo) {
+    using RM = const grid::robotModel<T>*;
+    (void)algo; (void)sizeof(RM);
+    return -2;  // not this family's key
+}
+// [[unit: end]]
+int grid_rbd_family_plant_hessian_kernel_ceiling(const char* algo);
+int grid_rbd_family_integrator_gradient_kernel_ceiling(const char* algo);
+int grid_rbd_family_integrator_kernel_ceiling(const char* algo);
+int grid_rbd_family_plant_step_gradient_kernel_ceiling(const char* algo);
+int grid_rbd_family_plant_step_kernel_ceiling(const char* algo);
+int grid_rbd_family_fdsva_so_kernel_ceiling(const char* algo);
+int grid_rbd_family_idsva_so_kernel_ceiling(const char* algo);
+int grid_rbd_family_dyn_values_kernel_ceiling(const char* algo);
+int grid_rbd_family_dyn_gradients_kernel_ceiling(const char* algo);
+int grid_rbd_family_regressors_kernel_ceiling(const char* algo);
+int grid_rbd_family_kinematics_kernel_ceiling(const char* algo);
+int grid_rbd_family_centroidal_kernel_ceiling(const char* algo);
+int grid_rbd_family_plant_costs_kernel_ceiling(const char* algo);
+extern "C" int grid_rbd_kernel_max_threads(const char* algo) {
+    if (!algo) return -1;
+    // ─ batch-2 coverage extension (2026-08-26): keys are the FULL symbol names ─
+    { int r = grid_rbd_family_plant_hessian_kernel_ceiling(algo); if (r != -2) return r; }
+    { int r = grid_rbd_family_integrator_gradient_kernel_ceiling(algo); if (r != -2) return r; }
+    { int r = grid_rbd_family_integrator_kernel_ceiling(algo); if (r != -2) return r; }
+    { int r = grid_rbd_family_plant_step_gradient_kernel_ceiling(algo); if (r != -2) return r; }
+    { int r = grid_rbd_family_plant_step_kernel_ceiling(algo); if (r != -2) return r; }
+    { int r = grid_rbd_family_fdsva_so_kernel_ceiling(algo); if (r != -2) return r; }
+    { int r = grid_rbd_family_idsva_so_kernel_ceiling(algo); if (r != -2) return r; }
+    { int r = grid_rbd_family_dyn_values_kernel_ceiling(algo); if (r != -2) return r; }
+    { int r = grid_rbd_family_dyn_gradients_kernel_ceiling(algo); if (r != -2) return r; }
+    { int r = grid_rbd_family_regressors_kernel_ceiling(algo); if (r != -2) return r; }
+    { int r = grid_rbd_family_kinematics_kernel_ceiling(algo); if (r != -2) return r; }
+    { int r = grid_rbd_family_centroidal_kernel_ceiling(algo); if (r != -2) return r; }
+    { int r = grid_rbd_family_plant_costs_kernel_ceiling(algo); if (r != -2) return r; }
     return -1;  // unknown / not-built algo key
 }
-#undef GRID_KERNEL_CEIL
+// ── END GENERATED KERNEL_MAX_THREADS BRANCHES ──
 
 // ─── per-family kernel-attribute registration (multi-TU arc, 2026-10-09) ────
 // The context constructor registers dynamic-smem attributes family by family
@@ -914,11 +726,14 @@ extern "C" int grid_rbd_kernel_max_threads(const char* algo) {
 // Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen
 // Tables: abi_specs.FAMILIES / FAMILY_ATTR_SHORTS (crosschecked against
 // kernel_attrs.KERNEL_OVERLOADS by test/test_abi_spec_crosscheck.py).
-static cudaError_t grid_rbd_family_plant_hessian_init_attrs(const char **failed_op) {
+// [[unit: plant_hessian]]
+cudaError_t grid_rbd_family_plant_hessian_init_attrs(const char **failed_op) {
     (void)failed_op;
     return cudaSuccess;
 }
-static cudaError_t grid_rbd_family_integrator_gradient_init_attrs(const char **failed_op) {
+// [[unit: end]]
+// [[unit: integrator_gradient]]
+cudaError_t grid_rbd_family_integrator_gradient_init_attrs(const char **failed_op) {
 #if GRID_HAS_INTEGRATOR_GRADIENT
     { cudaError_t _e = grid::init_grid_kernel_attr_integrator_gradient_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -928,7 +743,9 @@ static cudaError_t grid_rbd_family_integrator_gradient_init_attrs(const char **f
     (void)failed_op;
     return cudaSuccess;
 }
-static cudaError_t grid_rbd_family_integrator_init_attrs(const char **failed_op) {
+// [[unit: end]]
+// [[unit: integrator]]
+cudaError_t grid_rbd_family_integrator_init_attrs(const char **failed_op) {
 #if GRID_HAS_INTEGRATOR
     { cudaError_t _e = grid::init_grid_kernel_attr_integrator_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -938,15 +755,21 @@ static cudaError_t grid_rbd_family_integrator_init_attrs(const char **failed_op)
     (void)failed_op;
     return cudaSuccess;
 }
-static cudaError_t grid_rbd_family_plant_step_gradient_init_attrs(const char **failed_op) {
+// [[unit: end]]
+// [[unit: plant_step_gradient]]
+cudaError_t grid_rbd_family_plant_step_gradient_init_attrs(const char **failed_op) {
     (void)failed_op;
     return cudaSuccess;
 }
-static cudaError_t grid_rbd_family_plant_step_init_attrs(const char **failed_op) {
+// [[unit: end]]
+// [[unit: plant_step]]
+cudaError_t grid_rbd_family_plant_step_init_attrs(const char **failed_op) {
     (void)failed_op;
     return cudaSuccess;
 }
-static cudaError_t grid_rbd_family_fdsva_so_init_attrs(const char **failed_op) {
+// [[unit: end]]
+// [[unit: fdsva_so]]
+cudaError_t grid_rbd_family_fdsva_so_init_attrs(const char **failed_op) {
 #if GRID_HAS_FDSVA_SO
     { cudaError_t _e = grid::init_grid_kernel_attr_fdsva_so_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -956,7 +779,9 @@ static cudaError_t grid_rbd_family_fdsva_so_init_attrs(const char **failed_op) {
     (void)failed_op;
     return cudaSuccess;
 }
-static cudaError_t grid_rbd_family_idsva_so_init_attrs(const char **failed_op) {
+// [[unit: end]]
+// [[unit: idsva_so]]
+cudaError_t grid_rbd_family_idsva_so_init_attrs(const char **failed_op) {
 #if GRID_HAS_IDSVA_SO_BODY_FRAME
     { cudaError_t _e = grid::init_grid_kernel_attr_idsva_so_body_frame_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
 #endif
@@ -969,7 +794,9 @@ static cudaError_t grid_rbd_family_idsva_so_init_attrs(const char **failed_op) {
     (void)failed_op;
     return cudaSuccess;
 }
-static cudaError_t grid_rbd_family_dyn_values_init_attrs(const char **failed_op) {
+// [[unit: end]]
+// [[unit: dyn_values]]
+cudaError_t grid_rbd_family_dyn_values_init_attrs(const char **failed_op) {
 #if GRID_HAS_INVERSE_DYNAMICS
     { cudaError_t _e = grid::init_grid_kernel_attr_inverse_dynamics_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -1015,7 +842,9 @@ static cudaError_t grid_rbd_family_dyn_values_init_attrs(const char **failed_op)
     (void)failed_op;
     return cudaSuccess;
 }
-static cudaError_t grid_rbd_family_dyn_gradients_init_attrs(const char **failed_op) {
+// [[unit: end]]
+// [[unit: dyn_gradients]]
+cudaError_t grid_rbd_family_dyn_gradients_init_attrs(const char **failed_op) {
 #if GRID_HAS_INVERSE_DYNAMICS_GRADIENT
     { cudaError_t _e = grid::init_grid_kernel_attr_inverse_dynamics_gradient_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -1037,15 +866,14 @@ static cudaError_t grid_rbd_family_dyn_gradients_init_attrs(const char **failed_
     (void)failed_op;
     return cudaSuccess;
 }
-static cudaError_t grid_rbd_family_regressors_init_attrs(const char **failed_op) {
+// [[unit: end]]
+// [[unit: regressors]]
+cudaError_t grid_rbd_family_regressors_init_attrs(const char **failed_op) {
 #if GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
     { cudaError_t _e = grid::init_grid_kernel_attr_inverse_dynamics_regressor_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
 #ifdef GRID_RBD_WITH_MUJOCO
     { cudaError_t _e = grid::init_grid_kernel_attr_inverse_dynamics_regressor_mjx_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
 #endif
-#endif
-#if GRID_HAS_INVERSE_DYNAMICS_REGRESSOR_GRADIENT
-    { cudaError_t _e = grid::init_grid_kernel_attr_inverse_dynamics_regressor_gradient_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
 #endif
 #if GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
     { cudaError_t _e = grid::init_grid_kernel_attr_forward_dynamics_parameter_gradient_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
@@ -1059,7 +887,9 @@ static cudaError_t grid_rbd_family_regressors_init_attrs(const char **failed_op)
     (void)failed_op;
     return cudaSuccess;
 }
-static cudaError_t grid_rbd_family_kinematics_init_attrs(const char **failed_op) {
+// [[unit: end]]
+// [[unit: kinematics]]
+cudaError_t grid_rbd_family_kinematics_init_attrs(const char **failed_op) {
 #if GRID_HAS_END_EFFECTOR_POSE
     { cudaError_t _e = grid::init_grid_kernel_attr_end_effector_pose_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -1099,7 +929,9 @@ static cudaError_t grid_rbd_family_kinematics_init_attrs(const char **failed_op)
     (void)failed_op;
     return cudaSuccess;
 }
-static cudaError_t grid_rbd_family_centroidal_init_attrs(const char **failed_op) {
+// [[unit: end]]
+// [[unit: centroidal]]
+cudaError_t grid_rbd_family_centroidal_init_attrs(const char **failed_op) {
 #if GRID_HAS_COM
     { cudaError_t _e = grid::init_grid_kernel_attr_com_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
 #endif
@@ -1115,10 +947,26 @@ static cudaError_t grid_rbd_family_centroidal_init_attrs(const char **failed_op)
     (void)failed_op;
     return cudaSuccess;
 }
-static cudaError_t grid_rbd_family_plant_costs_init_attrs(const char **failed_op) {
+// [[unit: end]]
+// [[unit: plant_costs]]
+cudaError_t grid_rbd_family_plant_costs_init_attrs(const char **failed_op) {
     (void)failed_op;
     return cudaSuccess;
 }
+// [[unit: end]]
+cudaError_t grid_rbd_family_plant_hessian_init_attrs(const char **failed_op);
+cudaError_t grid_rbd_family_integrator_gradient_init_attrs(const char **failed_op);
+cudaError_t grid_rbd_family_integrator_init_attrs(const char **failed_op);
+cudaError_t grid_rbd_family_plant_step_gradient_init_attrs(const char **failed_op);
+cudaError_t grid_rbd_family_plant_step_init_attrs(const char **failed_op);
+cudaError_t grid_rbd_family_fdsva_so_init_attrs(const char **failed_op);
+cudaError_t grid_rbd_family_idsva_so_init_attrs(const char **failed_op);
+cudaError_t grid_rbd_family_dyn_values_init_attrs(const char **failed_op);
+cudaError_t grid_rbd_family_dyn_gradients_init_attrs(const char **failed_op);
+cudaError_t grid_rbd_family_regressors_init_attrs(const char **failed_op);
+cudaError_t grid_rbd_family_kinematics_init_attrs(const char **failed_op);
+cudaError_t grid_rbd_family_centroidal_init_attrs(const char **failed_op);
+cudaError_t grid_rbd_family_plant_costs_init_attrs(const char **failed_op);
 static cudaError_t grid_rbd_init_kernel_attrs_checked(const char **failed_op) {
     { cudaError_t _e = grid_rbd_family_plant_hessian_init_attrs(failed_op); if (_e != cudaSuccess) return _e; }
     { cudaError_t _e = grid_rbd_family_integrator_gradient_init_attrs(failed_op); if (_e != cudaSuccess) return _e; }
@@ -1205,92 +1053,6 @@ GRID_RBD_RUNTIME_PARAM_SETTER(transform, 6 * grid::NUM_JOINTS)
 GRID_RBD_RUNTIME_PARAM_SETTER(joint_dynamics, 2 * grid::NUM_VEL)
 #endif
 
-// ─── shared input-packing helper ─────────────────────────────────────────────
-//
-// h_q_qd_u layout (matches generated host wrappers):
-//   timestep t: [q[0..NJ-1], qd[0..NJ-1], u[0..NJ-1]]   (three NUM_JOINTS-wide slots)
-//   contiguous across t.
-//
-// Width contract (2026-09-26): the CALLER's q rows are num_joints (NUM_POS) wide and the
-// qd/u rows are num_vel (NUM_VEL) wide — the physical tangent width, as in Pinocchio and
-// MuJoCo. Every kernel indexes its velocity slot by tangent index, so the padded slot is
-// filled leading-NUM_VEL-entries-then-zeros for every model (floating or spherical). The
-// NUM_JOINTS-pitched staging rows are an internal layout of this .so.
-
-static inline void pack_q_qd_u(GridCtx *ctx, const T* q, const T* qd, const T* u,
-                               int batch, int num_joints, int num_vel)
-{
-    GRID_RBD_CTX_LOCALS(ctx);
-    // Drain in-flight framework work first (audit W04-B class, 2026-09-20): the jax/torch
-    // handlers enqueue async copies, kernels and the f_ext reset on THEIR (non-blocking)
-    // streams into these same g_data buffers; the numpy path stages synchronously on the
-    // legacy default stream, so without this a framework memset could land between our
-    // staging and our launch (seen: numpy ID computed against a zeroed d_f_ext).
-    cudaDeviceSynchronize();
-    const int stride = 3 * num_joints;
-    const int pad = num_joints - num_vel;
-    for (int t = 0; t < batch; ++t) {
-        T* row = &g_data->h_q_qd_u[t * stride];
-        std::memcpy(&row[0], &q[t * num_joints], num_joints * sizeof(T));
-        std::memcpy(&row[num_joints], &qd[t * num_vel], num_vel * sizeof(T));
-        if (pad > 0) std::memset(&row[num_joints + num_vel], 0, pad * sizeof(T));
-        if (u) {
-            std::memcpy(&row[2 * num_joints], &u[t * num_vel], num_vel * sizeof(T));
-            if (pad > 0) std::memset(&row[2 * num_joints + num_vel], 0, pad * sizeof(T));
-        }
-    }
-}
-
-// qdd (NUM_VEL-wide caller rows) into the NUM_JOINTS-pitched h_qdd the generated host
-// wrappers copy to d_qdd (USE_QDD_FLAG overloads). Same leading-entries-then-zeros rule.
-static inline void pack_qdd(GridCtx *ctx, const T* qdd, int batch)
-{
-    GRID_RBD_CTX_LOCALS(ctx);
-    const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
-    for (int t = 0; t < batch; ++t) {
-        std::memcpy(&g_data->h_qdd[t * nj], &qdd[t * nv], nv * sizeof(T));
-        if (nj > nv) std::memset(&g_data->h_qdd[t * nj + nv], 0, (nj - nv) * sizeof(T));
-    }
-}
-
-// `width` leading entries of each `pitch`-strided row of `src` into the tightly packed
-// `dst` (the NUM_VEL-wide caller view of the NUM_JOINTS-pitched h_c / h_qdd buffers).
-static inline void unpack_rows(T* dst, const T* src, int batch, int width, int pitch)
-{
-    for (int t = 0; t < batch; ++t)
-        std::memcpy(&dst[t * width], &src[t * pitch], width * sizeof(T));
-}
-
-// ─── external-force helper ───────────────────────────────────────────────────
-//
-// f_ext layout (caller side): (batch, 6*NUM_BODIES) row-major, body-major per
-// timestep, each per-body wrench ordered [angular(3); linear(3)] in the body's
-// LOCAL frame — identical to gridData::h_f_ext / d_f_ext and to RBDReference's
-// apply_external_forces (the kernel does f -= f_ext). A null f_ext leaves the
-// (zeroed) singleton buffer untouched, so the no-f_ext path is byte-identical
-// to before this surface existed.
-//
-// apply_f_ext(g_ctx) copies the user's wrench into the device buffer; reset_f_ext(g_ctx)
-// re-zeroes it after the launch so a later no-f_ext call sees a clean buffer
-// (the singleton is shared across calls). batch must be <= kMaxBatch.
-
-static inline int apply_f_ext(GridCtx *ctx, const T* f_ext, int batch) {
-    GRID_RBD_CTX_LOCALS(ctx);
-    if (!f_ext) return 0;
-    const size_t n = (size_t)6 * grid::NUM_BODIES * batch;
-    std::memcpy(g_data->h_f_ext, f_ext, n * sizeof(T));
-    if (cudaMemcpy(g_data->d_f_ext, g_data->h_f_ext, n * sizeof(T),
-                   cudaMemcpyHostToDevice) != cudaSuccess) return 5;
-    return 0;
-}
-
-static inline void reset_f_ext(GridCtx *ctx, const T* f_ext, int batch) {
-    GRID_RBD_CTX_LOCALS(ctx);
-    if (!f_ext) return;
-    const size_t n = (size_t)6 * grid::NUM_BODIES * batch;
-    std::memset(g_data->h_f_ext, 0, n * sizeof(T));
-    cudaMemset(g_data->d_f_ext, 0, n * sizeof(T));
-}
 
 // ─── algorithms ──────────────────────────────────────────────────────────────
 
@@ -1323,6 +1085,7 @@ static inline void reset_f_ext(GridCtx *ctx, const T* f_ext, int batch) {
 // fixed AND floating bases, mimic included (registry A2, 2026-08). rc=3 only
 // for spherical-joint robots, >32-joint robots (warp inner's lane==jid cap),
 // or a reduced codegen profile that skipped the EE-pose family.
+// [[unit: kinematics]]
 extern "C" int grid_rbd_fk_batched(long long ctx_id, 
     const T* q,
     T* pose7_out,
@@ -1359,6 +1122,7 @@ extern "C" int grid_rbd_fk_batched(long long ctx_id,
     return 3;  // not supported for this robot (floating-base / spherical; mimic supported since 2026-08-01)
 #endif
 }
+// [[unit: end]]
 
 // End-effector pose Jacobian (d/dv tangent, pinocchio convention):
 // 6×NUM_EES×NUM_VEL per timestep. Floating-base now produces the spatial
@@ -1415,12 +1179,6 @@ extern "C" int grid_rbd_fk_batched(long long ctx_id,
 // either to fall back to the codegen leaf-EE / LOCAL_WORLD_ALIGNED default baked
 // into the host wrapper. osc_inertia still bakes its frame at codegen time.
 
-// com uses the COMPRESSED input layout (h_q / d_q, stride NUM_JOINTS), unlike
-// the other surfaces which read the [q,qd,u]-interleaved h_q_qd_u.
-static inline void pack_q(GridCtx *ctx, const T* q, int batch, int num_joints) {
-    GRID_RBD_CTX_LOCALS(ctx);
-    std::memcpy(g_data->h_q, q, (size_t)batch * num_joints * sizeof(T));
-}
 
 // com(q) -> [p_com(3); J_com(3 x NV)] per timestep, total 3 + 3*NUM_VEL floats.
 // Gated on GRID_HAS_COM: com/ccrba/energy ARE emitted for mimic robots (the
@@ -1490,6 +1248,7 @@ static inline void pack_q(GridCtx *ctx, const T* q, int batch, int num_joints) {
 // (register with enable_tool=True). The device fn owns the FK arena in dynamic smem;
 // we size it from the (>= this arena) EE-pose / f_ext_gradient macros and pass
 // d_workspace so it also works at spilling tiers on big robots.
+// [[unit: dyn_gradients]]
 #ifdef GRID_HAS_CONTACT_RUNTIME
 __global__ void grid_rbd_tool_fext_kernel(const T* d_q, int stride_q, int jid,
                                           const T* d_rc, const T* d_wrench,
@@ -1551,6 +1310,7 @@ extern "C" int grid_rbd_tool_fext(long long ctx_id, const T* q, const T* wrench,
 #else
 extern "C" int grid_rbd_tool_fext(const T*, const T*, int, const T*, T*, int) { return 3; }
 #endif
+// [[unit: end]]
 
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1573,6 +1333,7 @@ extern "C" int grid_rbd_num_contact_frames() {
     return 0;
 #endif
 }
+// [[unit: dyn_gradients]]
 #ifdef GRID_HAS_CONTACT_FRAMES
 __global__ void grid_rbd_contact_fext_kernel(const T* d_q, int stride_q,
                                              const T* d_fc,
@@ -1624,6 +1385,7 @@ extern "C" int grid_rbd_contact_fext(long long ctx_id, const T* q, const T* f_c,
 #else
 extern "C" int grid_rbd_contact_fext(const T*, const T*, T*, int) { return 3; }
 #endif
+// [[unit: end]]
 
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1644,6 +1406,7 @@ extern "C" int grid_rbd_contact_fext(const T*, const T*, T*, int) { return 3; }
 // uninstantiated template that references a non-existent qualified name is still a hard
 // name-lookup error at parse time (not just a deferred instantiation failure). With the
 // guard, a subset .so simply omits the launcher; the caller body is rc=3-stubbed in turn.
+// [[unit: integrator]]
 #if GRID_HAS_INTEGRATOR
 template <grid::IntegratorType IT>
 static void launch_integrator_host(GridCtx *ctx, int batch, T gravity, T dt) {
@@ -1668,6 +1431,8 @@ static void launch_integrator_host_mujoco(GridCtx *ctx, int batch, T gravity, T 
 }
 #endif
 #endif  // GRID_HAS_INTEGRATOR
+// [[unit: end]]
+// [[unit: integrator_gradient]]
 #if GRID_HAS_INTEGRATOR_GRADIENT
 template <grid::IntegratorType IT>
 static void launch_integrator_grad_host(GridCtx *ctx, int batch, T gravity, T dt) {
@@ -1685,62 +1450,17 @@ static void launch_integrator_grad_host_mujoco(GridCtx *ctx, int batch, T gravit
 }
 #endif
 #endif  // GRID_HAS_INTEGRATOR_GRADIENT
+// [[unit: end]]
 
-#define GRID_RBD_IT_DISPATCH(it_code, FN, ...)                                   \
-    switch (it_code) {                                                           \
-        case 0: FN<grid::IntegratorType::EULER>(g_ctx, __VA_ARGS__); break;             \
-        case 1: FN<grid::IntegratorType::SEMI_IMPLICIT_EULER>(g_ctx, __VA_ARGS__); break;\
-        case 2: FN<grid::IntegratorType::MIDPOINT>(g_ctx, __VA_ARGS__); break;          \
-        case 3: FN<grid::IntegratorType::RK4>(g_ctx, __VA_ARGS__); break;               \
-        case 4: FN<grid::IntegratorType::TRAPEZOIDAL>(g_ctx, __VA_ARGS__); break;       \
-        case 5: FN<grid::IntegratorType::CONSTANT_ACCELERATION>(g_ctx, __VA_ARGS__); break; \
-        default: return 3;                                                       \
-    }
-
-// plant_step_hessian only supports EULER / SI-EULER (the composed device fn
-// static_asserts MIDPOINT/RK out — instantiating those cases would fail to
-// COMPILE, so this dispatch never names them). Other IT codes return rc=3.
-// Single-stage dispatch (EULER / SEMI_IMPLICIT_EULER only): the MuJoCo integration
-// values and gradients and the step Hessians support no multi-stage scheme, and the
-// generated kernels static_assert those instantiations out — so this switch never
-// names them. Other IT codes return rc=3.
-#define GRID_RBD_IT_DISPATCH_SS(it_code, FN, ...)                                \
-    switch (it_code) {                                                           \
-        case 0: FN<grid::IntegratorType::EULER>(g_ctx, __VA_ARGS__); break;             \
-        case 1: FN<grid::IntegratorType::SEMI_IMPLICIT_EULER>(g_ctx, __VA_ARGS__); break;\
-        default: return 3;                                                       \
-    }
-#define GRID_RBD_IT_DISPATCH_HESSIAN GRID_RBD_IT_DISPATCH_SS
-
-// Shared (IT, MUJOCO_FLAG) two-template-arg switch cores for the jax-FFI /
-// torch dispatchers below (which differ only in their bad-code statement).
-// ERR_STMT is the whole surface-specific statement (ffi::Error return vs
-// TORCH_CHECK). The _SS core is single-stage (EULER / SEMI_IMPLICIT_EULER)
-// ONLY — the mjx gradient / plant-step epilogues static_assert multi-stage
-// out, so those dispatchers must never name the multi-stage cases.
-#define GRID_RBD_IT_SWITCH_MJX(it_code, FN, MUJOCO_FLAG, ERR_STMT, ...)                         \
-    switch (it_code) {                                                                          \
-        case 0: FN<grid::IntegratorType::EULER, MUJOCO_FLAG>(g_ctx, __VA_ARGS__); break;               \
-        case 1: FN<grid::IntegratorType::SEMI_IMPLICIT_EULER, MUJOCO_FLAG>(g_ctx, __VA_ARGS__); break; \
-        case 2: FN<grid::IntegratorType::MIDPOINT, MUJOCO_FLAG>(g_ctx, __VA_ARGS__); break;            \
-        case 3: FN<grid::IntegratorType::RK4, MUJOCO_FLAG>(g_ctx, __VA_ARGS__); break;                 \
-        case 4: FN<grid::IntegratorType::TRAPEZOIDAL, MUJOCO_FLAG>(g_ctx, __VA_ARGS__); break;         \
-        case 5: FN<grid::IntegratorType::CONSTANT_ACCELERATION, MUJOCO_FLAG>(g_ctx, __VA_ARGS__); break; \
-        default: ERR_STMT;                                                                      \
-    }
-#define GRID_RBD_IT_SWITCH_MJX_SS(it_code, FN, MUJOCO_FLAG, ERR_STMT, ...)                      \
-    switch (it_code) {                                                                          \
-        case 0: FN<grid::IntegratorType::EULER, MUJOCO_FLAG>(g_ctx, __VA_ARGS__); break;               \
-        case 1: FN<grid::IntegratorType::SEMI_IMPLICIT_EULER, MUJOCO_FLAG>(g_ctx, __VA_ARGS__); break; \
-        default: ERR_STMT;                                                                      \
-    }
-
+// (GRID_RBD_IT_DISPATCH* / GRID_RBD_IT_SWITCH_MJX* live in wrapper_common.cuh: every unit that
+// forwards an integrator-type code uses them)
 
 // ── BEGIN GENERATED C-ABI BODIES (grid_codegen/wrapper_body_gen.py — do not hand-edit) ──
 // Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen
 // Table: grid_codegen/abi_specs.py (ABI_SPECS); drift-gated by
 // test/test_wrapper_generated_block.py.
 
+// [[unit: dyn_values]]
 extern "C" int grid_rbd_nonlinear_effects(long long ctx_id, const T* q, const T* qd, T* out, int batch, T gravity) {
 #if GRID_HAS_NONLINEAR_EFFECTS
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -1756,7 +1476,9 @@ extern "C" int grid_rbd_nonlinear_effects(long long ctx_id, const T* q, const T*
     return 3;  // nonlinear_effects not built into this .so (subset profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: dyn_values]]
 extern "C" int grid_rbd_generalized_gravity(long long ctx_id, const T* q, T* out, int batch, T gravity) {
 #if GRID_HAS_GENERALIZED_GRAVITY
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -1772,7 +1494,9 @@ extern "C" int grid_rbd_generalized_gravity(long long ctx_id, const T* q, T* out
     return 3;  // generalized_gravity not built into this .so (subset profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: dyn_values]]
 extern "C" int grid_rbd_coriolis_matrix(long long ctx_id, const T* q, const T* qd, T* out, int batch, T gravity) {
 #if GRID_HAS_CORIOLIS_MATRIX
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -1790,7 +1514,9 @@ extern "C" int grid_rbd_coriolis_matrix(long long ctx_id, const T* q, const T* q
     return 3;  // coriolis_matrix not built into this .so (subset profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: dyn_values]]
 extern "C" int grid_rbd_energy(long long ctx_id, const T* q, const T* qd, T* out, int batch, T gravity) {
 #ifdef GRID_HAS_ENERGY
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -1808,7 +1534,9 @@ extern "C" int grid_rbd_energy(long long ctx_id, const T* q, const T* qd, T* out
     return 3;  // energy not generated for this robot (reduced codegen profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: centroidal]]
 extern "C" int grid_rbd_com(long long ctx_id, const T* q, T* out, int batch) {
 #ifdef GRID_HAS_COM
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -1826,7 +1554,9 @@ extern "C" int grid_rbd_com(long long ctx_id, const T* q, T* out, int batch) {
     return 3;  // com not generated for this robot (reduced codegen profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: centroidal]]
 extern "C" int grid_rbd_ccrba(long long ctx_id, const T* q, const T* qd, T* out, int batch) {
 #ifdef GRID_HAS_CCRBA
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -1844,7 +1574,9 @@ extern "C" int grid_rbd_ccrba(long long ctx_id, const T* q, const T* qd, T* out,
     return 3;  // ccrba not generated for this robot (reduced codegen profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: centroidal]]
 extern "C" int grid_rbd_dccrba(long long ctx_id, const T* q, T* out, int batch) {
 #ifdef GRID_HAS_DCCRBA
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -1862,7 +1594,9 @@ extern "C" int grid_rbd_dccrba(long long ctx_id, const T* q, T* out, int batch) 
     return 3;  // dccrba not generated for this robot (reduced codegen profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: centroidal]]
 extern "C" int grid_rbd_cmm_time_variation(long long ctx_id, const T* q, const T* qd, T* out, int batch) {
 #ifdef GRID_HAS_CMM_TIME_VARIATION
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -1880,7 +1614,9 @@ extern "C" int grid_rbd_cmm_time_variation(long long ctx_id, const T* q, const T
     return 3;  // cmm_time_variation not generated for this robot (mimic)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: regressors]]
 extern "C" int grid_rbd_kinetic_energy_regressor(long long ctx_id, const T* q, const T* qd, T* out, int batch, T gravity) {
 #if GRID_HAS_KINETIC_ENERGY_REGRESSOR
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -1898,7 +1634,9 @@ extern "C" int grid_rbd_kinetic_energy_regressor(long long ctx_id, const T* q, c
     return 3;  // kinetic_energy_regressor not built into this .so (subset profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: regressors]]
 extern "C" int grid_rbd_potential_energy_regressor(long long ctx_id, const T* q, T* out, int batch, T gravity) {
 #if GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -1916,7 +1654,9 @@ extern "C" int grid_rbd_potential_energy_regressor(long long ctx_id, const T* q,
     return 3;  // potential_energy_regressor not built into this .so (subset profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: kinematics]]
 extern "C" int grid_rbd_frame_jacobian(long long ctx_id, const T* q, T* out, int batch, int target_jid, int reference_frame) {
 #ifdef GRID_HAS_FRAME_JACOBIAN
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -1935,7 +1675,9 @@ extern "C" int grid_rbd_frame_jacobian(long long ctx_id, const T* q, T* out, int
     return 3;  // frame_jacobian not generated for this .so
 #endif
 }
+// [[unit: end]]
 
+// [[unit: kinematics]]
 extern "C" int grid_rbd_frame_jacobian_dot(long long ctx_id, const T* q, const T* qd, T* out, int batch, int target_jid, int reference_frame) {
 #ifdef GRID_HAS_FRAME_JACOBIAN_DOT
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -1954,7 +1696,9 @@ extern "C" int grid_rbd_frame_jacobian_dot(long long ctx_id, const T* q, const T
     return 3;  // frame_jacobian_dot not built
 #endif
 }
+// [[unit: end]]
 
+// [[unit: kinematics]]
 extern "C" int grid_rbd_osc_inertia(long long ctx_id, const T* q, T* out, int batch) {
 #ifdef GRID_HAS_OSC_INERTIA
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -1970,7 +1714,9 @@ extern "C" int grid_rbd_osc_inertia(long long ctx_id, const T* q, T* out, int ba
     return 3;  // osc_inertia not built
 #endif
 }
+// [[unit: end]]
 
+// [[unit: dyn_values]]
 extern "C" int grid_rbd_minv(long long ctx_id, const T* q, T* minv_out, int batch) {
 #if GRID_HAS_MINV
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -2000,7 +1746,9 @@ extern "C" int grid_rbd_minv(long long ctx_id, const T* q, T* minv_out, int batc
     return 3;  // minv not built into this .so (subset profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: dyn_values]]
 extern "C" int grid_rbd_crba(long long ctx_id, const T* q, T* m_out, int batch, T gravity) {
 #if GRID_HAS_CRBA
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -2030,7 +1778,9 @@ extern "C" int grid_rbd_crba(long long ctx_id, const T* q, T* m_out, int batch, 
     return 3;  // crba not built into this .so (subset profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: kinematics]]
 extern "C" int grid_rbd_end_effector_pose(long long ctx_id, const T* q, T* ee_out, int batch) {
 #if GRID_HAS_END_EFFECTOR_POSE
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -2058,7 +1808,9 @@ extern "C" int grid_rbd_end_effector_pose(long long ctx_id, const T* q, T* ee_ou
     return 3;  // end_effector_pose not built into this .so (subset profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: kinematics]]
 extern "C" int grid_rbd_end_effector_pose_gradient(long long ctx_id, const T* q, T* dee_out, int batch) {
 #if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -2086,7 +1838,9 @@ extern "C" int grid_rbd_end_effector_pose_gradient(long long ctx_id, const T* q,
     return 3;  // end_effector_pose_gradient not built into this .so (subset profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: kinematics]]
 extern "C" int grid_rbd_end_effector_pose_hessian(long long ctx_id, const T* q, T* d2ee_out, int batch) {
 #if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -2114,7 +1868,9 @@ extern "C" int grid_rbd_end_effector_pose_hessian(long long ctx_id, const T* q, 
     return 3;  // end_effector_pose_hessian not built into this .so (subset profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: idsva_so]]
 extern "C" int grid_rbd_idsva_so(long long ctx_id, const T* q, const T* qd, const T* qdd, T* out, int batch, T gravity) {
 #if GRID_HAS_IDSVA_SO
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -2149,7 +1905,9 @@ extern "C" int grid_rbd_idsva_so(long long ctx_id, const T* q, const T* qd, cons
     return 3;  // idsva_so not built into this .so (subset profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: fdsva_so]]
 extern "C" int grid_rbd_fdsva_so(long long ctx_id, const T* q, const T* qd, const T* u, T* out, int batch, T gravity) {
 #if GRID_HAS_FDSVA_SO
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -2180,7 +1938,9 @@ extern "C" int grid_rbd_fdsva_so(long long ctx_id, const T* q, const T* qd, cons
     return 3;  // fdsva_so not built into this .so (subset profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: dyn_values]]
 extern "C" int grid_rbd_forward_dynamics(long long ctx_id, const T* q, const T* qd, const T* u, T* qdd_out, int batch, T gravity, const T* f_ext) {
 #if GRID_HAS_FORWARD_DYNAMICS
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -2216,7 +1976,9 @@ extern "C" int grid_rbd_forward_dynamics(long long ctx_id, const T* q, const T* 
     return 3;  // forward_dynamics not built into this .so (subset profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: dyn_values]]
 extern "C" int grid_rbd_aba(long long ctx_id, const T* q, const T* qd, const T* u, T* qdd_out, int batch, T gravity, const T* f_ext) {
 #if GRID_HAS_ABA
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -2252,7 +2014,9 @@ extern "C" int grid_rbd_aba(long long ctx_id, const T* q, const T* qd, const T* 
     return 3;  // aba not built into this .so (subset profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: dyn_values]]
 extern "C" int grid_rbd_inverse_dynamics(long long ctx_id, const T* q, const T* qd, const T* qdd_opt, T* c_out, int batch, T gravity, const T* f_ext) {
 #if GRID_HAS_INVERSE_DYNAMICS
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -2299,7 +2063,9 @@ extern "C" int grid_rbd_inverse_dynamics(long long ctx_id, const T* q, const T* 
     return 3;  // inverse_dynamics not built into this .so (subset profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: dyn_gradients]]
 extern "C" int grid_rbd_inverse_dynamics_gradient(long long ctx_id, const T* q, const T* qd, const T* qdd_opt, T* dc_du_out, int batch, T gravity, const T* f_ext) {
 #if GRID_HAS_INVERSE_DYNAMICS_GRADIENT
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -2348,7 +2114,9 @@ extern "C" int grid_rbd_inverse_dynamics_gradient(long long ctx_id, const T* q, 
     return 3;  // inverse_dynamics_gradient not built into this .so (subset profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: dyn_gradients]]
 extern "C" int grid_rbd_forward_dynamics_gradient(long long ctx_id, const T* q, const T* qd, const T* u, T* df_du_out, int batch, T gravity, const T* f_ext) {
 #if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -2386,7 +2154,9 @@ extern "C" int grid_rbd_forward_dynamics_gradient(long long ctx_id, const T* q, 
     return 3;  // forward_dynamics_gradient not built into this .so (subset profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: integrator]]
 extern "C" int grid_rbd_integrator(long long ctx_id, const T* q, const T* qd, const T* u, T* x_kp1_out, int batch, T gravity, T dt, int it) {
 #if GRID_HAS_INTEGRATOR
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -2405,7 +2175,9 @@ extern "C" int grid_rbd_integrator(long long ctx_id, const T* q, const T* qd, co
     return 3;  // integrator not built into this .so (subset profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: integrator_gradient]]
 extern "C" int grid_rbd_integrator_gradient(long long ctx_id, const T* q, const T* qd, const T* u, T* dAB_out, int batch, T gravity, T dt, int it) {
 #if GRID_HAS_INTEGRATOR_GRADIENT
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -2422,7 +2194,9 @@ extern "C" int grid_rbd_integrator_gradient(long long ctx_id, const T* q, const 
     return 3;  // integrator_gradient not built into this .so (subset profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: regressors]]
 extern "C" int grid_rbd_inverse_dynamics_regressor(long long ctx_id, const T* q, const T* qd, const T* qdd, T* out, int batch, T gravity) {
 #if GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -2440,7 +2214,9 @@ extern "C" int grid_rbd_inverse_dynamics_regressor(long long ctx_id, const T* q,
     return 3;  // inverse_dynamics_regressor not built into this .so (subset profile)
 #endif
 }
+// [[unit: end]]
 
+// [[unit: kinematics]]
 extern "C" int grid_rbd_end_effector_pose_runtime(long long ctx_id, const T* q, T* out, int batch, int target_jid, const T* offset) {
 #ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -2464,7 +2240,9 @@ extern "C" int grid_rbd_end_effector_pose_runtime(long long ctx_id, const T* q, 
     return 3;  // end_effector_pose_runtime not built
 #endif
 }
+// [[unit: end]]
 
+// [[unit: kinematics]]
 extern "C" int grid_rbd_end_effector_pose_gradient_runtime(long long ctx_id, const T* q, T* out, int batch, int target_jid, const T* offset) {
 #ifdef GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -2488,6 +2266,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient_runtime(long long ctx_id, con
     return 3;  // end_effector_pose_gradient_runtime not built
 #endif
 }
+// [[unit: end]]
 
 // ── END GENERATED C-ABI BODIES ──
 
@@ -2496,6 +2275,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient_runtime(long long ctx_id, con
 // Table: grid_codegen/abi_specs.py (mjx_* fields); docs verbatim from
 // grid_codegen/wrapper_mjx_docs.py. The 4 plant cost twins stay hand-written.
 
+// [[unit: dyn_values]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_NONLINEAR_EFFECTS
 // MuJoCo-convention nonlinear_effects(q, qd) -> c(q,qd) (floating base only). q is
 // raw mjx (kernel reorders the quaternion). The kernel (MUJOCO_OUTPUT=true) injects
@@ -2513,7 +2293,9 @@ extern "C" int grid_rbd_nonlinear_effects_mujoco(long long ctx_id, const T* q, c
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_NONLINEAR_EFFECTS
+// [[unit: end]]
 
+// [[unit: dyn_values]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_GENERALIZED_GRAVITY
 // MuJoCo-convention generalized_gravity(q) -> g(q) (floating base only). q is raw
 // mjx (kernel reorders the quaternion); the kernel (MUJOCO_OUTPUT=true) base-rotates
@@ -2530,7 +2312,9 @@ extern "C" int grid_rbd_generalized_gravity_mujoco(long long ctx_id, const T* q,
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_GENERALIZED_GRAVITY
+// [[unit: end]]
 
+// [[unit: dyn_values]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_CORIOLIS_MATRIX
 // MuJoCo-convention Coriolis matrix (floating base only): C_mjx = G C_pin G^T, a
 // congruence baked into the kernel (MUJOCO_OUTPUT=true). q/qd raw mjx in (kernel
@@ -2549,7 +2333,9 @@ extern "C" int grid_rbd_coriolis_matrix_mujoco(long long ctx_id, const T* q, con
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_CORIOLIS_MATRIX
+// [[unit: end]]
 
+// [[unit: dyn_values]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_ENERGY
 // MuJoCo-convention energy(q, qd) -> [KE, PE, KE+PE] per timestep. The energies are
 // frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) just converts the mjx-native
@@ -2569,7 +2355,9 @@ extern "C" int grid_rbd_energy_mujoco(long long ctx_id, const T* q, const T* qd,
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_ENERGY
+// [[unit: end]]
 
+// [[unit: centroidal]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_COM
 // MuJoCo-convention com(q) -> [p_com(3); J_com(3 x NV)] per timestep. p_com is
 // INVARIANT; the J_com columns are reframed by the kernel (MUJOCO_OUTPUT=true): q
@@ -2589,7 +2377,9 @@ extern "C" int grid_rbd_com_mujoco(long long ctx_id, const T* q, T* out, int bat
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_COM
+// [[unit: end]]
 
+// [[unit: centroidal]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_CCRBA
 // MuJoCo-convention ccrba(q, qd) -> [A(6 x NV); h(6)] per timestep. The centroidal
 // momentum h is INVARIANT; the A columns are reframed by the kernel
@@ -2609,7 +2399,9 @@ extern "C" int grid_rbd_ccrba_mujoco(long long ctx_id, const T* q, const T* qd, 
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_CCRBA
+// [[unit: end]]
 
+// [[unit: centroidal]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_DCCRBA
 // MuJoCo-convention dccrba(q) -> 6*NV*NV dA/dq tensor (floating base only). q is raw
 // mjx (kernel reorders the quaternion); the kernel (MUJOCO_OUTPUT=true) double-reframes
@@ -2629,7 +2421,9 @@ extern "C" int grid_rbd_dccrba_mujoco(long long ctx_id, const T* q, T* out, int 
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_DCCRBA
+// [[unit: end]]
 
+// [[unit: centroidal]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_CMM_TIME_VARIATION
 // MuJoCo-convention cmm_time_variation(q, qd) -> 6*NUM_VEL Adot (per timestep).
 // Column-reframe: q/qd raw mjx in (kernel reorders the quaternion + reframes qd)
@@ -2648,7 +2442,9 @@ extern "C" int grid_rbd_cmm_time_variation_mujoco(long long ctx_id, const T* q, 
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_CMM_TIME_VARIATION
+// [[unit: end]]
 
+// [[unit: regressors]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_KINETIC_ENERGY_REGRESSOR
 // MuJoCo-convention kinetic_energy_regressor(q, qd) -> length 10*NUM_BODIES y_KE.
 // The regressor is frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) only converts
@@ -2669,7 +2465,9 @@ extern "C" int grid_rbd_kinetic_energy_regressor_mujoco(long long ctx_id, const 
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_KINETIC_ENERGY_REGRESSOR
+// [[unit: end]]
 
+// [[unit: regressors]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
 // MuJoCo-convention potential_energy_regressor(q) -> length 10*NUM_BODIES y_PE.
 // Frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) only converts the mjx-native q
@@ -2688,7 +2486,9 @@ extern "C" int grid_rbd_potential_energy_regressor_mujoco(long long ctx_id, cons
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
+// [[unit: end]]
 
+// [[unit: kinematics]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_FRAME_JACOBIAN
 // MuJoCo-convention frame_jacobian family (floating base only). The geometric
 // Jacobian / its time-derivative are column-reframed J_mjx = J_pin G^{-1} in the
@@ -2709,7 +2509,9 @@ extern "C" int grid_rbd_frame_jacobian_mujoco(long long ctx_id, const T* q, T* o
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FRAME_JACOBIAN
+// [[unit: end]]
 
+// [[unit: kinematics]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_FRAME_JACOBIAN_DOT
 extern "C" int grid_rbd_frame_jacobian_dot_mujoco(long long ctx_id, const T* q, const T* qd, T* out, int batch, int target_jid, int reference_frame) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -2724,7 +2526,9 @@ extern "C" int grid_rbd_frame_jacobian_dot_mujoco(long long ctx_id, const T* q, 
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FRAME_JACOBIAN_DOT
+// [[unit: end]]
 
+// [[unit: kinematics]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_OSC_INERTIA
 extern "C" int grid_rbd_osc_inertia_mujoco(long long ctx_id, const T* q, T* out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
@@ -2738,7 +2542,9 @@ extern "C" int grid_rbd_osc_inertia_mujoco(long long ctx_id, const T* q, T* out,
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_OSC_INERTIA
+// [[unit: end]]
 
+// [[unit: dyn_values]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_MINV
 // MuJoCo-convention direct mass-matrix inverse (floating base only): the kernel
 // reorders the quaternion and applies the congruence Minv_mjx = G^-T Minv_pin G^-1
@@ -2759,7 +2565,9 @@ extern "C" int grid_rbd_minv_mujoco(long long ctx_id, const T* q, T* minv_out, i
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_MINV
+// [[unit: end]]
 
+// [[unit: dyn_values]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_CRBA
 // MuJoCo-convention mass matrix (floating base only): M_mjx = G M_pin G^T, the
 // congruence baked into the kernel (MUJOCO_OUTPUT=true). q is MuJoCo-native (quat
@@ -2779,7 +2587,9 @@ extern "C" int grid_rbd_crba_mujoco(long long ctx_id, const T* q, T* m_out, int 
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_CRBA
+// [[unit: end]]
 
+// [[unit: kinematics]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_END_EFFECTOR_POSE
 // MuJoCo-convention end_effector_pose(q) -> 6*NUM_EES per timestep. The pose is
 // frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) only converts the mjx-native q
@@ -2797,7 +2607,9 @@ extern "C" int grid_rbd_end_effector_pose_mujoco(long long ctx_id, const T* q, T
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_END_EFFECTOR_POSE
+// [[unit: end]]
 
+// [[unit: kinematics]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_END_EFFECTOR_POSE_GRADIENT
 // MuJoCo-convention end_effector_pose Jacobian (q) -> 6*NUM_EES*NUM_VEL per
 // timestep. Column-reframe: q raw mjx in (kernel reorders the quaternion) and the
@@ -2815,7 +2627,9 @@ extern "C" int grid_rbd_end_effector_pose_gradient_mujoco(long long ctx_id, cons
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_END_EFFECTOR_POSE_GRADIENT
+// [[unit: end]]
 
+// [[unit: kinematics]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_END_EFFECTOR_POSE_HESSIAN
 // MuJoCo-convention end_effector_pose Hessian (q) -> 6*NUM_EES*NV*NV per timestep.
 // q is raw mjx (kernel reorders the quaternion); the kernel (MUJOCO_OUTPUT=true)
@@ -2833,7 +2647,9 @@ extern "C" int grid_rbd_end_effector_pose_hessian_mujoco(long long ctx_id, const
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_END_EFFECTOR_POSE_HESSIAN
+// [[unit: end]]
 
+// [[unit: idsva_so]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_IDSVA_SO
 // MuJoCo-convention idsva_so(q, qd, qdd) -> 4*NV^3 (floating base only). q/qd/qdd are
 // raw mjx (kernel input-converts); the kernel (MUJOCO_OUTPUT=true) transforms all four
@@ -2855,7 +2671,9 @@ extern "C" int grid_rbd_idsva_so_mujoco(long long ctx_id, const T* q, const T* q
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_IDSVA_SO
+// [[unit: end]]
 
+// [[unit: fdsva_so]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_FDSVA_SO
 // MuJoCo-convention fdsva_so(q, qd, u) -> 4*NV^3 (floating base only). q/qd/u raw mjx
 // (kernel input-converts); the kernel (MUJOCO_OUTPUT=true) transforms all four
@@ -2877,7 +2695,9 @@ extern "C" int grid_rbd_fdsva_so_mujoco(long long ctx_id, const T* q, const T* q
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FDSVA_SO
+// [[unit: end]]
 
+// [[unit: dyn_values]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_FORWARD_DYNAMICS
 // MuJoCo-convention forward dynamics (floating base only). q/qd/u are MuJoCo-native;
 // the kernel converts inputs mjx->pin on load and maps the output acceleration
@@ -2904,7 +2724,9 @@ extern "C" int grid_rbd_forward_dynamics_mujoco(long long ctx_id, const T* q, co
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FORWARD_DYNAMICS
+// [[unit: end]]
 
+// [[unit: dyn_values]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_ABA
 // MuJoCo-convention ABA (floating base only). Same accel_out convention as
 // forward_dynamics: q/qd/u raw mjx in, mjx-frame qdd out (MUJOCO_OUTPUT=true). f_ext
@@ -2929,7 +2751,9 @@ extern "C" int grid_rbd_aba_mujoco(long long ctx_id, const T* q, const T* qd, co
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_ABA
+// [[unit: end]]
 
+// [[unit: dyn_values]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_INVERSE_DYNAMICS
 // MuJoCo-convention inverse dynamics (floating base only). Identical signature to
 // grid_rbd_inverse_dynamics, but q/qd/qdd are MuJoCo-native (quat wxyz, free-joint
@@ -2967,7 +2791,9 @@ extern "C" int grid_rbd_inverse_dynamics_mujoco(long long ctx_id, const T* q, co
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_INVERSE_DYNAMICS
+// [[unit: end]]
 
+// [[unit: dyn_gradients]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_INVERSE_DYNAMICS_GRADIENT
 // MuJoCo-convention inverse-dynamics gradient (floating base only). q/qd/qdd are
 // MuJoCo-native; the kernel converts inputs mjx->pin on load and applies the full
@@ -2999,7 +2825,9 @@ extern "C" int grid_rbd_inverse_dynamics_gradient_mujoco(long long ctx_id, const
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_INVERSE_DYNAMICS_GRADIENT
+// [[unit: end]]
 
+// [[unit: dyn_gradients]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_FORWARD_DYNAMICS_GRADIENT
 // MuJoCo-convention forward-dynamics gradient (floating base only). q/qd/u are
 // MuJoCo-native; qdd is computed internally. The kernel converts inputs mjx->pin on
@@ -3027,7 +2855,9 @@ extern "C" int grid_rbd_forward_dynamics_gradient_mujoco(long long ctx_id, const
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FORWARD_DYNAMICS_GRADIENT
+// [[unit: end]]
 
+// [[unit: integrator]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_INTEGRATOR
 // MuJoCo-convention integrator (floating base only): the free-joint base POSITION
 // takes a GLOBAL additive step (mjx retract) instead of pin's SE(3) V(phi); the
@@ -3047,7 +2877,9 @@ extern "C" int grid_rbd_integrator_mujoco(long long ctx_id, const T* q, const T*
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_INTEGRATOR
+// [[unit: end]]
 
+// [[unit: integrator_gradient]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_INTEGRATOR_GRADIENT
 // MuJoCo-convention integrator_gradient(q, qd, u, dt, it) -> dAB (2NV x 3NV) (floating
 // base only). q/qd/u raw mjx (kernel input-converts); the kernel (MUJOCO_OUTPUT=true)
@@ -3066,7 +2898,9 @@ extern "C" int grid_rbd_integrator_gradient_mujoco(long long ctx_id, const T* q,
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_INTEGRATOR_GRADIENT
+// [[unit: end]]
 
+// [[unit: regressors]]
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
 // MuJoCo-convention inverse_dynamics_regressor (floating base only). q/qd/qdd are raw
 // mjx (kernel input-converts); the regressor ROWS are tangent-indexed generalized
@@ -3087,7 +2921,9 @@ extern "C" int grid_rbd_inverse_dynamics_regressor_mujoco(long long ctx_id, cons
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
+// [[unit: end]]
 
+// [[unit: kinematics]]
 #ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention end_effector_pose_runtime (floating base only). The kernel
 // input-converts q (quat reorder) on load; the pose VALUE is frame-INVARIANT (the
@@ -3118,7 +2954,9 @@ extern "C" int grid_rbd_end_effector_pose_runtime_mujoco(long long ctx_id, const
 #endif
 }
 #endif  // GRID_RBD_WITH_MUJOCO
+// [[unit: end]]
 
+// [[unit: kinematics]]
 #ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention end_effector_pose_gradient_runtime (floating base only). The
 // pose value is invariant, but the gradient is COLUMN-reframed: the base-linear
@@ -3149,6 +2987,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient_runtime_mujoco(long long ctx_
 #endif
 }
 #endif  // GRID_RBD_WITH_MUJOCO
+// [[unit: end]]
 
 // ── END GENERATED MJX TWIN BODIES ──
 
@@ -3167,11 +3006,10 @@ extern "C" int grid_rbd_end_effector_pose_gradient_runtime_mujoco(long long ctx_
 // Inputs are staged H->D, outputs copied D->H, with a device sync per call
 // (the host-path ABI is synchronous, matching the other algorithms).
 
-namespace {
 
 // Lazily-allocated plant scratch (device). Sized to kMaxBatch * per-timestep.
 
-static int plant_alloc(GridCtx *ctx) {
+int plant_alloc(GridCtx *ctx) {  // core; declared in wrapper_common.cuh for the plant units
     GRID_RBD_CTX_LOCALS(ctx);
     if (g_plant.allocated) return 0;
     const int nx = grid::NUM_POS + grid::NUM_VEL;
@@ -3212,10 +3050,10 @@ static int plant_alloc(GridCtx *ctx) {
     return 0;
 }
 
-}  // namespace
 
 // quadratic_state_cost / quadratic_input_cost: value + grad + GN-diag hess.
 // var/des/weight are (batch, N); out (batch); grad (batch, N); hess (batch, N*N).
+// [[unit: plant_costs]]
 template <bool STATE>
 static int plant_quadratic_cost_impl(GridCtx *ctx, 
     const T* var, const T* des, const T* w,
@@ -3349,7 +3187,9 @@ extern "C" int grid_plant_joint_torque_barrier(long long ctx_id,
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     return plant_barrier_impl(g_ctx, PlantBarrier::TORQUE, var, lower, upper, mu, out, grad, hess_diag, batch);
 }
+// [[unit: end]]
 
+// [[unit: plant_step]]
 #ifdef GRID_PLANT_HAS_STEP
 // plant_step: x_{k+1} = integrator(x_k, u_k, dt). x (batch, NX); u (batch, NV);
 // out (batch, NX). Gated on GRID_PLANT_HAS_STEP (emitted only when the
@@ -3422,7 +3262,9 @@ extern "C" int grid_plant_step_mujoco(long long ctx_id,
 }
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_PLANT_HAS_STEP
+// [[unit: end]]
 
+// [[unit: plant_costs]]
 #ifdef GRID_PLANT_HAS_EE_COST
 // ee_pos_cost: value + grad over x=[q;qd] + GN hess_x. q (batch, NQ);
 // p_des (batch, 3); W (batch, 3); out (batch); grad (batch, NX); hess (batch, NX*NX).
@@ -3646,7 +3488,9 @@ extern "C" int grid_rbd_momentum_cost_mujoco(long long ctx_id,
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_PLANT_HAS_MOMENTUM_COST
+// [[unit: end]]
 
+// [[unit: plant_step_gradient]]
 #ifdef GRID_PLANT_HAS_STEP_GRADIENT
 // plant_step_gradient: [A|B] = d x_{k+1}/d(x,u) = integrator_gradient([q;qd], u).
 // x (batch, NX); u (batch, NV); dAB (batch, 2*NV*3*NV, column-major). The kernel
@@ -3728,7 +3572,9 @@ extern "C" int grid_plant_step_gradient_mujoco(long long ctx_id,
 }
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_PLANT_HAS_STEP_GRADIENT
+// [[unit: end]]
 
+// [[unit: plant_hessian]]
 #ifdef GRID_PLANT_HAS_STEP_HESSIAN
 // plant_step_hessian: s_d2AB = d^2 x_{k+1}/d z^2, z=[q;qd;u] (the 2nd-order
 // sensitivity of the integrator step). x (batch, NX); u (batch, NV); d2AB
@@ -3842,6 +3688,7 @@ extern "C" int grid_plant_step_hessian_mujoco(long long ctx_id,
 }
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_PLANT_HAS_STEP_HESSIAN
+// [[unit: end]]
 
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -3871,6 +3718,7 @@ extern "C" int grid_plant_step_hessian_mujoco(long long ctx_id,
 // documented in _core.cpp:49-57 applies here too; mu stays float by contract).
 #if defined(GRID_RBD_WITH_JAX)
 
+// [[unit: prelude; surface: jax]]
 #include "xla/ffi/api/ffi.h"
 namespace ffi = xla::ffi;
 
@@ -3966,11 +3814,13 @@ namespace ffi = xla::ffi;
                 std::string(ksym " launch failed: ") + cudaGetErrorName(_le));   \
     } while (0)
 
+// [[unit: end]]
 // ── BEGIN GENERATED JAX FFI HANDLERS (grid_codegen/wrapper_body_gen.py — do not hand-edit) ──
 // Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen
 // Table: grid_codegen/abi_specs.py (kernel_args / jax_buffer_inputs
 // et al.); docs verbatim from grid_codegen/wrapper_surface_docs.py.
 
+// [[unit: dyn_values; surface: jax]]
 #if GRID_HAS_INVERSE_DYNAMICS
 // inverse_dynamics(q, qd, qdd, f_ext) → c   — fully device-resident path.
 //
@@ -4088,7 +3938,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_INVERSE_DYNAMICS
+// [[unit: end]]
 
+// [[unit: dyn_values; surface: jax]]
 #if GRID_HAS_MINV
 // minv(q) → Minv  (kernel writes lower triangle only; symmetrize Python-side)
 template <bool MUJOCO>
@@ -4165,7 +4017,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_MINV
+// [[unit: end]]
 
+// [[unit: dyn_values; surface: jax]]
 #if GRID_HAS_FORWARD_DYNAMICS
 // forward_dynamics(q, qd, u, f_ext) → qdd  (f_ext always passed; zeros if omitted)
 template <bool MUJOCO>
@@ -4272,7 +4126,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_FORWARD_DYNAMICS
+// [[unit: end]]
 
+// [[unit: dyn_values; surface: jax]]
 #if GRID_HAS_ABA
 // aba(q, qd, u, f_ext) → qdd  — same kernel signature shape as forward_dynamics
 template <bool MUJOCO>
@@ -4379,7 +4235,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_ABA
+// [[unit: end]]
 
+// [[unit: dyn_values; surface: jax]]
 #if GRID_HAS_CRBA
 // crba(q) → M  (kernel writes the full mass matrix; no symmetrize needed)
 template <bool MUJOCO>
@@ -4415,7 +4273,9 @@ GRID_RBD_JAX_BIND_1IN_GRAV(grid_rbd_jax_crba, grid_rbd_jax_crba_impl<false>);
 GRID_RBD_JAX_BIND_1IN_GRAV(grid_rbd_jax_crba_mujoco, grid_rbd_jax_crba_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_CRBA
+// [[unit: end]]
 
+// [[unit: kinematics; surface: jax]]
 #if GRID_HAS_END_EFFECTOR_POSE
 // end_effector_pose(q) → end_effector_pose  flat (B, 6*NUM_EES)
 template <bool MUJOCO>
@@ -4494,7 +4354,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_END_EFFECTOR_POSE
+// [[unit: end]]
 
+// [[unit: kinematics; surface: jax]]
 #if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
 // end_effector_pose_gradient(q) → end_effector_pose_gradient d/dv flat (B, 6*NUM_EES*NV).
 // Output convention: d/dv tangent (pinocchio); floating-base shape uses NV
@@ -4574,7 +4436,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_END_EFFECTOR_POSE_GRADIENT
+// [[unit: end]]
 
+// [[unit: kinematics; surface: jax]]
 #if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
 // end_effector_pose_hessian(q) → end_effector_pose_hessian  flat (B, 6*NUM_EES*NV*NV)
 // The kernel also writes d_end_effector_pose_gradient as a byproduct; we only return d2.
@@ -4610,7 +4474,9 @@ GRID_RBD_JAX_BIND_1IN(grid_rbd_jax_end_effector_pose_hessian, grid_rbd_jax_end_e
 GRID_RBD_JAX_BIND_1IN(grid_rbd_jax_end_effector_pose_hessian_mujoco, grid_rbd_jax_end_effector_pose_hessian_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_END_EFFECTOR_POSE_HESSIAN
+// [[unit: end]]
 
+// [[unit: dyn_gradients; surface: jax]]
 #if GRID_HAS_INVERSE_DYNAMICS_GRADIENT
 // inverse_dynamics_gradient(q, qd, qdd) → dc_du  flat (B, 2*NV*NV)
 // Python reshapes/transposes to (B, NV, 2*NV) [dc_dq | dc_dqd] (tangent-space;
@@ -4725,7 +4591,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_INVERSE_DYNAMICS_GRADIENT
+// [[unit: end]]
 
+// [[unit: dyn_gradients; surface: jax]]
 #if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
 // forward_dynamics_gradient(q, qd, u) → df_du  flat (B, 2*NV*NV)
 // Python reshapes/transposes to (B, NV, 2*NV) (tangent-space; FIXED base
@@ -4832,7 +4700,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_FORWARD_DYNAMICS_GRADIENT
+// [[unit: end]]
 
+// [[unit: fdsva_so; surface: jax]]
 #if GRID_HAS_FDSVA_SO
 // fdsva_so(q, qd, u) → packed (B, SECOND_ORDER_TENSOR_SIZE)
 // Uses d_idsva_so as scratch — must not run concurrently with idsva_so.
@@ -4875,6 +4745,7 @@ GRID_RBD_JAX_BIND_3IN_GRAV(grid_rbd_jax_fdsva_so, grid_rbd_jax_fdsva_so_impl<fal
 GRID_RBD_JAX_BIND_3IN_GRAV(grid_rbd_jax_fdsva_so_mujoco, grid_rbd_jax_fdsva_so_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_FDSVA_SO
+// [[unit: end]]
 
 // ────────────────────────────────────────────────────────────────────────────
 // Inertial-parameter regressor surface (PS2a — sysID autodiff)
@@ -4887,6 +4758,7 @@ GRID_RBD_JAX_BIND_3IN_GRAV(grid_rbd_jax_fdsva_so_mujoco, grid_rbd_jax_fdsva_so_i
 // dqdd/dpi = -Minv . Y. The Python custom_vjp contracts a cotangent ct (NV)
 // with these (NV x 10NB) Jacobians to produce the pi-cotangent (10NB).
 
+// [[unit: regressors; surface: jax]]
 #if GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
 // inverse_dynamics_regressor(q, qd, qdd) → Y  flat (B, NV*10*NUM_BODIES).
 // qdd is passed explicitly (the bias regressor used by inverse_dynamics's VJP
@@ -4986,7 +4858,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
+// [[unit: end]]
 
+// [[unit: regressors; surface: jax]]
 #if GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
 // forward_dynamics_parameter_gradient(q, qd, u) → dqdd/dpi = -Minv . Y
 // flat (B, NV*10*NUM_BODIES). Internally runs FD at (q,qd,u) and the regressor
@@ -5065,6 +4939,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("ctx_id")
 );
 #endif  // GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
+// [[unit: end]]
 
 // ─── P-tier1: centroidal / energy / kinematics family (jax FFI) ──────────────
 //
@@ -5089,6 +4964,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 // algorithm kernel (coriolis/cmm/dccrba/com/ccrba/energy/... all enumerated
 // there). The crba/idsva_so handlers rely on the same warmup; these do too.
 
+// [[unit: dyn_values; surface: jax]]
 #if GRID_HAS_GENERALIZED_GRAVITY
 // generalized_gravity(q) → g(q), NV  [d_workspace, gravity]
 template <bool MUJOCO>
@@ -5123,7 +4999,9 @@ GRID_RBD_JAX_BIND_1IN_GRAV(grid_rbd_jax_generalized_gravity, grid_rbd_jax_genera
 GRID_RBD_JAX_BIND_1IN_GRAV(grid_rbd_jax_generalized_gravity_mujoco, grid_rbd_jax_generalized_gravity_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_GENERALIZED_GRAVITY
+// [[unit: end]]
 
+// [[unit: dyn_values; surface: jax]]
 #if GRID_HAS_NONLINEAR_EFFECTS
 // nonlinear_effects(q, qd) → c(q,qd), NV  [d_workspace, gravity]
 template <bool MUJOCO>
@@ -5161,7 +5039,9 @@ GRID_RBD_JAX_BIND_2IN_GRAV(grid_rbd_jax_nonlinear_effects, grid_rbd_jax_nonlinea
 GRID_RBD_JAX_BIND_2IN_GRAV(grid_rbd_jax_nonlinear_effects_mujoco, grid_rbd_jax_nonlinear_effects_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_NONLINEAR_EFFECTS
+// [[unit: end]]
 
+// [[unit: dyn_values; surface: jax]]
 #if GRID_HAS_CORIOLIS_MATRIX
 // coriolis_matrix(q, qd) → C(q,qd), NV*NV row-major  [d_workspace, gravity]
 template <bool MUJOCO>
@@ -5199,7 +5079,9 @@ GRID_RBD_JAX_BIND_2IN_GRAV(grid_rbd_jax_coriolis_matrix, grid_rbd_jax_coriolis_m
 GRID_RBD_JAX_BIND_2IN_GRAV(grid_rbd_jax_coriolis_matrix_mujoco, grid_rbd_jax_coriolis_matrix_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_CORIOLIS_MATRIX
+// [[unit: end]]
 
+// [[unit: regressors; surface: jax]]
 #if GRID_HAS_KINETIC_ENERGY_REGRESSOR
 // kinetic_energy_regressor(q, qd) → y_KE, 10*NUM_BODIES  [gravity, no workspace]
 template <bool MUJOCO>
@@ -5237,7 +5119,9 @@ GRID_RBD_JAX_BIND_2IN_GRAV(grid_rbd_jax_kinetic_energy_regressor, grid_rbd_jax_k
 GRID_RBD_JAX_BIND_2IN_GRAV(grid_rbd_jax_kinetic_energy_regressor_mujoco, grid_rbd_jax_kinetic_energy_regressor_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_KINETIC_ENERGY_REGRESSOR
+// [[unit: end]]
 
+// [[unit: regressors; surface: jax]]
 #if GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
 // potential_energy_regressor(q) → y_PE, 10*NUM_BODIES  [gravity, no workspace]
 template <bool MUJOCO>
@@ -5272,9 +5156,11 @@ GRID_RBD_JAX_BIND_1IN_GRAV(grid_rbd_jax_potential_energy_regressor, grid_rbd_jax
 GRID_RBD_JAX_BIND_1IN_GRAV(grid_rbd_jax_potential_energy_regressor_mujoco, grid_rbd_jax_potential_energy_regressor_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
+// [[unit: end]]
 
 // ─── Wave 2: gated value ops (energy/com/ccrba/cmm/dccrba) ───────────────────
 
+// [[unit: dyn_values; surface: jax]]
 #ifdef GRID_HAS_ENERGY
 // energy(q, qd) → [KE, PE, KE+PE], 3  [gravity, no workspace]
 template <bool MUJOCO>
@@ -5312,7 +5198,9 @@ GRID_RBD_JAX_BIND_2IN_GRAV(grid_rbd_jax_energy, grid_rbd_jax_energy_impl<false>)
 GRID_RBD_JAX_BIND_2IN_GRAV(grid_rbd_jax_energy_mujoco, grid_rbd_jax_energy_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_ENERGY
+// [[unit: end]]
 
+// [[unit: centroidal; surface: jax]]
 #ifdef GRID_HAS_COM
 // com(q) → flat [p_com(3); J_com(3*NV)], 3 + 3*NV  [no workspace, no gravity]
 // Single flat buffer; the Python layer splits the (p_com, J_com) tuple.
@@ -5347,7 +5235,9 @@ GRID_RBD_JAX_BIND_1IN(grid_rbd_jax_com, grid_rbd_jax_com_impl<false>);
 GRID_RBD_JAX_BIND_1IN(grid_rbd_jax_com_mujoco, grid_rbd_jax_com_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_COM
+// [[unit: end]]
 
+// [[unit: centroidal; surface: jax]]
 #ifdef GRID_HAS_CCRBA
 // ccrba(q, qd) → flat [A(6*NV); h(6)], 6*NV + 6  [no workspace, no gravity]
 // Single flat buffer; the Python layer splits the (A, h) tuple.
@@ -5385,7 +5275,9 @@ GRID_RBD_JAX_BIND_2IN(grid_rbd_jax_ccrba, grid_rbd_jax_ccrba_impl<false>);
 GRID_RBD_JAX_BIND_2IN(grid_rbd_jax_ccrba_mujoco, grid_rbd_jax_ccrba_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_CCRBA
+// [[unit: end]]
 
+// [[unit: centroidal; surface: jax]]
 #ifdef GRID_HAS_CMM_TIME_VARIATION
 // cmm_time_variation(q, qd) → Adot, 6*NV  [d_workspace, no gravity]
 template <bool MUJOCO>
@@ -5422,7 +5314,9 @@ GRID_RBD_JAX_BIND_2IN(grid_rbd_jax_cmm_time_variation, grid_rbd_jax_cmm_time_var
 GRID_RBD_JAX_BIND_2IN(grid_rbd_jax_cmm_time_variation_mujoco, grid_rbd_jax_cmm_time_variation_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_CMM_TIME_VARIATION
+// [[unit: end]]
 
+// [[unit: centroidal; surface: jax]]
 #ifdef GRID_HAS_DCCRBA
 // dccrba(q) → dA/dq, 6*NV*NV  [d_workspace, no gravity]  (compressed d_q kernel)
 template <bool MUJOCO>
@@ -5456,6 +5350,7 @@ GRID_RBD_JAX_BIND_1IN(grid_rbd_jax_dccrba, grid_rbd_jax_dccrba_impl<false>);
 GRID_RBD_JAX_BIND_1IN(grid_rbd_jax_dccrba_mujoco, grid_rbd_jax_dccrba_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_DCCRBA
+// [[unit: end]]
 
 // ─── Wave 3: int-attr kinematics (frame_jacobian/dot, osc_inertia) ───────────
 //
@@ -5467,6 +5362,7 @@ GRID_RBD_JAX_BIND_1IN(grid_rbd_jax_dccrba_mujoco, grid_rbd_jax_dccrba_impl<true>
 // the leaf-EE / LOCAL_WORLD_ALIGNED defaults from the numpy handle). reference_frame:
 // 0=LOCAL, 1=WORLD, 2=LOCAL_WORLD_ALIGNED.
 
+// [[unit: kinematics; surface: jax]]
 #ifdef GRID_HAS_FRAME_JACOBIAN
 // frame_jacobian(q) → 6*NV geometric Jacobian  [no workspace, no gravity, int attrs]
 template <bool MUJOCO>
@@ -5522,7 +5418,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_FRAME_JACOBIAN
+// [[unit: end]]
 
+// [[unit: kinematics; surface: jax]]
 #if defined(GRID_HAS_FRAME_JACOBIAN) && defined(GRID_HAS_FRAME_JACOBIAN_DOT)
 // frame_jacobian_dot(q, qd) → 6*NV d/dt Jacobian  [no workspace, no gravity, int attrs]
 template <bool MUJOCO>
@@ -5583,7 +5481,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_FRAME_JACOBIAN && GRID_HAS_FRAME_JACOBIAN_DOT
+// [[unit: end]]
 
+// [[unit: kinematics; surface: jax]]
 #if defined(GRID_HAS_FRAME_JACOBIAN) && defined(GRID_HAS_OSC_INERTIA)
 // osc_inertia(q) → 6x6 task inertia Lambda, 36  [d_workspace (tier-spill scratch), no gravity, frame baked at codegen]
 template <bool MUJOCO>
@@ -5617,6 +5517,7 @@ GRID_RBD_JAX_BIND_1IN(grid_rbd_jax_osc_inertia, grid_rbd_jax_osc_inertia_impl<fa
 GRID_RBD_JAX_BIND_1IN(grid_rbd_jax_osc_inertia_mujoco, grid_rbd_jax_osc_inertia_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_FRAME_JACOBIAN && GRID_HAS_OSC_INERTIA
+// [[unit: end]]
 
 // ── END GENERATED JAX FFI HANDLERS ──
 
@@ -5631,6 +5532,7 @@ GRID_RBD_JAX_BIND_1IN(grid_rbd_jax_osc_inertia_mujoco, grid_rbd_jax_osc_inertia_
 // stream — an attr (not a Buffer input) so jax/vmap never tries to batch it.
 // target_jid is an int64 attr (already an absolute jid; the Python layer resolves
 // names→jids, so no -1 default).
+// [[unit: kinematics; surface: jax]]
 #ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
 // end_effector_pose_runtime(q) → (B, 6) [xyz; rpy] of target_jid at offset point.
 template <bool MUJOCO>
@@ -5702,8 +5604,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 .Attr<int64_t>("ctx_id"));
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_END_EFFECTOR_POSE_RUNTIME
+// [[unit: end]]
 
 
+// [[unit: kinematics; surface: jax]]
 #ifdef GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
 // end_effector_pose_gradient_runtime(q) → (B, 6*NV) col-major d[xyz; rpy]/dv of
 // target_jid at the offset point. Python reshapes (B,NV,6)→transpose→(B,6,NV).
@@ -5774,8 +5678,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 .Attr<int64_t>("ctx_id"));
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
+// [[unit: end]]
 
 
+// [[unit: idsva_so; surface: jax]]
 #if GRID_HAS_IDSVA_SO
 // idsva_so(q, qd, qdd) → packed (B, SECOND_ORDER_TENSOR_SIZE)
 // The codegen-time dispatcher picks body- vs world-frame; we mirror that pick
@@ -5873,11 +5779,13 @@ GRID_RBD_JAX_BIND_3IN_GRAV(grid_rbd_jax_idsva_so, grid_rbd_jax_idsva_so_impl<fal
 GRID_RBD_JAX_BIND_3IN_GRAV(grid_rbd_jax_idsva_so_mujoco, grid_rbd_jax_idsva_so_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_IDSVA_SO
+// [[unit: end]]
 
 
 // Integrator. dt + it are FFI attributes (runtime scalars; gravity is the
 // standard constant). q/qd/u are packed D→D like aba; the integrator kernels
 // are launched directly on the JAX stream.
+// [[unit: integrator; surface: jax]]
 #if GRID_HAS_INTEGRATOR
 template <grid::IntegratorType IT, bool MUJOCO>
 static void launch_integrator_kernel_jax(GridCtx *ctx, cudaStream_t stream, int batch, T dt, T gravity) {
@@ -5890,6 +5798,8 @@ static void launch_integrator_kernel_jax(GridCtx *ctx, cudaStream_t stream, int 
             g_robot, g_data->d_f_ext, /*gravity=*/static_cast<T>(gravity), static_cast<T>(dt), batch);
 }
 #endif  // GRID_HAS_INTEGRATOR
+// [[unit: end]]
+// [[unit: integrator_gradient; surface: jax]]
 #if GRID_HAS_INTEGRATOR_GRADIENT
 template <grid::IntegratorType IT, bool MUJOCO>
 static void launch_integrator_grad_kernel_jax(GridCtx *ctx, cudaStream_t stream, int batch, T dt, T gravity) {
@@ -5902,7 +5812,9 @@ static void launch_integrator_grad_kernel_jax(GridCtx *ctx, cudaStream_t stream,
             g_robot, g_data->d_f_ext, /*gravity=*/static_cast<T>(gravity), static_cast<T>(dt), batch);
 }
 #endif  // GRID_HAS_INTEGRATOR_GRADIENT
+// [[unit: end]]
 
+// [[unit: prelude; surface: jax]]
 // mjx-aware integrator-type dispatch: instantiates FN<IT_case, MUJOCO_FLAG>. The
 // helper's first template arg is supplied by the case; the second (MUJOCO) is
 // threaded from the templated impl so the kernel launches with MUJOCO_OUTPUT.
@@ -5938,7 +5850,9 @@ static ffi::Error grid_rbd_jax_pack_qqdu(GridCtx *ctx, cudaStream_t stream, int 
                       v_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     return ffi::Error::Success();
 }
+// [[unit: end]]
 
+// [[unit: integrator; surface: jax]]
 #if GRID_HAS_INTEGRATOR
 // integrator(q, qd, u; dt, it) → x_kp1  (B, NUM_POS + NUM_VEL)
 template <bool MUJOCO>
@@ -6009,7 +5923,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(grid_rbd_jax_integrator_mujoco_stamped, grid_rbd_j
     .Attr<T>("dt").Attr<int64_t>("it").Attr<T>("gravity").Attr<int64_t>("ctx_id"));
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_INTEGRATOR
+// [[unit: end]]
 
+// [[unit: integrator_gradient; surface: jax]]
 #if GRID_HAS_INTEGRATOR_GRADIENT
 // integrator_gradient(q, qd, u; dt, it) → dAB  (B, 2*NV, 3*NV)
 template <bool MUJOCO>
@@ -6080,6 +5996,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(grid_rbd_jax_integrator_gradient_mujoco_checked, g
     .Attr<T>("dt").Attr<int64_t>("it").Attr<T>("gravity").Attr<int64_t>("ctx_id"));
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_INTEGRATOR_GRADIENT
+// [[unit: end]]
+// [[unit: plant_costs; surface: jax]]
 
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -6250,7 +6168,9 @@ GRID_RBD_JAX_PLANT_BARRIER_BIND(grid_rbd_jax_plant_joint_velocity_barrier,
 GRID_RBD_JAX_PLANT_BARRIER_BIND(grid_rbd_jax_plant_joint_torque_barrier,
                                 grid_rbd_jax_plant_joint_torque_barrier_impl);
 
+// [[unit: end]]
 // ── BEGIN GENERATED JAX PLANT TAIL (grid_codegen/wrapper_plant_gen.py — do not hand-edit) ──
+// [[unit: plant_step; surface: jax]]
 #ifdef GRID_PLANT_HAS_STEP
 // plant_step(x, u; dt, it) → x_kp1  (B, NX). Reuses g_plant.d_grad as x_kp1
 // (size NX), matching the C-ABI launch_plant_step.
@@ -6305,7 +6225,9 @@ GRID_RBD_JAX_BIND_2IN_DT_IT_GRAV(grid_rbd_jax_plant_step, grid_rbd_jax_plant_ste
 GRID_RBD_JAX_BIND_2IN_DT_IT_GRAV(grid_rbd_jax_plant_step_mujoco, grid_rbd_jax_plant_step_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_PLANT_HAS_STEP
+// [[unit: end]]
 
+// [[unit: plant_step_gradient; surface: jax]]
 #ifdef GRID_PLANT_HAS_STEP_GRADIENT
 // plant_step_gradient(x, u; dt, it) → dAB  (B, 2*NV*3*NV col-major). Reuses
 // g_plant.d_grad as the dAB output (size 2*NV*3*NV), matching the C-ABI.
@@ -6362,7 +6284,9 @@ GRID_RBD_JAX_BIND_2IN_DT_IT_GRAV(grid_rbd_jax_plant_step_gradient, grid_rbd_jax_
 GRID_RBD_JAX_BIND_2IN_DT_IT_GRAV(grid_rbd_jax_plant_step_gradient_mujoco, grid_rbd_jax_plant_step_gradient_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_PLANT_HAS_STEP_GRADIENT
+// [[unit: end]]
 
+// [[unit: plant_costs; surface: jax]]
 #ifdef GRID_PLANT_HAS_EE_COST
 // ee_pos_cost(q, p_des, W) → (value (B,1), grad (B,NX), hess (B,NX*NX)).
 // MUJOCO=true launches with MUJOCO_OUTPUT=true (floating only).
@@ -6409,7 +6333,9 @@ GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_ee_pos_cost_mujoco,
                              grid_rbd_jax_plant_ee_pos_cost_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_PLANT_HAS_EE_COST
+// [[unit: end]]
 
+// [[unit: plant_costs; surface: jax]]
 #ifdef GRID_PLANT_HAS_COM_COST
 // com_cost(q, p_des, W) → (value (B,1), grad (B,NX), hess (B,NX*NX)).
 // MUJOCO=true launches with MUJOCO_OUTPUT=true (floating only).
@@ -6456,7 +6382,9 @@ GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_com_cost_mujoco,
                              grid_rbd_jax_plant_com_cost_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_PLANT_HAS_COM_COST
+// [[unit: end]]
 
+// [[unit: plant_costs; surface: jax]]
 #ifdef GRID_PLANT_HAS_MOMENTUM_COST
 // momentum_cost(q, qd, h_des, W) → (value (B,1), grad (B,2*NV), hess (B,2*NV*2*NV)) in
 // tangent [dq | dv] order, including the configuration and cross blocks (needs dccrba).
@@ -6528,6 +6456,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_PLANT_HAS_MOMENTUM_COST
+// [[unit: end]]
 // ── END GENERATED JAX PLANT TAIL ──
 
 #endif  // GRID_RBD_WITH_JAX
@@ -6559,25 +6488,11 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 #if defined(GRID_RBD_WITH_TORCH)
 
 // The tensor dtype tracks the .so's T (fp64 Wave 2a).
-#ifdef GRID_WRAPPER_T_DOUBLE
-#define GRID_TORCH_DTYPE torch::kFloat64
-#define GRID_TORCH_DTYPE_NAME "float64"
-#else
-#define GRID_TORCH_DTYPE torch::kFloat32
-#define GRID_TORCH_DTYPE_NAME "float32"
-#endif
+// [[unit: prelude; surface: torch]]
+// (torch includes + GRID_TORCH_DTYPE live in wrapper_common.cuh: the core unit defines the op library)
 
-// Use the Python-free C++ frontend (torch/library.h) rather than
-// torch/extension.h, which pulls in <Python.h>. We register ops via the
-// TORCH_LIBRARY dispatcher and load them with torch.ops.load_library — no
-// pybind/Python C-API needed in the .so.
-#include <torch/library.h>
-#include <torch/types.h>
-#include <ATen/ATen.h>
-#include <ATen/cuda/CUDAContext.h>
-#include <c10/cuda/CUDAStream.h>
-
-namespace {
+// (torch impls are `static`: internal linkage per unit — the anonymous namespace that
+// used to wrap this section would not survive the multi-TU split)
 
 // ── input validation + D->D pack helpers (mirror the JAX handlers) ──
 static inline void grid_torch_check(const torch::Tensor& t, const char* name, int last_dim) {
@@ -6692,7 +6607,7 @@ static inline void grid_torch_f_ext_reset(GridCtx *ctx, cudaStream_t stream, int
 // qdd keeps the (faster) qdd=0 overload. Mirrors the numpy / JAX ID paths.
 #if GRID_HAS_INVERSE_DYNAMICS
 template <bool MUJOCO>
-torch::Tensor torch_inverse_dynamics(torch::Tensor q, torch::Tensor qd, double gravity,
+static torch::Tensor torch_inverse_dynamics(torch::Tensor q, torch::Tensor qd, double gravity,
                          c10::optional<torch::Tensor> qdd,
                          c10::optional<torch::Tensor> f_ext, int64_t ctx_id,
                          c10::optional<torch::Tensor> stamp_out) {
@@ -6738,15 +6653,17 @@ torch::Tensor torch_inverse_dynamics(torch::Tensor q, torch::Tensor qd, double g
 }
 #endif  // GRID_HAS_INVERSE_DYNAMICS
 
+// [[unit: end]]
 // ── BEGIN GENERATED TORCH OP BODIES (grid_codegen/wrapper_body_gen.py — do not hand-edit) ──
 // Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen
 // Table: grid_codegen/abi_specs.py (kernel_args et al.); docs verbatim
 // from grid_codegen/wrapper_surface_docs.py.
 
+// [[unit: dyn_values; surface: torch]]
 #if GRID_HAS_MINV
 template <bool MUJOCO>
-torch::Tensor torch_minv(torch::Tensor q, int64_t ctx_id,
-                         c10::optional<torch::Tensor> stamp_expect) {
+static torch::Tensor torch_minv(torch::Tensor q, int64_t ctx_id,
+                                c10::optional<torch::Tensor> stamp_expect) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "minv: q", nj);
@@ -6765,11 +6682,13 @@ torch::Tensor torch_minv(torch::Tensor q, int64_t ctx_id,
     return out;
 }
 #endif  // GRID_HAS_MINV
+// [[unit: end]]
 
+// [[unit: dyn_values; surface: torch]]
 #if GRID_HAS_FORWARD_DYNAMICS
 template <bool MUJOCO>
-torch::Tensor torch_forward_dynamics(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity, c10::optional<torch::Tensor> f_ext, int64_t ctx_id,
-                                     c10::optional<torch::Tensor> stamp_out) {
+static torch::Tensor torch_forward_dynamics(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity, c10::optional<torch::Tensor> f_ext, int64_t ctx_id,
+                                            c10::optional<torch::Tensor> stamp_out) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "forward_dynamics: q", nj);
@@ -6790,11 +6709,13 @@ torch::Tensor torch_forward_dynamics(torch::Tensor q, torch::Tensor qd, torch::T
     return out;
 }
 #endif  // GRID_HAS_FORWARD_DYNAMICS
+// [[unit: end]]
 
+// [[unit: dyn_values; surface: torch]]
 #if GRID_HAS_ABA
 template <bool MUJOCO>
-torch::Tensor torch_aba(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity, c10::optional<torch::Tensor> f_ext, int64_t ctx_id,
-                        c10::optional<torch::Tensor> stamp_out) {
+static torch::Tensor torch_aba(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity, c10::optional<torch::Tensor> f_ext, int64_t ctx_id,
+                               c10::optional<torch::Tensor> stamp_out) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "aba: q", nj); grid_torch_check(qd, "aba: qd", nv); grid_torch_check(u, "aba: u", nv);
@@ -6813,10 +6734,12 @@ torch::Tensor torch_aba(torch::Tensor q, torch::Tensor qd, torch::Tensor u, doub
     return out;
 }
 #endif  // GRID_HAS_ABA
+// [[unit: end]]
 
+// [[unit: dyn_values; surface: torch]]
 #if GRID_HAS_CRBA
 template <bool MUJOCO>
-torch::Tensor torch_crba(torch::Tensor q, double gravity, int64_t ctx_id) {
+static torch::Tensor torch_crba(torch::Tensor q, double gravity, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "crba: q", nj);
@@ -6834,11 +6757,13 @@ torch::Tensor torch_crba(torch::Tensor q, double gravity, int64_t ctx_id) {
     return out;
 }
 #endif  // GRID_HAS_CRBA
+// [[unit: end]]
 
+// [[unit: kinematics; surface: torch]]
 #if GRID_HAS_END_EFFECTOR_POSE
 template <bool MUJOCO>
-torch::Tensor torch_end_effector_pose(torch::Tensor q, int64_t ctx_id,
-                                      c10::optional<torch::Tensor> stamp_out) {
+static torch::Tensor torch_end_effector_pose(torch::Tensor q, int64_t ctx_id,
+                                             c10::optional<torch::Tensor> stamp_out) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL, nee = GRID_RBD_NUM_EES;
     grid_torch_check(q, "end_effector_pose: q", nj);
@@ -6855,11 +6780,13 @@ torch::Tensor torch_end_effector_pose(torch::Tensor q, int64_t ctx_id,
     return out;
 }
 #endif  // GRID_HAS_END_EFFECTOR_POSE
+// [[unit: end]]
 
+// [[unit: kinematics; surface: torch]]
 #if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
 template <bool MUJOCO>
-torch::Tensor torch_end_effector_pose_gradient(torch::Tensor q, int64_t ctx_id,
-                                               c10::optional<torch::Tensor> stamp_expect) {
+static torch::Tensor torch_end_effector_pose_gradient(torch::Tensor q, int64_t ctx_id,
+                                                      c10::optional<torch::Tensor> stamp_expect) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL, nee = GRID_RBD_NUM_EES;
     grid_torch_check(q, "end_effector_pose_gradient: q", nj);
@@ -6876,10 +6803,12 @@ torch::Tensor torch_end_effector_pose_gradient(torch::Tensor q, int64_t ctx_id,
     return out;
 }
 #endif  // GRID_HAS_END_EFFECTOR_POSE_GRADIENT
+// [[unit: end]]
 
+// [[unit: kinematics; surface: torch]]
 #if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
 template <bool MUJOCO>
-torch::Tensor torch_end_effector_pose_hessian(torch::Tensor q, int64_t ctx_id) {
+static torch::Tensor torch_end_effector_pose_hessian(torch::Tensor q, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL, nee = GRID_RBD_NUM_EES;
     grid_torch_check(q, "end_effector_pose_hessian: q", nj);
@@ -6895,11 +6824,13 @@ torch::Tensor torch_end_effector_pose_hessian(torch::Tensor q, int64_t ctx_id) {
     return out;
 }
 #endif  // GRID_HAS_END_EFFECTOR_POSE_HESSIAN
+// [[unit: end]]
 
+// [[unit: dyn_gradients; surface: torch]]
 #if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
 template <bool MUJOCO>
-torch::Tensor torch_forward_dynamics_gradient(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity, c10::optional<torch::Tensor> f_ext, int64_t ctx_id,
-                                              c10::optional<torch::Tensor> stamp_expect) {
+static torch::Tensor torch_forward_dynamics_gradient(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity, c10::optional<torch::Tensor> f_ext, int64_t ctx_id,
+                                                     c10::optional<torch::Tensor> stamp_expect) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "forward_dynamics_gradient: q", nj);
@@ -6922,10 +6853,12 @@ torch::Tensor torch_forward_dynamics_gradient(torch::Tensor q, torch::Tensor qd,
     return out;
 }
 #endif  // GRID_HAS_FORWARD_DYNAMICS_GRADIENT
+// [[unit: end]]
 
+// [[unit: fdsva_so; surface: torch]]
 #if GRID_HAS_FDSVA_SO
 template <bool MUJOCO>
-torch::Tensor torch_fdsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity, int64_t ctx_id) {
+static torch::Tensor torch_fdsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "fdsva_so: q", nj); grid_torch_check(qd, "fdsva_so: qd", nv); grid_torch_check(u, "fdsva_so: u", nv);
@@ -6941,6 +6874,7 @@ torch::Tensor torch_fdsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor u,
     return out;
 }
 #endif  // GRID_HAS_FDSVA_SO
+// [[unit: end]]
 
 // ── inertial-parameter (sysID) regressor + FD parameter gradient ──
 // Mirror the JAX grid_rbd_jax_inverse_dynamics_regressor /
@@ -6949,10 +6883,11 @@ torch::Tensor torch_fdsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor u,
 // output. These back the torch inertial-parameter VJP (tau = Y . pi so
 // dtau/dpi = Y, dqdd/dpi = -Minv . Y).
 
+// [[unit: regressors; surface: torch]]
 #if GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
 template <bool MUJOCO>
-torch::Tensor torch_inverse_dynamics_regressor(torch::Tensor q, torch::Tensor qd, torch::Tensor qdd, double gravity, int64_t ctx_id,
-                                               c10::optional<torch::Tensor> stamp_expect) {
+static torch::Tensor torch_inverse_dynamics_regressor(torch::Tensor q, torch::Tensor qd, torch::Tensor qdd, double gravity, int64_t ctx_id,
+                                                      c10::optional<torch::Tensor> stamp_expect) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "inverse_dynamics_regressor: q", nj);
@@ -6973,10 +6908,12 @@ torch::Tensor torch_inverse_dynamics_regressor(torch::Tensor q, torch::Tensor qd
     return out;
 }
 #endif  // GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
+// [[unit: end]]
 
+// [[unit: regressors; surface: torch]]
 #if GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
-torch::Tensor torch_forward_dynamics_parameter_gradient(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity, int64_t ctx_id,
-                                                        c10::optional<torch::Tensor> stamp_expect) {
+static torch::Tensor torch_forward_dynamics_parameter_gradient(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity, int64_t ctx_id,
+                                                               c10::optional<torch::Tensor> stamp_expect) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "forward_dynamics_parameter_gradient: q", nj);
@@ -6996,6 +6933,7 @@ torch::Tensor torch_forward_dynamics_parameter_gradient(torch::Tensor q, torch::
     return out;
 }
 #endif  // GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
+// [[unit: end]]
 
 // ─── P-tier1: centroidal / energy / kinematics family (torch ops) ────────────
 //
@@ -7006,9 +6944,10 @@ torch::Tensor torch_forward_dynamics_parameter_gradient(torch::Tensor q, torch::
 // d_workspace passed ONLY where the contract row says YES; gravity only where YES.
 // R2 smem opt-in: covered by grid_rbd_init → init_grid_kernel_attrs (see jax note).
 
+// [[unit: dyn_values; surface: torch]]
 #if GRID_HAS_GENERALIZED_GRAVITY
 template <bool MUJOCO>
-torch::Tensor torch_generalized_gravity(torch::Tensor q, double gravity, int64_t ctx_id) {
+static torch::Tensor torch_generalized_gravity(torch::Tensor q, double gravity, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "generalized_gravity: q", nj);
@@ -7024,10 +6963,12 @@ torch::Tensor torch_generalized_gravity(torch::Tensor q, double gravity, int64_t
     return out;
 }
 #endif  // GRID_HAS_GENERALIZED_GRAVITY
+// [[unit: end]]
 
+// [[unit: dyn_values; surface: torch]]
 #if GRID_HAS_NONLINEAR_EFFECTS
 template <bool MUJOCO>
-torch::Tensor torch_nonlinear_effects(torch::Tensor q, torch::Tensor qd, double gravity, int64_t ctx_id) {
+static torch::Tensor torch_nonlinear_effects(torch::Tensor q, torch::Tensor qd, double gravity, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "nonlinear_effects: q", nj); grid_torch_check(qd, "nonlinear_effects: qd", nv);
@@ -7043,10 +6984,12 @@ torch::Tensor torch_nonlinear_effects(torch::Tensor q, torch::Tensor qd, double 
     return out;
 }
 #endif  // GRID_HAS_NONLINEAR_EFFECTS
+// [[unit: end]]
 
+// [[unit: dyn_values; surface: torch]]
 #if GRID_HAS_CORIOLIS_MATRIX
 template <bool MUJOCO>
-torch::Tensor torch_coriolis_matrix(torch::Tensor q, torch::Tensor qd, double gravity, int64_t ctx_id) {
+static torch::Tensor torch_coriolis_matrix(torch::Tensor q, torch::Tensor qd, double gravity, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "coriolis_matrix: q", nj); grid_torch_check(qd, "coriolis_matrix: qd", nv);
@@ -7062,10 +7005,12 @@ torch::Tensor torch_coriolis_matrix(torch::Tensor q, torch::Tensor qd, double gr
     return out;
 }
 #endif  // GRID_HAS_CORIOLIS_MATRIX
+// [[unit: end]]
 
+// [[unit: regressors; surface: torch]]
 #if GRID_HAS_KINETIC_ENERGY_REGRESSOR
 template <bool MUJOCO>
-torch::Tensor torch_kinetic_energy_regressor(torch::Tensor q, torch::Tensor qd, double gravity, int64_t ctx_id) {
+static torch::Tensor torch_kinetic_energy_regressor(torch::Tensor q, torch::Tensor qd, double gravity, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL, nb = grid::NUM_BODIES;
     grid_torch_check(q, "kinetic_energy_regressor: q", nj); grid_torch_check(qd, "kinetic_energy_regressor: qd", nv);
@@ -7081,10 +7026,12 @@ torch::Tensor torch_kinetic_energy_regressor(torch::Tensor q, torch::Tensor qd, 
     return out;
 }
 #endif  // GRID_HAS_KINETIC_ENERGY_REGRESSOR
+// [[unit: end]]
 
+// [[unit: regressors; surface: torch]]
 #if GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
 template <bool MUJOCO>
-torch::Tensor torch_potential_energy_regressor(torch::Tensor q, double gravity, int64_t ctx_id) {
+static torch::Tensor torch_potential_energy_regressor(torch::Tensor q, double gravity, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL, nb = grid::NUM_BODIES;
     grid_torch_check(q, "potential_energy_regressor: q", nj);
@@ -7100,10 +7047,12 @@ torch::Tensor torch_potential_energy_regressor(torch::Tensor q, double gravity, 
     return out;
 }
 #endif  // GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
+// [[unit: end]]
 
+// [[unit: dyn_values; surface: torch]]
 #ifdef GRID_HAS_ENERGY
 template <bool MUJOCO>
-torch::Tensor torch_energy(torch::Tensor q, torch::Tensor qd, double gravity, int64_t ctx_id) {
+static torch::Tensor torch_energy(torch::Tensor q, torch::Tensor qd, double gravity, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "energy: q", nj); grid_torch_check(qd, "energy: qd", nv);
@@ -7119,11 +7068,13 @@ torch::Tensor torch_energy(torch::Tensor q, torch::Tensor qd, double gravity, in
     return out;
 }
 #endif  // GRID_HAS_ENERGY
+// [[unit: end]]
 
+// [[unit: centroidal; surface: torch]]
 #ifdef GRID_HAS_COM
 // com → single flat (B, 3 + 3*NV); the Python layer splits the (p_com, J_com) tuple.
 template <bool MUJOCO>
-torch::Tensor torch_com(torch::Tensor q, int64_t ctx_id) {
+static torch::Tensor torch_com(torch::Tensor q, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "com: q", nj);
@@ -7139,11 +7090,13 @@ torch::Tensor torch_com(torch::Tensor q, int64_t ctx_id) {
     return out;
 }
 #endif  // GRID_HAS_COM
+// [[unit: end]]
 
+// [[unit: centroidal; surface: torch]]
 #ifdef GRID_HAS_CCRBA
 // ccrba → single flat (B, 6*NV + 6); the Python layer splits the (A, h) tuple.
 template <bool MUJOCO>
-torch::Tensor torch_ccrba(torch::Tensor q, torch::Tensor qd, int64_t ctx_id) {
+static torch::Tensor torch_ccrba(torch::Tensor q, torch::Tensor qd, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "ccrba: q", nj); grid_torch_check(qd, "ccrba: qd", nv);
@@ -7159,10 +7112,12 @@ torch::Tensor torch_ccrba(torch::Tensor q, torch::Tensor qd, int64_t ctx_id) {
     return out;
 }
 #endif  // GRID_HAS_CCRBA
+// [[unit: end]]
 
+// [[unit: centroidal; surface: torch]]
 #ifdef GRID_HAS_CMM_TIME_VARIATION
 template <bool MUJOCO>
-torch::Tensor torch_cmm_time_variation(torch::Tensor q, torch::Tensor qd, int64_t ctx_id) {
+static torch::Tensor torch_cmm_time_variation(torch::Tensor q, torch::Tensor qd, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "cmm_time_variation: q", nj); grid_torch_check(qd, "cmm_time_variation: qd", nv);
@@ -7178,10 +7133,12 @@ torch::Tensor torch_cmm_time_variation(torch::Tensor q, torch::Tensor qd, int64_
     return out;
 }
 #endif  // GRID_HAS_CMM_TIME_VARIATION
+// [[unit: end]]
 
+// [[unit: centroidal; surface: torch]]
 #ifdef GRID_HAS_DCCRBA
 template <bool MUJOCO>
-torch::Tensor torch_dccrba(torch::Tensor q, int64_t ctx_id) {
+static torch::Tensor torch_dccrba(torch::Tensor q, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "dccrba: q", nj);
@@ -7197,13 +7154,15 @@ torch::Tensor torch_dccrba(torch::Tensor q, int64_t ctx_id) {
     return out;
 }
 #endif  // GRID_HAS_DCCRBA
+// [[unit: end]]
 
+// [[unit: kinematics; surface: torch]]
 #ifdef GRID_HAS_FRAME_JACOBIAN
 // frame_jacobian / frame_jacobian_dot: target_jid + reference_frame trail the
 // schema as ints, passed straight through to the kernel (NO host -1 default
 // resolution — the Python torch surface passes resolved non-negative values).
 template <bool MUJOCO>
-torch::Tensor torch_frame_jacobian(torch::Tensor q, int64_t target_jid, int64_t reference_frame, int64_t ctx_id) {
+static torch::Tensor torch_frame_jacobian(torch::Tensor q, int64_t target_jid, int64_t reference_frame, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "frame_jacobian: q", nj);
@@ -7219,10 +7178,12 @@ torch::Tensor torch_frame_jacobian(torch::Tensor q, int64_t target_jid, int64_t 
     return out;
 }
 #endif  // GRID_HAS_FRAME_JACOBIAN
+// [[unit: end]]
 
+// [[unit: kinematics; surface: torch]]
 #if defined(GRID_HAS_FRAME_JACOBIAN) && defined(GRID_HAS_FRAME_JACOBIAN_DOT)
 template <bool MUJOCO>
-torch::Tensor torch_frame_jacobian_dot(torch::Tensor q, torch::Tensor qd, int64_t target_jid, int64_t reference_frame, int64_t ctx_id) {
+static torch::Tensor torch_frame_jacobian_dot(torch::Tensor q, torch::Tensor qd, int64_t target_jid, int64_t reference_frame, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "frame_jacobian_dot: q", nj); grid_torch_check(qd, "frame_jacobian_dot: qd", nv);
@@ -7238,10 +7199,12 @@ torch::Tensor torch_frame_jacobian_dot(torch::Tensor q, torch::Tensor qd, int64_
     return out;
 }
 #endif  // GRID_HAS_FRAME_JACOBIAN && GRID_HAS_FRAME_JACOBIAN_DOT
+// [[unit: end]]
 
+// [[unit: kinematics; surface: torch]]
 #if defined(GRID_HAS_FRAME_JACOBIAN) && defined(GRID_HAS_OSC_INERTIA)
 template <bool MUJOCO>
-torch::Tensor torch_osc_inertia(torch::Tensor q, int64_t ctx_id) {
+static torch::Tensor torch_osc_inertia(torch::Tensor q, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "osc_inertia: q", nj);
@@ -7257,6 +7220,7 @@ torch::Tensor torch_osc_inertia(torch::Tensor q, int64_t ctx_id) {
     return out;
 }
 #endif  // GRID_HAS_FRAME_JACOBIAN && GRID_HAS_OSC_INERTIA
+// [[unit: end]]
 
 // ── END GENERATED TORCH OP BODIES ──
 
@@ -7267,9 +7231,10 @@ torch::Tensor torch_osc_inertia(torch::Tensor q, int64_t ctx_id) {
 // contiguous device pointer to 16 T, so it is handed straight to the kernel's
 // d_Xtool (no host staging). target_jid is an absolute jid (the Python layer
 // resolves names→jids). Gated like the C-ABI wrappers.
+// [[unit: kinematics; surface: torch]]
 #ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
 template <bool MUJOCO>
-torch::Tensor torch_end_effector_pose_runtime(torch::Tensor q, int64_t target_jid, torch::Tensor offset, int64_t ctx_id) {
+static torch::Tensor torch_end_effector_pose_runtime(torch::Tensor q, int64_t target_jid, torch::Tensor offset, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     TORCH_CHECK(target_jid >= 0 && target_jid < grid::NUM_JOINTS, "end_effector_pose_runtime: target_jid out of range");
     const int nj = grid::NUM_JOINTS;
@@ -7290,10 +7255,12 @@ torch::Tensor torch_end_effector_pose_runtime(torch::Tensor q, int64_t target_ji
     return out;
 }
 #endif  // GRID_HAS_END_EFFECTOR_POSE_RUNTIME
+// [[unit: end]]
 
+// [[unit: kinematics; surface: torch]]
 #ifdef GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
 template <bool MUJOCO>
-torch::Tensor torch_end_effector_pose_gradient_runtime(torch::Tensor q, int64_t target_jid, torch::Tensor offset, int64_t ctx_id) {
+static torch::Tensor torch_end_effector_pose_gradient_runtime(torch::Tensor q, int64_t target_jid, torch::Tensor offset, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     TORCH_CHECK(target_jid >= 0 && target_jid < grid::NUM_JOINTS, "end_effector_pose_gradient_runtime: target_jid out of range");
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
@@ -7314,6 +7281,7 @@ torch::Tensor torch_end_effector_pose_gradient_runtime(torch::Tensor q, int64_t 
     return out;
 }
 #endif  // GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
+// [[unit: end]]
 
 // qdd wiring (torch grad): ∂c/∂(q,qd) depends on qdd via the M·qdd term's
 // derivatives. When a qdd tensor is provided, copy it D→D into d_qdd and launch
@@ -7321,9 +7289,10 @@ torch::Tensor torch_end_effector_pose_gradient_runtime(torch::Tensor q, int64_t 
 // stride). A null qdd keeps the (faster) qdd=0 overload — byte-identical to the
 // prior behaviour. Mirrors the numpy / JAX ID-gradient paths and the order of
 // the VALUE torch_inverse_dynamics op (q, qd, gravity, qdd, f_ext).
+// [[unit: dyn_gradients; surface: torch]]
 #if GRID_HAS_INVERSE_DYNAMICS_GRADIENT
 template <bool MUJOCO>
-torch::Tensor torch_inverse_dynamics_gradient(torch::Tensor q, torch::Tensor qd, double gravity,
+static torch::Tensor torch_inverse_dynamics_gradient(torch::Tensor q, torch::Tensor qd, double gravity,
                               c10::optional<torch::Tensor> qdd,
                               c10::optional<torch::Tensor> f_ext, int64_t ctx_id,
                               c10::optional<torch::Tensor> stamp_expect) {
@@ -7370,10 +7339,12 @@ torch::Tensor torch_inverse_dynamics_gradient(torch::Tensor q, torch::Tensor qd,
     return out;
 }
 #endif  // GRID_HAS_INVERSE_DYNAMICS_GRADIENT
+// [[unit: end]]
 
+// [[unit: idsva_so; surface: torch]]
 #if GRID_HAS_IDSVA_SO
 template <bool MUJOCO>
-torch::Tensor torch_idsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor qdd, double gravity, int64_t ctx_id) {
+static torch::Tensor torch_idsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor qdd, double gravity, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "idsva_so: q", nj); grid_torch_check(qd, "idsva_so: qd", nv);
@@ -7411,7 +7382,9 @@ torch::Tensor torch_idsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor qd
     return out;
 }
 #endif  // GRID_HAS_IDSVA_SO
+// [[unit: end]]
 
+// [[unit: prelude; surface: torch]]
 // mjx-aware torch integrator-type dispatch: instantiates FN<IT_case, MUJOCO_FLAG>.
 #define GRID_RBD_IT_DISPATCH_TORCH_MJX(it_code, FN, MUJOCO_FLAG, ...)                          \
     GRID_RBD_IT_SWITCH_MJX(it_code, FN, MUJOCO_FLAG,                                            \
@@ -7423,7 +7396,9 @@ torch::Tensor torch_idsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor qd
         TORCH_CHECK(false,                                                                      \
             "mujoco integrator/plant-step gradient supports only euler / semi-implicit-euler"), \
         __VA_ARGS__)
+// [[unit: end]]
 
+// [[unit: integrator; surface: torch]]
 #if GRID_HAS_INTEGRATOR
 template <grid::IntegratorType IT, bool MUJOCO>
 static void torch_launch_integrator(GridCtx *ctx, cudaStream_t stream, int batch, double dt, double gravity) {
@@ -7433,6 +7408,8 @@ static void torch_launch_integrator(GridCtx *ctx, cudaStream_t stream, int batch
         g_data->d_x_kp1, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, g_data->d_f_ext, (T)gravity, (T)dt, batch);
 }
 #endif  // GRID_HAS_INTEGRATOR
+// [[unit: end]]
+// [[unit: integrator_gradient; surface: torch]]
 #if GRID_HAS_INTEGRATOR_GRADIENT
 template <grid::IntegratorType IT, bool MUJOCO>
 static void torch_launch_integrator_grad(GridCtx *ctx, cudaStream_t stream, int batch, double dt, double gravity) {
@@ -7442,10 +7419,12 @@ static void torch_launch_integrator_grad(GridCtx *ctx, cudaStream_t stream, int 
         g_data->d_dAB, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, g_data->d_f_ext, (T)gravity, (T)dt, batch);
 }
 #endif  // GRID_HAS_INTEGRATOR_GRADIENT
+// [[unit: end]]
 
+// [[unit: integrator; surface: torch]]
 #if GRID_HAS_INTEGRATOR
 template <bool MUJOCO>
-torch::Tensor torch_integrator(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double dt, int64_t it, double gravity, int64_t ctx_id,
+static torch::Tensor torch_integrator(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double dt, int64_t it, double gravity, int64_t ctx_id,
                                c10::optional<torch::Tensor> stamp_out) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
@@ -7466,10 +7445,12 @@ torch::Tensor torch_integrator(torch::Tensor q, torch::Tensor qd, torch::Tensor 
     return out;
 }
 #endif  // GRID_HAS_INTEGRATOR
+// [[unit: end]]
 
+// [[unit: integrator_gradient; surface: torch]]
 #if GRID_HAS_INTEGRATOR_GRADIENT
 template <bool MUJOCO>
-torch::Tensor torch_integrator_gradient(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double dt, int64_t it, double gravity, int64_t ctx_id,
+static torch::Tensor torch_integrator_gradient(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double dt, int64_t it, double gravity, int64_t ctx_id,
                                         c10::optional<torch::Tensor> stamp_expect) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
@@ -7490,6 +7471,7 @@ torch::Tensor torch_integrator_gradient(torch::Tensor q, torch::Tensor qd, torch
     return out;
 }
 #endif  // GRID_HAS_INTEGRATOR_GRADIENT
+// [[unit: end]]
 
 // ── grid_plant surface (cost / barrier / plant-step) ──
 //
@@ -7500,6 +7482,7 @@ torch::Tensor torch_integrator_gradient(torch::Tensor q, torch::Tensor qd, torch
 // plant_step_gradient return a single tensor. Reshapes to the _handle.py
 // conventions are done Python-side. Gated on the same GRID_PLANT_HAS_* defines.
 
+// [[unit: prelude; surface: torch]]
 static inline void grid_torch_plant_init(GridCtx *ctx) {
     GRID_RBD_CTX_LOCALS(ctx);
     TORCH_CHECK(plant_alloc(g_ctx) == 0, "plant_alloc failed");
@@ -7513,6 +7496,7 @@ static inline void grid_torch_check_n(const torch::Tensor& t, const char* name, 
     TORCH_CHECK(t.dim() == 2, name, ": must be 2D (B, ", n, ")");
     TORCH_CHECK(t.size(1) == n, name, ": last dim != ", n);
 }
+// [[unit: end]]
 
 // quadratic cost (state or input). var/des/w are (B, N). Returns (value, grad, hess).
 // STATE=true selects the state kernel (N = NX) else the input kernel (N = NV).
@@ -7520,6 +7504,7 @@ static inline void grid_torch_check_n(const torch::Tensor& t, const char* name, 
 // member-template calls parse unambiguously under nvcc's host pass; MUJOCO is a
 // compile-time template flag threaded into the STATE kernel launch (the only mjx
 // path — input cost is frame-invariant and always pinocchio).
+// [[unit: plant_costs; surface: torch]]
 template <bool MUJOCO>
 static std::vector<torch::Tensor> torch_plant_quadratic_cost(
     torch::Tensor var, torch::Tensor des, torch::Tensor w, bool state, int64_t ctx_id) {
@@ -7554,10 +7539,10 @@ static std::vector<torch::Tensor> torch_plant_quadratic_cost(
 }
 
 template <bool MUJOCO>
-std::vector<torch::Tensor> torch_quadratic_state_cost(torch::Tensor x, torch::Tensor x_des, torch::Tensor Q, int64_t ctx_id) {
+static std::vector<torch::Tensor> torch_quadratic_state_cost(torch::Tensor x, torch::Tensor x_des, torch::Tensor Q, int64_t ctx_id) {
     return torch_plant_quadratic_cost<MUJOCO>(x, x_des, Q, true, ctx_id);
 }
-std::vector<torch::Tensor> torch_quadratic_input_cost(torch::Tensor u, torch::Tensor u_des, torch::Tensor R, int64_t ctx_id) {
+static std::vector<torch::Tensor> torch_quadratic_input_cost(torch::Tensor u, torch::Tensor u_des, torch::Tensor R, int64_t ctx_id) {
     return torch_plant_quadratic_cost<false>(u, u_des, R, false, ctx_id);
 }
 
@@ -7598,17 +7583,19 @@ static std::vector<torch::Tensor> torch_plant_barrier(
     return {out, grad, hdiag};
 }
 
-std::vector<torch::Tensor> torch_joint_position_barrier(torch::Tensor v, torch::Tensor lo, torch::Tensor hi, double mu, int64_t ctx_id) {
+static std::vector<torch::Tensor> torch_joint_position_barrier(torch::Tensor v, torch::Tensor lo, torch::Tensor hi, double mu, int64_t ctx_id) {
     return torch_plant_barrier(v, lo, hi, mu, 0, ctx_id);
 }
-std::vector<torch::Tensor> torch_joint_velocity_barrier(torch::Tensor v, torch::Tensor lo, torch::Tensor hi, double mu, int64_t ctx_id) {
+static std::vector<torch::Tensor> torch_joint_velocity_barrier(torch::Tensor v, torch::Tensor lo, torch::Tensor hi, double mu, int64_t ctx_id) {
     return torch_plant_barrier(v, lo, hi, mu, 1, ctx_id);
 }
-std::vector<torch::Tensor> torch_joint_torque_barrier(torch::Tensor v, torch::Tensor lo, torch::Tensor hi, double mu, int64_t ctx_id) {
+static std::vector<torch::Tensor> torch_joint_torque_barrier(torch::Tensor v, torch::Tensor lo, torch::Tensor hi, double mu, int64_t ctx_id) {
     return torch_plant_barrier(v, lo, hi, mu, 2, ctx_id);
 }
 
+// [[unit: end]]
 // ── BEGIN GENERATED TORCH PLANT TAIL (grid_codegen/wrapper_plant_gen.py — do not hand-edit) ──
+// [[unit: plant_step; surface: torch]]
 #ifdef GRID_PLANT_HAS_STEP
 template <grid::IntegratorType IT, bool MUJOCO>
 static void torch_launch_plant_step(GridCtx *ctx, cudaStream_t stream, int batch, double gravity, double dt) {
@@ -7625,7 +7612,7 @@ static void torch_launch_plant_step(GridCtx *ctx, cudaStream_t stream, int batch
 }
 
 template <bool MUJOCO>
-torch::Tensor torch_plant_step(torch::Tensor x, torch::Tensor u, double dt, int64_t it, double gravity, int64_t ctx_id) {
+static torch::Tensor torch_plant_step(torch::Tensor x, torch::Tensor u, double dt, int64_t it, double gravity, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     grid_torch_plant_init(g_ctx);
     const int nx = grid::NUM_POS + grid::NUM_VEL, nv = grid::NUM_VEL;
@@ -7648,7 +7635,9 @@ torch::Tensor torch_plant_step(torch::Tensor x, torch::Tensor u, double dt, int6
     return out;
 }
 #endif  // GRID_PLANT_HAS_STEP
+// [[unit: end]]
 
+// [[unit: plant_step_gradient; surface: torch]]
 #ifdef GRID_PLANT_HAS_STEP_GRADIENT
 template <grid::IntegratorType IT, bool MUJOCO>
 static void torch_launch_plant_step_gradient(GridCtx *ctx, cudaStream_t stream, int batch, double gravity, double dt) {
@@ -7665,7 +7654,7 @@ static void torch_launch_plant_step_gradient(GridCtx *ctx, cudaStream_t stream, 
 }
 
 template <bool MUJOCO>
-torch::Tensor torch_plant_step_gradient(torch::Tensor x, torch::Tensor u, double dt, int64_t it, double gravity, int64_t ctx_id) {
+static torch::Tensor torch_plant_step_gradient(torch::Tensor x, torch::Tensor u, double dt, int64_t it, double gravity, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     grid_torch_plant_init(g_ctx);
     const int nx = grid::NUM_POS + grid::NUM_VEL, nv = grid::NUM_VEL;
@@ -7689,10 +7678,12 @@ torch::Tensor torch_plant_step_gradient(torch::Tensor x, torch::Tensor u, double
     return out;
 }
 #endif  // GRID_PLANT_HAS_STEP_GRADIENT
+// [[unit: end]]
 
+// [[unit: plant_costs; surface: torch]]
 #ifdef GRID_PLANT_HAS_EE_COST
 template <bool MUJOCO>
-std::vector<torch::Tensor> torch_ee_pos_cost(torch::Tensor q, torch::Tensor p_des, torch::Tensor W, int64_t ctx_id) {
+static std::vector<torch::Tensor> torch_ee_pos_cost(torch::Tensor q, torch::Tensor p_des, torch::Tensor W, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     grid_torch_plant_init(g_ctx);
     const int nq = grid::NUM_POS, nx = grid::NUM_POS + grid::NUM_VEL;
@@ -7722,10 +7713,12 @@ std::vector<torch::Tensor> torch_ee_pos_cost(torch::Tensor q, torch::Tensor p_de
     return {out, grad, hess};
 }
 #endif  // GRID_PLANT_HAS_EE_COST
+// [[unit: end]]
 
+// [[unit: plant_costs; surface: torch]]
 #ifdef GRID_PLANT_HAS_COM_COST
 template <bool MUJOCO>
-std::vector<torch::Tensor> torch_com_cost(torch::Tensor q, torch::Tensor p_des, torch::Tensor W, int64_t ctx_id) {
+static std::vector<torch::Tensor> torch_com_cost(torch::Tensor q, torch::Tensor p_des, torch::Tensor W, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     grid_torch_plant_init(g_ctx);
     const int nq = grid::NUM_POS, nx = grid::NUM_POS + grid::NUM_VEL;
@@ -7755,10 +7748,12 @@ std::vector<torch::Tensor> torch_com_cost(torch::Tensor q, torch::Tensor p_des, 
     return {out, grad, hess};
 }
 #endif  // GRID_PLANT_HAS_COM_COST
+// [[unit: end]]
 
+// [[unit: plant_costs; surface: torch]]
 #ifdef GRID_PLANT_HAS_MOMENTUM_COST
 template <bool MUJOCO>
-std::vector<torch::Tensor> torch_momentum_cost(torch::Tensor q, torch::Tensor qd, torch::Tensor h_des, torch::Tensor W, int64_t ctx_id) {
+static std::vector<torch::Tensor> torch_momentum_cost(torch::Tensor q, torch::Tensor qd, torch::Tensor h_des, torch::Tensor W, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
     grid_torch_plant_init(g_ctx);
     const int nq = grid::NUM_POS, nv = grid::NUM_VEL, nx = nq + nv;
@@ -7793,28 +7788,15 @@ std::vector<torch::Tensor> torch_momentum_cost(torch::Tensor q, torch::Tensor qd
     return {out, grad, hess};
 }
 #endif  // GRID_PLANT_HAS_MOMENTUM_COST
+// [[unit: end]]
 // ── END GENERATED TORCH PLANT TAIL ──
 
-}  // namespace
 
-// The op library name is keyed by the cache_key so two robots don't collide.
-#ifndef GRID_RBD_TORCH_KEY
-#define GRID_RBD_TORCH_KEY default
-#endif
-#define GRID_RBD_TORCH_CONCAT2(a, b) a##b
-#define GRID_RBD_TORCH_CONCAT(a, b) GRID_RBD_TORCH_CONCAT2(a, b)
-#define GRID_RBD_TORCH_LIB GRID_RBD_TORCH_CONCAT(grid_rbd_torch_, GRID_RBD_TORCH_KEY)
-
-// Indirection so GRID_RBD_TORCH_LIB is fully expanded BEFORE TORCH_LIBRARY
-// stringizes/token-pastes it. Without this, TORCH_LIBRARY(GRID_RBD_TORCH_LIB,..)
-// registers under the literal token "GRID_RBD_TORCH_LIB" (token-paste suppresses
-// expansion), while TORCH_LIBRARY_IMPL's extra macro layer expands it — a
-// namespace mismatch that hides every op. The wrapper forces expansion for both.
-#define GRID_RBD_TORCH_LIBRARY(ns, m) TORCH_LIBRARY(ns, m)
-#define GRID_RBD_TORCH_LIBRARY_IMPL(ns, k, m) TORCH_LIBRARY_IMPL(ns, k, m)
+// (GRID_RBD_TORCH_KEY / GRID_RBD_TORCH_LIB / GRID_RBD_TORCH_LIBRARY* live in wrapper_common.cuh)
 
 // ── BEGIN GENERATED TORCH OP TABLE (grid_codegen/wrapper_body_gen.py — do not hand-edit) ──
 // Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen
+// [[unit: prelude; surface: torch]]
 // ── def/impl op table (X-macro) ──────────────────────────────────────────────
 // One row per op that has a <bool MUJOCO> impl template AND (on floating
 // builds) a _mujoco twin — i.e. every torch op except the pin-only stragglers
@@ -8043,46 +8025,341 @@ std::vector<torch::Tensor> torch_momentum_cost(torch::Tensor q, torch::Tensor qd
     GRID_TORCH_ROW_EE_POS_COST(X) \
     GRID_TORCH_ROW_COM_COST(X) \
     GRID_TORCH_ROW_MOMENTUM_COST(X)
-// ── END GENERATED TORCH OP TABLE ──
-
-GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {
-    // Table ops: schema = op name + row signature.
+// [[unit: end]]
+// Per-family registration (multi-TU build): each family unit defines + impls ITS
+// rows through TORCH_LIBRARY_FRAGMENT / TORCH_LIBRARY_IMPL; the core unit only
+// defines the library (below the table). Same rows, same order as GRID_RBD_TORCH_OPS.
+// [[unit: integrator_gradient; surface: torch]]
+#define GRID_RBD_TORCH_OPS_INTEGRATOR_GRADIENT(X) \
+    GRID_TORCH_ROW_INTEGRATOR_GRADIENT(X)
+GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
 #define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
-    GRID_RBD_TORCH_OPS(GRID_TORCH_X_DEF)
+    GRID_RBD_TORCH_OPS_INTEGRATOR_GRADIENT(GRID_TORCH_X_DEF)
 #undef GRID_TORCH_X_DEF
-    // pin-only stragglers (no mjx twin / non-template impls):
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_DEF_MJX(name, sig) m.def(#name "_mujoco" sig);
+    GRID_RBD_TORCH_OPS_INTEGRATOR_GRADIENT(GRID_TORCH_X_DEF_MJX)
+#undef GRID_TORCH_X_DEF_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+#define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
+    GRID_RBD_TORCH_OPS_INTEGRATOR_GRADIENT(GRID_TORCH_X_IMPL)
+#undef GRID_TORCH_X_IMPL
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_IMPL_MJX(name, sig) m.impl(#name "_mujoco", torch_##name<true>);
+    GRID_RBD_TORCH_OPS_INTEGRATOR_GRADIENT(GRID_TORCH_X_IMPL_MJX)
+#undef GRID_TORCH_X_IMPL_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+// [[unit: end]]
+// [[unit: integrator; surface: torch]]
+#define GRID_RBD_TORCH_OPS_INTEGRATOR(X) \
+    GRID_TORCH_ROW_INTEGRATOR(X)
+GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+#define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
+    GRID_RBD_TORCH_OPS_INTEGRATOR(GRID_TORCH_X_DEF)
+#undef GRID_TORCH_X_DEF
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_DEF_MJX(name, sig) m.def(#name "_mujoco" sig);
+    GRID_RBD_TORCH_OPS_INTEGRATOR(GRID_TORCH_X_DEF_MJX)
+#undef GRID_TORCH_X_DEF_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+#define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
+    GRID_RBD_TORCH_OPS_INTEGRATOR(GRID_TORCH_X_IMPL)
+#undef GRID_TORCH_X_IMPL
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_IMPL_MJX(name, sig) m.impl(#name "_mujoco", torch_##name<true>);
+    GRID_RBD_TORCH_OPS_INTEGRATOR(GRID_TORCH_X_IMPL_MJX)
+#undef GRID_TORCH_X_IMPL_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+// [[unit: end]]
+// [[unit: plant_step_gradient; surface: torch]]
+#define GRID_RBD_TORCH_OPS_PLANT_STEP_GRADIENT(X) \
+    GRID_TORCH_ROW_PLANT_STEP_GRADIENT(X)
+GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+#define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
+    GRID_RBD_TORCH_OPS_PLANT_STEP_GRADIENT(GRID_TORCH_X_DEF)
+#undef GRID_TORCH_X_DEF
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_DEF_MJX(name, sig) m.def(#name "_mujoco" sig);
+    GRID_RBD_TORCH_OPS_PLANT_STEP_GRADIENT(GRID_TORCH_X_DEF_MJX)
+#undef GRID_TORCH_X_DEF_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+#define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
+    GRID_RBD_TORCH_OPS_PLANT_STEP_GRADIENT(GRID_TORCH_X_IMPL)
+#undef GRID_TORCH_X_IMPL
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_IMPL_MJX(name, sig) m.impl(#name "_mujoco", torch_##name<true>);
+    GRID_RBD_TORCH_OPS_PLANT_STEP_GRADIENT(GRID_TORCH_X_IMPL_MJX)
+#undef GRID_TORCH_X_IMPL_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+// [[unit: end]]
+// [[unit: plant_step; surface: torch]]
+#define GRID_RBD_TORCH_OPS_PLANT_STEP(X) \
+    GRID_TORCH_ROW_PLANT_STEP(X)
+GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+#define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
+    GRID_RBD_TORCH_OPS_PLANT_STEP(GRID_TORCH_X_DEF)
+#undef GRID_TORCH_X_DEF
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_DEF_MJX(name, sig) m.def(#name "_mujoco" sig);
+    GRID_RBD_TORCH_OPS_PLANT_STEP(GRID_TORCH_X_DEF_MJX)
+#undef GRID_TORCH_X_DEF_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+#define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
+    GRID_RBD_TORCH_OPS_PLANT_STEP(GRID_TORCH_X_IMPL)
+#undef GRID_TORCH_X_IMPL
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_IMPL_MJX(name, sig) m.impl(#name "_mujoco", torch_##name<true>);
+    GRID_RBD_TORCH_OPS_PLANT_STEP(GRID_TORCH_X_IMPL_MJX)
+#undef GRID_TORCH_X_IMPL_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+// [[unit: end]]
+// [[unit: fdsva_so; surface: torch]]
+#define GRID_RBD_TORCH_OPS_FDSVA_SO(X) \
+    GRID_TORCH_ROW_FDSVA_SO(X)
+GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+#define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
+    GRID_RBD_TORCH_OPS_FDSVA_SO(GRID_TORCH_X_DEF)
+#undef GRID_TORCH_X_DEF
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_DEF_MJX(name, sig) m.def(#name "_mujoco" sig);
+    GRID_RBD_TORCH_OPS_FDSVA_SO(GRID_TORCH_X_DEF_MJX)
+#undef GRID_TORCH_X_DEF_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+#define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
+    GRID_RBD_TORCH_OPS_FDSVA_SO(GRID_TORCH_X_IMPL)
+#undef GRID_TORCH_X_IMPL
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_IMPL_MJX(name, sig) m.impl(#name "_mujoco", torch_##name<true>);
+    GRID_RBD_TORCH_OPS_FDSVA_SO(GRID_TORCH_X_IMPL_MJX)
+#undef GRID_TORCH_X_IMPL_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+// [[unit: end]]
+// [[unit: idsva_so; surface: torch]]
+#define GRID_RBD_TORCH_OPS_IDSVA_SO(X) \
+    GRID_TORCH_ROW_IDSVA_SO(X)
+GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+#define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
+    GRID_RBD_TORCH_OPS_IDSVA_SO(GRID_TORCH_X_DEF)
+#undef GRID_TORCH_X_DEF
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_DEF_MJX(name, sig) m.def(#name "_mujoco" sig);
+    GRID_RBD_TORCH_OPS_IDSVA_SO(GRID_TORCH_X_DEF_MJX)
+#undef GRID_TORCH_X_DEF_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+#define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
+    GRID_RBD_TORCH_OPS_IDSVA_SO(GRID_TORCH_X_IMPL)
+#undef GRID_TORCH_X_IMPL
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_IMPL_MJX(name, sig) m.impl(#name "_mujoco", torch_##name<true>);
+    GRID_RBD_TORCH_OPS_IDSVA_SO(GRID_TORCH_X_IMPL_MJX)
+#undef GRID_TORCH_X_IMPL_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+// [[unit: end]]
+// [[unit: dyn_values; surface: torch]]
+#define GRID_RBD_TORCH_OPS_DYN_VALUES(X) \
+    GRID_TORCH_ROW_INVERSE_DYNAMICS(X) \
+    GRID_TORCH_ROW_MINV(X) \
+    GRID_TORCH_ROW_FORWARD_DYNAMICS(X) \
+    GRID_TORCH_ROW_ABA(X) \
+    GRID_TORCH_ROW_CRBA(X) \
+    GRID_TORCH_ROW_GENERALIZED_GRAVITY(X) \
+    GRID_TORCH_ROW_NONLINEAR_EFFECTS(X) \
+    GRID_TORCH_ROW_CORIOLIS_MATRIX(X) \
+    GRID_TORCH_ROW_ENERGY(X)
+GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+#define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
+    GRID_RBD_TORCH_OPS_DYN_VALUES(GRID_TORCH_X_DEF)
+#undef GRID_TORCH_X_DEF
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_DEF_MJX(name, sig) m.def(#name "_mujoco" sig);
+    GRID_RBD_TORCH_OPS_DYN_VALUES(GRID_TORCH_X_DEF_MJX)
+#undef GRID_TORCH_X_DEF_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+#define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
+    GRID_RBD_TORCH_OPS_DYN_VALUES(GRID_TORCH_X_IMPL)
+#undef GRID_TORCH_X_IMPL
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_IMPL_MJX(name, sig) m.impl(#name "_mujoco", torch_##name<true>);
+    GRID_RBD_TORCH_OPS_DYN_VALUES(GRID_TORCH_X_IMPL_MJX)
+#undef GRID_TORCH_X_IMPL_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+// [[unit: end]]
+// [[unit: dyn_gradients; surface: torch]]
+#define GRID_RBD_TORCH_OPS_DYN_GRADIENTS(X) \
+    GRID_TORCH_ROW_INVERSE_DYNAMICS_GRADIENT(X) \
+    GRID_TORCH_ROW_FORWARD_DYNAMICS_GRADIENT(X)
+GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+#define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
+    GRID_RBD_TORCH_OPS_DYN_GRADIENTS(GRID_TORCH_X_DEF)
+#undef GRID_TORCH_X_DEF
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_DEF_MJX(name, sig) m.def(#name "_mujoco" sig);
+    GRID_RBD_TORCH_OPS_DYN_GRADIENTS(GRID_TORCH_X_DEF_MJX)
+#undef GRID_TORCH_X_DEF_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+#define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
+    GRID_RBD_TORCH_OPS_DYN_GRADIENTS(GRID_TORCH_X_IMPL)
+#undef GRID_TORCH_X_IMPL
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_IMPL_MJX(name, sig) m.impl(#name "_mujoco", torch_##name<true>);
+    GRID_RBD_TORCH_OPS_DYN_GRADIENTS(GRID_TORCH_X_IMPL_MJX)
+#undef GRID_TORCH_X_IMPL_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+// [[unit: end]]
+// [[unit: regressors; surface: torch]]
+#define GRID_RBD_TORCH_OPS_REGRESSORS(X) \
+    GRID_TORCH_ROW_INVERSE_DYNAMICS_REGRESSOR(X) \
+    GRID_TORCH_ROW_KINETIC_ENERGY_REGRESSOR(X) \
+    GRID_TORCH_ROW_POTENTIAL_ENERGY_REGRESSOR(X)
+GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+#define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
+    GRID_RBD_TORCH_OPS_REGRESSORS(GRID_TORCH_X_DEF)
+#undef GRID_TORCH_X_DEF
 #if GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
     m.def("forward_dynamics_parameter_gradient(Tensor q, Tensor qd, Tensor u, float gravity, int ctx_id=0, Tensor? stamp_expect=None) -> Tensor");
 #endif  // GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_DEF_MJX(name, sig) m.def(#name "_mujoco" sig);
+    GRID_RBD_TORCH_OPS_REGRESSORS(GRID_TORCH_X_DEF_MJX)
+#undef GRID_TORCH_X_DEF_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+#define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
+    GRID_RBD_TORCH_OPS_REGRESSORS(GRID_TORCH_X_IMPL)
+#undef GRID_TORCH_X_IMPL
+#if GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
+    m.impl("forward_dynamics_parameter_gradient", torch_forward_dynamics_parameter_gradient);
+#endif  // GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_IMPL_MJX(name, sig) m.impl(#name "_mujoco", torch_##name<true>);
+    GRID_RBD_TORCH_OPS_REGRESSORS(GRID_TORCH_X_IMPL_MJX)
+#undef GRID_TORCH_X_IMPL_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+// [[unit: end]]
+// [[unit: kinematics; surface: torch]]
+#define GRID_RBD_TORCH_OPS_KINEMATICS(X) \
+    GRID_TORCH_ROW_END_EFFECTOR_POSE(X) \
+    GRID_TORCH_ROW_END_EFFECTOR_POSE_GRADIENT(X) \
+    GRID_TORCH_ROW_END_EFFECTOR_POSE_HESSIAN(X) \
+    GRID_TORCH_ROW_FRAME_JACOBIAN(X) \
+    GRID_TORCH_ROW_FRAME_JACOBIAN_DOT(X) \
+    GRID_TORCH_ROW_OSC_INERTIA(X) \
+    GRID_TORCH_ROW_END_EFFECTOR_POSE_RUNTIME(X) \
+    GRID_TORCH_ROW_END_EFFECTOR_POSE_GRADIENT_RUNTIME(X)
+GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+#define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
+    GRID_RBD_TORCH_OPS_KINEMATICS(GRID_TORCH_X_DEF)
+#undef GRID_TORCH_X_DEF
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_DEF_MJX(name, sig) m.def(#name "_mujoco" sig);
+    GRID_RBD_TORCH_OPS_KINEMATICS(GRID_TORCH_X_DEF_MJX)
+#undef GRID_TORCH_X_DEF_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+#define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
+    GRID_RBD_TORCH_OPS_KINEMATICS(GRID_TORCH_X_IMPL)
+#undef GRID_TORCH_X_IMPL
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_IMPL_MJX(name, sig) m.impl(#name "_mujoco", torch_##name<true>);
+    GRID_RBD_TORCH_OPS_KINEMATICS(GRID_TORCH_X_IMPL_MJX)
+#undef GRID_TORCH_X_IMPL_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+// [[unit: end]]
+// [[unit: centroidal; surface: torch]]
+#define GRID_RBD_TORCH_OPS_CENTROIDAL(X) \
+    GRID_TORCH_ROW_COM(X) \
+    GRID_TORCH_ROW_CCRBA(X) \
+    GRID_TORCH_ROW_CMM_TIME_VARIATION(X) \
+    GRID_TORCH_ROW_DCCRBA(X)
+GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+#define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
+    GRID_RBD_TORCH_OPS_CENTROIDAL(GRID_TORCH_X_DEF)
+#undef GRID_TORCH_X_DEF
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_DEF_MJX(name, sig) m.def(#name "_mujoco" sig);
+    GRID_RBD_TORCH_OPS_CENTROIDAL(GRID_TORCH_X_DEF_MJX)
+#undef GRID_TORCH_X_DEF_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+#define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
+    GRID_RBD_TORCH_OPS_CENTROIDAL(GRID_TORCH_X_IMPL)
+#undef GRID_TORCH_X_IMPL
+#ifdef GRID_RBD_WITH_MUJOCO
+#define GRID_TORCH_X_IMPL_MJX(name, sig) m.impl(#name "_mujoco", torch_##name<true>);
+    GRID_RBD_TORCH_OPS_CENTROIDAL(GRID_TORCH_X_IMPL_MJX)
+#undef GRID_TORCH_X_IMPL_MJX
+#endif  // GRID_RBD_WITH_MUJOCO
+}
+// [[unit: end]]
+// [[unit: plant_costs; surface: torch]]
+#define GRID_RBD_TORCH_OPS_PLANT_COSTS(X) \
+    GRID_TORCH_ROW_QUADRATIC_STATE_COST(X) \
+    GRID_TORCH_ROW_EE_POS_COST(X) \
+    GRID_TORCH_ROW_COM_COST(X) \
+    GRID_TORCH_ROW_MOMENTUM_COST(X)
+GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+#define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
+    GRID_RBD_TORCH_OPS_PLANT_COSTS(GRID_TORCH_X_DEF)
+#undef GRID_TORCH_X_DEF
     m.def("quadratic_input_cost(Tensor u, Tensor u_des, Tensor R, int ctx_id=0) -> Tensor[]");
     m.def("joint_position_barrier(Tensor var, Tensor lower, Tensor upper, float mu, int ctx_id=0) -> Tensor[]");
     m.def("joint_velocity_barrier(Tensor var, Tensor lower, Tensor upper, float mu, int ctx_id=0) -> Tensor[]");
     m.def("joint_torque_barrier(Tensor var, Tensor lower, Tensor upper, float mu, int ctx_id=0) -> Tensor[]");
 #ifdef GRID_RBD_WITH_MUJOCO
-    // MuJoCo-convention twins (floating only): same schemas, name + "_mujoco";
-    // the CUDA impls launch the kernels with MUJOCO_OUTPUT=true.
 #define GRID_TORCH_X_DEF_MJX(name, sig) m.def(#name "_mujoco" sig);
-    GRID_RBD_TORCH_OPS(GRID_TORCH_X_DEF_MJX)
+    GRID_RBD_TORCH_OPS_PLANT_COSTS(GRID_TORCH_X_DEF_MJX)
 #undef GRID_TORCH_X_DEF_MJX
 #endif  // GRID_RBD_WITH_MUJOCO
 }
-
 GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
 #define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
-    GRID_RBD_TORCH_OPS(GRID_TORCH_X_IMPL)
+    GRID_RBD_TORCH_OPS_PLANT_COSTS(GRID_TORCH_X_IMPL)
 #undef GRID_TORCH_X_IMPL
-#if GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
-    m.impl("forward_dynamics_parameter_gradient", torch_forward_dynamics_parameter_gradient);
-#endif  // GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
     m.impl("quadratic_input_cost", torch_quadratic_input_cost);
     m.impl("joint_position_barrier", torch_joint_position_barrier);
     m.impl("joint_velocity_barrier", torch_joint_velocity_barrier);
     m.impl("joint_torque_barrier", torch_joint_torque_barrier);
 #ifdef GRID_RBD_WITH_MUJOCO
 #define GRID_TORCH_X_IMPL_MJX(name, sig) m.impl(#name "_mujoco", torch_##name<true>);
-    GRID_RBD_TORCH_OPS(GRID_TORCH_X_IMPL_MJX)
+    GRID_RBD_TORCH_OPS_PLANT_COSTS(GRID_TORCH_X_IMPL_MJX)
 #undef GRID_TORCH_X_IMPL_MJX
 #endif  // GRID_RBD_WITH_MUJOCO
 }
+// [[unit: end]]
+// ── END GENERATED TORCH OP TABLE ──
+
+// The library itself (exactly one TORCH_LIBRARY per op namespace); every op is
+// defined + implemented by its family's TORCH_LIBRARY_FRAGMENT / TORCH_LIBRARY_IMPL
+// in the generated table above (multi-TU build).
+GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) { (void)m; }
 
 #endif  // GRID_RBD_WITH_TORCH

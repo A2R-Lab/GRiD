@@ -104,7 +104,7 @@ namespaces = false
 [tool.setuptools.package-data]
 # py.typed (PEP 561): ship inline type annotations so consumers' type checkers /
 # IDEs honor them (grid_rbd is a typed package, no separate .pyi).
-grid_rbd = ["wrapper_template.cu", "py.typed"]
+grid_rbd = ["wrapper_template.cu", "wrapper_common.cuh", "py.typed"]
 "grid_rbd.jax" = ["py.typed"]
 "grid_rbd.torch" = ["py.typed"]
 grid_codegen = ["collision/*.cuh", "collision/assets/*.urdf", "_data/**/*", "_data/provenance.json"]

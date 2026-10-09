@@ -605,3 +605,16 @@ def test_family_attr_tables_partition_the_kernel_manifest():
     assert set(owned) | NOT_LAUNCHED_BY_BINDINGS == set(KERNEL_OVERLOADS)
     assert not (set(owned) & NOT_LAUNCHED_BY_BINDINGS)
     assert OPT_IN_GATE_SHORTS <= set(owned)
+
+
+def test_family_of_covers_every_wrapper_surface_key():
+    """Every ABI key with a wrapper body maps to a known family; python_only
+    rows (no body) have none; no family name is unknown."""
+    from grid_codegen.abi_specs import ABI_SPECS, FAMILIES, FAMILY_OF
+    for key, spec in ABI_SPECS.items():
+        if getattr(spec, "surface_class", None) == "python_only":
+            assert key not in FAMILY_OF, key
+        else:
+            assert key in FAMILY_OF, f"{key} has no build family"
+            assert FAMILY_OF[key] in FAMILIES, (key, FAMILY_OF[key])
+    assert set(FAMILY_OF) <= set(ABI_SPECS)

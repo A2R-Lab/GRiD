@@ -1315,9 +1315,8 @@ FAMILY_ATTR_SHORTS: dict[str, tuple[str, ...]] = {
                    "generalized_gravity", "nonlinear_effects", "coriolis_matrix", "energy"),
     "dyn_gradients": ("inverse_dynamics_gradient", "forward_dynamics_gradient",
                       "f_ext_gradient", "f_ext_gradient_dq"),
-    "regressors": ("inverse_dynamics_regressor", "inverse_dynamics_regressor_gradient",
-                   "forward_dynamics_parameter_gradient", "kinetic_energy_regressor",
-                   "potential_energy_regressor"),
+    "regressors": ("inverse_dynamics_regressor", "forward_dynamics_parameter_gradient",
+                   "kinetic_energy_regressor", "potential_energy_regressor"),
     "kinematics": ("end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian",
                    "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
                    "end_effector_pose_runtime", "end_effector_pose_gradient_runtime"),
@@ -1325,9 +1324,39 @@ FAMILY_ATTR_SHORTS: dict[str, tuple[str, ...]] = {
     "plant_costs": (),
 }
 NOT_LAUNCHED_BY_BINDINGS: frozenset[str] = frozenset(
-    {"integrator_with_gradient", "multi_target_position", "multi_target_position_gradient"})
+    {"integrator_with_gradient", "multi_target_position", "multi_target_position_gradient",
+     # codegen/CUDA-only surface (CODEGEN_ONLY_HAS_MACROS): no wrapper body launches it
+     "inverse_dynamics_regressor_gradient"})
 # Manifest shorts whose GRID_HAS_<SHORT> gate is defined-or-absent (emitted
 # inside the opt-in algorithm's own block) rather than always defined to 1/0.
 OPT_IN_GATE_SHORTS: frozenset[str] = frozenset(
     {"frame_jacobian", "frame_jacobian_dot", "osc_inertia",
      "end_effector_pose_runtime", "end_effector_pose_gradient_runtime"})
+# Build family of every ABI key (multi-TU arc). `python_only` rows have no
+# wrapper body and no family. Hand-written owners (tool/contact fext kernels,
+# integrator host launchers, plant impls, runtime-EE / idsva_so / integrator
+# JAX + torch bodies) carry hand-placed fences in wrapper_template.cu with the
+# same family names (see bindings/grid_rbd/_units.py).
+FAMILY_OF: dict[str, str] = {
+    **{k: "dyn_values" for k in ("crba", "inverse_dynamics", "minv", "forward_dynamics", "aba",
+                                 "generalized_gravity", "nonlinear_effects", "coriolis_matrix", "energy")},
+    **{k: "dyn_gradients" for k in ("inverse_dynamics_gradient", "forward_dynamics_gradient",
+                                    "f_ext_gradient", "f_ext_gradient_dq", "f_ext_contact")},
+    **{k: "regressors" for k in ("inverse_dynamics_regressor", "forward_dynamics_parameter_gradient",
+                                 "kinetic_energy_regressor", "potential_energy_regressor")},
+    **{k: "kinematics" for k in ("end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian",
+                                 "fk_batched", "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
+                                 "end_effector_pose_runtime", "end_effector_pose_gradient_runtime")},
+    **{k: "centroidal" for k in ("com", "ccrba", "dccrba", "cmm_time_variation")},
+    "integrator": "integrator",
+    "integrator_gradient": "integrator_gradient",
+    "idsva_so": "idsva_so",
+    "fdsva_so": "fdsva_so",
+    "plant_step": "plant_step",
+    "plant_step_gradient": "plant_step_gradient",
+    "plant_step_hessian": "plant_hessian",
+    **{k: "plant_costs" for k in ("plant_quadratic_state_cost", "plant_quadratic_input_cost",
+                                  "plant_joint_position_barrier", "plant_joint_velocity_barrier",
+                                  "plant_joint_torque_barrier", "plant_ee_pos_cost", "plant_com_cost",
+                                  "plant_momentum_cost")},
+}

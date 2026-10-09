@@ -356,12 +356,21 @@ def _jax_cost_block(key: str) -> list[str]:
     return L
 
 
+def _fence(key: str, lines: list[str], surface: str) -> list[str]:
+    """Multi-TU unit fence (bindings/grid_rbd/_units.py): comment lines the
+    single-unit compile ignores. plant_step / plant_step_gradient are their own
+    build families; the three costs share plant_costs (abi_specs.FAMILY_OF)."""
+    from .abi_specs import FAMILY_OF
+    fam = FAMILY_OF[key if key.startswith("plant_") else "plant_" + key]
+    return [f"// [[unit: {fam}; surface: {surface}]]"] + lines + ["// [[unit: end]]"]
+
+
 def gen_jax_plant_tail() -> str:
-    parts = (_jax_step_block("plant_step") + [""]
-             + _jax_step_block("plant_step_gradient") + [""]
-             + _jax_cost_block("ee_pos_cost") + [""]
-             + _jax_cost_block("com_cost") + [""]
-             + _jax_cost_block("momentum_cost"))
+    parts = (_fence("plant_step", _jax_step_block("plant_step"), "jax") + [""]
+             + _fence("plant_step_gradient", _jax_step_block("plant_step_gradient"), "jax") + [""]
+             + _fence("ee_pos_cost", _jax_cost_block("ee_pos_cost"), "jax") + [""]
+             + _fence("com_cost", _jax_cost_block("com_cost"), "jax") + [""]
+             + _fence("momentum_cost", _jax_cost_block("momentum_cost"), "jax"))
     return "\n".join(parts) + "\n"
 
 
@@ -393,7 +402,7 @@ def _torch_step_block(key: str) -> list[str]:
         "}",
         "",
         "template <bool MUJOCO>",
-        f"torch::Tensor torch_{name}(torch::Tensor x, torch::Tensor u, double dt, int64_t it, double gravity, int64_t ctx_id) {{",
+        f"static torch::Tensor torch_{name}(torch::Tensor x, torch::Tensor u, double dt, int64_t it, double gravity, int64_t ctx_id) {{",
         "    GRID_RBD_CTX_OR_THROW(ctx_id);",
         "    grid_torch_plant_init(g_ctx);",
         "    const int nx = grid::NUM_POS + grid::NUM_VEL, nv = grid::NUM_VEL;",
@@ -439,7 +448,7 @@ def _torch_cost_block(key: str) -> list[str]:
     L = [
         f"#ifdef {op['gate']}",
         "template <bool MUJOCO>",
-        f"std::vector<torch::Tensor> torch_{key}({args}) {{",
+        f"static std::vector<torch::Tensor> torch_{key}({args}) {{",
         "    GRID_RBD_CTX_OR_THROW(ctx_id);",
         "    grid_torch_plant_init(g_ctx);",
     ]
@@ -512,11 +521,11 @@ def _torch_cost_block(key: str) -> list[str]:
 
 
 def gen_torch_plant_tail() -> str:
-    parts = (_torch_step_block("plant_step") + [""]
-             + _torch_step_block("plant_step_gradient") + [""]
-             + _torch_cost_block("ee_pos_cost") + [""]
-             + _torch_cost_block("com_cost") + [""]
-             + _torch_cost_block("momentum_cost"))
+    parts = (_fence("plant_step", _torch_step_block("plant_step"), "torch") + [""]
+             + _fence("plant_step_gradient", _torch_step_block("plant_step_gradient"), "torch") + [""]
+             + _fence("ee_pos_cost", _torch_cost_block("ee_pos_cost"), "torch") + [""]
+             + _fence("com_cost", _torch_cost_block("com_cost"), "torch") + [""]
+             + _fence("momentum_cost", _torch_cost_block("momentum_cost"), "torch"))
     return "\n".join(parts) + "\n"
 
 
