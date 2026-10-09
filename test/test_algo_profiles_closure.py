@@ -77,8 +77,11 @@ def test_closure_is_idempotent_and_order_independent():
 # load_update_XmatsHom_helpers that only the kinematics block emitted.
 # A definition is `name(<params>) {` (any return type — init_topology_helpers
 # returns int*); a call is `name<...>(` or `name(` anywhere. defs ⊆ calls textually.
-_DEF = re.compile(r"\b([a-z0-9_]+(?:_inner|_helpers))\s*\([^;{}]*\)\s*\{", re.S)
-_CALL = re.compile(r"\b([a-z0-9_]+(?:_inner|_helpers))\s*(?:<[^;{}]*?>)?\s*\(")
+# `_finish` / `_device` joined 2026-10-09: a forward_dynamics_parameter_gradient
+# singleton called forward_dynamics_finish (emitted only by the forward_dynamics
+# block) and nvcc rejected the header — the `_inner`-only net did not see it.
+_DEF = re.compile(r"\b([a-z0-9_]+(?:_inner|_helpers|_finish|_device))\s*\([^;{}]*\)\s*\{", re.S)
+_CALL = re.compile(r"\b([a-z0-9_]+(?:_inner|_helpers|_finish|_device))\s*(?:<[^;{}]*?>)?\s*\(")
 
 
 _COMMENTS = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
