@@ -2835,3 +2835,17 @@ now check h=1e-4 and 3e-4 with the SAME 1e-6 relative threshold, not a looser on
 Receipt implication: byte-identical generated headers say nothing about changed
 CPU expectations. Oracle gitlink changes must invalidate carries independently
 of header replay, for both CUDA and wrapper shards.
+
+### 7.z42 A completion waiter must never `pgrep -f` its own command line (2026-10-07, release lane)
+
+An `until ! pgrep -f "test.benchmarks.release.collect"; do sleep 60; done` loop waited two
+hours after the collection had finished: `pgrep -f` matches the full command line of every
+process, including the `bash -c '... pgrep -f "test.benchmarks.release.collect" ...'` shell
+running the loop itself. The pattern therefore always matched, and the waiter looked like a
+still-running job. Nothing was lost, but the quiet-window hours were.
+
+Rules: (1) wait on STATE, not on process names — poll the job's own state file, output
+directory or `gh run` status; (2) if a process check is unavoidable, anchor it on the real
+executable (`pgrep -f "^.*\.venv/bin/python -m test\.benchmarks"`) or use the PID recorded
+at launch (`kill -0 $PID`), never a bare substring; (3) a Monitor that reads a state file
+cannot self-match. Related: kill by PID only (the `pkill` bracket trick is unreliable).
