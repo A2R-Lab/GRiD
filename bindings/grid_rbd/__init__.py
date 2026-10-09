@@ -726,10 +726,15 @@ def warm_robot(
         else:
             # The op namespace must match the PUBLISHED dir name, not the
             # staging dir's — pass it explicitly.
+            # Per-unit object cache beside the store: units whose compile inputs
+            # are unchanged link from cached objects; force_rebuild recompiles
+            # every unit (and refreshes the cache).
             meta = compile_sources(
                 gen_dir, meta, code_options,
                 cuda_arch=cuda_arch, max_batch=max_batch_size,
-                torch_op_key="k" + content_key[:12])
+                torch_op_key="k" + content_key[:12],
+                object_cache_dir=cache_dir / "objects",
+                reuse_objects=not force_rebuild)
             write_build_inputs(gen_dir, identity)  # published with the entry
             if force_rebuild and entry_dir.exists():
                 _shutil.rmtree(entry_dir)

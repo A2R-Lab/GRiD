@@ -8027,12 +8027,12 @@ static std::vector<torch::Tensor> torch_momentum_cost(torch::Tensor q, torch::Te
     GRID_TORCH_ROW_MOMENTUM_COST(X)
 // [[unit: end]]
 // Per-family registration (multi-TU build): each family unit defines + impls ITS
-// rows through TORCH_LIBRARY_FRAGMENT / TORCH_LIBRARY_IMPL; the core unit only
-// defines the library (below the table). Same rows, same order as GRID_RBD_TORCH_OPS.
+// rows in grid_rbd_torch_def_<family> / grid_rbd_torch_impl_<family>; the core
+// unit's library (below) calls them. Same rows, same order as GRID_RBD_TORCH_OPS.
 // [[unit: integrator_gradient; surface: torch]]
 #define GRID_RBD_TORCH_OPS_INTEGRATOR_GRADIENT(X) \
     GRID_TORCH_ROW_INTEGRATOR_GRADIENT(X)
-GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+void grid_rbd_torch_def_integrator_gradient(torch::Library &m) {
 #define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
     GRID_RBD_TORCH_OPS_INTEGRATOR_GRADIENT(GRID_TORCH_X_DEF)
 #undef GRID_TORCH_X_DEF
@@ -8042,7 +8042,7 @@ GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
 #undef GRID_TORCH_X_DEF_MJX
 #endif  // GRID_RBD_WITH_MUJOCO
 }
-GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+void grid_rbd_torch_impl_integrator_gradient(torch::Library &m) {
 #define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
     GRID_RBD_TORCH_OPS_INTEGRATOR_GRADIENT(GRID_TORCH_X_IMPL)
 #undef GRID_TORCH_X_IMPL
@@ -8056,7 +8056,7 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
 // [[unit: integrator; surface: torch]]
 #define GRID_RBD_TORCH_OPS_INTEGRATOR(X) \
     GRID_TORCH_ROW_INTEGRATOR(X)
-GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+void grid_rbd_torch_def_integrator(torch::Library &m) {
 #define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
     GRID_RBD_TORCH_OPS_INTEGRATOR(GRID_TORCH_X_DEF)
 #undef GRID_TORCH_X_DEF
@@ -8066,7 +8066,7 @@ GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
 #undef GRID_TORCH_X_DEF_MJX
 #endif  // GRID_RBD_WITH_MUJOCO
 }
-GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+void grid_rbd_torch_impl_integrator(torch::Library &m) {
 #define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
     GRID_RBD_TORCH_OPS_INTEGRATOR(GRID_TORCH_X_IMPL)
 #undef GRID_TORCH_X_IMPL
@@ -8080,7 +8080,7 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
 // [[unit: plant_step_gradient; surface: torch]]
 #define GRID_RBD_TORCH_OPS_PLANT_STEP_GRADIENT(X) \
     GRID_TORCH_ROW_PLANT_STEP_GRADIENT(X)
-GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+void grid_rbd_torch_def_plant_step_gradient(torch::Library &m) {
 #define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
     GRID_RBD_TORCH_OPS_PLANT_STEP_GRADIENT(GRID_TORCH_X_DEF)
 #undef GRID_TORCH_X_DEF
@@ -8090,7 +8090,7 @@ GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
 #undef GRID_TORCH_X_DEF_MJX
 #endif  // GRID_RBD_WITH_MUJOCO
 }
-GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+void grid_rbd_torch_impl_plant_step_gradient(torch::Library &m) {
 #define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
     GRID_RBD_TORCH_OPS_PLANT_STEP_GRADIENT(GRID_TORCH_X_IMPL)
 #undef GRID_TORCH_X_IMPL
@@ -8104,7 +8104,7 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
 // [[unit: plant_step; surface: torch]]
 #define GRID_RBD_TORCH_OPS_PLANT_STEP(X) \
     GRID_TORCH_ROW_PLANT_STEP(X)
-GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+void grid_rbd_torch_def_plant_step(torch::Library &m) {
 #define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
     GRID_RBD_TORCH_OPS_PLANT_STEP(GRID_TORCH_X_DEF)
 #undef GRID_TORCH_X_DEF
@@ -8114,7 +8114,7 @@ GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
 #undef GRID_TORCH_X_DEF_MJX
 #endif  // GRID_RBD_WITH_MUJOCO
 }
-GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+void grid_rbd_torch_impl_plant_step(torch::Library &m) {
 #define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
     GRID_RBD_TORCH_OPS_PLANT_STEP(GRID_TORCH_X_IMPL)
 #undef GRID_TORCH_X_IMPL
@@ -8128,7 +8128,7 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
 // [[unit: fdsva_so; surface: torch]]
 #define GRID_RBD_TORCH_OPS_FDSVA_SO(X) \
     GRID_TORCH_ROW_FDSVA_SO(X)
-GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+void grid_rbd_torch_def_fdsva_so(torch::Library &m) {
 #define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
     GRID_RBD_TORCH_OPS_FDSVA_SO(GRID_TORCH_X_DEF)
 #undef GRID_TORCH_X_DEF
@@ -8138,7 +8138,7 @@ GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
 #undef GRID_TORCH_X_DEF_MJX
 #endif  // GRID_RBD_WITH_MUJOCO
 }
-GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+void grid_rbd_torch_impl_fdsva_so(torch::Library &m) {
 #define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
     GRID_RBD_TORCH_OPS_FDSVA_SO(GRID_TORCH_X_IMPL)
 #undef GRID_TORCH_X_IMPL
@@ -8152,7 +8152,7 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
 // [[unit: idsva_so; surface: torch]]
 #define GRID_RBD_TORCH_OPS_IDSVA_SO(X) \
     GRID_TORCH_ROW_IDSVA_SO(X)
-GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+void grid_rbd_torch_def_idsva_so(torch::Library &m) {
 #define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
     GRID_RBD_TORCH_OPS_IDSVA_SO(GRID_TORCH_X_DEF)
 #undef GRID_TORCH_X_DEF
@@ -8162,7 +8162,7 @@ GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
 #undef GRID_TORCH_X_DEF_MJX
 #endif  // GRID_RBD_WITH_MUJOCO
 }
-GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+void grid_rbd_torch_impl_idsva_so(torch::Library &m) {
 #define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
     GRID_RBD_TORCH_OPS_IDSVA_SO(GRID_TORCH_X_IMPL)
 #undef GRID_TORCH_X_IMPL
@@ -8184,7 +8184,7 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
     GRID_TORCH_ROW_NONLINEAR_EFFECTS(X) \
     GRID_TORCH_ROW_CORIOLIS_MATRIX(X) \
     GRID_TORCH_ROW_ENERGY(X)
-GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+void grid_rbd_torch_def_dyn_values(torch::Library &m) {
 #define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
     GRID_RBD_TORCH_OPS_DYN_VALUES(GRID_TORCH_X_DEF)
 #undef GRID_TORCH_X_DEF
@@ -8194,7 +8194,7 @@ GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
 #undef GRID_TORCH_X_DEF_MJX
 #endif  // GRID_RBD_WITH_MUJOCO
 }
-GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+void grid_rbd_torch_impl_dyn_values(torch::Library &m) {
 #define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
     GRID_RBD_TORCH_OPS_DYN_VALUES(GRID_TORCH_X_IMPL)
 #undef GRID_TORCH_X_IMPL
@@ -8209,7 +8209,7 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
 #define GRID_RBD_TORCH_OPS_DYN_GRADIENTS(X) \
     GRID_TORCH_ROW_INVERSE_DYNAMICS_GRADIENT(X) \
     GRID_TORCH_ROW_FORWARD_DYNAMICS_GRADIENT(X)
-GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+void grid_rbd_torch_def_dyn_gradients(torch::Library &m) {
 #define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
     GRID_RBD_TORCH_OPS_DYN_GRADIENTS(GRID_TORCH_X_DEF)
 #undef GRID_TORCH_X_DEF
@@ -8219,7 +8219,7 @@ GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
 #undef GRID_TORCH_X_DEF_MJX
 #endif  // GRID_RBD_WITH_MUJOCO
 }
-GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+void grid_rbd_torch_impl_dyn_gradients(torch::Library &m) {
 #define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
     GRID_RBD_TORCH_OPS_DYN_GRADIENTS(GRID_TORCH_X_IMPL)
 #undef GRID_TORCH_X_IMPL
@@ -8235,7 +8235,7 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
     GRID_TORCH_ROW_INVERSE_DYNAMICS_REGRESSOR(X) \
     GRID_TORCH_ROW_KINETIC_ENERGY_REGRESSOR(X) \
     GRID_TORCH_ROW_POTENTIAL_ENERGY_REGRESSOR(X)
-GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+void grid_rbd_torch_def_regressors(torch::Library &m) {
 #define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
     GRID_RBD_TORCH_OPS_REGRESSORS(GRID_TORCH_X_DEF)
 #undef GRID_TORCH_X_DEF
@@ -8248,7 +8248,7 @@ GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
 #undef GRID_TORCH_X_DEF_MJX
 #endif  // GRID_RBD_WITH_MUJOCO
 }
-GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+void grid_rbd_torch_impl_regressors(torch::Library &m) {
 #define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
     GRID_RBD_TORCH_OPS_REGRESSORS(GRID_TORCH_X_IMPL)
 #undef GRID_TORCH_X_IMPL
@@ -8272,7 +8272,7 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
     GRID_TORCH_ROW_OSC_INERTIA(X) \
     GRID_TORCH_ROW_END_EFFECTOR_POSE_RUNTIME(X) \
     GRID_TORCH_ROW_END_EFFECTOR_POSE_GRADIENT_RUNTIME(X)
-GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+void grid_rbd_torch_def_kinematics(torch::Library &m) {
 #define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
     GRID_RBD_TORCH_OPS_KINEMATICS(GRID_TORCH_X_DEF)
 #undef GRID_TORCH_X_DEF
@@ -8282,7 +8282,7 @@ GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
 #undef GRID_TORCH_X_DEF_MJX
 #endif  // GRID_RBD_WITH_MUJOCO
 }
-GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+void grid_rbd_torch_impl_kinematics(torch::Library &m) {
 #define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
     GRID_RBD_TORCH_OPS_KINEMATICS(GRID_TORCH_X_IMPL)
 #undef GRID_TORCH_X_IMPL
@@ -8299,7 +8299,7 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
     GRID_TORCH_ROW_CCRBA(X) \
     GRID_TORCH_ROW_CMM_TIME_VARIATION(X) \
     GRID_TORCH_ROW_DCCRBA(X)
-GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+void grid_rbd_torch_def_centroidal(torch::Library &m) {
 #define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
     GRID_RBD_TORCH_OPS_CENTROIDAL(GRID_TORCH_X_DEF)
 #undef GRID_TORCH_X_DEF
@@ -8309,7 +8309,7 @@ GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
 #undef GRID_TORCH_X_DEF_MJX
 #endif  // GRID_RBD_WITH_MUJOCO
 }
-GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+void grid_rbd_torch_impl_centroidal(torch::Library &m) {
 #define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
     GRID_RBD_TORCH_OPS_CENTROIDAL(GRID_TORCH_X_IMPL)
 #undef GRID_TORCH_X_IMPL
@@ -8326,7 +8326,7 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
     GRID_TORCH_ROW_EE_POS_COST(X) \
     GRID_TORCH_ROW_COM_COST(X) \
     GRID_TORCH_ROW_MOMENTUM_COST(X)
-GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
+void grid_rbd_torch_def_plant_costs(torch::Library &m) {
 #define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);
     GRID_RBD_TORCH_OPS_PLANT_COSTS(GRID_TORCH_X_DEF)
 #undef GRID_TORCH_X_DEF
@@ -8340,7 +8340,7 @@ GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {
 #undef GRID_TORCH_X_DEF_MJX
 #endif  // GRID_RBD_WITH_MUJOCO
 }
-GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+void grid_rbd_torch_impl_plant_costs(torch::Library &m) {
 #define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);
     GRID_RBD_TORCH_OPS_PLANT_COSTS(GRID_TORCH_X_IMPL)
 #undef GRID_TORCH_X_IMPL
@@ -8355,11 +8355,61 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
 #endif  // GRID_RBD_WITH_MUJOCO
 }
 // [[unit: end]]
+// The library itself (core unit — the ONLY text that names the op namespace
+// GRID_RBD_TORCH_LIB / -DGRID_RBD_TORCH_KEY; family objects are namespace-free
+// and reusable across store entries by the per-unit object cache).
+void grid_rbd_torch_def_integrator_gradient(torch::Library &m);
+void grid_rbd_torch_def_integrator(torch::Library &m);
+void grid_rbd_torch_def_plant_step_gradient(torch::Library &m);
+void grid_rbd_torch_def_plant_step(torch::Library &m);
+void grid_rbd_torch_def_fdsva_so(torch::Library &m);
+void grid_rbd_torch_def_idsva_so(torch::Library &m);
+void grid_rbd_torch_def_dyn_values(torch::Library &m);
+void grid_rbd_torch_def_dyn_gradients(torch::Library &m);
+void grid_rbd_torch_def_regressors(torch::Library &m);
+void grid_rbd_torch_def_kinematics(torch::Library &m);
+void grid_rbd_torch_def_centroidal(torch::Library &m);
+void grid_rbd_torch_def_plant_costs(torch::Library &m);
+void grid_rbd_torch_impl_integrator_gradient(torch::Library &m);
+void grid_rbd_torch_impl_integrator(torch::Library &m);
+void grid_rbd_torch_impl_plant_step_gradient(torch::Library &m);
+void grid_rbd_torch_impl_plant_step(torch::Library &m);
+void grid_rbd_torch_impl_fdsva_so(torch::Library &m);
+void grid_rbd_torch_impl_idsva_so(torch::Library &m);
+void grid_rbd_torch_impl_dyn_values(torch::Library &m);
+void grid_rbd_torch_impl_dyn_gradients(torch::Library &m);
+void grid_rbd_torch_impl_regressors(torch::Library &m);
+void grid_rbd_torch_impl_kinematics(torch::Library &m);
+void grid_rbd_torch_impl_centroidal(torch::Library &m);
+void grid_rbd_torch_impl_plant_costs(torch::Library &m);
+GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {
+    grid_rbd_torch_def_integrator_gradient(m);
+    grid_rbd_torch_def_integrator(m);
+    grid_rbd_torch_def_plant_step_gradient(m);
+    grid_rbd_torch_def_plant_step(m);
+    grid_rbd_torch_def_fdsva_so(m);
+    grid_rbd_torch_def_idsva_so(m);
+    grid_rbd_torch_def_dyn_values(m);
+    grid_rbd_torch_def_dyn_gradients(m);
+    grid_rbd_torch_def_regressors(m);
+    grid_rbd_torch_def_kinematics(m);
+    grid_rbd_torch_def_centroidal(m);
+    grid_rbd_torch_def_plant_costs(m);
+}
+GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+    grid_rbd_torch_impl_integrator_gradient(m);
+    grid_rbd_torch_impl_integrator(m);
+    grid_rbd_torch_impl_plant_step_gradient(m);
+    grid_rbd_torch_impl_plant_step(m);
+    grid_rbd_torch_impl_fdsva_so(m);
+    grid_rbd_torch_impl_idsva_so(m);
+    grid_rbd_torch_impl_dyn_values(m);
+    grid_rbd_torch_impl_dyn_gradients(m);
+    grid_rbd_torch_impl_regressors(m);
+    grid_rbd_torch_impl_kinematics(m);
+    grid_rbd_torch_impl_centroidal(m);
+    grid_rbd_torch_impl_plant_costs(m);
+}
 // ── END GENERATED TORCH OP TABLE ──
-
-// The library itself (exactly one TORCH_LIBRARY per op namespace); every op is
-// defined + implemented by its family's TORCH_LIBRARY_FRAGMENT / TORCH_LIBRARY_IMPL
-// in the generated table above (multi-TU build).
-GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) { (void)m; }
 
 #endif  // GRID_RBD_WITH_TORCH

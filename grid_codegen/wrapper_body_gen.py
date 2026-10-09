@@ -1205,17 +1205,22 @@ _TORCH_STRAGGLERS: dict[str, list[tuple[str, str, str | None]]] = {
 
 
 def _torch_family_registration(fam: str, rows: list[str]) -> str:
-    """One family's TORCH_LIBRARY_FRAGMENT (schemas) + TORCH_LIBRARY_IMPL (CUDA
-    impls) blocks, fenced into the family's unit so every `m.impl(name,
-    torch_x<false>)` address-take — which instantiates the kernel launch —
-    stays in the unit that owns the kernel. Mirrors the historical single
-    TORCH_LIBRARY/IMPL pair row for row (table rows, then the pin-only
-    stragglers, then the mjx twins)."""
+    """One family's op registration as two plain functions taking the library,
+    `grid_rbd_torch_def_<fam>(torch::Library&)` (schemas) and
+    `grid_rbd_torch_impl_<fam>(torch::Library&)` (CUDA impls), fenced into the
+    family's unit so every `m.impl(name, torch_x<false>)` address-take — which
+    instantiates the kernel launch — stays in the unit that owns the kernel.
+    The core's TORCH_LIBRARY / TORCH_LIBRARY_IMPL call them (gen_torch_ops_table):
+    the op NAMESPACE (-DGRID_RBD_TORCH_KEY, the store key) is therefore baked into
+    the core object only, and a family object depends on nothing but its sources
+    and flags — the per-unit object cache (M4) can share it across store entries.
+    Mirrors the historical single TORCH_LIBRARY/IMPL pair row for row (table
+    rows, then the pin-only stragglers, then the mjx twins)."""
     ops = f"GRID_RBD_TORCH_OPS_{fam.upper()}"
     L = [f"// [[unit: {fam}; surface: torch]]",
          f"#define {ops}(X) \\"]
     L.append(" \\\n".join(f"    GRID_TORCH_ROW_{r}(X)" for r in rows) if rows else "    /* no table rows */")
-    L += ["GRID_RBD_TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB, m) {",
+    L += [f"void grid_rbd_torch_def_{fam}(torch::Library &m) {{",
           "#define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);",
           f"    {ops}(GRID_TORCH_X_DEF)",
           "#undef GRID_TORCH_X_DEF"]
@@ -1229,7 +1234,7 @@ def _torch_family_registration(fam: str, rows: list[str]) -> str:
           "#undef GRID_TORCH_X_DEF_MJX",
           "#endif  // GRID_RBD_WITH_MUJOCO",
           "}",
-          "GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {",
+          f"void grid_rbd_torch_impl_{fam}(torch::Library &m) {{",
           "#define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);",
           f"    {ops}(GRID_TORCH_X_IMPL)",
           "#undef GRID_TORCH_X_IMPL"]
@@ -1248,6 +1253,23 @@ def _torch_family_registration(fam: str, rows: list[str]) -> str:
     return "\n".join(L) + "\n"
 
 
+def _torch_core_library(fams: list[str]) -> str:
+    """The core unit's library definition: exactly one TORCH_LIBRARY (schemas)
+    + TORCH_LIBRARY_IMPL (CUDA) per op namespace, each delegating to the
+    family functions above. Unfenced (core text) by construction."""
+    L = ["// The library itself (core unit — the ONLY text that names the op namespace",
+         "// GRID_RBD_TORCH_LIB / -DGRID_RBD_TORCH_KEY; family objects are namespace-free",
+         "// and reusable across store entries by the per-unit object cache)."]
+    L += [f"void grid_rbd_torch_def_{f}(torch::Library &m);" for f in fams]
+    L += [f"void grid_rbd_torch_impl_{f}(torch::Library &m);" for f in fams]
+    L.append("GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {")
+    L += [f"    grid_rbd_torch_def_{f}(m);" for f in fams]
+    L += ["}", "GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {"]
+    L += [f"    grid_rbd_torch_impl_{f}(m);" for f in fams]
+    L.append("}")
+    return "\n".join(L) + "\n"
+
+
 def gen_torch_ops_table() -> str:
     from .abi_specs import FAMILIES, FAMILY_OF
     parts = [TORCH_OPS_BEGIN + "\n",
@@ -1261,14 +1283,15 @@ def gen_torch_ops_table() -> str:
         for k in TORCH_TABLE_ORDER))
     parts.append("\n// [[unit: end]]\n")
     parts.append("// Per-family registration (multi-TU build): each family unit defines + impls ITS\n"
-                 "// rows through TORCH_LIBRARY_FRAGMENT / TORCH_LIBRARY_IMPL; the core unit only\n"
-                 "// defines the library (below the table). Same rows, same order as GRID_RBD_TORCH_OPS.\n")
+                 "// rows in grid_rbd_torch_def_<family> / grid_rbd_torch_impl_<family>; the core\n"
+                 "// unit's library (below) calls them. Same rows, same order as GRID_RBD_TORCH_OPS.\n")
     rows_by_family: dict[str, list[str]] = {f: [] for f in FAMILIES}
     for k in TORCH_TABLE_ORDER:
         rows_by_family[FAMILY_OF[k]].append(_torch_table_name(k).upper())
-    for fam in FAMILIES:
-        if rows_by_family[fam] or fam in _TORCH_STRAGGLERS:
-            parts.append(_torch_family_registration(fam, rows_by_family[fam]))
+    fams = [f for f in FAMILIES if rows_by_family[f] or f in _TORCH_STRAGGLERS]
+    for fam in fams:
+        parts.append(_torch_family_registration(fam, rows_by_family[fam]))
+    parts.append(_torch_core_library(fams))
     parts.append(TORCH_OPS_END + "\n")
     return "".join(parts)
 

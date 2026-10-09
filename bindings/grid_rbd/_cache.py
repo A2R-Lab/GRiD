@@ -5,6 +5,10 @@ Layout:
     ~/.cache/grid-rbd/
     ├── manifest.json              # name -> content-key registry
     ├── bykey/                     # keymap: stage-1 input-key -> stage-2 content-key
+    ├── objects/                   # per-unit object cache: <unit>-<content key of that
+    │                              #   unit's compile inputs>.o (multi-TU build, 2026-10-09;
+    │                              #   _compile._unit_object_key); an unchanged unit links
+    │                              #   from here with no nvcc. No GC yet (like store/).
     └── store/
         ├── <content_key>/
         │   ├── grid.cuh           # generated header

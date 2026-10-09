@@ -233,3 +233,14 @@ exception naming the failed operation; the generated initializers never
 library-safe `*_checked` path — see the *Library-safe initialization* page). On a
 successful build the `build.log` path is reported too (not just on failure), so
 you can inspect nvcc/ptxas output for warnings.
+
+The build itself is multi-unit: the wrapper is split into a core unit plus one
+unit per algorithm family, compiled with `nvcc -c` in parallel and host-linked
+into `robot.so` (wall time ≈ the slowest family, not the sum; a humanoid unit
+peaks at ~2.5 GB). `GRID_RBD_BUILD_JOBS=N` caps the parallel units (default
+`min(8, cores, MemAvailable / 3 GB)`; `1` = sequential, still a smaller peak
+than the old single unit). Per-unit objects are cached under
+`<cache_dir>/objects/` keyed by their exact compile inputs, so a later build
+whose `grid.cuh` is unchanged recompiles only the units whose text changed;
+`force_rebuild=True` recompiles every unit. The per-unit `rc`/seconds/cache
+hits are in `robot.build.log`.

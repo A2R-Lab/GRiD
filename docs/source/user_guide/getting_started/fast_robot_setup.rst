@@ -158,13 +158,29 @@ the cache key and is recorded in ``meta.json`` as ``launch_config_gpu``.
 What to expect: cold vs. warm
 -----------------------------
 
-Measured 2026-09-24 on an RTX 5090 / 24-core host, ``max_batch_size=1024``,
-one build per process (``/usr/bin/time -v`` wall and peak RSS). A cold build is
-the Python code generation (about a second, even for g1) plus ONE ``nvcc``
-translation unit, so a cold build is essentially all ``nvcc``; "generation-only"
-is what a codegen edit with byte-identical output costs (the content key re-hits
-the compiled ``.so``, no ``nvcc``); a warm start is a fresh process calling
-``get_robot`` and one ``forward_dynamics``.
+**Multi-unit build (2026-10-09).** The per-robot ``.so`` is no longer one
+``nvcc`` translation unit: the wrapper is split into a core unit plus one unit
+per algorithm family (integrator gradients, plant step gradients, the
+second-order kernels, ...), compiled in parallel and host-linked. Wall time is
+bounded by the slowest family instead of the sum, and peak RAM by the number of
+parallel units (about 2.5 GB each on a humanoid) instead of one giant unit. On
+the host below that turns the iiwa14 build into about 100 s and go2-floating
+into about 160 s with 8 parallel units; g1 pin-only was 48 min as one unit and
+under 10 min in the split prototype (the dated table will be re-measured on the
+release path). ``GRID_RBD_BUILD_JOBS=N`` caps the parallel units (default:
+``min(8, cores, available RAM / 3 GB)``; ``1`` is sequential and still peaks
+lower than the old single unit). Objects are kept in a per-unit cache
+(``~/.cache/grid-rbd/objects/``), so a wrapper change rebuilds only the units
+whose text changed.
+
+The table below is the **single-unit baseline** it replaces — measured
+2026-09-24 on an RTX 5090 / 24-core host, ``max_batch_size=1024``, one build per
+process (``/usr/bin/time -v`` wall and peak RSS). A cold build is the Python
+code generation (about a second, even for g1) plus ``nvcc``, so a cold build is
+essentially all ``nvcc``; "generation-only" is what a codegen edit with
+byte-identical output costs (the content key re-hits the compiled ``.so``, no
+``nvcc``); a warm start is a fresh process calling ``get_robot`` and one
+``forward_dynamics``.
 
 .. list-table::
    :header-rows: 1

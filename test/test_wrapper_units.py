@@ -71,14 +71,27 @@ def test_core_unit_references_no_kernel():
     """The structural guarantee of the split: the core unit launches nothing,
     address-takes no kernel (registration, ceiling, torch impl table) and
     binds no JAX handler — every such reference lives in a family unit."""
-    core = _units.split(TEMPLATE.read_text())["core"]
-    for needle in ("<<<", "init_grid_kernel_attr_", "GRID_KERNEL_CEIL(", "m.impl(",
-                   "XLA_FFI_DEFINE_HANDLER_SYMBOL(", "TORCH_LIBRARY_FRAGMENT(GRID_RBD_TORCH_LIB",
-                   "TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB"):
+    units = _units.split(TEMPLATE.read_text())
+    core = units["core"]
+    for needle in ("<<<", "init_grid_kernel_attr_", "GRID_KERNEL_CEIL(", "m.impl(", "m.def(",
+                   "XLA_FFI_DEFINE_HANDLER_SYMBOL(", "TORCH_LIBRARY_FRAGMENT("):
         assert needle not in core, f"core unit still contains {needle!r}"
     import re
     assert not re.search(r"grid::[a-z_0-9]+_kernel<", core), "core unit instantiates a kernel"
+    assert not re.search(r"torch_[a-z_0-9]+<(true|false)>", core), "core unit instantiates a torch impl"
+    # The op library (namespace) lives in core and ONLY in core: family objects
+    # never see -DGRID_RBD_TORCH_KEY, so the per-unit object cache can share them.
     assert "GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m)" in core
+    assert "GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m)" in core
+    for fam, text in units.items():
+        if fam == "core":
+            continue
+        for needle in ("GRID_RBD_TORCH_LIB", "GRID_RBD_TORCH_KEY", "TORCH_LIBRARY"):
+            assert needle not in text, f"family unit {fam} names the torch namespace ({needle})"
+    # every family that registers torch ops is called from the core library, def and impl
+    for fam in units:
+        if fam != "core" and f"void grid_rbd_torch_def_{fam}(torch::Library &m) {{" in units[fam]:
+            assert f"    grid_rbd_torch_def_{fam}(m);" in core and f"    grid_rbd_torch_impl_{fam}(m);" in core
 
 
 def test_every_family_unit_is_self_describing():

@@ -474,8 +474,11 @@ static inline int grid_kernel_ceiling(const void* fp) {
         default: ERR_STMT;                                                                      \
     }
 
-// ─── torch op-library naming (used by the core library definition and every family fragment) ───
-// The op library name is keyed by the cache_key so two robots don't collide.
+// ─── torch op-library naming (used by the CORE unit's library definition only) ───
+// The op library name is keyed by the cache_key so two robots don't collide. Only
+// the core unit is compiled with -DGRID_RBD_TORCH_KEY (family units register their
+// ops through grid_rbd_torch_def_<family>/impl_<family>(torch::Library&), which
+// never name the namespace), so family objects are store-entry independent.
 #ifndef GRID_RBD_TORCH_KEY
 #define GRID_RBD_TORCH_KEY default
 #endif
@@ -490,7 +493,6 @@ static inline int grid_kernel_ceiling(const void* fp) {
 // namespace mismatch that hides every op. The wrapper forces expansion for both.
 #define GRID_RBD_TORCH_LIBRARY(ns, m) TORCH_LIBRARY(ns, m)
 #define GRID_RBD_TORCH_LIBRARY_IMPL(ns, k, m) TORCH_LIBRARY_IMPL(ns, k, m)
-#define GRID_RBD_TORCH_LIBRARY_FRAGMENT(ns, m) TORCH_LIBRARY_FRAGMENT(ns, m)
 
 // ─── torch surface includes + dtype macros (core defines the op library; family units implement ops) ───
 #if defined(GRID_RBD_WITH_TORCH)
