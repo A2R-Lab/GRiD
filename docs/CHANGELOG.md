@@ -1,9 +1,63 @@
 # Changelog
 
-GRiD has never been published; this changelog tracks notable in-tree
-changes since the GLASS rollout for our own historical reference.
+This changelog tracks notable in-tree changes since the GLASS rollout; the
+dated entries under "Unreleased — v2.0" are the running engineering log, and the
+release sections above it summarize what each PyPI release of `grid-rbd` ships.
+
+## 0.5.1 — faster per-robot builds + receipt infrastructure (2026-10)
+
+Second packaged release (first: 0.5.0, 2026-10-08). User-visible:
+
+- **Per-robot `robot.so` builds are 4–8x faster** (multi-unit build, per-unit
+  object cache kept forever, `GRID_RBD_BUILD_JOBS`): iiwa14 ~100 s (was 10 min),
+  go2-floating ~2 min (was 13), g1 pin-only ~6 min (was 48). A wrapper-only change
+  rebuilds only the touched units. See the 2026-10-09 entry and Fast Robot Setup.
+- **Compile-on-first-use:** `get_robot(name, urdf_path=...)` compiles and
+  registers on a miss with a one-line WARNING estimating the build; `GRID_RBD_QUIET=1`
+  silences it.
+- **Cache maintenance:** `python -m grid_rbd.gc_cache` (dry run; `--execute`).
+- **Opt-in** `GRID_RBD_SPLIT_COMPILE=N` (nvcc `--split-compile` on the heavy unit),
+  content-keyed; off by default.
+- `algorithm_list` closure fixes (`forward_dynamics_parameter_gradient` needs
+  `forward_dynamics`; the integrator gradients need `integrator`).
+- Reproducible sdist/wheel builds in CI (`SOURCE_DATE_EPOCH`).
+- Maintainer-side: CUDA test runners register only the kernels they launch, the
+  receipt scheduler measures process-tree RAM, two GPU shards run side by side
+  (2026-10-10 entry) — receipts are hours faster.
 
 ## Unreleased — v2.0 — cuBLASDx removal + resource-tier system
+
+### 2026-10-10 — receipt infrastructure (compile-time arc, part 2)
+- **CUDA test runners register only what they launch.** The flagship
+  `cuda_equivalence_runner.cu` and the second-order, integrator, plant and
+  centroidal smoke runners call `init_grid_streams` + the generated per-algorithm
+  `init_grid_kernel_attr_<algo>_checked` twins for their RUN tokens instead of
+  `init_grid<T>()` (whose aggregate registration address-took — i.e. compiled —
+  every kernel in the header, bench-only `_single_timing` twins included; a mimic
+  robot's cells share one full header, so each cell compiled the whole robot).
+  Measured uncontended: h1_2 fixed second-order cell 3021 s / 15 GB → 81 s / 2.1 GB;
+  g1 floating integrator (SHARED tier) 2253 s → 635 s. CPU referee:
+  `test/test_runner_registration.py`. Runner executables re-key (source changed);
+  generated headers are untouched, so header caches still hit.
+- **Compile scheduler measures the process tree.** `test/compile_sched.py` samples
+  the summed RSS of every process in a worker's session (0.5 s) instead of trusting
+  `/usr/bin/time -v`'s ru_maxrss, which reports only the largest single child and
+  under-predicted a 4–8-unit bindings build ~4x. Ledger schema 2
+  (`{"schema": 2, "jobs": {key: {peak_kb, secs}}}`); a legacy flat file is dropped,
+  not trusted. Unmeasured default 8 GB.
+- **Heavy jobs first.** Within one consumer shard the pool launches the job with
+  the longest recorded wall time first (the overnight tail was a 4.5 h h1_2 job
+  started late).
+- **Two GPU shards side by side** in the receipt launcher (`GRID_SPLIT_SHARD_JOBS=2`;
+  pilot 2026-10-01 clean at ~800 MiB VRAM per shard, 38 GiB+ host RAM headroom
+  measured overnight).
+- **Split driver soundness:** never carry from a merged receipt recorded with a
+  dirty tree (`gpu-proof merge --carry-from` takes `/repo/dirty` from fresh shards
+  only, which would launder it); `--resume` re-runs shards whose per-shard receipt
+  recorded `repo.dirty`; the repo root is on `sys.path` at import so the no-op
+  resume path no longer dies on the stdlib `test` package.
+- **Reproducible release artifacts:** CI builds under `SOURCE_DATE_EPOCH` (commit
+  time) and repacks the sdist deterministically (wheel was already byte-identical).
 
 ### 2026-10-09 — multi-unit robot.so build (compile-time arc)
 - **Bindings build is multi-TU.** `wrapper_template.cu` stays one fenced file

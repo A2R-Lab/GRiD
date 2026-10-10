@@ -9,7 +9,7 @@
 project = 'GRiD'
 copyright = '2026, A²R Lab'
 author = 'Kwamena Awotwi, Zachary Pestrikov, Danelle Tuchman, Abhinav Sharma, Brian Plancher'
-release = '0.5.0'
+release = '0.5.1'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
