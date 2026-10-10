@@ -739,3 +739,63 @@ def test_fingerprint_follows_named_runners_and_local_helpers():
     # A module that uses neither keeps its narrow fingerprint.
     narrow = R._shard_fingerprint_paths({"test_cuda_kinematics_thread_invariance"})
     assert "test/cuda_equivalents/executable_cache.py" not in narrow
+
+
+def test_resume_prunes_dirty_recorded_clean_rows(tmp_path):
+    """2026-10-10: a clean resume row whose per-shard receipt recorded
+    repo.dirty re-runs (the merge would fold the dirty flag into the merged
+    receipt and the release verify would refuse it); a same-sha clean-tree
+    row is kept."""
+    import subprocess as _sp
+    head = _sp.run(["git", "rev-parse", "HEAD"], cwd=rss.REPO_ROOT,
+                   capture_output=True, text=True, check=True).stdout.strip()
+    (tmp_path / "receipts").mkdir()
+    rows = [{"shard": "s_clean", "kind": "OK"}, {"shard": "s_dirty", "kind": "OK"}]
+    (tmp_path / "results.json").write_text(json.dumps(rows))
+    (tmp_path / "receipts" / "s_clean.json").write_text(
+        json.dumps({"repo": {"commit_sha": head, "dirty": False}}))
+    (tmp_path / "receipts" / "s_dirty.json").write_text(
+        json.dumps({"repo": {"commit_sha": head, "dirty": True}}))
+    kept = rss.load_prior_results(tmp_path, {"s_clean", "s_dirty"})
+    assert {r["shard"] for r in kept} == {"s_clean"}
+
+
+def test_plan_refresh_dirty_old_receipt_carries_nothing(monkeypatch):
+    """2026-10-10: `gpu-proof merge --carry-from` takes /repo/dirty from the
+    FRESH shards only, so carrying from a receipt recorded with a dirty tree
+    would launder it. Fingerprint-identical shards are still ALL stale."""
+    import codegen_neutrality
+    monkeypatch.setattr(codegen_neutrality, "cuda_carry_soundness",
+                        lambda r: (True, "stubbed neutral"))
+    _W = ["test/python_wrappers/test_w.py", "bindings/grid_rbd", "bindings/src"]
+    ids = [_fid("iiwa14", "fixed", "crba", t) for t in (1, 32)]
+    shards = [_mk_shard("cuda_00_x", ids, ["a.py"], "d1"),
+              _mk_shard("test_w", ["test/python_wrappers/test_w.py::t"], _W, "w")]
+    now = {("a.py",): "d1", tuple(_W): "w"}
+    fn = lambda paths: now[tuple(paths)]
+    clean = {"repo": {"commit_sha": "abc", "dirty": False}, "shards": shards}
+    stale, carried, wrap_run, cuda_fresh = rss.plan_refresh(
+        clean, ids, ["test_w"], {}, 7200.0, fn)
+    assert set(carried) == {"cuda_00_x", "test_w"} and not stale
+    dirty = {"repo": {"commit_sha": "abc", "dirty": True}, "shards": shards}
+    stale, carried, wrap_run, cuda_fresh = rss.plan_refresh(
+        dirty, ids, ["test_w"], {}, 7200.0, fn)
+    assert not carried
+    assert set(stale) == {"cuda_00_x", "test_w"}
+    assert wrap_run == ["test_w"]
+    assert {s.name for s in cuda_fresh} == {"cuda_00_x"}
+    assert sorted(i for s in cuda_fresh for i in s.targets) == sorted(ids)
+
+
+def test_driver_import_puts_repo_root_ahead_of_stdlib_test_package(tmp_path):
+    """2026-10-10: the no-op --resume crashed with ModuleNotFoundError on
+    `test.receipt_integrity` (the stdlib `test` package shadowed the repo's)
+    because the sys.path insert lived only in the shard/prewarm helpers.
+    Importing the driver from an unrelated cwd must be enough."""
+    import subprocess as _sp
+    code = ("import sys; sys.path.insert(0, %r); import run_split_suite; "
+            "from test.receipt_integrity import verify_header_keys; print('ok')"
+            % str(rss.REPO_ROOT / "test"))
+    r = _sp.run([sys.executable, "-c", code], cwd=tmp_path,
+                capture_output=True, text=True)
+    assert r.returncode == 0 and r.stdout.strip() == "ok", r.stderr
