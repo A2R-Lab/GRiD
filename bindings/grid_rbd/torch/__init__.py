@@ -1334,11 +1334,15 @@ def _install_torch_device_pool(base):
 
 
 def get_robot(name: str, cache_dir: str | Path | None = None, *,
-              output_convention: str = "pinocchio") -> TorchRobotHandle:
+              output_convention: str = "pinocchio",
+              urdf_path: str | None = None, **register_opts) -> TorchRobotHandle:
     """Look up a previously-registered robot (same cache as grid_rbd.get_robot).
     ``output_convention`` ('pinocchio' or 'mujoco') mirrors register_robot and
     can also be set later via the handle's ``output_convention`` property."""
     _require_torch()  # fail early with install guidance if torch is missing
+    if register_opts and urdf_path is None:
+        raise TypeError(f"get_robot() got register options {sorted(register_opts)} without urdf_path")
+    _grid_rbd._register_on_miss(name, cache_dir, urdf_path, register_opts)   # just-in-time compile on a miss
     base = _grid_rbd.get_robot(name, cache_dir=cache_dir, _profile_overlay="torch")  # E6
     _install_torch_device_pool(base)
     cache_key, so_path = _lookup(name, cache_dir)

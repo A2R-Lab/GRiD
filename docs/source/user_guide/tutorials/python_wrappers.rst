@@ -290,6 +290,25 @@ a desktop) safely keeps separate ``.so`` files per machine.
 Override the cache root with ``$GRID_RBD_CACHE_DIR`` or
 ``cache_dir=...`` on ``register_robot``.
 
+**Garbage collection.** The store is content-addressed and never overwrites:
+re-registering a name after a codegen, bindings or toolchain change binds it
+to a new entry and leaves the old one behind, so a dev box accumulates entries
+no name points to. ``python -m grid_rbd.gc_cache`` (or ``grid_rbd.gc_cache()``)
+reports them — store entries no manifest name binds, dangling ``bykey``
+pointers, dead staging dirs — and ``--execute`` deletes them. Nothing a name
+still binds is touched, and the per-unit objects are kept unless you pass
+``--objects-days N``.
+
+**Compile on first use.** A first call pays the one-time build and says so: a
+one-line notice on stderr (a ``WARNING`` on the ``grid_rbd`` logger, so it
+shows with no logging setup) names the robot, the unit count and cores, the
+rough expectation (a minute or two for an arm or quadruped, about ten for a
+humanoid) and the cache location; a second line reports the elapsed time.
+``GRID_RBD_QUIET=1`` silences both. ``get_robot(name, urdf_path=...)`` makes
+a *miss* compile and register that URDF under ``name`` (``floating_base=`` and
+the other ``register_robot`` options are forwarded); a hit ignores the URDF.
+A name alone is never enough to build from — the URDF bytes are the identity.
+
 Dimensions, layouts and differentiability
 -----------------------------------------
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import time
 import warnings
 from pathlib import Path
 from typing import Any, Iterable
@@ -82,7 +83,9 @@ class RobotNotRegisteredError(KeyError):
     def __init__(self, name: str):
         super().__init__(
             f"No robot registered under name {name!r}. Call "
-            f"grid_rbd.register_robot(name={name!r}, urdf_path=...) first."
+            f"grid_rbd.register_robot(name={name!r}, urdf_path=...) first, or "
+            f"grid_rbd.get_robot({name!r}, urdf_path=...) to compile it on this miss, or "
+            f"grid_rbd.load_robot(urdf_path) for a no-name, compile-on-first-use handle."
         )
         self.name = name
 
@@ -455,6 +458,30 @@ def register_robot(
     return handle
 
 
+def _notice(msg: str) -> None:
+    """The one-time-build notice. WARNING so Python's last-resort handler prints
+    it to stderr when the host app configured no logging — first-run latency
+    must never look like a hang. GRID_RBD_QUIET=1 (or a handler on the
+    'grid_rbd' logger that filters WARNING) silences it."""
+    if os.environ.get("GRID_RBD_QUIET", "") not in ("", "0"):
+        return
+    _log.warning(msg)
+
+
+def _build_notice_start(name: str, meta: dict, gen_dir: Path, cache_dir: Path) -> None:
+    from ._compile import _build_jobs
+    nv = int(meta.get("num_vel", meta.get("NUM_VEL", 0)) or 0)
+    units = len(list(gen_dir.glob("wrapper_*.cu")))
+    size = "about 10 min for a humanoid" if nv >= 20 else "typically 1–3 min for an arm or quadruped"
+    _notice(f"grid_rbd: compiling the dynamics of {name!r} ({nv} velocity DOF) — a one-time nvcc build "
+            f"of {units} units on up to {_build_jobs()} cores, {size}; the result is cached under "
+            f"{cache_dir} for every later run (progress: robot.build.log in the cache entry).")
+
+
+def _build_notice_end(name: str, secs: float, cache_dir: Path) -> None:
+    _notice(f"grid_rbd: built {name!r} in {secs:.0f} s — cached under {cache_dir}; later loads take about a second.")
+
+
 def _sweep_dead_staging_dirs(store: Path) -> int:
     """Remove `.gen_<pid>_<key>` staging dirs whose owning process is gone.
     The builder deletes its own staging dir in a `finally`, but a killed
@@ -729,12 +756,15 @@ def warm_robot(
             # Per-unit object cache beside the store: units whose compile inputs
             # are unchanged link from cached objects; force_rebuild recompiles
             # every unit (and refreshes the cache).
+            _build_notice_start(name, meta, gen_dir, cache_dir)
+            t_build = time.monotonic()
             meta = compile_sources(
                 gen_dir, meta, code_options,
                 cuda_arch=cuda_arch, max_batch=max_batch_size,
                 torch_op_key="k" + content_key[:12],
                 object_cache_dir=cache_dir / "objects",
                 reuse_objects=not force_rebuild)
+            _build_notice_end(name, time.monotonic() - t_build, cache_dir)
             write_build_inputs(gen_dir, identity)  # published with the entry
             if force_rebuild and entry_dir.exists():
                 _shutil.rmtree(entry_dir)
@@ -752,13 +782,29 @@ def warm_robot(
     return content_key, so_path, meta
 
 
+def _register_on_miss(name: str, cache_dir, urdf_path: str | None, register_opts: dict) -> None:
+    """get_robot's just-in-time path: a miss with a URDF registers it (the
+    build notice tells the user what is happening); a hit is untouched."""
+    if urdf_path is None:
+        return
+    cd = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
+    if manifest_lookup(cd, name) is None:
+        register_robot(name, urdf_path, cache_dir=cache_dir, **register_opts)
+
+
 def get_robot(name: str, cache_dir: str | Path | None = None, *,
               backend: str = "numpy",
               output_convention: str = "pinocchio",
-              _profile_overlay: str | None = "pybind") -> RobotHandle:
+              urdf_path: str | None = None,
+              _profile_overlay: str | None = "pybind",
+              **register_opts: Any) -> RobotHandle:
     """Look up a previously-registered robot by name.
 
-    Raises RobotNotRegisteredError if `name` isn't in the manifest.
+    Raises RobotNotRegisteredError if `name` isn't in the manifest — unless
+    ``urdf_path`` is given: then a miss compiles and registers that URDF under
+    ``name`` (just-in-time; ``**register_opts`` such as ``floating_base=True``
+    are forwarded to :py:func:`register_robot`) and a hit ignores it. A name
+    alone is never enough to build from: the URDF bytes are the identity.
     ``backend`` ('numpy' / 'jax' / 'torch') mirrors :py:func:`register_robot`:
     it returns the matching backend handle for the same cached ``.so`` (the
     cache is shared across backends). Default 'numpy' keeps the historical
@@ -771,10 +817,15 @@ def get_robot(name: str, cache_dir: str | Path | None = None, *,
         raise ValueError(f"backend must be 'numpy', 'jax', or 'torch'; got {backend!r}")
     if backend == "jax":
         from . import jax as _jax_backend
-        return _jax_backend.get_robot(name, cache_dir, output_convention=output_convention)
+        return _jax_backend.get_robot(name, cache_dir, output_convention=output_convention,
+                                      urdf_path=urdf_path, **register_opts)
     if backend == "torch":
         from . import torch as _torch_backend
-        return _torch_backend.get_robot(name, cache_dir, output_convention=output_convention)
+        return _torch_backend.get_robot(name, cache_dir, output_convention=output_convention,
+                                        urdf_path=urdf_path, **register_opts)
+    if register_opts and urdf_path is None:
+        raise TypeError(f"get_robot() got register options {sorted(register_opts)} without urdf_path")
+    _register_on_miss(name, cache_dir, urdf_path, register_opts)
     cache_dir = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
     entry = manifest_lookup(cache_dir, name)
     if entry is None:
@@ -990,7 +1041,10 @@ def load_robot(
     )
 
 
+from .gc_cache import gc_cache  # noqa: E402  (store GC; python -m grid_rbd.gc_cache)
+
 __all__ = [
+    "gc_cache",
     "RobotHandle",
     "SecondOrderID",
     "SecondOrderFD",

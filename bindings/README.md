@@ -234,6 +234,16 @@ library-safe `*_checked` path — see the *Library-safe initialization* page). O
 successful build the `build.log` path is reported too (not just on failure), so
 you can inspect nvcc/ptxas output for warnings.
 
+A first use announces itself: a one-line `WARNING` on the `grid_rbd` logger
+(printed to stderr with no logging setup) says which robot is being compiled,
+how many units on how many cores, roughly how long (1–3 min for an arm or
+quadruped, ~10 min for a humanoid) and where it is cached; a second line reports
+the elapsed time. `GRID_RBD_QUIET=1` silences it. `get_robot(name, urdf_path=...)`
+compiles and registers on a *miss* (a hit ignores the URDF), so a script can be
+written as "get or build". `python -m grid_rbd.gc_cache` reports store entries
+no name binds any more (plus dangling pointers and dead staging dirs); `--execute`
+deletes them; per-unit objects are kept unless `--objects-days N`.
+
 The build itself is multi-unit: the wrapper is split into a core unit plus one
 unit per algorithm family, compiled with `nvcc -c` in parallel and host-linked
 into `robot.so` (wall time ≈ the slowest family, not the sum; a humanoid unit

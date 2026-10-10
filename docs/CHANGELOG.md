@@ -33,6 +33,16 @@ changes since the GLASS rollout for our own historical reference.
   family objects are shared across store entries. `force_rebuild` recompiles
   every unit. Objects are kept forever like `store/` entries;
   `GRID_RBD_OBJECT_CACHE_DAYS=N` opts in to age-pruning.
+- **Cache GC** (2026-10-10): `python -m grid_rbd.gc_cache` / `grid_rbd.gc_cache()`
+  removes store entries no manifest name binds, dangling `bykey` pointers and
+  dead staging dirs; dry run by default, `--execute` deletes; objects kept
+  unless `--objects-days N`.
+- **Compile-on-first-use notice** (2026-10-10): a one-time build logs a
+  `WARNING` (visible with no logging setup) with robot, unit/core counts, a
+  rough duration and the cache dir, then the elapsed time; `GRID_RBD_QUIET=1`
+  silences. `get_robot(name, urdf_path=..., **register_opts)` (numpy/jax/torch)
+  compiles and registers on a miss; the miss error now names all three ways
+  out (`register_robot`, `get_robot(..., urdf_path=)`, `load_robot`).
 - `algorithm_list` closure fixes found by the arc: `forward_dynamics_parameter_gradient`
   needs `forward_dynamics`; `integrator_gradient` / `integrator_with_gradient`
   need `integrator` (the closure test now also matches `_finish` / `_device`
