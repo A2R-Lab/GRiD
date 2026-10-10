@@ -2861,9 +2861,12 @@ unit + 13 family units (SSOT: `docs/open-tasks/multi_tu_arc_2026-10-09.md`; desi
    and overloads nothing launches). Any TU that calls it instantiates the whole robot. The
    bindings got **3x** (iiwa14 618 → 203 s) from registering per algorithm through the checked
    twins (`init_grid_kernel_attr_<algo>_checked`) and dropping the twins, before any TU split.
-   The CUDA equivalence runner still calls `grid::init_grid<T>()` → the aggregate → every cell
-   of a mimic robot (shared full header) compiles the entire robot (h1_2 second-order prewarm:
-   50 min, 15 GB). Rule: a TU registers only what it launches.
+   The CUDA test runners used to call `grid::init_grid<T>()` → the aggregate → every cell
+   of a mimic robot (shared full header) compiled the entire robot (h1_2 second-order prewarm:
+   50 min, 15 GB). Fixed 2026-10-10 (`init_grid_streams` + per-RUN-token checked twins;
+   referee `test/test_runner_registration.py`): that cell is now 81 s / 2.1 GB, the g1
+   floating integrator SHARED cell 2253 s → 635 s. Rule: a TU registers only what it
+   launches — a NEW runner must never call `init_grid<T>()`.
 2. **cicc is single-threaded per TU; ptxas is superlinear in kernel size.** One giant TU
    (full g1: 48 min, 8 GB) is bounded by the slowest kernel chain; N units in parallel are
    bounded by the slowest UNIT (g1: `integrator_gradient` 362 s). Partition by measured unit
@@ -2923,9 +2926,14 @@ unit + 13 family units (SSOT: `docs/open-tasks/multi_tu_arc_2026-10-09.md`; desi
   tracked) or in a worktree, and `git status --porcelain` must stay empty until the launcher
   prints "Recording complete".
 - Fingerprints: a codegen or bindings edit stales ALL 42 shards; a change to grid.cuh bytes
-  (even additive) also misses every CUDA equivalence header cache — 160 prewarms, ~4.5 h once;
-  the next run hits them again. Budget a receipt as: wrappers ~1.7 h + CUDA prewarm (0 or 4.5 h)
-  + CUDA shard tests ~4 h.
+  (even additive) also misses every CUDA equivalence header cache — 160 prewarms, ~4.5 h once
+  BEFORE the runners registered per algorithm (2026-10-10; the h1_2 flagship job alone was 4.5 h,
+  now each cell compiles only its own kernels); a runner-source edit re-keys only the executables.
+  The pool now launches each consumer's heaviest job first and sizes admissions from sampled
+  process-tree peaks (ledger schema 2 — a legacy ru_maxrss ledger is dropped on load, so the
+  first run after the upgrade predicts the 8 GB default everywhere). Two GPU shards run side by
+  side (`GRID_SPLIT_SHARD_JOBS=2` in the launcher). Re-budget from the first receipt under
+  this configuration (the 2026-10-1x release run) rather than from the numbers above.
 - Watch the driver's `[hh:mm:ss] <shard>: OK|FAIL` lines; `[pool] +/- prewarm_*` lines show the
   compile pool; a long silence with `cicc`/`ptxas` at 100 % CPU is a big header compiling, not a
   stall (the h1_2 second-order runner: 50 min).

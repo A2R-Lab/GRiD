@@ -55,7 +55,15 @@ int run(const int req_threads) {
     const int _nthreads = _req_threads < grid::MAX_PERF_LEVEL_THREADS ? _req_threads : grid::MAX_PERF_LEVEL_THREADS;
     const dim3 thread_dimms(_nthreads, 1, 1);
 
-    cudaStream_t *streams = grid::init_grid<T>();
+    // R1 (2026-10-10): streams + the two kernels this runner launches, not the
+    // header's aggregate registration (the fixed-base cell uses a FULL "all"
+    // header: init_grid<T>() made every cell compile the whole robot — h1_2
+    // fixed: 50 min / 15 GB). Whoever address-takes a kernel compiles it.
+    cudaStream_t *streams = grid::init_grid_streams<T>();
+    gpuErrchk(grid::init_grid_kernel_attr_idsva_so_body_frame_checked<T>());
+#if GRID_CUDA_SECOND_ORDER_ENABLE_FDSVA
+    gpuErrchk(grid::init_grid_kernel_attr_fdsva_so_checked<T>());
+#endif
     grid::robotModel<T> *d_robot_model = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();
 

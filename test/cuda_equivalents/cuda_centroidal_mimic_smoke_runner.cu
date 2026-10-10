@@ -152,7 +152,10 @@ void dcopy_out(const std::string &name, T *dptr, int rows, int cols) {
 template <typename T>
 void run() {
     const T gravity = static_cast<T>(-9.81);
-    cudaStream_t *streams = grid::init_grid<T>();
+    // R1 (2026-10-10): streams only — every kernel this runner launches is
+    // runner-local (wrapping grid::*_device) and registered below; the "all"
+    // header's aggregate init_grid<T>() compiled the whole robot for nothing.
+    cudaStream_t *streams = grid::init_grid_streams<T>();
     grid::robotModel<T> *d_robotModel = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();
 

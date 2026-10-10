@@ -73,8 +73,10 @@ verified under the RELEASE policy.
 
 Prefer the crash-isolated split driver for full GPU passes:
 `test/run_validation.py` (the receipt launcher) strips `GRID_*` from its env and sets its own
-(incl. `GRID_RBD_BUILD_JOBS=4` per compile job); it refuses a dirty tree and requires HEAD unchanged
-for the whole run — no commits in the main checkout while a receipt runs (use a worktree).
+(`GRID_SPLIT_COMPILE_JOBS=3`, `GRID_SPLIT_SHARD_JOBS=2` — two GPU shards side by side since
+2026-10-10 — and `GRID_RBD_BUILD_JOBS=4` per compile job); it refuses a dirty tree and requires HEAD
+unchanged for the whole run — the main checkout must stay BYTE-CLEAN (no edits, docs included, no
+commits) until it prints "Recording complete" (use a worktree for side work).
 `test/run_split_suite.py` runs `python_wrappers` as per-module shards (compile-warm
 phase + one pytest subprocess per module — one module's abort can't eat the rest;
 `--changed-only` skips modules whose input fingerprint matches the last green run)
@@ -92,9 +94,11 @@ wrapper `.so` warms and CUDA flagship, integrator and second-order smoke pre-war
 (`test/prewarm_cuda_flagship.py` — reuses the tests' actual builders and cache keys;
 `--inventory --node-ids test/gpu-proof-scope.json --out inventory.json` inspects
 integrator/SO hits without compiling) execute as admission-controlled parallel
-workers (predicted peak RSS from a rolling `/usr/bin/time -v` ledger at
-`test/.split_suite/compile_rss.json`, conservative default + margin + MemAvailable
-floor) and OVERLAP GPU shard execution — a shard only waits for its own compile
+workers (predicted peak RSS from a rolling ledger at `test/.split_suite/compile_rss.json`
+— schema 2 since 2026-10-10: the job's whole process TREE is sampled, because
+`/usr/bin/time -v`'s ru_maxrss reports only the largest single child and under-predicted a
+multi-unit build ~4x; the ledger also keeps wall time so each consumer's heaviest job
+launches first — conservative default + margin + MemAvailable floor) and OVERLAP GPU shard execution — a shard only waits for its own compile
 jobs, so the pool is the sole writer of a cache key until that shard starts (the
 unlocked cache writers are never raced; a mimic robot's cells share one header and
 fold into one serial job). `GRID_SPLIT_COMPILE_JOBS` sizes the pool (default 5;
@@ -154,7 +158,10 @@ seconds of regeneration, never an nvcc rebuild.
 - **A TU compiles every kernel it address-takes.** The header's aggregate `init_grid_kernel_attrs`
   registers everything (incl. bench-only `_single_timing` twins); library and test code must register
   per algorithm through `init_grid_kernel_attr_<algo>_checked` for what it actually launches (3x on
-  the bindings; the CUDA equivalence runner still does the aggregate — receipt-infra arc).
+  the bindings). The CUDA test runners do the same since 2026-10-10 (`init_grid_streams` + per-RUN-token
+  twins; referee `test/test_runner_registration.py`): the h1_2 second-order cell went 3021 s / 15 GB →
+  81 s / 2.1 GB, and a mimic robot's flagship cells (one full shared header) no longer each compile
+  the whole robot. A NEW runner must register per algorithm too, never `grid::init_grid<T>()`.
 - **Big floating-base builds are mjx-dominated.** On a floating, non-mimic robot GRiD also emits a
   MuJoCo-convention ("mjx") twin of each kernel; the second-order twins used to dwarf their pin
   kernels (`idsva_so_world_frame` twin was **28x** raw, cut to 5.5x by rolling, then to **2.42x** by
