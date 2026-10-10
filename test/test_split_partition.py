@@ -76,6 +76,25 @@ def test_compile_priority_follows_first_consumer():
     assert {id(j) for j in ordered} == {id(j) for j in jobs}
 
 
+def test_compile_priority_heavy_first_within_a_consumer(tmp_path):
+    """R3 (2026-10-10): within one consumer rank the longest recorded job
+    launches first; unrecorded jobs rank at DEFAULT_SECS (after a known-heavy
+    job, before a known-light one); consumer order still wins across ranks."""
+    from types import SimpleNamespace
+    import compile_sched
+    ledger = compile_sched.Ledger(tmp_path / "rss.json")
+    ledger.record("prewarm_light", 1000, 30.0)
+    ledger.record("prewarm_heavy", 1000, 16000.0)
+    ledger.record("prewarm_second_rank", 1000, 99999.0)
+    jobs = [SimpleNamespace(name=n, ledger_key=n) for n in
+            ("prewarm_light", "prewarm_unknown", "prewarm_heavy", "prewarm_second_rank")]
+    ordered = rss.prioritize_compile_jobs(jobs, ["s1", "s2"],
+        {"s1": ["prewarm_light", "prewarm_unknown", "prewarm_heavy"],
+         "s2": ["prewarm_second_rank"]}, ledger)
+    assert [j.name for j in ordered] == [
+        "prewarm_heavy", "prewarm_unknown", "prewarm_light", "prewarm_second_rank"]
+
+
 def test_ready_shard_waits_for_all_writers_and_keeps_failed_jobs():
     from threading import Event
     from types import SimpleNamespace
@@ -319,14 +338,16 @@ def test_prewarm_atom_parse():
 def test_scheduler_admission_and_groups(tmp_path):
     """max_jobs + group serialization + ledger roundtrip on dummy commands."""
     ledger = compile_sched.Ledger(tmp_path / "rss.json")
-    ledger.record("k1", 123456)
-    # reload roundtrip + max-over-history (smaller peak never lowers)
+    ledger.record("k1", 123456, 40.0)
+    # reload roundtrip + max-over-history (smaller peak / shorter run never lowers)
     ledger2 = compile_sched.Ledger(tmp_path / "rss.json")
-    assert ledger2.data == {"k1": 123456}
-    ledger2.record("k1", 5)
-    assert ledger2.data["k1"] == 123456
+    assert ledger2.data == {"k1": {"peak_kb": 123456, "secs": 40.0}}
+    ledger2.record("k1", 5, 1.0)
+    assert ledger2.data["k1"] == {"peak_kb": 123456, "secs": 40.0}
     assert ledger2.predict_kb("k1", 999, 2.0) == 246912
     assert ledger2.predict_kb("unknown", 1000, 1.5) == 1500
+    assert ledger2.predict_secs("k1") == 40.0
+    assert ledger2.predict_secs("unknown", 7.0) == 7.0
 
     marker = tmp_path / "serial_marker"
     script = (
@@ -351,8 +372,38 @@ def test_scheduler_admission_and_groups(tmp_path):
     results = sched.run(jobs)
     assert {r.rc for r in results.values()} == {0}, {
         n: (r.rc, r.stdout_tail) for n, r in results.items()}
-    # peaks parsed from /usr/bin/time for every job
+    # peaks (sampled tree or /usr/bin/time floor) for every job
     assert all(r.peak_kb > 0 for r in results.values())
+
+
+def test_ledger_drops_legacy_ru_maxrss_schema(tmp_path):
+    """S1 (2026-10-10): a schema-1 flat ru_maxrss map under-predicts parallel
+    builds ~4x; it is dropped (counted) rather than trusted."""
+    path = tmp_path / "rss.json"
+    path.write_text(json.dumps({"warm:x": 4800000, "prewarm_y": 9000000}))
+    ledger = compile_sched.Ledger(path)
+    assert ledger.data == {} and ledger.dropped_legacy == 2
+    assert ledger.predict_kb("warm:x", 1000, 1.0) == 1000
+    ledger.record("warm:x", 15000000, 120.0)
+    assert json.loads(path.read_text()) == {
+        "schema": 2, "jobs": {"warm:x": {"peak_kb": 15000000, "secs": 120.0}}}
+
+
+def test_scheduler_peak_is_the_process_tree_sum(tmp_path):
+    """S1: two concurrent 200 MB grandchildren → ru_maxrss sees ~200 MB (the
+    largest single descendant) but the sampled session tree sees ~400 MB."""
+    child = ("import time, sys; b = bytearray(200 * 1024 * 1024); "
+             "b[::4096] = b'x' * len(b[::4096]); time.sleep(2.5)")
+    parent = ("import subprocess, sys; ps = [subprocess.Popen([sys.executable, '-c', %r]) "
+              "for _ in range(2)]; [p.wait() for p in ps]" % child)
+    ledger = compile_sched.Ledger(tmp_path / "rss.json")
+    sched = compile_sched.RamScheduler(
+        ledger, max_jobs=1, floor_kb=0, default_peak_kb=1, label="test")
+    job = compile_sched.Job(name="tree", argv=[sys.executable, "-c", parent],
+                            ledger_key="tree", log_path=str(tmp_path / "tree.log"))
+    res = sched.run([job])["tree"]
+    assert res.rc == 0, res.stdout_tail
+    assert res.peak_kb >= 350 * 1024, res.peak_kb
 
 
 def test_scheduler_stop_resolves_pending(tmp_path):

@@ -236,3 +236,19 @@ def test_finalize_real_git_evidence_transition(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match='evidence changed'):
         launcher.finalize(out)
     assert calls == ['driver', 'verify']
+
+
+def test_validation_env_strips_overrides_and_sets_receipt_knobs(monkeypatch):
+    """The launcher owns the driver's env: stray GRID_*/SPLIT*/pytest overrides
+    are dropped; the receipt knobs (compile pool 3, two GPU shards side by
+    side — W1 2026-10-10 — and 4 nvcc units per bindings build) are set here,
+    not inherited."""
+    monkeypatch.setenv('GRID_SPLIT_SHARD_JOBS', '9')
+    monkeypatch.setenv('GRID_RBD_BUILD_JOBS', '99')
+    monkeypatch.setenv('GRID_CUDA_KIN_THREADS', '1')
+    monkeypatch.setenv('PYTEST_ADDOPTS', '-x')
+    env = launcher.validation_env()
+    assert env['GRID_SPLIT_SHARD_JOBS'] == '2'
+    assert env['GRID_SPLIT_COMPILE_JOBS'] == '3'
+    assert env['GRID_RBD_BUILD_JOBS'] == '4'
+    assert 'GRID_CUDA_KIN_THREADS' not in env and 'PYTEST_ADDOPTS' not in env

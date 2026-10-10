@@ -1279,20 +1279,36 @@ def build_compile_pool(out_dir: Path, *, warm: bool, cuda_shards: list,
         return None, [], {}
     ledger = compile_sched.Ledger(
         REPO_ROOT / "test" / ".split_suite" / "compile_rss.json")
+    if ledger.dropped_legacy:
+        print(f"  compile ledger: schema {compile_sched.LEDGER_SCHEMA} (process-tree "
+              f"peaks); {ledger.dropped_legacy} legacy ru_maxrss entries dropped — "
+              f"unmeasured jobs predict {compile_sched.DEFAULT_PEAK_KB >> 20} GB until re-measured")
     pool = compile_sched.RamScheduler(ledger, max_jobs=max_jobs, label="pool")
-    # Unblock earlier shards before warming unrelated robots alphabetically.
+    # Unblock earlier shards before warming unrelated robots alphabetically;
+    # within a consumer, heaviest (ledger wall time) first.
     ordered_names = list(modules) + [s.name for s in cuda_shards]
-    jobs = prioritize_compile_jobs(jobs, ordered_names, prereqs)
+    jobs = prioritize_compile_jobs(jobs, ordered_names, prereqs, ledger)
     return pool, jobs, prereqs
 
 
-def prioritize_compile_jobs(jobs, shard_names: list[str], prereqs: dict):
-    """Stable order by each job's earliest consumer; never split cache groups."""
+def prioritize_compile_jobs(jobs, shard_names: list[str], prereqs: dict, ledger=None):
+    """Stable order by each job's earliest consumer; never split cache groups.
+
+    R3 (2026-10-10): within one consumer rank the pool launches the job with
+    the longest recorded wall time FIRST — the pool's makespan is its
+    last-started straggler (the overnight tail: the h1_2 flagship job, 4.5 h,
+    started late and ran alone for the final hour). Unrecorded jobs rank at
+    DEFAULT_SECS, so a known-heavy job still goes ahead of them."""
     rank = {}
     for index, name in enumerate(shard_names):
         for job in prereqs.get(name, []):
             rank.setdefault(job, index)
-    return sorted(jobs, key=lambda job: rank.get(job.name, len(shard_names)))
+
+    def secs(job) -> float:
+        if ledger is None:
+            return 0.0
+        return ledger.predict_secs(getattr(job, "ledger_key", job.name))
+    return sorted(jobs, key=lambda job: (rank.get(job.name, len(shard_names)), -secs(job)))
 
 
 def pending_compile_jobs(spec: ShardSpec, pool, prereqs: dict) -> list[str]:
@@ -1345,7 +1361,7 @@ def report_pool(pool, out_dir: Path) -> int:
         if real_build and res.peak_kb > 0:
             job_key = (f"warm:{json.loads((cdir / f'{name}.spec.json').read_text())['desc']}"
                        if (cdir / f"{name}.spec.json").exists() else name)
-            pool.ledger.record(job_key, res.peak_kb)
+            pool.ledger.record(job_key, res.peak_kb, res.secs)
     return failed
 
 

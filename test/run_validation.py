@@ -32,7 +32,15 @@ def validation_env():
             env.pop(key)
     env.update(OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1',
                NUMEXPR_NUM_THREADS='1', MAX_JOBS='1',
-               GRID_SPLIT_COMPILE_JOBS='3', GRID_SPLIT_SHARD_JOBS='1',
+               GRID_SPLIT_COMPILE_JOBS='3',
+               # W1 (2026-10-10): two GPU shards side by side. Pilot 2026-10-01 ran
+               # the four CUDA shards two at a time clean (~800 MiB VRAM each,
+               # 1.1–1.3x per-shard slowdown → ~1.8x throughput); the cuda caches
+               # are per-key flock'd and python_wrappers modules run one per
+               # process (jax claims 35 % of VRAM per process). The overnight
+               # 2026-10-10 run never admitted a pool job below 38 GiB available
+               # on the 62 GB box, so a second shard's inline nvcc fits.
+               GRID_SPLIT_SHARD_JOBS='2',
                # Multi-unit robot.so builds (2026-10-10): each compile job runs up to
                # GRID_RBD_BUILD_JOBS nvcc units in parallel. Measured: a humanoid at
                # the default 8 units takes ~15 GB; the scheduler's ru_maxrss ledger
