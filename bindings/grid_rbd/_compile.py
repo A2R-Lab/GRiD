@@ -684,6 +684,22 @@ def _build_jobs() -> int:
     return jobs
 
 
+def _split_compile_flags(unit_stem: str) -> list[str]:
+    """Opt-in nvcc `--split-compile N` for the heaviest unit(s) (2026-10-10):
+    GRID_RBD_SPLIT_COMPILE=N (0/unset = off) applies it to the units named in
+    GRID_RBD_SPLIT_COMPILE_UNITS (comma list of family names, default
+    `integrator_gradient` — the singleton that bounds every humanoid build).
+    Measured 10-09: 3–4x wall on that unit, ~3x its RAM, and ptxas register
+    allocation CHANGES (bit-different SASS), which is why it is opt-in and in
+    the content key, never a default."""
+    n = os.environ.get("GRID_RBD_SPLIT_COMPILE", "0").strip()
+    if not n or n == "0":
+        return []
+    units = os.environ.get("GRID_RBD_SPLIT_COMPILE_UNITS", "integrator_gradient")
+    wanted = {f"wrapper_{u.strip()}" for u in units.split(",") if u.strip()}
+    return [f"--split-compile={int(n)}"] if unit_stem in wanted else []
+
+
 def _unit_order(units: list[Path]) -> list[Path]:
     """Heavy families first (abi_specs.FAMILIES order), core last: the pool's
     makespan is the slowest unit, so start it first."""
@@ -771,7 +787,8 @@ def _build_units(cmd: list[str], source_dir: Path, out_so: Path, arch: str,
         log.write("$ " + " ".join([nvcc, "--shared", "-o", str(out_so), "<units>.o"] + link_flags) + "\n\n")
 
     def one(unit: Path) -> tuple[Path, int, float, str]:
-        ucmd = compile_cmd + (list(core_flags or []) if unit.stem == "wrapper_core" else [])
+        ucmd = compile_cmd + (list(core_flags or []) if unit.stem == "wrapper_core" else []) \
+            + _split_compile_flags(unit.stem)
         cached = None
         if object_cache_dir is not None:
             cached = object_cache_dir / f"{unit.stem}-{_unit_object_key(unit, source_dir, ucmd)}.o"

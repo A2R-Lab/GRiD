@@ -158,3 +158,32 @@ def test_object_prune_is_opt_in_and_hits_refresh_mtime(env, monkeypatch):
     monkeypatch.setenv("GRID_RBD_OBJECT_CACHE_DAYS", "14")
     _build(src, objects)
     assert not stale.exists() and sorted(objects.glob("*.o")) == objs
+
+
+def test_split_compile_knob_targets_only_the_named_units(env, monkeypatch):
+    """GRID_RBD_SPLIT_COMPILE=N adds --split-compile=N to the named family units
+    only (default integrator_gradient); off by default; a unit's object key
+    changes with it (its flags are hashed)."""
+    fake, src, objects = env
+    (src / "wrapper_integrator_gradient.cu").write_text("// ig v1\n")
+    seen = {}
+    orig = fake.__call__
+
+    def spy(cmd, *a, **k):
+        if "-c" in cmd:
+            seen[Path(cmd[cmd.index("-c") + 1]).stem] = [f for f in cmd if f.startswith("--split-compile")]
+        return orig(cmd, *a, **k)
+    monkeypatch.setattr(_compile.subprocess, "run", spy)
+    _build(src, objects)
+    assert all(v == [] for v in seen.values()), seen
+    seen.clear(); fake.compiled.clear()
+    monkeypatch.setenv("GRID_RBD_SPLIT_COMPILE", "8")
+    _build(src, objects)
+    assert fake.compiled == ["wrapper_integrator_gradient"], "only the targeted unit re-keys"
+    assert seen == {"wrapper_integrator_gradient": ["--split-compile=8"]}
+    monkeypatch.setenv("GRID_RBD_SPLIT_COMPILE_UNITS", "kinematics,dyn_values")
+    seen.clear(); fake.compiled.clear()
+    _build(src, objects)
+    # integrator_gradient drops back to its flag-free key, whose object is still cached
+    assert sorted(fake.compiled) == ["wrapper_dyn_values", "wrapper_kinematics"]
+    assert seen["wrapper_kinematics"] == ["--split-compile=8"] and "wrapper_integrator_gradient" not in seen

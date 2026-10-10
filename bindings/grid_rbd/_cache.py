@@ -530,6 +530,10 @@ def compute_content_key(source_dir: Path, options: dict[str, Any],
               "runtime_joint_dynamics"):
         h.update(f"{k}={options.get(k)!r};".encode())
     h.update(f"compile={_compile_source_hash()}".encode())
+    # Opt-in per-unit nvcc knobs change the SASS (register allocation), so a
+    # .so built under one setting must never be handed back under another.
+    h.update(f"split_compile={os.environ.get('GRID_RBD_SPLIT_COMPILE', '0')};"
+             f"split_units={os.environ.get('GRID_RBD_SPLIT_COMPILE_UNITS', '')};".encode())
     h.update(f"{_torch_abi_tag()}".encode())
     h.update(f"{_jax_ffi_tag()}".encode())
     h.update(f"nvcc={_nvcc_identity()}".encode())
