@@ -72,6 +72,9 @@ receipts do not replace that evidence. A release needs one fresh full run
 verified under the RELEASE policy.
 
 Prefer the crash-isolated split driver for full GPU passes:
+`test/run_validation.py` (the receipt launcher) strips `GRID_*` from its env and sets its own
+(incl. `GRID_RBD_BUILD_JOBS=4` per compile job); it refuses a dirty tree and requires HEAD unchanged
+for the whole run — no commits in the main checkout while a receipt runs (use a worktree).
 `test/run_split_suite.py` runs `python_wrappers` as per-module shards (compile-warm
 phase + one pytest subprocess per module — one module's abort can't eat the rest;
 `--changed-only` skips modules whose input fingerprint matches the last green run)
@@ -134,6 +137,24 @@ seconds of regeneration, never an nvcc rebuild.
 - **Fix, don't guard** — no `xfail`/`skip`/defensive guards; fix the root cause.
 - **Physics**: gravity `-9.81`; Pinocchio is authoritative. Prefer extending GLASS primitives over
   working around them (GLASS is first-party).
+- **The bindings `robot.so` is a multi-unit build (2026-10-09).** `bindings/grid_rbd/wrapper_template.cu`
+  stays ONE fenced file (`// [[unit: <family>]]` … `// [[unit: end]]`, `surface: jax|torch` tags, preludes);
+  `grid_rbd._units` splits it into `wrapper_core.cu` + one unit per family (`abi_specs.FAMILIES` /
+  `FAMILY_OF`), `_compile._build_units` compiles them `-c` in a pool (`GRID_RBD_BUILD_JOBS`, default
+  `min(8, cores, MemAvailable/3 GB)`) and host-links with `-Xfatbin -compress-all`; objects are cached
+  per unit under `<cache_dir>/objects/`. Invariants the tests enforce: the core unit references NO
+  kernel (registration, ceiling table, torch impls, JAX handlers live in the owning family unit);
+  the torch op-namespace key is a CORE-ONLY flag; every template line lands in exactly one unit.
+  Generated regions carry their fences (wrapper_body_gen / wrapper_plant_gen); hand-written blocks
+  carry hand fences — a new hand-written launch site MUST be fenced into its family or the core
+  referee fails. Numbers: iiwa14 101 s (was 11 min), go2 128 s (was 15), g1 366 s (was 53), 12–15 GB
+  per 8-unit humanoid build. Never `--split-compile` the test runners (user ruling); the bindings
+  knob `GRID_RBD_SPLIT_COMPILE` is opt-in and content-keyed. Full learnings:
+  `docs/agent_debugging_guide.md` §7.z43/§7.z44, design: `docs/compile_time_arc_2026-10.md`.
+- **A TU compiles every kernel it address-takes.** The header's aggregate `init_grid_kernel_attrs`
+  registers everything (incl. bench-only `_single_timing` twins); library and test code must register
+  per algorithm through `init_grid_kernel_attr_<algo>_checked` for what it actually launches (3x on
+  the bindings; the CUDA equivalence runner still does the aggregate — receipt-infra arc).
 - **Big floating-base builds are mjx-dominated.** On a floating, non-mimic robot GRiD also emits a
   MuJoCo-convention ("mjx") twin of each kernel; the second-order twins used to dwarf their pin
   kernels (`idsva_so_world_frame` twin was **28x** raw, cut to 5.5x by rolling, then to **2.42x** by
