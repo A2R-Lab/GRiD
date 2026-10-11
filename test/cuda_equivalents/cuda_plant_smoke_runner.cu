@@ -499,7 +499,13 @@ void dcopy_out(const std::string &name, T *dptr, int rows, int cols) {
 template <typename T>
 void run() {
     const T gravity = static_cast<T>(-9.81);
-    cudaStream_t *streams = grid::init_grid<T>();
+    // R1 (2026-10-10): streams + only the generated host wrappers this runner
+    // calls (integrator / integrator_gradient); the plant kernels below are
+    // runner-local and register themselves. The "all" header's aggregate
+    // init_grid<T>() compiled every kernel of the robot (go2: ~10 min).
+    cudaStream_t *streams = grid::init_grid_streams<T>();
+    gpuErrchk(grid::init_grid_kernel_attr_integrator_checked<T>());
+    gpuErrchk(grid::init_grid_kernel_attr_integrator_gradient_checked<T>());
     grid::robotModel<T> *d_robotModel = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();
 

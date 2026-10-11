@@ -83,6 +83,12 @@ from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+# `test.receipt_integrity` etc. are imported as the REPO package `test`; without
+# the repo root ahead of the stdlib's own `test` package, a code path that never
+# ran module_fingerprint()/_warm_one_entry() first (the no-op --resume, 2026-10-10)
+# dies with ModuleNotFoundError at the very end. Insert once, here.
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 WRAPPERS_DIR = REPO_ROOT / "test" / "python_wrappers"
 CUDA_DIR = REPO_ROOT / "test" / "cuda_equivalents"
 # The project venv when present (local convention: always .venv/bin/python);
@@ -458,9 +464,18 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
     oracle_changed = bool(old_sha and codegen_neutrality.reference_inputs_changed(old_sha))
     if oracle_changed:
         print("  carry soundness: RBDReference changed; all oracle-dependent shards stale")
+    # 2026-10-10: a merged receipt recorded with a dirty tree attests nothing
+    # carryable — its shards ran against unknown bytes. `gpu-proof merge
+    # --carry-from` takes /repo/dirty from the FRESH shards only (measured with
+    # the real tool), so carrying from a dirty receipt would LAUNDER it into a
+    # clean-looking descendant. Everything is stale; nothing is carried.
+    old_dirty = bool((old_receipt.get("repo") or {}).get("dirty"))
+    if old_dirty:
+        print("  carry soundness: old receipt was recorded with a DIRTY tree; "
+              "nothing is carried (all shards stale)")
     carried, stale = [], []
     for s in shards:
-        if oracle_changed:
+        if oracle_changed or old_dirty:
             stale.append(s)
             continue
         if _bad_ids.intersection(s.get("node_ids") or []):
@@ -654,17 +669,21 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
             wrapper_to_run, cuda_fresh)
 
 
-def _shard_receipt_sha(out_dir: Path, shard: str) -> str | None:
-    """repo.commit_sha recorded by a shard's own receipt (None when absent
+def _shard_receipt_repo(out_dir: Path, shard: str) -> dict | None:
+    """The `repo` block recorded by a shard's own receipt (None when absent
     or unreadable — non-receipts runs have no per-shard receipt)."""
     path = out_dir / "receipts" / f"{shard}.json"
     if not path.exists():
         return None
     try:
-        return ((json.loads(path.read_text()) or {}).get("repo") or {}) \
-            .get("commit_sha")
+        return (json.loads(path.read_text()) or {}).get("repo") or {}
     except (json.JSONDecodeError, OSError):
         return None
+
+
+def _shard_receipt_sha(out_dir: Path, shard: str) -> str | None:
+    repo = _shard_receipt_repo(out_dir, shard)
+    return None if repo is None else repo.get("commit_sha")
 
 
 def load_prior_results(out_dir: Path, spec_names: set[str]) -> list[dict]:
@@ -675,7 +694,13 @@ def load_prior_results(out_dir: Path, spec_names: set[str]) -> list[dict]:
     recorded at a different commit than the current HEAD cannot merge with
     fresh work (gpu-proof merge refuses mixed repo.commit_sha — the ONE-
     commit receipt invariant; a mid-run commit is how this state arises).
-    Such rows re-run instead of poisoning the merge at the very end."""
+    Such rows re-run instead of poisoning the merge at the very end.
+
+    2026-10-10 dirty prune: a clean row whose per-shard receipt recorded
+    `repo.dirty` (an uncommitted edit to a tracked file was in the tree while
+    the shard ran) is NOT clean evidence — the merge folds it into the merged
+    receipt's /repo/dirty and the release verify refuses it; a resume that
+    kept it could never finalize (lost an overnight 42/42 run). Re-run it."""
     path = out_dir / "results.json"
     if not path.exists():
         return []
@@ -689,13 +714,17 @@ def load_prior_results(out_dir: Path, spec_names: set[str]) -> list[dict]:
                               text=True).stdout.strip()
     except (subprocess.CalledProcessError, OSError):
         head = None
-    kept, divergent = [], []
+    kept, divergent, dirty = [], [], []
     for r in prior:
         if r.get("kind") not in CLEAN_KINDS or r.get("shard") not in spec_names:
             continue
-        sha = _shard_receipt_sha(out_dir, r.get("shard", ""))
+        repo = _shard_receipt_repo(out_dir, r.get("shard", ""))
+        sha = None if repo is None else repo.get("commit_sha")
         if head and sha and sha != head:
             divergent.append(r.get("shard"))
+            continue
+        if repo and repo.get("dirty"):
+            dirty.append(r.get("shard"))
             continue
         kept.append(dict(r, fresh=False))
     if divergent:
@@ -703,6 +732,10 @@ def load_prior_results(out_dir: Path, spec_names: set[str]) -> list[dict]:
               f"DIFFERENT commit than HEAD — re-running them so the merged "
               f"receipt stays single-commit: {', '.join(sorted(divergent)[:6])}"
               + (" …" if len(divergent) > 6 else ""))
+    if dirty:
+        print(f"  resume: {len(dirty)} clean shard(s) recorded with a DIRTY "
+              f"tree — re-running them so the merged receipt can verify: "
+              f"{', '.join(sorted(dirty)[:6])}" + (" …" if len(dirty) > 6 else ""))
     return kept
 
 
@@ -1246,20 +1279,36 @@ def build_compile_pool(out_dir: Path, *, warm: bool, cuda_shards: list,
         return None, [], {}
     ledger = compile_sched.Ledger(
         REPO_ROOT / "test" / ".split_suite" / "compile_rss.json")
+    if ledger.dropped_legacy:
+        print(f"  compile ledger: schema {compile_sched.LEDGER_SCHEMA} (process-tree "
+              f"peaks); {ledger.dropped_legacy} legacy ru_maxrss entries dropped — "
+              f"unmeasured jobs predict {compile_sched.DEFAULT_PEAK_KB >> 20} GB until re-measured")
     pool = compile_sched.RamScheduler(ledger, max_jobs=max_jobs, label="pool")
-    # Unblock earlier shards before warming unrelated robots alphabetically.
+    # Unblock earlier shards before warming unrelated robots alphabetically;
+    # within a consumer, heaviest (ledger wall time) first.
     ordered_names = list(modules) + [s.name for s in cuda_shards]
-    jobs = prioritize_compile_jobs(jobs, ordered_names, prereqs)
+    jobs = prioritize_compile_jobs(jobs, ordered_names, prereqs, ledger)
     return pool, jobs, prereqs
 
 
-def prioritize_compile_jobs(jobs, shard_names: list[str], prereqs: dict):
-    """Stable order by each job's earliest consumer; never split cache groups."""
+def prioritize_compile_jobs(jobs, shard_names: list[str], prereqs: dict, ledger=None):
+    """Stable order by each job's earliest consumer; never split cache groups.
+
+    R3 (2026-10-10): within one consumer rank the pool launches the job with
+    the longest recorded wall time FIRST — the pool's makespan is its
+    last-started straggler (the overnight tail: the h1_2 flagship job, 4.5 h,
+    started late and ran alone for the final hour). Unrecorded jobs rank at
+    DEFAULT_SECS, so a known-heavy job still goes ahead of them."""
     rank = {}
     for index, name in enumerate(shard_names):
         for job in prereqs.get(name, []):
             rank.setdefault(job, index)
-    return sorted(jobs, key=lambda job: rank.get(job.name, len(shard_names)))
+
+    def secs(job) -> float:
+        if ledger is None:
+            return 0.0
+        return ledger.predict_secs(getattr(job, "ledger_key", job.name))
+    return sorted(jobs, key=lambda job: (rank.get(job.name, len(shard_names)), -secs(job)))
 
 
 def pending_compile_jobs(spec: ShardSpec, pool, prereqs: dict) -> list[str]:
@@ -1312,7 +1361,7 @@ def report_pool(pool, out_dir: Path) -> int:
         if real_build and res.peak_kb > 0:
             job_key = (f"warm:{json.loads((cdir / f'{name}.spec.json').read_text())['desc']}"
                        if (cdir / f"{name}.spec.json").exists() else name)
-            pool.ledger.record(job_key, res.peak_kb)
+            pool.ledger.record(job_key, res.peak_kb, res.secs)
     return failed
 
 

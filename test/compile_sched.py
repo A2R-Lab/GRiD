@@ -3,9 +3,13 @@
 Runs a queue of compile jobs (each an argv subprocess) in parallel, bounded by
 PREDICTED peak RSS so the box never OOMs: a job is admitted only while the sum
 of running jobs' predicted peaks stays under the memory budget. Predictions
-come from a rolling max-over-history ledger (test/.split_suite/compile_rss.json)
-measured via `/usr/bin/time -v` (its ru_maxrss folds in nvcc's cicc/ptxas
-children); unmeasured jobs use a conservative default.
+come from a rolling max-over-history ledger (test/.split_suite/compile_rss.json,
+schema 2) measured by SAMPLING THE JOB'S WHOLE PROCESS TREE (every process in the
+worker's session, summed RSS, 0.5 s cadence) — `/usr/bin/time -v`'s ru_maxrss
+reports only the LARGEST single descendant, so it under-predicted a multi-unit
+bindings build (4–8 parallel nvcc units) ~4x (2026-10-10: predicted 4.6 GB,
+measured 15 GB). The ledger also keeps each job's wall time so the pool can
+launch heavy jobs first. Unmeasured jobs use a conservative default.
 
 Design constraints honored:
 - CONSERVATIVE by default (box crashes are costly): budget = MemAvailable at
@@ -39,7 +43,29 @@ from pathlib import Path
 _TIME_BIN = "/usr/bin/time"
 _MAXRSS_RE = re.compile(r"Maximum resident set size \(kbytes\):\s*(\d+)")
 
-DEFAULT_PEAK_KB = 6 * 1024 * 1024      # 6 GB — unmeasured compile assumption
+DEFAULT_PEAK_KB = 8 * 1024 * 1024      # 8 GB — unmeasured compile assumption (tree peak)
+DEFAULT_SECS = 600.0                   # unmeasured wall-time assumption (ordering only)
+LEDGER_SCHEMA = 2                      # 1 = flat {key: ru_maxrss_kb} (dropped: under-predicts)
+_PAGE_KB = os.sysconf("SC_PAGE_SIZE") // 1024
+
+
+def session_tree_rss_kb(sid: int) -> int:
+    """Summed RSS (kB) of every live process whose session id is `sid` (the
+    worker runs under setsid, so its whole compiler tree shares it)."""
+    total = 0
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat") as f:
+                stat = f.read()
+        except OSError:
+            continue  # exited between listdir and open
+        rest = stat[stat.rfind(")") + 2:].split()   # comm may contain spaces/parens
+        # fields after comm: [0]=state [1]=ppid [2]=pgrp [3]=session ... [21]=rss (pages)
+        if len(rest) > 21 and int(rest[3]) == sid:
+            total += int(rest[21]) * _PAGE_KB
+    return total
 DEFAULT_FLOOR_KB = 10 * 1024 * 1024    # never plan below 10 GB MemAvailable
 DEFAULT_MARGIN = 1.3
 DEFAULT_MAX_JOBS = 5
@@ -68,35 +94,56 @@ class JobResult:
     name: str
     rc: int
     secs: float
-    peak_kb: int                  # 0 if /usr/bin/time output was unparsable
+    peak_kb: int                  # max(sampled process-tree peak, ru_maxrss); 0 if neither
     stdout_tail: str = ""
 
 
 class Ledger:
-    """Max-over-history peak-RSS map, atomically persisted."""
+    """Max-over-history {key: {peak_kb, secs}} map, atomically persisted.
+
+    Schema 2 (2026-10-10): peaks are process-TREE peaks. A schema-1 file (flat
+    ru_maxrss map) is dropped on load — its entries under-predict parallel
+    builds ~4x and would poison admission; `dropped_legacy` says how many."""
 
     def __init__(self, path: Path):
         self.path = Path(path)
         self._lock = threading.Lock()
-        self.data: dict[str, int] = {}
+        self.data: dict[str, dict] = {}
+        self.dropped_legacy = 0
         if self.path.exists():
             try:
-                self.data = {k: int(v) for k, v in json.loads(self.path.read_text()).items()}
+                raw = json.loads(self.path.read_text())
             except (ValueError, OSError):
-                self.data = {}
+                raw = {}
+            if isinstance(raw, dict) and raw.get("schema") == LEDGER_SCHEMA:
+                for k, v in (raw.get("jobs") or {}).items():
+                    try:
+                        self.data[k] = {"peak_kb": int(v["peak_kb"]),
+                                        "secs": float(v.get("secs", 0.0))}
+                    except (KeyError, TypeError, ValueError):
+                        continue
+            elif isinstance(raw, dict):
+                self.dropped_legacy = len(raw)
 
     def predict_kb(self, key: str, default_kb: int, margin: float) -> int:
-        base = self.data.get(key, default_kb)
+        base = self.data.get(key, {}).get("peak_kb", default_kb)
         return int(base * margin)
 
-    def record(self, key: str, peak_kb: int) -> None:
+    def predict_secs(self, key: str, default_secs: float = DEFAULT_SECS) -> float:
+        return float(self.data.get(key, {}).get("secs") or default_secs)
+
+    def record(self, key: str, peak_kb: int, secs: float = 0.0) -> None:
         if peak_kb <= 0:
             return
         with self._lock:
-            if peak_kb > self.data.get(key, 0):
-                self.data[key] = peak_kb
+            cur = self.data.get(key, {"peak_kb": 0, "secs": 0.0})
+            new = {"peak_kb": max(cur["peak_kb"], int(peak_kb)),
+                   "secs": max(cur["secs"], float(secs))}
+            if new != cur:
+                self.data[key] = new
                 tmp = self.path.with_suffix(f".{os.getpid()}.tmp")
-                tmp.write_text(json.dumps(self.data, indent=0, sort_keys=True))
+                tmp.write_text(json.dumps({"schema": LEDGER_SCHEMA, "jobs": self.data},
+                                          indent=0, sort_keys=True))
                 tmp.replace(self.path)
 
 
@@ -190,14 +237,14 @@ class RamScheduler:
     # -- internals ---------------------------------------------------------
 
     def _run_pool(self, pending: list[Job]) -> None:
-        running: dict[str, tuple[Job, subprocess.Popen, int, float, object]] = {}
+        running: dict[str, tuple[Job, subprocess.Popen, int, float, object, list]] = {}
         busy_groups: set[str] = set()
         predicted_sum = 0
 
         def reap() -> None:
             nonlocal predicted_sum
             for name in list(running):
-                job, proc, pred, t0, log_f = running[name]
+                job, proc, pred, t0, log_f, peak_holder = running[name]
                 if proc.poll() is None:
                     continue
                 del running[name]
@@ -208,7 +255,8 @@ class RamScheduler:
                     log_f.close()
                 with self._state_lock:
                     self._procs.pop(name, None)
-                self.results[name] = self._collect(job, proc, time.monotonic() - t0)
+                self.results[name] = self._collect(job, proc, time.monotonic() - t0,
+                                                   peak_holder[0])
                 self.done_events[name].set()
 
         while pending or running:
@@ -264,7 +312,13 @@ class RamScheduler:
                 start_new_session=True,
             )
             self._procs[job.name] = proc
-        running[job.name] = (job, proc, pred_kb, time.monotonic(), log_f if job.log_path else None)
+        # Tree-peak sampler (schema 2): the worker is a session leader (setsid), so
+        # every compiler it spawns shares its session id; sum their RSS until exit.
+        peak_holder = [0]
+        threading.Thread(target=self._sample_tree, args=(proc, peak_holder),
+                         daemon=True).start()
+        running[job.name] = (job, proc, pred_kb, time.monotonic(),
+                             log_f if job.log_path else None, peak_holder)
         if job.group:
             busy_groups.add(job.group)
         print(
@@ -274,7 +328,21 @@ class RamScheduler:
         )
         return True
 
-    def _collect(self, job: Job, proc: subprocess.Popen, secs: float) -> JobResult:
+    @staticmethod
+    def _sample_tree(proc: subprocess.Popen, holder: list, period: float = 0.5) -> None:
+        while proc.poll() is None:
+            try:
+                kb = session_tree_rss_kb(proc.pid)
+            except OSError:
+                kb = 0
+            if kb > holder[0]:
+                holder[0] = kb
+            time.sleep(period)
+
+    def _collect(self, job: Job, proc: subprocess.Popen, secs: float,
+                 tree_peak_kb: int = 0) -> JobResult:
+        # ru_maxrss (largest single descendant) is the floor for jobs too short
+        # for the sampler to catch; the sampled tree sum is the real peak.
         peak_kb = 0
         tail = ""
         try:
@@ -288,11 +356,13 @@ class RamScheduler:
                 tail = log_text[-800:]
         except OSError:
             pass
+        peak_kb = max(peak_kb, int(tree_peak_kb))
         rc = proc.returncode
         # /usr/bin/time exits 127/126 if the command couldn't start; otherwise
         # it propagates the command's exit status.
         print(
-            f"[{self.label}] - {job.name}: rc={rc} peak={peak_kb // 1024}MiB {secs:.0f}s",
+            f"[{self.label}] - {job.name}: rc={rc} peak={peak_kb // 1024}MiB "
+            f"(tree) {secs:.0f}s",
             flush=True,
         )
         return JobResult(job.name, rc, secs, peak_kb, tail)

@@ -1656,12 +1656,17 @@ def get_robot(
     cache_dir: str | Path | None = None,
     *,
     output_convention: str = "pinocchio",
+    urdf_path: str | None = None,
+    **register_opts,
 ) -> JaxRobotHandle:
     """Look up a previously-registered robot. Same cache as
     :py:func:`grid_rbd.get_robot`. ``output_convention`` ('pinocchio' or
     'mujoco') mirrors :py:func:`register_robot` and can also be set later
     via the handle's ``output_convention`` property."""
     _require_jax()  # fail early with install guidance if jax is missing
+    if register_opts and urdf_path is None:
+        raise TypeError(f"get_robot() got register options {sorted(register_opts)} without urdf_path")
+    _grid_rbd._register_on_miss(name, cache_dir, urdf_path, register_opts)   # just-in-time compile on a miss
     base = _grid_rbd.get_robot(name, cache_dir=cache_dir, _profile_overlay=None)  # jax baked default = ffi
     base.apply_batch_overlay("ffi")  # E6 batch-switch (no-op without a by-n block)
     _install_xla_device_pool(base)  # arena carved from XLA's pool (see register_robot)

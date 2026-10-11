@@ -287,13 +287,65 @@ static void grid_runner_set_smem_or_skip(FuncT func, const char *name, size_t by
                                    static_cast<int>(bytes)));
 }
 
+// Receipt-infra arc R1 (2026-10-10): register ONLY the kernels this cell launches.
+// grid::init_grid<T>() calls the header's aggregate init_grid_kernel_attrs, which
+// address-takes EVERY kernel in the header (bench-only _single_timing twins and
+// never-launched overloads included) — and whoever address-takes a kernel compiles
+// it. Non-mimic cells get a subset header so the waste was the twins; MIMIC robots
+// (fr3, h1_2) share ONE full header across all cells, so every cell compiled the
+// whole robot (h1_2 fixed: 10 cells = 4.5 h of prewarm, 11.5 GB). The generated
+// per-algorithm `init_grid_kernel_attr_<algo>_checked` twins (kernel_attrs.py, in
+// every grid.cuh since 2026-10-09) register one algorithm's kernels only, so a
+// split cell instantiates exactly its RUN token's kernels. Same guards as the
+// launch blocks below: a token that is compiled out registers nothing.
+template <typename T>
+static void grid_runner_register_run_tokens() {
+#if RUN_INVERSE_DYNAMICS
+    gpuErrchk(grid::init_grid_kernel_attr_inverse_dynamics_checked<T>());
+#endif
+#if RUN_MINV
+    gpuErrchk(grid::init_grid_kernel_attr_minv_checked<T>());
+#endif
+#if RUN_FORWARD_DYNAMICS
+    gpuErrchk(grid::init_grid_kernel_attr_forward_dynamics_checked<T>());
+#endif
+#if RUN_ABA
+    gpuErrchk(grid::init_grid_kernel_attr_aba_checked<T>());
+#endif
+#if RUN_CRBA
+    gpuErrchk(grid::init_grid_kernel_attr_crba_checked<T>());
+#endif
+#if RUN_END_EFFECTOR_POSE
+    gpuErrchk(grid::init_grid_kernel_attr_end_effector_pose_checked<T>());
+#endif
+#if !GRID_RUNNER_SKIP_EEPOSE_GRADIENTS
+#if RUN_END_EFFECTOR_POSE_GRADIENT
+    gpuErrchk(grid::init_grid_kernel_attr_end_effector_pose_gradient_checked<T>());
+#endif
+#if RUN_END_EFFECTOR_POSE_HESSIAN
+    gpuErrchk(grid::init_grid_kernel_attr_end_effector_pose_hessian_checked<T>());
+#endif
+#endif  // !GRID_RUNNER_SKIP_EEPOSE_GRADIENTS
+#if !GRID_RUNNER_SKIP_GRADIENTS
+#if RUN_INVERSE_DYNAMICS_GRADIENT
+    gpuErrchk(grid::init_grid_kernel_attr_inverse_dynamics_gradient_checked<T>());
+#endif
+#if RUN_FORWARD_DYNAMICS_GRADIENT
+    gpuErrchk(grid::init_grid_kernel_attr_forward_dynamics_gradient_checked<T>());
+#endif
+#endif  // !GRID_RUNNER_SKIP_GRADIENTS
+}
+
 template <typename T>
 void run() {
     const T gravity = static_cast<T>(-9.81);
     const dim3 block_dimms(1, 1, 1);
     const dim3 thread_dimms(g_num_threads, 1, 1);
 
-    cudaStream_t *streams = grid::init_grid<T>();
+    // Streams only (no aggregate kernel registration), then this cell's kernels.
+    // The floating block below additionally registers its runner-local kernels.
+    cudaStream_t *streams = grid::init_grid_streams<T>();
+    grid_runner_register_run_tokens<T>();
     grid::robotModel<T> *d_robot_model = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();
 

@@ -31,6 +31,8 @@ GENERATION_ENV_KNOBS = (
 # else c++17).
 BINDINGS_ENV_KNOBS = (
     "GRID_RBD_CXX_STD",
+    "GRID_RBD_SPLIT_COMPILE",         # opt-in nvcc --split-compile N on the heavy unit(s)
+    "GRID_RBD_SPLIT_COMPILE_UNITS",   # which family units (default integrator_gradient)
 )
 
 

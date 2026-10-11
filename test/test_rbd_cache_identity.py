@@ -41,10 +41,11 @@ class _Stubs:
         out_dir = Path(out_dir)
         (out_dir / "grid.cuh").write_text(self.emitted)
         (out_dir / "wrapper.cu").write_text("// wrapper\n")
+        (out_dir / "wrapper_common.cuh").write_text("// common\n")   # hashed with wrapper.cu (multi-TU build)
         return {"NUM_JOINTS": 1, "NUM_VEL": 1, "NUM_EES": 0}
 
     def compile_sources(self, gen_dir, meta, options, *, cuda_arch, max_batch,
-                        torch_op_key):
+                        torch_op_key, object_cache_dir=None, reuse_objects=True):
         self.compile_calls += 1
         gen_dir = Path(gen_dir)
         (gen_dir / "robot.so").write_bytes(b"\x7fELF-stub")

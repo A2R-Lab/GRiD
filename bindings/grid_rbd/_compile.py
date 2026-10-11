@@ -44,7 +44,7 @@ _NVCC_DEFAULT_FLAGS = [
     "-ftz=true",
     "-prec-div=false",
     "-prec-sqrt=false",
-    "--shared",
+    # (no --shared here: units are compiled with -c and host-linked into the .so)
     "--compiler-options=-fPIC",
     # We INTENTIONALLY do NOT set -fvisibility=hidden here — the
     # Runner dlsym's our `extern "C"` symbols, which must be exported.
@@ -434,6 +434,9 @@ def copy_wrapper_template(target_dir: Path) -> Path:
     src = Path(__file__).parent / "wrapper_template.cu"
     dst = target_dir / "wrapper.cu"
     shutil.copyfile(src, dst)
+    # The host-only header every unit of the multi-TU build includes (2026-10-09);
+    # copied beside wrapper.cu so `-I<target_dir>` resolves it like grid.cuh.
+    shutil.copyfile(Path(__file__).parent / "wrapper_common.cuh", target_dir / "wrapper_common.cuh")
     return dst
 
 
@@ -560,10 +563,17 @@ def compile_so(
     runtime_inertia: bool = False,
     runtime_transform: bool = False,
     runtime_joint_dynamics: bool = False,
+    object_cache_dir: Path | None = None,
+    reuse_objects: bool = True,
 ) -> None:
     """Invoke nvcc to build wrapper.cu → robot.so.
 
     wrapper.cu must include "grid.cuh" from its own directory.
+
+    ``object_cache_dir`` enables the per-unit object cache (see _build_units):
+    a unit whose exact compile inputs were compiled before links from the
+    cached object instead of re-running nvcc; ``reuse_objects=False``
+    (force_rebuild) recompiles every unit but still refreshes the cache.
 
     When JAX is installed, the .so additionally exports JAX FFI handler
     symbols (grid_rbd_jax_*); the Python side picks these up via dlsym in
@@ -573,6 +583,7 @@ def compile_so(
     """
     nvcc = find_nvcc()
     arch = f"sm_{cuda_arch}"
+    core_flags: list[str] = []   # flags only the core unit is compiled with
     cmd = [nvcc] + _NVCC_DEFAULT_FLAGS + [
         f"-gencode=arch=compute_{cuda_arch},code={arch}",
         f"-DGRID_RBD_MAX_BATCH={max_batch}",
@@ -583,8 +594,6 @@ def compile_so(
         # default; this define is bindings-builds only).
         "-DGRID_GPUERRCHK_NO_EXIT",
         f"-I{wrapper_cu.parent}",  # so #include "grid.cuh" resolves
-        "-o", str(out_so),
-        str(wrapper_cu),
     ]
     if glass_root:
         cmd.extend([f"-I{glass_root}", f"-I{glass_root / 'src'}"])
@@ -645,28 +654,220 @@ def compile_so(
         if "--expt-relaxed-constexpr" not in cmd:
             cmd.append("--expt-relaxed-constexpr")
         key = (torch_op_key or "default")
-        # op-namespace token must be a valid C identifier (hex prefix is).
-        cmd.append(f"-DGRID_RBD_TORCH_KEY={key}")
+        # op-namespace token must be a valid C identifier (hex prefix is). Only
+        # the core unit names the namespace (its TORCH_LIBRARY delegates to the
+        # families' grid_rbd_torch_def_/impl_ functions), so the key is a
+        # core-only flag: family objects stay identical across store entries.
+        core_flags.append(f"-DGRID_RBD_TORCH_KEY={key}")
 
     if extra_flags:
         cmd.extend(extra_flags)
 
+    _build_units(cmd, wrapper_cu.parent, out_so, arch, core_flags=core_flags,
+                 object_cache_dir=object_cache_dir, reuse_objects=reuse_objects)
+
+
+def _build_jobs() -> int:
+    """Parallel unit compiles: GRID_RBD_BUILD_JOBS, else min(8, cores, free RAM / 3 GB)
+    (a unit peaks at ~2.5 GB on a humanoid; 1 = sequential, still a smaller peak
+    than the old single-unit build)."""
+    env = os.environ.get("GRID_RBD_BUILD_JOBS")
+    if env:
+        return max(1, int(env))
+    jobs = min(8, os.cpu_count() or 1)
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                jobs = max(1, min(jobs, int(line.split()[1]) // (3 * 1024 * 1024)))
+    except OSError:
+        pass
+    return jobs
+
+
+def _split_compile_flags(unit_stem: str) -> list[str]:
+    """Opt-in nvcc `--split-compile N` for the heaviest unit(s) (2026-10-10):
+    GRID_RBD_SPLIT_COMPILE=N (0/unset = off) applies it to the units named in
+    GRID_RBD_SPLIT_COMPILE_UNITS (comma list of family names, default
+    `integrator_gradient` — the singleton that bounds every humanoid build).
+    Measured 10-09: 3–4x wall on that unit, ~3x its RAM, and ptxas register
+    allocation CHANGES (bit-different SASS), which is why it is opt-in and in
+    the content key, never a default."""
+    n = os.environ.get("GRID_RBD_SPLIT_COMPILE", "0").strip()
+    if not n or n == "0":
+        return []
+    units = os.environ.get("GRID_RBD_SPLIT_COMPILE_UNITS", "integrator_gradient")
+    wanted = {f"wrapper_{u.strip()}" for u in units.split(",") if u.strip()}
+    return [f"--split-compile={int(n)}"] if unit_stem in wanted else []
+
+
+def _unit_order(units: list[Path]) -> list[Path]:
+    """Heavy families first (abi_specs.FAMILIES order), core last: the pool's
+    makespan is the slowest unit, so start it first."""
+    from grid_codegen.abi_specs import FAMILIES
+    rank = {f"wrapper_{fam}.cu": i for i, fam in enumerate(FAMILIES)}
+    return sorted(units, key=lambda p: rank.get(p.name, len(rank)))
+
+
+def _unit_object_key(unit: Path, source_dir: Path, compile_cmd: list[str]) -> str:
+    """Content key of one unit's object: exactly what nvcc sees compiling it —
+    the unit text, the two headers every unit includes (grid.cuh,
+    wrapper_common.cuh), the flag list with the staging dir's own -I removed
+    (its CONTENT is hashed; its path differs per build), and the toolchain /
+    ABI tags the store's content key uses (nvcc, host C++, GLASS, torch, jax).
+    `-DGRID_RBD_TORCH_KEY` is in the core unit's flags only, so a family object
+    is shared by every store entry with the same sources and flags."""
+    from . import _cache
+    import hashlib
+    h = hashlib.sha256()
+    src = str(source_dir)
+    for a in compile_cmd[1:]:   # [0] = nvcc path (covered by _nvcc_identity)
+        if a == f"-I{src}" or a.startswith(src + "/"):
+            continue
+        h.update(a.encode() + b"\0")
+    for name in ("grid.cuh", "wrapper_common.cuh"):
+        h.update((source_dir / name).read_bytes())
+        h.update(b"\0")
+    h.update(unit.read_bytes())
+    h.update(f"nvcc={_cache._nvcc_identity()};host_cxx={_cache._host_cxx_tag()};"
+             f"glass={_cache._glass_content_hash()};{_cache._torch_abi_tag()};"
+             f"{_cache._jax_ffi_tag()};key_schema={_cache._KEY_SCHEMA}".encode())
+    return h.hexdigest()
+
+
+def _build_units(cmd: list[str], source_dir: Path, out_so: Path, arch: str,
+                 core_flags: list[str] | None = None,
+                 object_cache_dir: Path | None = None,
+                 reuse_objects: bool = True) -> None:
+    """Multi-TU build (2026-10-09): compile every `wrapper_*.cu` unit beside
+    grid.cuh with `-c` in a bounded pool, then host-link the objects into
+    robot.so. No -rdc: each unit's kernels are launched only from that unit.
+    `cmd` is the full nvcc flag list; library/rpath flags are link-only;
+    `core_flags` are added to the core unit's compile only (the torch op
+    namespace key).
+
+    Per-unit object cache (M4): with `object_cache_dir`, each unit's object is
+    kept at `<object_cache_dir>/<unit>-<key>.o` under `_unit_object_key`; a
+    unit whose key already exists links from the cached object with no nvcc
+    (`reuse_objects=False` recompiles every unit and refreshes the cache). A
+    wrapper edit therefore recompiles only the units whose text changed (core
+    alone when only core text moved); a grid.cuh / wrapper_common.cuh / flag
+    change recompiles every unit. Without a cache dir, objects are deleted
+    after the link."""
+    import concurrent.futures
+    import threading
+    import time
+
+    units = _unit_order(sorted(source_dir.glob("wrapper_*.cu")))
+    if not units:
+        raise RuntimeError(f"no wrapper units beside {source_dir / 'grid.cuh'} (generate_sources writes them)")
+    compile_cmd, link_flags = [], []
+    i = 0
+    while i < len(cmd):
+        a = cmd[i]
+        if a == "-Xlinker":
+            link_flags.extend([a, cmd[i + 1]]); i += 2; continue
+        if a.startswith(("-L", "-l")) and not a.startswith("-lineinfo"):
+            link_flags.append(a)
+        else:
+            compile_cmd.append(a)
+        i += 1
+    nvcc = compile_cmd[0]
+    jobs = _build_jobs()
     log_path = out_so.with_suffix(".build.log")
-    # First-run compile can take seconds–minutes (single-block fully-unrolled
-    # kernels are cicc-bound). Emit a one-line notice so the wait isn't read as
-    # a hang, and point at the live build log.
-    _log.info("grid_rbd: compiling %s for %s (first run; nvcc, may take "
-              "seconds–minutes) — log: %s", out_so.name, arch, log_path)
+    build_dir = source_dir / "build"
+    build_dir.mkdir(exist_ok=True)
+    if object_cache_dir is not None:
+        object_cache_dir.mkdir(parents=True, exist_ok=True)
+    lock = threading.Lock()
+    _log.info("grid_rbd: compiling %s for %s (%d units, %d parallel; nvcc, may take "
+              "seconds–minutes) — log: %s", out_so.name, arch, len(units), jobs, log_path)
     with log_path.open("w") as log:
-        log.write("$ " + " ".join(cmd) + "\n\n")
+        log.write("$ " + " ".join(compile_cmd) + " -c <unit> -o <unit>.o   # x" + str(len(units))
+                  + (" (+ " + " ".join(core_flags) + " for the core unit)" if core_flags else "") + "\n")
+        log.write("$ " + " ".join([nvcc, "--shared", "-o", str(out_so), "<units>.o"] + link_flags) + "\n\n")
+
+    def one(unit: Path) -> tuple[Path, int, float, str]:
+        ucmd = compile_cmd + (list(core_flags or []) if unit.stem == "wrapper_core" else []) \
+            + _split_compile_flags(unit.stem)
+        cached = None
+        if object_cache_dir is not None:
+            cached = object_cache_dir / f"{unit.stem}-{_unit_object_key(unit, source_dir, ucmd)}.o"
+            if reuse_objects and cached.is_file():
+                os.utime(cached)   # a hit is a use: keeps it out of _prune_object_cache
+                with lock, log_path.open("a") as log:
+                    log.write(f"[{unit.stem}] cached {cached.name}\n")
+                return cached, 0, 0.0, ""
+        obj = build_dir / (unit.stem + ".o")
+        ulog = build_dir / (unit.stem + ".log")
+        t0 = time.monotonic()
+        with ulog.open("w") as f:
+            r = subprocess.run(ucmd + ["-c", str(unit), "-o", str(obj)], stdout=f, stderr=subprocess.STDOUT)
+        secs = time.monotonic() - t0
+        with lock, log_path.open("a") as log:
+            log.write(f"[{unit.stem}] rc={r.returncode} {secs:.1f}s\n")
+        if r.returncode == 0 and cached is not None:
+            # publish atomically (another build may be producing the same key)
+            tmp = cached.with_name(cached.name + f".{os.getpid()}.tmp")
+            shutil.move(str(obj), str(tmp))
+            os.replace(tmp, cached)
+            obj = cached
+        return obj, r.returncode, secs, ulog.read_text()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
+        results = list(ex.map(one, units))
+    failed = [(obj, rc, out) for obj, rc, _, out in results if rc != 0]
+    if failed:
+        obj, rc, out = failed[0]
+        raise RuntimeError(f"nvcc failed (exit {rc}) compiling unit {obj.stem}. Unit log:\n{out}")
+    objs = [str(obj) for obj, _, _, _ in results]
+    link = [nvcc, "--shared", "-o", str(out_so)] + objs + link_flags
+    t0 = time.monotonic()
+    with log_path.open("a") as log:
+        log.write("\n$ " + " ".join(link) + "\n")
         log.flush()
-        result = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"nvcc failed (exit {result.returncode}). Build log:\n"
-            + log_path.read_text()
-        )
-    _log.info("grid_rbd: built %s (build log: %s)", out_so.name, log_path)
+        r = subprocess.run(link, stdout=log, stderr=subprocess.STDOUT)
+        log.write(f"[link] rc={r.returncode} {time.monotonic() - t0:.1f}s\n")
+    if r.returncode != 0:
+        raise RuntimeError(f"nvcc link failed (exit {r.returncode}). Build log:\n" + log_path.read_text())
+    for obj in objs:   # uncached objects: keep the store entry lean
+        if object_cache_dir is None or Path(obj).parent != object_cache_dir:
+            Path(obj).unlink(missing_ok=True)
+    compiled = sum(1 for _, _, secs, _ in results if secs > 0)
+    _log.info("grid_rbd: built %s from %d units (%d compiled, %d from the object cache; build log: %s)",
+              out_so.name, len(units), compiled, len(units) - compiled, log_path)
+    if object_cache_dir is not None:
+        _prune_object_cache(object_cache_dir)
+
+
+OBJECT_CACHE_MAX_AGE_DAYS = 0   # keep forever (user 2026-10-09); GRID_RBD_OBJECT_CACHE_DAYS=N opts in
+
+
+def _prune_object_cache(object_cache_dir: Path, max_age_days: float = OBJECT_CACHE_MAX_AGE_DAYS) -> int:
+    """Opt-in GC: drop cached unit objects not produced or linked from (mtime)
+    in `max_age_days`. OFF by default (objects are kept forever, like store/
+    entries — compile once, keep); `GRID_RBD_OBJECT_CACHE_DAYS=N` enables it.
+    Every distinct build (robot x options x subset) adds its ~14 objects; an
+    object is only ever a shortcut, so losing one costs that unit's compile and
+    nothing else. Returns the number removed."""
+    import time
+    env = os.environ.get("GRID_RBD_OBJECT_CACHE_DAYS")
+    if env is not None:
+        max_age_days = float(env)
+    if max_age_days <= 0:
+        return 0
+    cutoff = time.time() - max_age_days * 86400
+    removed = 0
+    for obj in object_cache_dir.glob("wrapper_*.o"):
+        try:
+            if obj.stat().st_mtime < cutoff:
+                obj.unlink()
+                removed += 1
+        except OSError:
+            pass   # a concurrent build published/removed it
+    if removed:
+        _log.info("grid_rbd: pruned %d cached unit objects older than %g days from %s",
+                  removed, max_age_days, object_cache_dir)
+    return removed
 
 
 def generate_sources(
@@ -683,7 +884,13 @@ def generate_sources(
     """
     target_dir.mkdir(parents=True, exist_ok=True)
     meta = generate_grid_cuh(urdf_path, options, target_dir / "grid.cuh")
-    copy_wrapper_template(target_dir)
+    wrapper = copy_wrapper_template(target_dir)
+    # Multi-TU build: one unit per build family + the core, split from the
+    # fenced template (bindings/grid_rbd/_units.py). wrapper.cu stays beside them
+    # as the hashed source of truth; the units are what nvcc compiles.
+    from . import _units
+    for name, text in _units.split(wrapper.read_text()).items():
+        (target_dir / f"wrapper_{name}.cu").write_text(text)
     return meta
 
 
@@ -694,9 +901,12 @@ def compile_sources(
     cuda_arch: int,
     max_batch: int = 256,
     torch_op_key: str | None = None,
+    object_cache_dir: Path | None = None,
+    reuse_objects: bool = True,
 ) -> dict[str, Any]:
-    """The nvcc half: compile target_dir's grid.cuh + wrapper.cu → robot.so
-    and persist meta.json. Returns the completed meta dict."""
+    """The nvcc half: compile target_dir's grid.cuh + wrapper units → robot.so
+    and persist meta.json. Returns the completed meta dict. ``object_cache_dir``
+    / ``reuse_objects`` drive the per-unit object cache (compile_so)."""
     cuh_path = target_dir / "grid.cuh"
     wrapper_cu = target_dir / "wrapper.cu"
 
@@ -729,6 +939,7 @@ def compile_sources(
                runtime_inertia=bool(options.get("runtime_inertia", False)),
                runtime_transform=bool(options.get("runtime_transform", False)),
                runtime_joint_dynamics=bool(options.get("runtime_joint_dynamics", False)),
+               object_cache_dir=object_cache_dir, reuse_objects=reuse_objects,
                # Host-template signature flags, derived from the header just
                # generated (floating builds carry a MUJOCO_OUTPUT template param
                # on most host launchers even when enable_mujoco_kernels=False).

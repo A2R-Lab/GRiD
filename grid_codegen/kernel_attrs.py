@@ -649,9 +649,53 @@ def gen_init_close_grid(self):
             self.gen_add_code_lines(per_lines)
             self.gen_add_end_function()
 
+        def _emit_checked_attr_fn(fn_suffix, doc_what, entries):
+            # Multi-TU arc (2026-10-09, user rulings D1 + D2): the bindings'
+            # per-family registration entry point. Library-safe like the
+            # aggregate (returns the first error and names the op through
+            # failed_op) and WITHOUT the `_single_timing` twins -- those are
+            # bench-only kernels the bindings never launch, so address-taking
+            # them here would only instantiate + compile them for nothing.
+            # Spherical robots drop the multi-stage RK gradient rows exactly as
+            # the aggregate does (their static_assert trips on address-take).
+            self.gen_add_func_doc("Library-safe MaxDynamicSharedMemorySize registration for the %s "
+                                  "kernel(s) only, WITHOUT the _single_timing bench twins (bindings "
+                                  "entry point; callable from any TU; idempotent)." % doc_what,
+                                  [], ["failed_op (optional) receives a static string naming the failed operation"],
+                                  "cudaSuccess or the first error")
+            self.gen_add_code_line("template <typename T>")
+            self.gen_add_code_line("__host__ __forceinline__")
+            self.gen_add_code_line("cudaError_t init_grid_kernel_attr_%s_checked(const char **failed_op = nullptr){" % fn_suffix, True)
+            per_lines = ["size_t _grid_smem_max = 0; gpuErrchk(grid_get_max_dynamic_shared_memory_bytes(&_grid_smem_max));"]
+            per_alias = 0
+            for entry_label, entry_bytes, entry_kernels in entries:
+                entry_kernels = [(k, sig) for (k, sig) in entry_kernels if "_single_timing" not in k]
+                if (self.robot.robot_has_spherical()
+                        and short in ("integrator_gradient", "integrator_with_gradient")):
+                    entry_kernels = [(k, sig) for (k, sig) in entry_kernels
+                                     if not any(rk in k for rk in ("MIDPOINT", "TRAPEZOIDAL", "RK4"))]
+                per_lines.append(f"if ({entry_bytes} <= _grid_smem_max) {{")
+                per_lines.append(f"    gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"{entry_label}\", {entry_bytes}));")
+                for kernel_name, signature in entry_kernels:
+                    alias = f"_grid_kern_alias_{per_alias}"
+                    per_alias += 1
+                    per_lines.append(f"    auto {alias} = static_cast<{signature}>(&{kernel_name});")
+                    per_lines.append(f"    gpuErrchk(cudaFuncSetAttribute({alias}, cudaFuncAttributeMaxDynamicSharedMemorySize, {entry_bytes}));")
+                per_lines.append("}")
+                if short in divergent_tiers:
+                    extra, per_alias = _tier_variant_attr_lines(
+                        entry_label, entry_bytes, entry_kernels,
+                        divergent_tiers[short], per_alias)
+                    per_lines.extend(extra)
+            self.gen_add_code_lines(_checked_attr_lines(per_lines))
+            self.gen_add_code_line("return cudaSuccess;")
+            self.gen_add_end_function()
+
         _emit_attr_fn(short, label, [(label, bytes_macro, kernels)])
+        _emit_checked_attr_fn(short, label, [(label, bytes_macro, kernels)])
         if short in mjx_by_short:
             _emit_attr_fn(short + "_mjx", label + "(mjx)", [mjx_by_short[short]])
+            _emit_checked_attr_fn(short + "_mjx", label + "(mjx)", [mjx_by_short[short]])
 
     # ----- init_grid_streams<T>(): streams only, no attr registration -------
     # The stream-allocation half of init_grid, WITHOUT init_grid_kernel_attrs

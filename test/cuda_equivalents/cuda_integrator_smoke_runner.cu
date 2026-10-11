@@ -127,7 +127,16 @@ void run() {
     const int nthreads = requested < grid::MAX_PERF_LEVEL_THREADS ? requested : grid::MAX_PERF_LEVEL_THREADS;
     const dim3 thread_dimms(nthreads, 1, 1);
 
-    cudaStream_t *streams = grid::init_grid<T>();
+    // R1 (2026-10-10): streams + only the integrator kernels this runner launches.
+    // The aggregate init_grid<T>() also address-took (= compiled) the bench-only
+    // _single_timing twins and the forward-dynamics kernel of the "integrators"
+    // profile header (g1 floating SHARED: 37 min; h1_2: 45 min per tier).
+    cudaStream_t *streams = grid::init_grid_streams<T>();
+    gpuErrchk(grid::init_grid_kernel_attr_integrator_checked<T>());
+#if GRID_HAS_INTEGRATOR_GRADIENT
+    gpuErrchk(grid::init_grid_kernel_attr_integrator_gradient_checked<T>());
+    gpuErrchk(grid::init_grid_kernel_attr_integrator_with_gradient_checked<T>());
+#endif
     grid::robotModel<T> *d_robotModel = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();
 

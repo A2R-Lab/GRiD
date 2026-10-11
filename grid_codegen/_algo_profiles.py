@@ -152,8 +152,11 @@ def normalize_codegen_algorithms(gen, codegen_profile = "all", algorithm_list = 
     # dqdd/dpi = -Minv . Y composes the regressor inner + minv_inner on top of the
     # RNEA sweep (the "fd-param-gradient" profile lists exactly these; a bare
     # singleton request emitted an nvcc-rejected header — audit W07 closure net).
+    # ... and its kernel epilogue calls forward_dynamics_finish (emitted by the
+    # forward_dynamics block): a regressor-family subset without forward_dynamics
+    # emitted an nvcc-rejected header (multi-TU family split, 2026-10-09).
     if "forward_dynamics_parameter_gradient" in algorithms:
-        algorithms.update({"inverse_dynamics", "minv", "inverse_dynamics_regressor"})
+        algorithms.update({"inverse_dynamics", "minv", "forward_dynamics", "inverse_dynamics_regressor"})
     if "inverse_dynamics_gradient" in algorithms:
         algorithms.add("inverse_dynamics")
     # B.0 dY/dx composes the id_du staging (calls inverse_dynamics_gradient_inner)
@@ -172,6 +175,10 @@ def normalize_codegen_algorithms(gen, codegen_profile = "all", algorithm_list = 
     # plus integrator.
     if "integrator_hessian" in algorithms:
         algorithms.update({"fdsva_so", "integrator"})
+    # integrator_gradient / integrator_with_gradient call integrator_finish,
+    # emitted only by the integrator block (closure net widened 2026-10-09).
+    if "integrator_gradient" in algorithms or "integrator_with_gradient" in algorithms:
+        algorithms.add("integrator")
     if "fdsva_so" in algorithms:
         algorithms.update({"inverse_dynamics", "minv", "forward_dynamics", "inverse_dynamics_gradient", "forward_dynamics_gradient", "idsva_so_body_frame"})
     # Mimic AND spherical (Tier-C) Minv route through crba_inner (see _minv.py:

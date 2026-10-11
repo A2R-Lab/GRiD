@@ -589,3 +589,32 @@ def test_plant_twin_symbols_resolve():
                         f"grid_rbd_{stem.removeprefix('plant_')}_mujoco"):
                 assert f'extern "C" int {sym}(' not in _SRC, (
                     f"{key}: has_mjx_twin=False but {sym} exists")
+
+
+def test_family_attr_tables_partition_the_kernel_manifest():
+    """Multi-TU arc (2026-10-09): every kernel_attrs manifest short is owned by
+    exactly one build family's registration function, or is explicitly listed
+    as never launched by the bindings (so nobody registers it in a bindings
+    build); family keys and ordering agree."""
+    from grid_codegen.abi_specs import (FAMILIES, FAMILY_ATTR_SHORTS,
+                                        NOT_LAUNCHED_BY_BINDINGS, OPT_IN_GATE_SHORTS)
+    from grid_codegen.kernel_attrs import KERNEL_OVERLOADS
+    assert tuple(FAMILY_ATTR_SHORTS) == FAMILIES or set(FAMILY_ATTR_SHORTS) == set(FAMILIES)
+    owned = [s for f in FAMILIES for s in FAMILY_ATTR_SHORTS[f]]
+    assert len(owned) == len(set(owned)), "a manifest short is owned by two families"
+    assert set(owned) | NOT_LAUNCHED_BY_BINDINGS == set(KERNEL_OVERLOADS)
+    assert not (set(owned) & NOT_LAUNCHED_BY_BINDINGS)
+    assert OPT_IN_GATE_SHORTS <= set(owned)
+
+
+def test_family_of_covers_every_wrapper_surface_key():
+    """Every ABI key with a wrapper body maps to a known family; python_only
+    rows (no body) have none; no family name is unknown."""
+    from grid_codegen.abi_specs import ABI_SPECS, FAMILIES, FAMILY_OF
+    for key, spec in ABI_SPECS.items():
+        if getattr(spec, "surface_class", None) == "python_only":
+            assert key not in FAMILY_OF, key
+        else:
+            assert key in FAMILY_OF, f"{key} has no build family"
+            assert FAMILY_OF[key] in FAMILIES, (key, FAMILY_OF[key])
+    assert set(FAMILY_OF) <= set(ABI_SPECS)

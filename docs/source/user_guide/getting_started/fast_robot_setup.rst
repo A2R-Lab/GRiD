@@ -158,66 +158,69 @@ the cache key and is recorded in ``meta.json`` as ``launch_config_gpu``.
 What to expect: cold vs. warm
 -----------------------------
 
-Measured 2026-09-24 on an RTX 5090 / 24-core host, ``max_batch_size=1024``,
-one build per process (``/usr/bin/time -v`` wall and peak RSS). A cold build is
-the Python code generation (about a second, even for g1) plus ONE ``nvcc``
-translation unit, so a cold build is essentially all ``nvcc``; "generation-only"
-is what a codegen edit with byte-identical output costs (the content key re-hits
-the compiled ``.so``, no ``nvcc``); a warm start is a fresh process calling
-``get_robot`` and one ``forward_dynamics``.
+**Multi-unit build (2026-10-09).** The per-robot ``.so`` is no longer one
+``nvcc`` translation unit: the wrapper is split into a core unit plus one unit
+per algorithm family (integrator gradients, plant step gradients, the
+second-order kernels, ...), compiled in parallel and host-linked. Wall time is
+bounded by the slowest family instead of the sum, and peak RAM by the number of
+parallel units instead of one giant unit. ``GRID_RBD_BUILD_JOBS=N`` caps the
+parallel units (default ``min(8, cores, available RAM / 3 GB)``; ``1`` is
+sequential and still peaks lower than the old single unit). Objects are kept in
+a per-unit cache (``~/.cache/grid-rbd/objects/``), so a wrapper change rebuilds
+only the units whose text changed.
+
+Measured 2026-10-10 on an RTX 5090 / 24-core host, ``max_batch_size=1024``,
+pin-only, one build per process into an empty cache, 8 parallel units, box
+otherwise idle. "Build RAM" is the drop in system ``MemAvailable`` during the
+build (the sum over the parallel ``nvcc`` units; the old table's per-process RSS
+no longer measures a build). A warm start is a fresh process calling
+``get_robot`` and one ``forward_dynamics``; "generation-only" (a codegen edit
+with byte-identical output) is unchanged at 1–3 s.
 
 .. list-table::
    :header-rows: 1
-   :widths: 22 16 12 16 16 18
+   :widths: 30 14 14 14 14 14
 
    * - Robot / build
      - Cold build
-     - Peak RSS
-     - Generation-only
+     - was (one unit, 09-24)
+     - Build RAM
      - Warm start
      - Host RSS after one call
-   * - iiwa14 fixed, all algorithms, pin-only
+   * - iiwa14 fixed, all algorithms
+     - 1 min 41 s
      - 10 min 53 s
-     - 2.0 GB
-     - 1.1 s
-     - 1.7 s
-     - 1.1 GB
-   * - go2 floating, all algorithms, pin-only
+     - 12 GB
+     - 1.2 s
+     - 0.9 GB
+   * - go2 floating, all algorithms
+     - 2 min 8 s
      - 14 min 55 s
-     - 3.6 GB
-     - 2.0 s
-     - 1.9 s
-     - 1.8 GB
-   * - go2 floating, all algorithms + mjx twins
-     - 27 min 26 s
-     - 10.1 GB
-     - —
-     - —
-     - —
-   * - g1 floating, all algorithms, pin-only
+     - 11 GB
+     - 1.4 s
+     - 1.6 GB
+   * - g1 floating, all algorithms
+     - 6 min 6 s
      - 53 min 29 s
-     - 8.3 GB
-     - 2.9 s
-     - 3.2 s
-     - 6.9 GB
-   * - g1 floating, all algorithms + mjx twins
-     - 1 h 16 min
-     - 11.0 GB
-     - —
-     - 3.2 s
-     - 7.1 GB
+     - 14 GB
+     - 2.3 s
+     - 6.4 GB
    * - g1 floating, ``algorithm_list`` = fd, id, fd-gradient
+     - 1 min 18 s
      - 3 min 0 s
-     - 1.7 GB
-     - —
-     - 1.7 s
+     - 10 GB
+     - 1.3 s
      - 1.1 GB
 
-Three things to take from the table. ``algorithm_list`` is the biggest lever on
-every axis (g1: 53 min → 3 min, 8.3 → 1.7 GB to build, 6.9 → 1.1 GB of host RAM
-to run). The mjx twins roughly double a floating-base build and triple its RAM,
-so ``enable_mujoco_kernels=False`` is the default advice for humanoids. And the
-host RSS of a full build is dominated by per-algorithm workspaces sized by
+The mjx twins (``enable_mujoco_kernels=True`` on a floating base) still roughly
+double a build; they are not in this table (they were 27 min on go2 and 1 h 16
+min on g1 as one unit).
+
+Three things to take from the table. The multi-unit build made every cold
+build 2–9x faster (g1: 53 → 6 min), and ``algorithm_list`` still cuts the rest
+(g1: 6 min → 78 s, and 6.4 → 1.1 GB of host RAM to run). The mjx twins roughly
+double a floating-base build, so ``enable_mujoco_kernels=False`` is the default
+advice for humanoids. And the host RSS of a full build is dominated by per-algorithm workspaces sized by
 ``max_batch_size`` and allocated at init, whether or not the process ever calls
 those algorithms — on a shared-memory device (Jetson) size ``max_batch_size``
 and ``algorithm_list`` to what you run.

@@ -191,28 +191,58 @@ def _ceil_sig(short: str) -> str:
     return sig.replace("T *", "T*")
 
 
+def _ceil_family(short: str) -> str:
+    from .abi_specs import FAMILY_OF
+    if short == _CEIL_DISPATCH:
+        return FAMILY_OF["idsva_so"]
+    return FAMILY_OF[short]
+
+
 def gen_ceil_block() -> str:
+    """Per-family `grid_rbd_family_<f>_kernel_ceiling(algo)` (each address-takes
+    only its own family's kernels, fenced into that family's unit; -2 = not my
+    key) + the exported core dispatcher. Row order/content as CEIL_ROWS."""
+    from .abi_specs import FAMILIES
     parts = [CEIL_BEGIN,
              "// Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen",
              "// Rows: CEIL_ROWS (keys crosschecked against the descriptor table's",
-             "// autotune_keys by test/test_abi_spec_crosscheck.py)."]
+             "// autotune_keys by test/test_abi_spec_crosscheck.py), grouped by build family."]
+    rows_by_family: dict[str, list[str]] = {f: [] for f in FAMILIES}
     for key, short in CEIL_ROWS:
-        if short == _CEIL_DISPATCH:
-            parts.append(_CEIL_DISPATCH_BLOCK)
-            continue
         if short == _CEIL_DIVIDER:
-            parts.append(_CEIL_DIVIDER_LINE)
+            continue  # positioned comment, emitted in the dispatcher below
+        if short == _CEIL_DISPATCH:
+            rows_by_family[_ceil_family(short)].append(_CEIL_DISPATCH_BLOCK)
             continue
         kern = CEIL_KERNEL_OVERRIDE.get(short, short + "_kernel")
         up = short.upper()
-        parts.append(f"""\
+        rows_by_family[_ceil_family(short)].append(f"""\
 #if GRID_HAS_{up}
     if (std::strcmp(algo, "{key}") == 0)
         return GRID_KERNEL_CEIL({kern}, GRID_ALGO_{up},
                                 {_ceil_sig(short)});
 #endif""")
+    for fam in FAMILIES:
+        parts.append(f"// [[unit: {fam}]]")
+        parts.append(f"int grid_rbd_family_{fam}_kernel_ceiling(const char* algo) {{")
+        parts.append("    using RM = const grid::robotModel<T>*;")
+        parts.extend(rows_by_family[fam])
+        parts.append("    (void)algo; (void)sizeof(RM);")
+        parts.append("    return -2;  // not this family's key")
+        parts.append("}")
+        parts.append("// [[unit: end]]")
+    for fam in FAMILIES:
+        parts.append(f"int grid_rbd_family_{fam}_kernel_ceiling(const char* algo);")
+    parts.append('extern "C" int grid_rbd_kernel_max_threads(const char* algo) {')
+    parts.append("    if (!algo) return -1;")
+    parts.append(_CEIL_DIVIDER_LINE)
+    for fam in FAMILIES:
+        parts.append(f"    {{ int r = grid_rbd_family_{fam}_kernel_ceiling(algo); if (r != -2) return r; }}")
+    parts.append("    return -1;  // unknown / not-built algo key")
+    parts.append("}")
     parts.append(CEIL_END)
     return "\n".join(parts) + "\n"
+
 
 # Load-bearing per-body comments preserved from the hand-written originals.
 # The standard signature-switch comment (verbatim from the hand originals).
@@ -474,7 +504,7 @@ def gen_block() -> str:
              "// test/test_wrapper_generated_block.py.",
              ""]
     for key in GENERATED_KEYS:
-        parts.append(gen_body(ABI_SPECS[key]))
+        parts.append(_fenced(key, gen_body(ABI_SPECS[key])))
     parts.append(END)
     return "\n".join(parts) + "\n"
 
@@ -614,7 +644,7 @@ def gen_mjx_block() -> str:
              "// grid_codegen/wrapper_mjx_docs.py. The 4 plant cost twins stay hand-written.",
              ""]
     for key in MJX_KEYS:
-        parts.append(gen_mjx_body(ABI_SPECS[key]))
+        parts.append(_fenced(key, gen_mjx_body(ABI_SPECS[key])))
     parts.append(MJX_END)
     return "\n".join(parts) + "\n"
 
@@ -751,7 +781,7 @@ def emit_torch_body(key: str) -> str:
     elif role == "grad":
         args.append("c10::optional<torch::Tensor> stamp_expect")    # B2 (K4): version stamp CHECK
     prefix = ("template <bool MUJOCO>\n" if templated else "") + \
-        f"torch::Tensor torch_{key}("
+        f"static torch::Tensor torch_{key}("
     if any(a.startswith("c10::optional") for a in args):
         # the optional f_ext alone wraps, aligned to the open paren
         col = len(prefix.rsplit("\n", 1)[-1])
@@ -826,8 +856,8 @@ def gen_torch_bodies_block() -> str:
             parts.append(SECTION_BANNERS[_TORCH_REGION_BANNERS[key]])
         opener, closer = _surface_gate(ABI_SPECS[key])
         doc = TORCH_OP_DOCS.get(key)
-        parts.append(opener + "\n" + (doc if doc else "")
-                     + emit_torch_body(key) + closer + "\n")
+        parts.append(_fenced(key, opener + "\n" + (doc if doc else "")
+                             + emit_torch_body(key) + closer + "\n", "torch"))
     parts.append(TORCH_BODIES_END)
     return "\n".join(parts) + "\n"
 
@@ -1036,7 +1066,7 @@ def gen_jax_handlers_block() -> str:
     for key in JAX_SURFACE_KEYS:
         if key in _JAX_REGION_BANNERS:
             parts.append(SECTION_BANNERS[_JAX_REGION_BANNERS[key]])
-        parts.append(_jax_unit(key))
+        parts.append(_fenced(key, _jax_unit(key), "jax"))
     parts.append(JAX_HANDLERS_END)
     return "\n".join(parts) + "\n"
 
@@ -1163,21 +1193,180 @@ def _torch_table_name(key: str) -> str:
     return key.removeprefix("plant_") if ABI_SPECS[key].plant_returns else key
 
 
+# pin-only stragglers (non-template impls, no mjx twin): (def schema, impl symbol, gate macro or None)
+_TORCH_STRAGGLERS: dict[str, list[tuple[str, str, str | None]]] = {
+    "regressors": [('"forward_dynamics_parameter_gradient(Tensor q, Tensor qd, Tensor u, float gravity, int ctx_id=0, Tensor? stamp_expect=None) -> Tensor"',
+                    "torch_forward_dynamics_parameter_gradient", "GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT")],
+    "plant_costs": [('"quadratic_input_cost(Tensor u, Tensor u_des, Tensor R, int ctx_id=0) -> Tensor[]"', "torch_quadratic_input_cost", None),
+                    ('"joint_position_barrier(Tensor var, Tensor lower, Tensor upper, float mu, int ctx_id=0) -> Tensor[]"', "torch_joint_position_barrier", None),
+                    ('"joint_velocity_barrier(Tensor var, Tensor lower, Tensor upper, float mu, int ctx_id=0) -> Tensor[]"', "torch_joint_velocity_barrier", None),
+                    ('"joint_torque_barrier(Tensor var, Tensor lower, Tensor upper, float mu, int ctx_id=0) -> Tensor[]"', "torch_joint_torque_barrier", None)],
+}
+
+
+def _torch_family_registration(fam: str, rows: list[str]) -> str:
+    """One family's op registration as two plain functions taking the library,
+    `grid_rbd_torch_def_<fam>(torch::Library&)` (schemas) and
+    `grid_rbd_torch_impl_<fam>(torch::Library&)` (CUDA impls), fenced into the
+    family's unit so every `m.impl(name, torch_x<false>)` address-take — which
+    instantiates the kernel launch — stays in the unit that owns the kernel.
+    The core's TORCH_LIBRARY / TORCH_LIBRARY_IMPL call them (gen_torch_ops_table):
+    the op NAMESPACE (-DGRID_RBD_TORCH_KEY, the store key) is therefore baked into
+    the core object only, and a family object depends on nothing but its sources
+    and flags — the per-unit object cache (M4) can share it across store entries.
+    Mirrors the historical single TORCH_LIBRARY/IMPL pair row for row (table
+    rows, then the pin-only stragglers, then the mjx twins)."""
+    ops = f"GRID_RBD_TORCH_OPS_{fam.upper()}"
+    L = [f"// [[unit: {fam}; surface: torch]]",
+         f"#define {ops}(X) \\"]
+    L.append(" \\\n".join(f"    GRID_TORCH_ROW_{r}(X)" for r in rows) if rows else "    /* no table rows */")
+    L += [f"void grid_rbd_torch_def_{fam}(torch::Library &m) {{",
+          "#define GRID_TORCH_X_DEF(name, sig) m.def(#name sig);",
+          f"    {ops}(GRID_TORCH_X_DEF)",
+          "#undef GRID_TORCH_X_DEF"]
+    for schema, impl, gate in _TORCH_STRAGGLERS.get(fam, []):
+        if gate: L.append(f"#if {gate}")
+        L.append(f"    m.def({schema});")
+        if gate: L.append(f"#endif  // {gate}")
+    L += ["#ifdef GRID_RBD_WITH_MUJOCO",
+          '#define GRID_TORCH_X_DEF_MJX(name, sig) m.def(#name "_mujoco" sig);',
+          f"    {ops}(GRID_TORCH_X_DEF_MJX)",
+          "#undef GRID_TORCH_X_DEF_MJX",
+          "#endif  // GRID_RBD_WITH_MUJOCO",
+          "}",
+          f"void grid_rbd_torch_impl_{fam}(torch::Library &m) {{",
+          "#define GRID_TORCH_X_IMPL(name, sig) m.impl(#name, torch_##name<false>);",
+          f"    {ops}(GRID_TORCH_X_IMPL)",
+          "#undef GRID_TORCH_X_IMPL"]
+    for schema, impl, gate in _TORCH_STRAGGLERS.get(fam, []):
+        name = schema.split("(", 1)[0].strip('"')
+        if gate: L.append(f"#if {gate}")
+        L.append(f'    m.impl("{name}", {impl});')
+        if gate: L.append(f"#endif  // {gate}")
+    L += ["#ifdef GRID_RBD_WITH_MUJOCO",
+          '#define GRID_TORCH_X_IMPL_MJX(name, sig) m.impl(#name "_mujoco", torch_##name<true>);',
+          f"    {ops}(GRID_TORCH_X_IMPL_MJX)",
+          "#undef GRID_TORCH_X_IMPL_MJX",
+          "#endif  // GRID_RBD_WITH_MUJOCO",
+          "}",
+          "// [[unit: end]]"]
+    return "\n".join(L) + "\n"
+
+
+def _torch_core_library(fams: list[str]) -> str:
+    """The core unit's library definition: exactly one TORCH_LIBRARY (schemas)
+    + TORCH_LIBRARY_IMPL (CUDA) per op namespace, each delegating to the
+    family functions above. Unfenced (core text) by construction."""
+    L = ["// The library itself (core unit — the ONLY text that names the op namespace",
+         "// GRID_RBD_TORCH_LIB / -DGRID_RBD_TORCH_KEY; family objects are namespace-free",
+         "// and reusable across store entries by the per-unit object cache)."]
+    L += [f"void grid_rbd_torch_def_{f}(torch::Library &m);" for f in fams]
+    L += [f"void grid_rbd_torch_impl_{f}(torch::Library &m);" for f in fams]
+    L.append("GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {")
+    L += [f"    grid_rbd_torch_def_{f}(m);" for f in fams]
+    L += ["}", "GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {"]
+    L += [f"    grid_rbd_torch_impl_{f}(m);" for f in fams]
+    L.append("}")
+    return "\n".join(L) + "\n"
+
+
 def gen_torch_ops_table() -> str:
+    from .abi_specs import FAMILIES, FAMILY_OF
     parts = [TORCH_OPS_BEGIN + "\n",
              "// Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen\n",
+             "// [[unit: prelude; surface: torch]]\n",   # the row macros: every family unit expands its own rows
              _TORCH_TABLE_HEADER]
     parts += [_torch_table_row(k) for k in TORCH_TABLE_ORDER]
     parts.append("\n#define GRID_RBD_TORCH_OPS(X) \\\n")
     parts.append(" \\\n".join(
         f"    GRID_TORCH_ROW_{_torch_table_name(k).upper()}(X)"
         for k in TORCH_TABLE_ORDER))
-    parts.append("\n" + TORCH_OPS_END + "\n")
+    parts.append("\n// [[unit: end]]\n")
+    parts.append("// Per-family registration (multi-TU build): each family unit defines + impls ITS\n"
+                 "// rows in grid_rbd_torch_def_<family> / grid_rbd_torch_impl_<family>; the core\n"
+                 "// unit's library (below) calls them. Same rows, same order as GRID_RBD_TORCH_OPS.\n")
+    rows_by_family: dict[str, list[str]] = {f: [] for f in FAMILIES}
+    for k in TORCH_TABLE_ORDER:
+        rows_by_family[FAMILY_OF[k]].append(_torch_table_name(k).upper())
+    fams = [f for f in FAMILIES if rows_by_family[f] or f in _TORCH_STRAGGLERS]
+    for fam in fams:
+        parts.append(_torch_family_registration(fam, rows_by_family[fam]))
+    parts.append(_torch_core_library(fams))
+    parts.append(TORCH_OPS_END + "\n")
     return "".join(parts)
 
 
 def template_path() -> Path:
     return Path(__file__).resolve().parents[1] / "bindings" / "grid_rbd" / "wrapper_template.cu"
+
+
+# ── per-family kernel-attribute registration (multi-TU arc, 2026-10-09) ──────
+# One `grid_rbd_family_<f>_init_attrs` per build family (abi_specs.FAMILIES),
+# calling the header's library-safe `init_grid_kernel_attr_<short>_checked`
+# twins for the manifest shorts that family owns (+ the `_mjx_checked` twin
+# under GRID_RBD_WITH_MUJOCO), and the aggregator the context constructor
+# calls instead of the header's all-kernel `init_grid_kernel_attrs_checked`.
+# Same registrations as the aggregate for everything the bindings launch
+# (minus the bench-only `_single_timing` twins and the never-launched shorts in
+# NOT_LAUNCHED_BY_BINDINGS); failed_op naming unchanged. In the single-unit
+# build these are `static`; M2 moves each family's function into its own unit.
+FAMILY_BEGIN = ("// ── BEGIN GENERATED FAMILY KERNEL ATTRS "
+                "(grid_codegen/wrapper_body_gen.py — do not hand-edit) ──")
+FAMILY_END = "// ── END GENERATED FAMILY KERNEL ATTRS ──"
+
+
+def _attr_gate(short: str) -> str:
+    from .abi_specs import OPT_IN_GATE_SHORTS
+    gate = "GRID_HAS_" + short.upper()
+    return f"#ifdef {gate}" if short in OPT_IN_GATE_SHORTS else f"#if {gate}"
+
+
+def gen_family_attr_block() -> str:
+    from .abi_specs import FAMILIES, FAMILY_ATTR_SHORTS
+    from .kernel_attrs import MJX_KERNEL_OVERLOADS
+    parts = [FAMILY_BEGIN,
+             "// Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen",
+             "// Tables: abi_specs.FAMILIES / FAMILY_ATTR_SHORTS (crosschecked against",
+             "// kernel_attrs.KERNEL_OVERLOADS by test/test_abi_spec_crosscheck.py)."]
+    for fam in FAMILIES:
+        parts.append(f"// [[unit: {fam}]]")
+        parts.append(f"cudaError_t grid_rbd_family_{fam}_init_attrs(const char **failed_op) {{")
+        for short in FAMILY_ATTR_SHORTS[fam]:
+            parts.append(_attr_gate(short))
+            parts.append(f"    {{ cudaError_t _e = grid::init_grid_kernel_attr_{short}_checked<T>(failed_op); "
+                         "if (_e != cudaSuccess) return _e; }")
+            if short in MJX_KERNEL_OVERLOADS:
+                parts.append("#ifdef GRID_RBD_WITH_MUJOCO")
+                parts.append(f"    {{ cudaError_t _e = grid::init_grid_kernel_attr_{short}_mjx_checked<T>(failed_op); "
+                             "if (_e != cudaSuccess) return _e; }")
+                parts.append("#endif")
+            parts.append("#endif")
+        parts.append("    (void)failed_op;")
+        parts.append("    return cudaSuccess;")
+        parts.append("}")
+        parts.append("// [[unit: end]]")
+    for fam in FAMILIES:
+        parts.append(f"cudaError_t grid_rbd_family_{fam}_init_attrs(const char **failed_op);")
+    parts.append("static cudaError_t grid_rbd_init_kernel_attrs_checked(const char **failed_op) {")
+    for fam in FAMILIES:
+        parts.append(f"    {{ cudaError_t _e = grid_rbd_family_{fam}_init_attrs(failed_op); if (_e != cudaSuccess) return _e; }}")
+    parts.append("    return cudaSuccess;")
+    parts.append("}")
+    parts.append(FAMILY_END)
+    return "\n".join(parts) + "\n"
+
+
+def _fenced(key: str, text: str, surface: str | None = None) -> str:
+    """Wrap one key's generated text in the multi-TU unit fence (comment lines
+    the single-unit compile ignores; bindings/grid_rbd/_units.py splits on them).
+    Keys with no wrapper family (python_only) are emitted unfenced (core)."""
+    from .abi_specs import FAMILY_OF
+    fam = FAMILY_OF.get(key)
+    if fam is None:
+        return text
+    attr = f"; surface: {surface}" if surface else ""
+    body = text if text.endswith("\n") else text + "\n"
+    return f"// [[unit: {fam}{attr}]]\n{body}// [[unit: end]]\n"
 
 
 # Every generated region of the template: (begin marker, end marker, generator).
@@ -1188,6 +1377,7 @@ REGIONS = (
     (TORCH_OPS_BEGIN, TORCH_OPS_END, gen_torch_ops_table),
     (TORCH_BODIES_BEGIN, TORCH_BODIES_END, gen_torch_bodies_block),
     (JAX_HANDLERS_BEGIN, JAX_HANDLERS_END, gen_jax_handlers_block),
+    (FAMILY_BEGIN, FAMILY_END, gen_family_attr_block),
 )
 
 

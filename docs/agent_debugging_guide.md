@@ -2835,3 +2835,105 @@ now check h=1e-4 and 3e-4 with the SAME 1e-6 relative threshold, not a looser on
 Receipt implication: byte-identical generated headers say nothing about changed
 CPU expectations. Oracle gitlink changes must invalidate carries independently
 of header replay, for both CUDA and wrapper shards.
+
+### 7.z42 A completion waiter must never `pgrep -f` its own command line (2026-10-07, release lane)
+
+An `until ! pgrep -f "test.benchmarks.release.collect"; do sleep 60; done` loop waited two
+hours after the collection had finished: `pgrep -f` matches the full command line of every
+process, including the `bash -c '... pgrep -f "test.benchmarks.release.collect" ...'` shell
+running the loop itself. The pattern therefore always matched, and the waiter looked like a
+still-running job. Nothing was lost, but the quiet-window hours were.
+
+Rules: (1) wait on STATE, not on process names — poll the job's own state file, output
+directory or `gh run` status; (2) if a process check is unavoidable, anchor it on the real
+executable (`pgrep -f "^.*\.venv/bin/python -m test\.benchmarks"`) or use the PID recorded
+at launch (`kill -0 $PID`), never a bare substring; (3) a Monitor that reads a state file
+cannot self-match. Related: kill by PID only (the `pkill` bracket trick is unreliable).
+
+### 7.z43 Compile-time arc: what actually decides nvcc wall time and RAM (2026-10-09/10, multi-TU build)
+
+Measured on an RTX 5090 / 24-core host while splitting the bindings `robot.so` into one core
+unit + 13 family units (SSOT: `docs/open-tasks/multi_tu_arc_2026-10-09.md`; design note:
+`docs/compile_time_arc_2026-10.md`). The facts, in the order they bit us:
+
+1. **Whoever address-takes a kernel compiles it.** The header's aggregate
+   `init_grid_kernel_attrs` registers EVERY kernel (incl. the bench-only `_single_timing` twins
+   and overloads nothing launches). Any TU that calls it instantiates the whole robot. The
+   bindings got **3x** (iiwa14 618 → 203 s) from registering per algorithm through the checked
+   twins (`init_grid_kernel_attr_<algo>_checked`) and dropping the twins, before any TU split.
+   The CUDA test runners used to call `grid::init_grid<T>()` → the aggregate → every cell
+   of a mimic robot (shared full header) compiled the entire robot (h1_2 second-order prewarm:
+   50 min, 15 GB). Fixed 2026-10-10 (`init_grid_streams` + per-RUN-token checked twins;
+   referee `test/test_runner_registration.py`): that cell is now 81 s / 2.1 GB, the g1
+   floating integrator SHARED cell 2253 s → 635 s. Rule: a TU registers only what it
+   launches — a NEW runner must never call `init_grid<T>()`.
+2. **cicc is single-threaded per TU; ptxas is superlinear in kernel size.** One giant TU
+   (full g1: 48 min, 8 GB) is bounded by the slowest kernel chain; N units in parallel are
+   bounded by the slowest UNIT (g1: `integrator_gradient` 362 s). Partition by measured unit
+   cost, heavy families as singletons, and launch heavy-first (the pool's makespan is the
+   last-started straggler).
+3. **`-c` objects carry UNCOMPRESSED fatbins** (nvcc compresses only at its own final link):
+   the linked `.so` was 19.8 MB vs 4.2 MB. `-Xfatbin -compress-all` on each unit restores it.
+4. **`--split-compile N`** = 3–4x wall on a unit but ~3x its RAM, and ptxas register allocation
+   CHANGES (SASS differs). A/B on g1 `integrator_gradient`: outputs bitwise identical, kernel
+   time +1.3 % (noise). Policy (user, 10-10): opt-in knob for bindings builds
+   (`GRID_RBD_SPLIT_COMPILE`, in the content key), NEVER on the test runners (the receipt
+   certifies the binary users get), never a default.
+5. **Opt-in gate macros are INDENTED `#define`s** inside `#if` blocks in grid.cuh — anchor on
+   `^\s*#define`, never `^#define` (two prototype runs were mis-gated by this).
+6. **Core must reference no kernel.** The referee (`test/test_wrapper_units.py`) greps the
+   core unit for `<<<`, `init_grid_kernel_attr_`, `GRID_KERNEL_CEIL(`, `m.impl(`,
+   `XLA_FFI_DEFINE_HANDLER_SYMBOL(`, `grid::*_kernel<`, `torch_*<true|false>`. Anything that
+   address-takes a kernel (registration, ceiling table, torch impl table, JAX handler symbol)
+   lives in the family unit that owns the kernel; core only dispatches by name.
+7. **The torch op-namespace key is a core-only compile flag.** It used to be a `-D` for every
+   unit, which would have made every family object unique per store entry and the object cache
+   useless. Family units register through `grid_rbd_torch_def_/impl_<family>(torch::Library&)`;
+   core's single `TORCH_LIBRARY` calls them. Two robots in one process still get distinct
+   namespaces (receipt shard `test_two_robot_process`).
+8. **Per-unit object cache key = exactly that unit's compile inputs** (unit text, grid.cuh,
+   wrapper_common.cuh, flags WITHOUT the staging dir's own `-I`, toolchain tags). The staging
+   dir is `.gen_<pid>_…` and differs per build — hashing its path would miss every time. A
+   wrapper comment edit then costs one unit + core (iiwa14 119 → 22 s).
+9. **RAM: a humanoid unit peaks ~2.5 GB; a full 8-unit build 12–15 GB** (MemAvailable drop,
+   sampler — NOT `/usr/bin/time -v`: `ru_maxrss` of a parent reports the LARGEST child, not the
+   sum, so it under-reports a parallel build ~4x; `test/compile_sched.py`'s ledger has this
+   blind spot). Default jobs = `min(8, cores, MemAvailable/3 GB)`, evaluated per process at
+   start — concurrent builds don't coordinate; the receipt launcher caps units per job at 4.
+10. **Gate hygiene under a split build:** run `python_wrappers` modules one per process (the
+    torch op namespace collides across modules in one process); never edit
+    `wrapper_template.cu` / `_compile.py` while a GPU gate runs (the hash changes mid-run →
+    `StaleRobotError` / "cache hit took 208 s" artifacts); objects/outputs of a killed build
+    are published atomically (`os.replace`) so a concurrent builder of the same key is safe.
+
+### 7.z44 Everyday receipt mechanics under the multi-unit build (2026-10-10)
+
+- `test/run_validation.py` strips every `GRID_*` variable from the driver's environment — a
+  cap or knob must be SET INSIDE `validation_env()`, not exported around the launcher.
+- The launcher refuses a dirty tree and verifies `HEAD == candidate` at the end: **no commits
+  in the main checkout for the whole run** (12 h). Do side work in a worktree on another
+  branch (`git worktree add -b <tmp> /tmp/... HEAD`), never on the receipt's branch.
+- **The main checkout must stay BYTE-CLEAN for the whole run — no edits either, docs
+  included** (2026-10-10, the hard way). Every shard's receipt records `repo.dirty` from
+  `git status` at ITS record time, so an uncommitted edit to any tracked file (a CHANGELOG
+  line, a docs page, a ledger that is not gitignored) while a shard records makes that shard
+  dirty; `gpu-proof merge` folds it into the merged `/repo/dirty`, the launcher's post-step
+  refuses the tree, and `--finalize` / `gpu-proof verify` (policy `allow_dirty: false`) fails.
+  Nothing can be hand-patched afterwards (the receipt is signed), and a `--resume` keeps
+  every green shard — a dirty-but-green shard included — unless the driver demotes dirty
+  shards (fixed 2026-10-10, `load_prior_results`). An overnight 42/42-green run was lost to one
+  docs edit. Write notes in gitignored ledgers (`docs/open-tasks/*.md` are ignored unless
+  tracked) or in a worktree, and `git status --porcelain` must stay empty until the launcher
+  prints "Recording complete".
+- Fingerprints: a codegen or bindings edit stales ALL 42 shards; a change to grid.cuh bytes
+  (even additive) also misses every CUDA equivalence header cache — 160 prewarms, ~4.5 h once
+  BEFORE the runners registered per algorithm (2026-10-10; the h1_2 flagship job alone was 4.5 h,
+  now each cell compiles only its own kernels); a runner-source edit re-keys only the executables.
+  The pool now launches each consumer's heaviest job first and sizes admissions from sampled
+  process-tree peaks (ledger schema 2 — a legacy ru_maxrss ledger is dropped on load, so the
+  first run after the upgrade predicts the 8 GB default everywhere). Two GPU shards run side by
+  side (`GRID_SPLIT_SHARD_JOBS=2` in the launcher). Re-budget from the first receipt under
+  this configuration (the 2026-10-1x release run) rather than from the numbers above.
+- Watch the driver's `[hh:mm:ss] <shard>: OK|FAIL` lines; `[pool] +/- prewarm_*` lines show the
+  compile pool; a long silence with `cicc`/`ptxas` at 100 % CPU is a big header compiling, not a
+  stall (the h1_2 second-order runner: 50 min).

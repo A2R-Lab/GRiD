@@ -19,7 +19,7 @@ adaptation from embedded Jetson class devices to desktop GPUs. Website: https://
 
 GRiD builds on our [URDFParser](https://github.com/A2R-Lab/URDFParser), [RBDReference](https://github.com/A2R-Lab/RBDReference), and [GLASS](https://github.com/A2R-Lab/GLASS) packages (URDF parsing, Pinocchio-validated reference dynamics, and GPU linear algebra), together with its own bundled code generator. Using its scripts, users can easily generate and test optimized rigid body dynamics CUDA C++ code for their URDF files.
 
-**Status: 0.5.0 is the first packaged release and is alpha software.** APIs may still change between
+**Status: 0.5.1 (the first packaged release was 0.5.0) is alpha software.** APIs may still change between
 minor versions; see [CHANGELOG.md](https://github.com/A2R-Lab/GRiD/blob/main/CHANGELOG.md) for what has
 landed since the paper and what is known to be missing. The [original ICRA 2022 paper](https://a2r-lab.org/publication/grid/)
 describes the implementation preserved in the archival [robot-acceleration/GRiD](https://github.com/robot-acceleration/GRiD)
