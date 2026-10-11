@@ -311,7 +311,6 @@ humans both follow).
     </tr>
     <tr>
       <td align="center" valign="top" width="20%"><a href="https://github.com/pruyontrarakk"><img src="https://avatars.githubusercontent.com/pruyontrarakk?s=100" width="100px;" alt="pruyontrarakk"/><br /><sub><b>pruyontrarakk</b></sub></a><br /></td>
-      <td align="center" valign="top" width="20%"><a href="https://github.com/the-eater"><img src="https://avatars.githubusercontent.com/the-eater?s=100" width="100px;" alt="="/><br /><sub><b>=</b></sub></a><br /></td>
     </tr>
   </tbody>
 </table>
