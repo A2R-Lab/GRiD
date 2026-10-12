@@ -28,7 +28,7 @@ Homepage figures also omit overall titles; their context lives on the page.
 This presentation choice does NOT approve the data. Without --approve, --output
 must not be the published asset directory. ``--approve`` writes the figures
 into docs/source/_static/release and marks the manifest approved; use it only
-after the collection has been audited (docs/open-tasks/release_timing_handoff).
+after the collection has been audited (docs/open-tasks/archive/release_timing_handoff).
 """
 import argparse
 import collections

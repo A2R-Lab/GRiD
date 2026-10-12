@@ -1543,7 +1543,7 @@ is their tombstone):
   re-snapshot).
 - **Keep the ON-DISK todo / backlog current as work lands — not just the ephemeral in-session list (USER
   PREFERENCE).** The harness TodoWrite list is per-session and disappears at `/compact`; the durable state
-  lives in `docs/open-tasks/session_progress_*.md` (live commit log) + the authoritative forward backlog
+  lives in `docs/open-tasks/archive/session_progress_*.md` (live commit log) + the authoritative forward backlog
   (`backlog_*_post_features.md`) + the `feedback_*`/`project_*` memories + `MEMORY.md` pointers. Update
   these AS each slice commits (mark done, append the commit SHA, move/refresh outstanding items, supersede
   stale lists) so a fresh context can resume losslessly. When a doc goes stale (an item it lists is now
@@ -2561,7 +2561,7 @@ the same root term `inverse_dynamics` already emits:
 **What happened.** After the floating×mimic fixes (§7.z32) and the X0-inversion fix (§7.z33),
 every per-robot override in `CUDA_ROBOT_ALGORITHM_TOLERANCES` and the integrator scopes were
 re-measured.
-- **Method:** a throwaway harness patch (`docs/open-tasks/diag-tolerance-audit-20260930.patch`,
+- **Method:** a throwaway harness patch (`docs/open-tasks/archive/diag-tolerance-audit-20260930.patch`,
   never committed) logged every comparison's error against the strict default and never raised.
   It ran over both bases, every robot, all samples plus random samples, and the integrator
   with scopes removed.
@@ -2623,9 +2623,11 @@ per header (the `ENABLE_FDSVA` flag) instead of one per session.
 locking, which is why `run_split_suite.phase_run` ran GPU shards one at a time. They now
 take a per-key exclusive flock (`cuda_harness._cache_key_lock`, the `executable_cache`
 idiom) around check-then-build, the runner executable is published by `os.replace`
-from a `.partial`, and `GRID_SPLIT_SHARD_JOBS` (default 1) runs that many shards side by
+from a `.partial`, and `GRID_SPLIT_SHARD_JOBS` (driver default 1) runs that many shards side by
 side. Host RAM, not the GPU, is the bound: a shard's inline humanoid nvcc builds are not
-pool-admitted, so pilot >1 only under a `MemoryMax`'d unit. Guard:
+pool-admitted. The 2026-10-01 pilot (two at a time, ~800 MiB VRAM each, ~1.8x throughput) was
+clean, and since 2026-10-10 the receipt launcher sets 2 (runners now register only what they
+launch, so inline builds are small). Guard:
 `test/test_cuda_cache_locking.py`.
 ### 7.z36 "Pageable D2H" was a misdiagnosis: the numpy path copied twice; fix by retargeting the mirror, not by pinning the destination (2026-10-01)
 
@@ -2803,7 +2805,7 @@ thread indices — a per-entry gather rewrite would remove them — and the real
 ones); world-frame forward sweep 9 → 4 per body. Arena: body-frame 36·pairs t/p scratch →
 78·NB totals region (iiwa14 3744 → 3282 floats). The A/B decides what is kept.
 
-**Harness.** `docs/open-tasks/bitident_2026_10_03.py` (gitignored): generates PRE (main) and
+**Harness.** `docs/open-tasks/archive/bitident_2026_10_03.py` (gitignored): generates PRE (main) and
 POST (worktree) headers for one robot, compiles a stdin runner against each, same inputs,
 `BEGIN <tag> … END <tag>` block must be byte-identical and thread-invariant. The general
 `cuda_equivalence_runner.cu` works with `--defines GRID_RUN_SPLIT=1,RUN_<ALGO>=1`.
@@ -2853,7 +2855,7 @@ cannot self-match. Related: kill by PID only (the `pkill` bracket trick is unrel
 ### 7.z43 Compile-time arc: what actually decides nvcc wall time and RAM (2026-10-09/10, multi-TU build)
 
 Measured on an RTX 5090 / 24-core host while splitting the bindings `robot.so` into one core
-unit + 13 family units (SSOT: `docs/open-tasks/multi_tu_arc_2026-10-09.md`; design note:
+unit + 13 family units (SSOT: `docs/open-tasks/archive/multi_tu_arc_2026-10-09.md`; design note:
 `docs/compile_time_arc_2026-10.md`). The facts, in the order they bit us:
 
 1. **Whoever address-takes a kernel compiles it.** The header's aggregate

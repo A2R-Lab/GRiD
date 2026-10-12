@@ -43,8 +43,9 @@ def validation_env():
                GRID_SPLIT_SHARD_JOBS='2',
                # Multi-unit robot.so builds (2026-10-10): each compile job runs up to
                # GRID_RBD_BUILD_JOBS nvcc units in parallel. Measured: a humanoid at
-               # the default 8 units takes ~15 GB; the scheduler's ru_maxrss ledger
-               # sees only the LARGEST unit, not the sum, so cap units per job here
+               # the default 8 units takes ~15 GB. The pool ledger now samples the
+               # whole process tree (schema 2), but the first run after a ledger
+               # reset predicts the 8 GB default, so keep units per job capped at 4
                # (3 jobs x 4 units x ~2.5 GB ≈ 30 GB worst case on a 62 GB box).
                GRID_RBD_BUILD_JOBS='4')
     return env

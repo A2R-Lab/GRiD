@@ -1224,11 +1224,6 @@ class TorchRobotHandle(BaseDelegateMixin):
                 f"floating_base={self.floating_base})")
 
 
-def _concat_blocks(blocks):
-    import torch
-    return torch.cat([blocks[:, 0], blocks[:, 1]], dim=-1)
-
-
 # ─── public API ─────────────────────────────────────────────────────────────
 
 

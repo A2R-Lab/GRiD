@@ -86,7 +86,7 @@ def _idsva_so_use_world_frame(self):
     exactly correct (no internal slab / fold needed). Mirrors how floating/mimic
     already route here. Byte-identical for low/mid-DOF cardinal fixed-base robots
     (predicate false). See docs/idsva_so_inner_refactor_notes.md + the spherical
-    progress memo + docs/open-tasks/perf_idsva_so_bigrobot.md (EXP-1 high-DOF route).
+    progress memo + docs/open-tasks/archive/perf_idsva_so_bigrobot.md (EXP-1 high-DOF route).
     """
     return (self.robot.floating_base
             or self.robot.robot_has_spherical()
@@ -3902,7 +3902,7 @@ def _emit_idsva_so_mjx_output(self):
       [OUT,        OUT+4*NV*NV*NV)     mjx output band (4 slabs; copied back at end)
 
     The closed-form dM block and the explicit per-k form (a) for the other three
-    tensors are transcribed verbatim from docs/open-tasks/mjx_proto/
+    tensors are transcribed verbatim from docs/open-tasks/archive/mjx_proto/
     proto_idsva_so_emit_spec.py (validated <1e-13 vs second_order_id_pin_to_mjx)."""
     nv = self.robot.get_num_vel()
     NJ = self.robot.get_num_joints()

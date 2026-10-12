@@ -255,3 +255,11 @@ whose `grid.cuh` is unchanged recompiles only the units whose text changed;
 `force_rebuild=True` recompiles every unit. Objects are kept forever, like the
 `store/` entries; set `GRID_RBD_OBJECT_CACHE_DAYS=N` to prune objects not built
 or linked from in N days after each successful build. The per-unit `rc`/seconds/cache hits are in `robot.build.log`.
+Two more knobs: `GRID_RBD_CACHE_DIR` overrides the cache root (default: the
+platformdirs user cache; `register_robot(cache_dir=...)` wins over the env), and
+`GRID_RBD_SPLIT_COMPILE=N` (opt-in, default off) passes nvcc `--split-compile N`
+on the heaviest unit(s) (`GRID_RBD_SPLIT_COMPILE_UNITS`, default
+`integrator_gradient`) for ~3x faster compiles of that unit at ~3x its RAM; it
+changes ptxas register allocation (outputs were bitwise identical in our A/B,
+kernel time within noise), is folded into the cache key, and is never used for
+the test runners.

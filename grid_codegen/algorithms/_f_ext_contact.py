@@ -1,6 +1,6 @@
 """Contact-FRAME -> joint-local f_ext map + derivatives (GATO ask 1, part C.2).
 
-SSOT: docs/open-tasks/c2_contact_frame_map_design_2026-07-13.md
+SSOT: docs/open-tasks/archive/c2_contact_frame_map_design_2026-07-13.md
 
 WHAT THIS CLOSES. GRiD already had the whole f_ext DERIVATIVE stack (_f_ext_gradient.py):
     dtau/dfext = -J^T,   dqdd/dfext = M^-1 J^T,   d(id_gradient)/dfext = -dJ^T/dq

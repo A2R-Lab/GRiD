@@ -12,7 +12,7 @@ MJWarp (https://github.com/google-deepmind/mujoco_warp) is the NVIDIA-Warp-based
 GPU successor to MJX, advertised as faster than MJX. It is GPU-only (Warp targets
 NVIDIA hardware), so unlike frax there is no cpu/gpu split — a single column.
 
-First-run things to verify (see docs/open-tasks/mujoco_warp_baseline_plan.md):
+First-run things to verify (see docs/open-tasks/archive/mujoco_warp_baseline_plan.md):
   * wp.synchronize() actually brackets each timed launch (no async leakage).
   * the batched-state assign API (d.qpos.assign(...)) matches the installed
     MJWarp Data layout (1D flattened vs 2D (nworld, n)).

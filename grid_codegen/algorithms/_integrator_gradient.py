@@ -487,7 +487,7 @@ def _emit_integrator_gradient_mjx_output(self, integrator_type, s_mjx_scratch="s
 
     ``s_dAB`` is 2n*3n COLUMN-major (``s_dAB[col*2n + row]``); output rows are
     ``[q_{k+1} tangent(n); qd_{k+1}(n)]``, input cols ``[dq(n) | dqd(n) | du(n)]``.
-    Transcribed verbatim from docs/open-tasks/mjx_proto/proto_integ_grad_mjx.py
+    Transcribed verbatim from docs/open-tasks/archive/mjx_proto/proto_integ_grad_mjx.py
     (validated <1e-15 vs integrator_gradient_pin_to_mjx). The assembly:
       * BOTTOM rows reframe as a VELOCITY output (G applied to base-linear rows; the
         3 base-rotation q-cols pick up g_dot @ qd_{k+1,pin}); columns reframe by the
@@ -1754,7 +1754,7 @@ def _emit_integrator_hessian_mjx_output(self):
     idsva_so SO epilogues). Implemented as REAL FORWARD-MODE: for each mjx axis k, the
     directional derivative of every input to the first-order transform is built from
     the in-kernel quantities, then propagated through a forward-mode clone of the
-    transform. Transcribed op-for-op from docs/open-tasks/mjx_proto/proto_integ_hess_mjx.py
+    transform. Transcribed op-for-op from docs/open-tasks/archive/mjx_proto/proto_integ_hess_mjx.py
     (validated <1e-9 vs integrator_hessian_pin_to_mjx). In-kernel quantities (all live):
       s_df_du = fd_dq|fd_dqd (col-major), s_Minv (SYMMETRIC_UPPER), s_qdd, s_q/s_qd/s_u,
       the SE(3) blocks (s_dInt_v / s_d2Int_qv / s_d2Int_vv) + a freshly-computed

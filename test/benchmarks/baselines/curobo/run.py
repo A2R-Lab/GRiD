@@ -76,7 +76,7 @@ ALGORITHM COVERAGE
 All other GRiD algos -> null (cuRobo's dynamics surface only exposes RNEA
 fwd/bwd; no forward_dynamics / crba / minv / SO / Jacobian dynamics kernels).
 
-FIRST-RUN VALIDATION CHECKLIST (see docs/open-tasks/curobo_baseline_plan.md)
+FIRST-RUN VALIDATION CHECKLIST (see docs/open-tasks/archive/curobo_baseline_plan.md)
   * confirm dynamics.compute_inverse_dynamics(JointState(q,qd,qdd)) returns tau
     of shape (batch, dof) on cuda.
   * confirm the RNEA-backward (torch.autograd.backward) path is the gradient we
