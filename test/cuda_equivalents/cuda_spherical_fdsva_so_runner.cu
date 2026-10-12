@@ -61,7 +61,10 @@ template <typename T>
 void run() {
     const T gravity = static_cast<T>(-9.81);
 
-    cudaStream_t *streams = grid::init_grid<T>();
+    // R1 (2026-10-12): streams + only the kernels this runner launches (the
+    // aggregate init_grid<T>() address-took, i.e. compiled, every kernel in the header).
+    cudaStream_t *streams = grid::init_grid_streams<T>();
+    gpuErrchk(grid::init_grid_kernel_attr_fdsva_so_checked<T>());
     grid::robotModel<T> *d_robot_model = grid::init_robotModel<T>();
 
     const int nq = grid::NUM_JOINTS;   // == nq for this codegen

@@ -100,7 +100,11 @@ __global__ void spherical_frame_jacobian_device_runner(
 
 template <typename T>
 void run() {
-    cudaStream_t *streams = grid::init_grid<T>();
+    // R1 (2026-10-12): streams + only the kernels this runner launches (the
+    // aggregate init_grid<T>() address-took, i.e. compiled, every kernel in the header).
+    cudaStream_t *streams = grid::init_grid_streams<T>();
+    gpuErrchk(grid::init_grid_kernel_attr_end_effector_pose_checked<T>());
+    gpuErrchk(grid::init_grid_kernel_attr_frame_jacobian_checked<T>());
     grid::robotModel<T> *d_robot_model = grid::init_robotModel<T>();
 
     const int nq = grid::NUM_JOINTS;

@@ -167,7 +167,9 @@ void dcopy_out(const std::string &name, T *dptr, int rows, int cols) {
 
 template <typename T>
 void run() {
-    cudaStream_t *streams = grid::init_grid<T>();
+    // R1 (2026-10-12): streams + only the kernels this runner launches (the
+    // aggregate init_grid<T>() address-took, i.e. compiled, every kernel in the header).
+    cudaStream_t *streams = grid::init_grid_streams<T>();  // runner-local kernels register themselves below
     grid::robotModel<T> *d_robotModel = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();
 

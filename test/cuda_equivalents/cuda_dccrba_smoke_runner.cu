@@ -55,7 +55,11 @@ int run(int req_threads) {
     const int dccrba_size = 6 * nv * nv;
     const int adot_size = 6 * nv;
 
-    cudaStream_t *streams = grid::init_grid<T>();
+    // R1 (2026-10-12): streams + only the kernels this runner launches (the
+    // aggregate init_grid<T>() address-took, i.e. compiled, every kernel in the header).
+    cudaStream_t *streams = grid::init_grid_streams<T>();
+    gpuErrchk(grid::init_grid_kernel_attr_cmm_time_variation_checked<T>());
+    gpuErrchk(grid::init_grid_kernel_attr_dccrba_checked<T>());
     grid::robotModel<T> *d_robot_model = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();
 
