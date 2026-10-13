@@ -43,10 +43,11 @@ producing the canonical markdown report:
        --output-dir test/benchmarks/results/comparison_<tag> \
        --report test/benchmarks/benchmark_multi_version_<tag>.md
 
-The full sweep takes ~1.5 hours on an RTX 5090. cuBLASDx (``glass_nvidia``)
-was removed in v2.0 of the codegen; see
-:doc:`../concepts/cublasdx_removal_design` for the rationale and the
-``archive/last-cublasdx`` git tag for the historical comparison data.
+The full sweep takes ~1.5 hours on an RTX 5090. The cuBLASDx-backed
+``glass_nvidia`` column was removed before the first PyPI release (0.5.0); the
+historical design record is kept in ``docs/design_history/`` in the
+repository and the ``archive/last-cublasdx`` git tag holds the last
+comparison data.
 
 Algorithms measured
 -------------------
@@ -149,7 +150,7 @@ at any block size), so the optimal ``(resource_tier, threads_per_block)``
 for each algorithm is a pure *performance* choice that depends on the
 **robot** (DoF / topology) and the **GPU**. GRiD ships measured-optimal
 launch configs under ``config/launch_configs/<robot>/<gpu>.json``; codegen bakes
-the matching file into ``grid_launch_config.cuh`` and the host launchers
+the matching file into the generated header and the host launchers
 (and therefore the python / jax / torch bindings) default their launch
 config from it. With no entry for your (robot, GPU), GRiD falls back to a
 conservative — still correct, just slower — default.
@@ -248,8 +249,8 @@ memory. Two example pairs demonstrate and time this
 iiwa14, and ``..._go2.py`` twins for the floating-base go2), driven by
 ``test/benchmarks/gpu_resident_timing.py``.
 
-Measured on the RTX 5090 (sm_120, 2026-08-09,
-``results/overnight_20260809/legC_gpu_resident.json``):
+Measured on the RTX 5090 (sm_120, 2026-08-09; raw results live in the local
+benchmark archive, which is not tracked):
 
 * **JAX resident rollout vs host round-trip** (a ``lax.scan`` rollout calling
   GRiD's dynamics each step): iiwa14 **24.3x / 14.5x / 7.3x** faster at batch
@@ -283,8 +284,8 @@ Two fixes ship for this:
   effective D2H bandwidth on large payloads from 13.3 to ~21 GB/s (the
   box's PCIe-lane ceiling). That alone flipped **8 with-mem cells** vs
   Pinocchio (CPU, 24 threads) (11 losses + 2 ties → 5 losses + 8 wins); the
-  per-cell before/after table is the "W2a re-capture" section of
-  ``test/benchmarks/results/competitive_render_20260826/competitive_analysis.md``.
+  per-cell before/after table is in the 2026-08-26 competitive analysis in the
+  local benchmark archive.
 * **Not copying at all** — keep the tensor on the GPU (next section).
 
 Staying resident (jax)
@@ -294,8 +295,7 @@ The ``grid_rbd`` jax FFI path is device-in / device-out: under ``jit`` /
 ``lax.scan`` composition the nv³ tensor is produced on-device and consumed
 by the next pipeline stage (a Hessian-vector product, a DDP backward pass)
 with **zero host transfer**. Layer-3 timings (jax FFI, medians of 30 iters
-after warmup, RTX 5090,
-``test/benchmarks/results/night4_20260827/so_resident_results.json``), in
+after warmup, RTX 5090, 2026-08-27 capture in the local benchmark archive), in
 total-batch µs — *resident* = device-in/device-out, *out_host* = outputs
 pulled to host, *roundtrip* = numpy-in → numpy-out:
 

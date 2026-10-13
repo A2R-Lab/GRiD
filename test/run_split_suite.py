@@ -409,16 +409,20 @@ def build_cuda_shards(cuda_k: str | None,
 
 def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
                  wrapper_mods_now: list[str], durations: dict,
-                 budget_secs: float, fingerprint_digest_fn):
+                 budget_secs: float, carry_plan: dict):
     """Shard-level receipt refresh (user decision 2026-08-20): re-run ONLY the
     shards whose narrow fingerprints changed vs `old_receipt`; the rest are
     carried by `gpu-proof merge --carry-from` (policy allow_carried gates
     acceptance — the everyday policy allows it, the release policy refuses it).
 
     Returns (stale_names, carried_names, wrapper_mods_to_run, cuda_fresh_shards).
-    `fingerprint_digest_fn(paths) -> digest` must be pytest-gpu-proof's OWN
-    compute_fingerprint (imported, not reimplemented) so the staleness decision
-    can never drift from what carry_forward/verify recompute downstream.
+    `carry_plan` is pytest-gpu-proof's OWN `plan_carry(old_receipt)` report
+    (pytest-gpu-proof >= 0.4.1): per-shard carryable/stale verdicts from the
+    same ancestry, dirty-tree and narrow-fingerprint checks `merge --carry-from`
+    enforces, so the base staleness decision can never drift from what the
+    merge and the verifier recompute downstream. GRiD layers its own stricter
+    rules on top (oracle pin, recorded failures, wrapper fingerprint schema,
+    cuda byte-neutrality) — those can only demote a carryable shard to stale.
 
     Safety shape: fresh cuda shards are packed from {current collection} minus
     {carryable shards' node ids}; a carryable shard whose ids vanished from the
@@ -464,25 +468,32 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
     oracle_changed = bool(old_sha and codegen_neutrality.reference_inputs_changed(old_sha))
     if oracle_changed:
         print("  carry soundness: RBDReference changed; all oracle-dependent shards stale")
-    # 2026-10-10: a merged receipt recorded with a dirty tree attests nothing
-    # carryable — its shards ran against unknown bytes. `gpu-proof merge
-    # --carry-from` takes /repo/dirty from the FRESH shards only (measured with
-    # the real tool), so carrying from a dirty receipt would LAUNDER it into a
-    # clean-looking descendant. Everything is stale; nothing is carried.
-    old_dirty = bool((old_receipt.get("repo") or {}).get("dirty"))
-    if old_dirty:
-        print("  carry soundness: old receipt was recorded with a DIRTY tree; "
+    # The tool's verdicts (pytest-gpu-proof 0.4.1 `plan_carry`): ancestry,
+    # a dirty recording tree (receipt-level AND per-shard — a dirty shard can
+    # never be laundered by carrying it next to clean ones) and the narrow
+    # fingerprint recomputed at the current tree. Everything below only
+    # demotes a tool-carryable shard; it never promotes a tool-stale one.
+    plan_receipt = carry_plan.get("receipt") or {}
+    if not plan_receipt.get("carryable", False):
+        print(f"  carry soundness: {plan_receipt.get('reason', 'receipt not carryable')}; "
               "nothing is carried (all shards stale)")
+    tool_verdict = {sh.get("name"): sh for sh in carry_plan.get("shards") or []}
     carried, stale = [], []
     for s in shards:
-        if oracle_changed or old_dirty:
+        if oracle_changed:
+            stale.append(s)
+            continue
+        tv = tool_verdict.get(s.get("name"))
+        if tv is None or tv.get("verdict") != "carryable":
+            if tv is not None and plan_receipt.get("carryable", False) \
+                    and tv.get("reason") != "fingerprint changed":
+                print(f"  carry soundness: {s.get('name')} stale — {tv.get('reason')}")
             stale.append(s)
             continue
         if _bad_ids.intersection(s.get("node_ids") or []):
             stale.append(s)
             continue
-        fp = s.get("fingerprint") or {}
-        paths = fp.get("included_paths") or []
+        paths = (s.get("fingerprint") or {}).get("included_paths") or []
         # 2026-09-09 fingerprint-schema upgrade: wrapper shards fingerprint the
         # bindings SOURCE too (_BINDINGS_FP at shard construction — a bindings-
         # only change must stale the tests that import it). A wrapper shard
@@ -491,8 +502,7 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
         if _is_wrapper(s) and "bindings/grid_rbd" not in paths:
             stale.append(s)
             continue
-        now = fingerprint_digest_fn(paths)
-        (carried if now == fp.get("digest") else stale).append(s)
+        carried.append(s)
 
     # 2026-09-11 byte-neutrality gate (user decision, option 2): cuda narrow
     # fingerprints are test-side only — the GENERATOR inputs (grid_codegen,
@@ -669,6 +679,28 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
             wrapper_to_run, cuda_fresh)
 
 
+def resign_module_if_fingerprint_moved(old_receipt: dict, carried_names: list[str],
+                                       durations: dict, digest_now: str | None) -> str | None:
+    """A refresh with NO stale shard but a moved RECEIPT-LEVEL fingerprint
+    (an edit to a fingerprint path outside every shard's narrow paths — the
+    driver itself, pyproject.toml, the test manifest) cannot be a no-op: the
+    committed receipt no longer verifies against this tree, and `gpu-proof
+    merge` needs at least one fresh shard to re-sign at HEAD. Returns the
+    cheapest carried wrapper module to re-run for that (its carry is sound;
+    a fresh run simply replaces it), or None when the fingerprint is unmoved
+    or nothing carried is a wrapper shard."""
+    old_digest = (old_receipt.get("fingerprint") or {}).get("digest")
+    if digest_now is None or digest_now == old_digest:
+        return None
+    by_mod: dict[str, float] = {}
+    for sh in old_receipt.get("shards") or []:
+        ids = sh.get("node_ids") or []
+        if sh.get("name") in carried_names and ids \
+                and str(ids[0]).startswith("test/python_wrappers/"):
+            by_mod[sh["name"]] = sum(float(durations.get(i, 0.0)) for i in ids)
+    return min(by_mod, key=by_mod.get) if by_mod else None
+
+
 def _shard_receipt_repo(out_dir: Path, shard: str) -> dict | None:
     """The `repo` block recorded by a shard's own receipt (None when absent
     or unreadable — non-receipts runs have no per-shard receipt)."""
@@ -757,13 +789,11 @@ def update_durations(merged_receipt: Path) -> None:
         data = json.loads(merged_receipt.read_text())
     except (OSError, json.JSONDecodeError):
         return
-    durations = load_durations()
-    n = 0
-    for t in data.get("tests", []):
-        nid, dur = t.get("node_id"), t.get("duration_s")
-        if isinstance(nid, str) and isinstance(dur, (int, float)):
-            durations[nid] = dur
-            n += 1
+    from pytest_gpu_proof.merge import collect_durations  # noqa: PLC0415
+    durations = collect_durations([data], load_durations())
+    n = sum(1 for t in data.get("tests", [])
+            if isinstance(t.get("node_id"), str)
+            and isinstance(t.get("duration_s"), (int, float)))
     if n:
         DURATIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
         DURATIONS_PATH.write_text(
@@ -937,11 +967,16 @@ def _warm_desc(entry: dict) -> str:
     ) + f",mb={kw.get('max_batch_size', 256)}"
 
 
-def warm_entries() -> list[tuple[str, dict]]:
-    """Deduped Phase A warm targets as (desc, warm_robot-kwargs)."""
+def warm_entries(modules: list[str] | None = None) -> list[tuple[str, dict]]:
+    """Deduped Phase A warm targets as (desc, warm_robot-kwargs). With
+    `modules`, only the targets those modules need (2026-10-13: a refresh that
+    re-runs one module used to queue every manifest warm, then drain-kill the
+    rest and report them as POOL-FAIL)."""
     seen: set[str] = set()
     out: list[tuple[str, dict]] = []
-    for _mod, entries in sorted(WARM_MANIFEST.items()):
+    for mod, entries in sorted(WARM_MANIFEST.items()):
+        if modules is not None and mod not in modules:
+            continue
         for e in entries:
             desc = _warm_desc(e)
             if desc in seen:
@@ -1209,7 +1244,7 @@ def build_compile_pool(out_dir: Path, *, warm: bool, cuda_shards: list,
 
     desc_to_job: dict[str, str] = {}
     if warm:
-        for i, (desc, entry) in enumerate(warm_entries()):
+        for i, (desc, entry) in enumerate(warm_entries(modules)):
             name = f"warm{i:02d}_{entry['robot']}"
             spec_path = cdir / f"{name}.spec.json"
             spec_path.write_text(json.dumps({
@@ -1351,7 +1386,15 @@ def report_pool(pool, out_dir: Path) -> int:
                 log_text = res.stdout_tail
             real_build = ("compiling runner" in log_text or "cache miss" in log_text
                           or "executable miss" in log_text)
-        if res.rc not in (0,):
+        drained = getattr(pool, "stopped", False) and (
+            res.rc == -1 or (res.rc < 0 and "not attempted" in res.stdout_tail)
+            or res.rc == -15)
+        if res.rc not in (0,) and drained:
+            # The pool was stopped after the shards finished: killed in flight
+            # (SIGTERM, rc=-15) or never attempted (rc=-1). Nothing depended
+            # on these any more — not a failure.
+            print(f"  POOL-CANCELLED {name}: rc={res.rc} (pool drained)")
+        elif res.rc not in (0,):
             failed += 1
             print(f"  POOL-FAIL {name}: rc={res.rc} {detail} "
                   f"(log: {cdir / (name + '.log')})")
@@ -1669,14 +1712,13 @@ def main() -> int:
             print(f"=== refresh resume: {len(modules)} wrapper module(s) + "
                   f"{len(refresh_cuda_shards)} cuda shard(s) from the saved plan ===")
         else:
-            from pytest_gpu_proof.fingerprint import compute_fingerprint  # noqa: PLC0415
+            from pytest_gpu_proof.merge import plan_carry  # noqa: PLC0415
             old = json.loads(Path(args.refresh_from).read_text())
             stale_names, carried_names, modules, refresh_cuda_shards = \
                 plan_refresh(
                     old, collect_cuda_node_ids(None), discover_modules(),
                     load_durations(), args.shard_budget_mins * 60.0,
-                    lambda paths: compute_fingerprint(
-                        paths, root=str(REPO_ROOT))["digest"])
+                    plan_carry(old, repo_root=str(REPO_ROOT)))
             print(f"=== refresh vs {args.refresh_from}: {len(stale_names)} "
                   f"stale / {len(carried_names)} carried shard(s); re-running "
                   f"{len(modules)} wrapper module(s) + "
@@ -1684,8 +1726,24 @@ def main() -> int:
             for n in stale_names:
                 print(f"  STALE {n}")
             if not modules and not refresh_cuda_shards:
-                print("nothing stale — the receipt already covers this tree")
-                return 0
+                from pytest_gpu_proof.fingerprint import recompute_fingerprint  # noqa: PLC0415
+                try:
+                    digest_now = recompute_fingerprint(
+                        old.get("fingerprint") or {}, root=str(REPO_ROOT))["digest"]
+                except Exception as exc:  # unreadable scope → let verify decide
+                    print(f"  receipt-level fingerprint not recomputable ({exc})")
+                    digest_now = None
+                resign = resign_module_if_fingerprint_moved(
+                    old, carried_names, load_durations(), digest_now)
+                if resign is None:
+                    print("nothing stale — the receipt already covers this tree")
+                    return 0
+                print(f"  receipt-level fingerprint moved (a fingerprint path outside "
+                      f"every shard's narrow paths changed); re-running wrapper "
+                      f"module {resign} so the merged receipt is re-signed at HEAD")
+                modules = [resign]
+                stale_names.append(resign)
+                carried_names.remove(resign)
             if os.environ.get("GRID_SPLIT_REFRESH_DRY") == "1":
                 print("GRID_SPLIT_REFRESH_DRY=1 — plan printed, not running")
                 return 0
@@ -1879,7 +1937,10 @@ def main() -> int:
         shards = sorted(str(p) for p in rdir.glob("*.json")) if rdir.exists() else []
         if shards:
             merged = out_dir / "gpu-proof.json"
-            cmd = [GPU_PROOF, "merge",
+            # --verify-inputs (pytest-gpu-proof 0.4.1): every shard receipt's
+            # signature is authenticated against the signer's GitHub keys
+            # before it can contribute to the merged receipt.
+            cmd = [GPU_PROOF, "merge", "--verify-inputs",
                    "--out", str(merged), "--repo", str(REPO_ROOT)]
             if args.receipts_carry_from:
                 cmd += ["--carry-from", args.receipts_carry_from]
@@ -1888,6 +1949,22 @@ def main() -> int:
             print(f"  receipts: merged {len(shards)} shard(s) -> {merged} (rc={mrc})"
                   + (f" carrying from {args.receipts_carry_from}"
                      if args.receipts_carry_from else ""))
+            if mrc == 0:
+                # The ONE scope/policy gate, fired here while the tree is
+                # still byte-clean (header keys are written below): the
+                # everyday policy's required_test_manifest (exact collection),
+                # expected-skips baseline, fingerprint, ancestry, signature.
+                # A short or drifted collection fails HERE, before the
+                # launcher promotes the receipt. --full runs re-verify under
+                # the release policy at --finalize.
+                vcmd = [GPU_PROOF, "verify", "--receipt", str(merged),
+                        "--repo", str(REPO_ROOT),
+                        "--policy", str(REPO_ROOT / "test/gpu-proof-policy.yaml"),
+                        "--expected-skips",
+                        str(REPO_ROOT / "test/gpu-proof-expected-skips.txt")]
+                vrc = subprocess.run(vcmd, cwd=REPO_ROOT).returncode
+                print(f"  receipts: everyday-policy verify of {merged} (rc={vrc})")
+                mrc = vrc
             if mrc != 0:
                 bad += 1
             elif bad == 0:

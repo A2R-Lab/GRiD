@@ -16,7 +16,7 @@ def launch(tmp_path, monkeypatch):
     before = {'shards': {'fresh': [{'content_sha256': 'old'}]}}
     (root / 'gpu-proof.json').write_text(json.dumps(original))
     (root / 'test/gpu-proof-header-keys.json').write_text(json.dumps(before))
-    (root / 'test/gpu-proof-scope.json').write_text(json.dumps({'node_ids': ['required']}))
+    (root / 'test/gpu-proof-tests.txt').write_text('required\n')
     monkeypatch.setattr(launcher, 'ROOT', root)
     monkeypatch.setattr(launcher, 'LOCK_PATH', tmp_path / 'lock')
     state = SimpleNamespace(root=root, out=tmp_path / 'run', calls=[],
@@ -121,7 +121,7 @@ def test_recording_preserves_fresh_headers_and_awaits_evidence_commit(launch):
 
 
 @pytest.mark.parametrize('outcome', [
-    'driver-fail', 'interrupt', 'missing-scope', 'bad-headers', 'head-moved',
+    'driver-fail', 'interrupt', 'bad-headers', 'head-moved',
 ])
 def test_failure_retains_evidence_without_promoting_receipt(launch, outcome):
     launch.outcome = outcome
@@ -131,9 +131,6 @@ def test_failure_retains_evidence_without_promoting_receipt(launch, outcome):
     assert launch.receipt()['identity'] == 'original'
     assert launch.status()['status'] == 'failed'
     assert (launch.out / 'header-keys.before.json').exists()
-    if outcome == 'verify-fail':
-        keys = json.loads((launch.root / 'test/gpu-proof-header-keys.json').read_text())
-        assert keys['shards']['fresh'][0]['content_sha256'] == 'new'
 
 
 def test_noop_refresh_verifies_existing_receipt(launch):
@@ -189,8 +186,8 @@ def test_finalize_real_git_evidence_transition(tmp_path, monkeypatch):
     (root / 'source.py').write_text('original\n')
     (root / 'gpu-proof.json').write_text('{}')
     (root / 'test/gpu-proof-header-keys.json').write_text('{"shards": {}}')
-    (root / 'test/gpu-proof-scope.json').write_text('{"node_ids": ["required"]}')
-    git('add', 'source.py', 'gpu-proof.json', 'test/gpu-proof-header-keys.json', 'test/gpu-proof-scope.json')
+    (root / 'test/gpu-proof-tests.txt').write_text('required\n')
+    git('add', 'source.py', 'gpu-proof.json', 'test/gpu-proof-header-keys.json', 'test/gpu-proof-tests.txt')
     git('commit', '-qm', 'Candidate')
     out = tmp_path / 'run'
     monkeypatch.setattr(launcher, 'ROOT', root)

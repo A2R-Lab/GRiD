@@ -327,7 +327,8 @@ Most useful helpers (in ``grid_codegen/helpers/``):
 When you're done
 ----------------
 
-Open a PR against the codegen submodule with:
+Open a PR against GRiD (the generator lives in ``grid_codegen/`` in this
+repository) with:
 
 #. The new ``_X.py`` algorithm file.
 #. The ``algo_registry.py`` entry.

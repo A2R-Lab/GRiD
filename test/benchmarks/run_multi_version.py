@@ -78,7 +78,7 @@ NON_GRID_COLUMNS = frozenset({"pinocchio", "mjx", "mujoco_warp", "frax", "bard"}
 # every GEMM shape GRiD calls (notably 4×4×4 in end_effector_pose_hessian, where
 # SIMT wins by 2.6×). The historical data is preserved at the
 # `archive/last-cublasdx` git tag; see
-# docs/source/user_guide/concepts/cublasdx_removal_design.rst.
+# docs/design_history/cublasdx_removal_design.rst.
 COLUMNS = ("pre_glass", "glass", "pinocchio", "mjx", "mujoco_warp", "frax", "bard")
 DEFAULT_COLUMNS = ("pre_glass", "glass", "pinocchio", "mjx", "mujoco_warp", "frax", "bard")
 

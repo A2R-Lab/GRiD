@@ -63,12 +63,41 @@ How to interpret availability
   memory limits for a particular robot or batch. Interface presence does not
   remove those limits.
 
-Important examples: ``fk_batched`` is a restricted first-leaf pose helper;
-plant step Hessians support Euler/semi-implicit Euler, not multi-stage RK;
-and momentum costs use the full ``2*NV`` tangent-state gradient and
-Gauss–Newton Hessian, requiring ``dccrba``. MuJoCo-output integration
-supports Euler/semi-implicit Euler only. See
-:doc:`../concepts/algorithms/kinematics` and
-:doc:`../concepts/algorithms/integrators_and_plant` before selecting a method.
 Use the :doc:`release measurements <../../release_measurements>` and linked
 receipts for the configurations actually measured or validated.
+
+Joint and interface restrictions
+--------------------------------
+
+This is the one place these restrictions are listed; the other pages link
+here. It is a coverage summary, not a guarantee for every combination of joint
+type, algorithm, backend and GPU resource budget.
+
+* **Joint types.** Planar and translation joints are decomposed into
+  scalar-joint chains by the parser; mimic joints retain dependent bodies but
+  reduce coordinates. Mimic and spherical ``minv`` use a dense inverse of the
+  reduced CRBA matrix rather than the scalar-joint direct-inverse recursion.
+* **NumPy-only methods.** ``fk_batched`` is a NumPy-only, restricted
+  single-leaf pose helper; it is not emitted for spherical models or models
+  with more than 32 joints. ``plant_step_hessian`` is available on the NumPy
+  handle and the CUDA interface, not the JAX/PyTorch handles; it supports
+  Euler and semi-implicit Euler on fixed and floating bases, not multi-stage
+  RK, and the artifact must include its ``fdsva_so`` dependency.
+* **Integrators.** Multi-stage integrator gradients are not supported for
+  spherical joints or MuJoCo-output twins; MuJoCo-output integration supports
+  Euler/semi-implicit Euler only.
+* **Costs.** Momentum costs use the full ``2*NV`` tangent-state gradient and
+  Gauss–Newton Hessian, requiring ``dccrba``.
+* **Differentiation scope.** First-order autograd (torch ``backward``,
+  ``jax.grad``/``vjp``) runs the analytic gradient kernels via ``custom_vjp``
+  / ``autograd.Function``; higher-order differentiation through them is not
+  provided. Second-order tensors (``idsva_so``, ``fdsva_so``, the explicit
+  Hessians) are values, not autograd-composable operators. ``*_wrt_params``
+  and ``forward_dynamics_parameter_gradient`` are JAX/PyTorch interfaces (the
+  NumPy handle exposes the regressor) and are local sensitivities of the
+  compiled model, not parameterized functions. ``capture`` is PyTorch-only.
+
+See :doc:`../concepts/algorithms/kinematics` and
+:doc:`../concepts/algorithms/integrators_and_plant` for shapes and method
+scope before selecting a method; :doc:`cuda_support_status` is the catalog of
+generated CUDA paths.

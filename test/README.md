@@ -19,8 +19,10 @@ Receipt correctness inputs are listed in `pyproject.toml` under
 configuration, GPU tests and shared harness/driver files. Changes require a
 refresh (`SPLIT=1 SPLIT_REFRESH=1 test/run_gpu_proof.sh`); the driver determines
 which shards may carry. Documentation-only changes do not stale evidence.
-`test/gpu-proof-scope.json` is the reviewed minimum node-ID set for main;
-adding tests should extend it after collection, never replace it with a smoke set.
+`test/gpu-proof-tests.txt` is the reviewed EXACT node-ID set for main (policy
+`required_test_manifest`); after a reviewed full collection changes, regenerate it
+with `test/receipt_integrity.py --receipt <run>/gpu-proof.json --write-manifest
+test/gpu-proof-tests.txt` and commit it BEFORE recording — never replace it with a smoke set.
 
 ## Root files, bucketed
 
@@ -29,7 +31,7 @@ adding tests should extend it after collection, never replace it with a smoke se
 partition/resume/carry), `compile_sched.py` (RAM-aware parallel compile
 pool), `prewarm_cuda_flagship.py` (flagship, integrator and SO smoke pre-warm;
 read-only integrator/SO cache inventory with `--inventory --node-ids
-test/gpu-proof-scope.json --out inventory.json`),
+test/gpu-proof-tests.txt --out inventory.json`),
 `gpu-proof-policy.yaml` / `gpu-proof-policy-release.yaml` (everyday vs
 release verification), `gpu-proof-expected-skips.txt` (85-entry skip
 baseline CI applies), `codegen_neutrality.py` (refresh-soundness prover:

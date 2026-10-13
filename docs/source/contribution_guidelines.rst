@@ -24,12 +24,37 @@ Documentation
 
 Update the relevant guide and API documentation when behavior changes.
 Use runnable examples and state limitations alongside the affected feature.
-See :doc:`sphinx_edit_guide` for the strict build and local preview commands.
+Documentation and website edits are outside the receipt fingerprint, so they
+never require a GPU run.
 
-.. toctree::
-   :hidden:
+The site is Sphinx (``pydata_sphinx_theme``) under ``docs/source/`` plus the
+cover page under ``docs/landing/``:
 
-   sphinx_edit_guide
+* Homepage text and first-screen navigation: ``docs/source/index.rst``.
+* Install, examples, CUDA status, validation and benchmark pages:
+  ``docs/source/user_guide/``; API landing text:
+  ``docs/source/api_reference/index.rst``.
+* Add a new page to the nearest ``.. toctree::`` so Sphinx includes it. When a
+  page moves or is merged, add its old path to ``LEGACY_ROUTES`` in
+  ``docs/build_site.py`` so published links keep working.
+* The navigation logo is ``docs/source/_static/a2r_lab.png`` (configured in
+  ``docs/source/conf.py``); theme assets such as the favicon and
+  ``custom.css`` live under ``docs/source/_static/``. Put figures next to the
+  page that uses them or under ``_static``.
+
+Build exactly what the GitHub Pages workflow (``.github/workflows/gh-pages.yml``)
+builds, from the repository root; developer installs already include the
+documentation dependencies (``docs/requirements.txt``):
+
+.. code-block:: bash
+
+   .venv/bin/python -m unittest discover -s docs -p 'test_site.py'
+   .venv/bin/python -m sphinx -b html -W --keep-going docs/source docs/build/html
+   .venv/bin/python docs/build_site.py          # cover + /docs + legacy redirects -> docs/build/site
+   .venv/bin/python docs/check_site.py docs/build/site
+   .venv/bin/python -m http.server -d docs/build/site 8000   # preview at http://localhost:8000
+
+Keep the strict build warning-free; the workflow treats warnings as errors.
 
 License
 -------

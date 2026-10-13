@@ -27,6 +27,45 @@ Second packaged release (first: 0.5.0, 2026-10-08). User-visible:
 
 ## Unreleased — v2.0 — cuBLASDx removal + resource-tier system
 
+### 2026-10-13 — pytest-gpu-proof 0.4.1 re-pin + website consolidation (merge-only)
+- **pytest-gpu-proof pinned at 0.4.1** (`install/requirements-dev.txt`, CI). The
+  split driver now takes its base carry verdicts from the tool's own
+  `plan_carry` (ancestry, receipt and per-shard dirty flags, narrow fingerprint)
+  and only demotes on top; durations fold through `collect_durations`; the
+  merge runs with `--verify-inputs` (every shard receipt's signature
+  authenticated); and the merged receipt is verified under the everyday policy
+  right after the merge, while the tree is still byte-clean.
+- **Scope gate moved into the policies.** `test/gpu-proof-scope.json` (a
+  GRiD-side subset check) is replaced by `test/gpu-proof-tests.txt`, an EXACT
+  node-ID manifest enforced by the verifier's `required_test_manifest` in both
+  policies and in CI. Regenerate it with `test/receipt_integrity.py --receipt
+  <run>/gpu-proof.json --write-manifest test/gpu-proof-tests.txt` and commit it
+  before recording.
+- **Refresh re-signs when only receipt-level inputs moved.** A refresh with
+  zero stale shards but a changed receipt-level fingerprint (driver, pyproject,
+  manifest) re-runs the cheapest carried wrapper module so the merge can
+  re-sign at HEAD instead of declaring a no-op the verifier would then reject
+  (`docs/agent_debugging_guide.md` §7.z45).
+- **Warm pool pruned to the running modules.** Phase A now queues compile-warms
+  only for the wrapper modules a run will execute (a one-module refresh used to
+  queue every manifest warm, then drain-kill the rest); jobs drained after the
+  shards finished are reported `POOL-CANCELLED`, not `POOL-FAIL`.
+- **Website consolidation** (text and links only, no re-timing): PyPI-first
+  install on the cover, quickstart and install pages; `docker_setup` folded
+  into Installation ("Containers"); the Sphinx editing guide folded into
+  Contributing; `resource_tier_design_notes` folded into the resource-tier
+  page; `cublasdx_removal_design` and `resource_tier_changelog` retired to
+  `docs/design_history/`; joint/interface restrictions live only on
+  Backend Coverage; stale build times, branch names, submodule-era wording,
+  untracked result paths and ledger phrasing fixed; legacy redirects (with
+  anchors) for every moved page; root `CHANGELOG.md` gains the 0.5.1 entry.
+- Verified: everyday verify of the committed receipt under 0.4.1; CPU driver
+  suite (106) and the CI CPU lane (1068); a real two-shard record → merge
+  --verify-inputs → verify → plan (no-op commit: 2/2 carryable; touched test
+  file: 1/2) → carry-from cycle; `durations` output identical to the driver's
+  map; exact-manifest gate PASS/FAIL/FAIL with the real verifier; strict site
+  build + assembly + link check (108 pages, 58 redirects).
+
 ### 2026-10-10 — receipt infrastructure (compile-time arc, part 2)
 - **CUDA test runners register only what they launch.** The flagship
   `cuda_equivalence_runner.cu` and the second-order, integrator, plant and
@@ -311,7 +350,7 @@ threaded through the CUDA codegen and the Python reference:
 exact pre-rip content of any file.
 
 **Design docs:**
-- [docs/source/user_guide/concepts/cublasdx_removal_design.rst](docs/source/user_guide/concepts/cublasdx_removal_design.rst) — original cuBLASDx-removal rationale.
+- [docs/design_history/cublasdx_removal_design.rst](docs/design_history/cublasdx_removal_design.rst) — original cuBLASDx-removal rationale.
 - [docs/source/user_guide/concepts/resource_tier_system.rst](docs/source/user_guide/concepts/resource_tier_system.rst) — tier system shipped on top, plus the deferred LITE-48KB follow-up.
 
 ### Why
@@ -439,7 +478,7 @@ their outer kernel.
 ### Docs
 
 - New page:
-  `docs/source/user_guide/concepts/cublasdx_removal_design.rst` —
+  `docs/design_history/cublasdx_removal_design.rst` —
   rationale, scope, revert path, deferred research questions.
 - Updated:
   `docs/source/user_guide/concepts/codegen_architecture.rst` —

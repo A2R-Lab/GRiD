@@ -67,9 +67,17 @@ Markers: `pinocchio_equivalence`, `cuda_equivalence`, `python_wrappers`, `floati
 `robot_{smoke,curated,nightly}`, `gpu_proof`, `notebooks`, `developer_only`. GPU test outcomes are captured in a signed
 `gpu-proof.json` receipt (see `test/run_gpu_proof.sh`) that CPU-only CI verifies against the committed
 test fingerprints (red when correctness inputs change without a refreshed receipt).
-Main requires a receipt covering `test/gpu-proof-scope.json`; diagnostic smoke
-receipts do not replace that evidence. A release needs one fresh full run
-verified under the RELEASE policy.
+Main requires a receipt whose collection EQUALS `test/gpu-proof-tests.txt` (policy
+`required_test_manifest`); diagnostic smoke receipts do not replace that evidence. A release needs one fresh full run
+verified under the RELEASE policy. pytest-gpu-proof is pinned at 0.4.1 (`install/requirements-dev.txt`, CI installs
+the same pin): the driver takes its BASE carry verdicts from the tool's `plan_carry` (ancestry, receipt and per-shard
+dirty flags, narrow fingerprint) and only demotes on top (oracle pin, recorded failures, wrapper fingerprint schema,
+cuda byte-neutrality); `gpu-proof merge --verify-inputs` authenticates every shard receipt; the merged receipt is
+verified under the everyday policy right after the merge (tree still byte-clean), before the launcher promotes it; and
+a refresh with zero stale shards whose RECEIPT-LEVEL fingerprint moved (driver / pyproject / manifest edit) re-runs the
+cheapest carried wrapper module so the merge can re-sign at HEAD (§7.z45). After a reviewed collection change,
+regenerate the manifest (`test/receipt_integrity.py --receipt <run>/gpu-proof.json --write-manifest
+test/gpu-proof-tests.txt`) and commit it BEFORE recording — it is a fingerprint path.
 
 Prefer the crash-isolated split driver for full GPU passes:
 `test/run_validation.py` (the receipt launcher) strips `GRID_*` from its env and sets its own
@@ -92,7 +100,7 @@ the partition logic live in `test/test_split_partition.py`.
 Compiles run through a RAM-aware parallel pool (`test/compile_sched.py`): Phase A
 wrapper `.so` warms and CUDA flagship, integrator and second-order smoke pre-warms
 (`test/prewarm_cuda_flagship.py` — reuses the tests' actual builders and cache keys;
-`--inventory --node-ids test/gpu-proof-scope.json --out inventory.json` inspects
+`--inventory --node-ids test/gpu-proof-tests.txt --out inventory.json` inspects
 integrator/SO hits without compiling) execute as admission-controlled parallel
 workers (predicted peak RSS from a rolling ledger at `test/.split_suite/compile_rss.json`
 — schema 2 since 2026-10-10: the job's whole process TREE is sampled, because

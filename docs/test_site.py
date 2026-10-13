@@ -17,10 +17,15 @@ class SiteTests(unittest.TestCase):
         self.output = self.root / "site"
         self.sphinx.mkdir()
         self.landing.mkdir()
-        for name in {*LEGACY_ROUTES.values(), "index.html", "guide/topic.html"}:
+        # A legacy route may target a merged section (path#fragment): the
+        # placeholder page must carry that id so check_site's anchor check holds.
+        anchors = "".join(f'<div id="{t.split("#", 1)[1]}"></div>'
+                          for t in LEGACY_ROUTES.values() if "#" in t)
+        for name in {*(t.split("#", 1)[0] for t in LEGACY_ROUTES.values()),
+                     "index.html", "guide/topic.html"}:
             path = self.sphinx / name
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text('<html><body id="section">Documentation</body></html>')
+            path.write_text(f'<html><body id="section">Documentation{anchors}</body></html>')
         (self.sphinx / "_static").mkdir()
         (self.sphinx / "_static/logo.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
         (self.landing / "index.html").write_text(
@@ -67,8 +72,13 @@ class SiteTests(unittest.TestCase):
     def test_redirects_keep_prefix_query_and_fragment(self):
         self.assemble()
         text = (self.output / "guide/topic.html").read_text()
-        self.assertIn('location.replace("../docs/guide/topic.html"', text)
+        self.assertIn('var t = "../docs/guide/topic.html"', text)
         self.assertIn("location.search + location.hash", text)
+        # an anchored destination keeps its fragment and splices the query in front of it
+        anchored = next(old for old, new in LEGACY_ROUTES.items() if "#" in new)
+        text = (self.output / anchored).read_text()
+        self.assertIn("#" + LEGACY_ROUTES[anchored].split("#", 1)[1] + '"', text)
+        self.assertIn("t.slice(0, i) + location.search + t.slice(i)", text)
         old = (self.output / "user_guide/landing_page.html").read_text()
         self.assertIn("../docs/index.html", old)
 

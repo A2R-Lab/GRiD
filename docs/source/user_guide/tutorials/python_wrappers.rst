@@ -20,18 +20,19 @@ Source: ``bindings/`` in the GRiD repo.
    canonical path — one-call ``load_robot``, cache anatomy, and warm-up
    recipes.
 
-Install (editable, from a GRiD checkout)
-----------------------------------------
+Install
+-------
 
 .. code-block:: shell
 
-   cd path/to/GRiD
-   pip install -e .
+   pip install grid-rbd            # numpy backend; add [jax], [torch] or [all]
 
-This builds a small pybind11 extension (``grid_rbd._core``) at install
-time. ``nvcc`` is **not** required for the install — only for
-:py:func:`grid_rbd.register_robot`, which compiles a per-robot
-``.so`` on first call.
+To develop GRiD, use an editable install from a checkout instead
+(``pip install -e ".[all]"`` from the repository root, or
+``bash install/base_install.sh``); it builds a small pybind11 extension
+(``grid_rbd._core``) at install time. ``nvcc`` is **not** required for either
+install — only for :py:func:`grid_rbd.register_robot`, which compiles a
+per-robot ``.so`` on first call. See :doc:`../getting_started/installation`.
 
 Register-then-run UX
 --------------------
@@ -224,9 +225,8 @@ If you do not need the MuJoCo output convention, build pin-only:
        enable_mujoco_kernels=False,
    )
 
-On g1-floating that is the difference between a 53-minute / 8.3 GB build
-(pin-only) and a 1 h 16 min / 11 GB one (with the mjx twins) — the dated table
-is on :doc:`../getting_started/fast_robot_setup`. Fixed-base and mimic robots (e.g. ``h1_2``)
+On g1-floating the mjx twins roughly double the build — the dated cold/warm
+table is on :doc:`../getting_started/fast_robot_setup`. Fixed-base and mimic robots (e.g. ``h1_2``)
 never get mjx twins, so the flag is a no-op there. It is mutually
 exclusive with ``output_convention="mujoco"``, and participates in the
 ``.so`` cache key only when ``False``, so existing caches stay valid.
@@ -405,9 +405,9 @@ the operand exists so that the backward can supply ``∂τ/∂π`` through the
 regressor VJP. Use them as the linearization point for sysID / calibration
 (the gradient with respect to ``π`` at the current model), not as a function
 you can evaluate at a different ``π`` — to actually change the model, call
-``set_inertia_params`` (``runtime_inertia=True`` builds). A functional
-parameterized forward is a registered design decision (audit W11, option B),
-not something the current API pretends to be.
+``set_inertia_params`` (``runtime_inertia=True`` builds). Not offering a
+functional parameterized forward is a deliberate design decision, not
+something the current API pretends to be.
 
 **Runtime tables reach dynamics, not baked kinematics.** ``runtime_inertia``,
 ``runtime_transform`` and ``runtime_joint_dynamics`` rebuild the dynamics
@@ -452,8 +452,8 @@ and composes with a subset ``algorithm_list`` — e.g.
 ``contact_frames=[...]`` builds only the dynamics cores and the contact
 family (the ``bindings/examples/multi_contact_fext.py`` recipe).
 
-The baked contact set also exposes its ORIGINS to CUDA/plant consumers
-(GATO ask 2026-09-20): ``grid::contact_frame_positions_device`` (the
+The baked contact set also exposes its ORIGINS to CUDA/plant consumers:
+``grid::contact_frame_positions_device`` (the
 ``3*NUM_CONTACT_FRAMES`` world positions of the points ``f_ext_body`` takes
 the wrench about, registration order) and
 ``grid::contact_frame_positions_gradient_device`` (``3 x NUM_VEL`` per
@@ -592,7 +592,7 @@ is present at register time.
    qdd = h.forward_dynamics(q, qd, u)   # autograd-aware torch.Tensor
    qdd.sum().backward()                 # gradients flow to q, qd, u
 
-**What the gradients mean (both backends, audit 2026-09-19).**
+**What the gradients mean (both backends).**
 
 * **Floating base, w.r.t. ``q``.** The analytic kernels differentiate in the
   Pinocchio free-flyer *tangent* chart (``[v_lin local, ω local, joints]``,
@@ -742,4 +742,3 @@ See also
 
 * :doc:`benchmarks` — bench harness and what the methods cost.
 * :doc:`../concepts/algorithms/index` — algorithm-level docs.
-* ``docs/open-tasks/archive/python_wrappers_plan.md`` — design rationale (archived).

@@ -5,7 +5,7 @@ import subprocess
 
 # SIMT-only GLASS sources vendored into every generated grid.cuh. The
 # cuBLASDx-backed `glass::nvidia` namespace was removed in v2.0; see
-# docs/source/user_guide/concepts/cublasdx_removal_design.rst for the
+# docs/design_history/cublasdx_removal_design.rst for the
 # rationale and the `archive/last-cublasdx` git tag for the historical
 # vendoring list.
 # ORDER MATTERS: vendoring strips every `#include`, so a file that references
@@ -149,7 +149,7 @@ def gen_linalg_smem_setup(self, temp_size):
 
     Historically set up an aligned smem pointer for cuBLASDx scratch.
     cuBLASDx was removed in v2.0 (see
-    ``docs/source/user_guide/concepts/cublasdx_removal_design.rst``);
+    ``docs/design_history/cublasdx_removal_design.rst``);
     the SIMT linalg path needs no scratch. The function (and the
     ``s_linalg_smem`` local) are kept so the ~100 callsites that pass
     it as the last ``grid_linalg_*`` argument continue to compile

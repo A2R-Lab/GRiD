@@ -165,7 +165,7 @@ fingerprint_paths = [
     "test/helpers.py", "test/run_gpu_proof.sh", "test/run_split_suite.py",
     "test/compile_sched.py", "test/prewarm_cuda_flagship.py",
     "test/codegen_neutrality.py", "test/header_key_replay.py",
-    "test/receipt_integrity.py", "test/gpu-proof-scope.json", "test/run_validation.py",
+    "test/receipt_integrity.py", "test/gpu-proof-tests.txt", "test/run_validation.py",
     "tools/check_installed_package.py",
 ]
 max_age_days = 30

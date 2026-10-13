@@ -74,7 +74,7 @@ def check(root, allow_preview=False):
         if not legacy.is_file():
             errors.append(f"Missing legacy redirect: {old}")
             continue
-        expected = (root / "docs" / new).resolve()
+        expected = (root / "docs" / new.split("#", 1)[0]).resolve()   # fragment checked above
         if not any((legacy.parent / unquote(urlsplit(link).path)).resolve() == expected
                    for link in parse(legacy).links):
             errors.append(f"Wrong legacy redirect destination: {old}")
