@@ -188,6 +188,12 @@ class RamScheduler:
         """Stop admitting new jobs; running jobs finish."""
         self._stop.set()
 
+    @property
+    def stopped(self) -> bool:
+        """True once stop()/kill_all() ran: later non-zero results are drained
+        jobs (killed in flight or never attempted), not failures."""
+        return self._stop.is_set()
+
     def running_pids(self) -> list[int]:
         """Snapshot worker process-group leaders for dependency-aware stall checks."""
         with self._state_lock:

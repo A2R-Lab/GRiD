@@ -967,11 +967,16 @@ def _warm_desc(entry: dict) -> str:
     ) + f",mb={kw.get('max_batch_size', 256)}"
 
 
-def warm_entries() -> list[tuple[str, dict]]:
-    """Deduped Phase A warm targets as (desc, warm_robot-kwargs)."""
+def warm_entries(modules: list[str] | None = None) -> list[tuple[str, dict]]:
+    """Deduped Phase A warm targets as (desc, warm_robot-kwargs). With
+    `modules`, only the targets those modules need (2026-10-13: a refresh that
+    re-runs one module used to queue every manifest warm, then drain-kill the
+    rest and report them as POOL-FAIL)."""
     seen: set[str] = set()
     out: list[tuple[str, dict]] = []
-    for _mod, entries in sorted(WARM_MANIFEST.items()):
+    for mod, entries in sorted(WARM_MANIFEST.items()):
+        if modules is not None and mod not in modules:
+            continue
         for e in entries:
             desc = _warm_desc(e)
             if desc in seen:
@@ -1239,7 +1244,7 @@ def build_compile_pool(out_dir: Path, *, warm: bool, cuda_shards: list,
 
     desc_to_job: dict[str, str] = {}
     if warm:
-        for i, (desc, entry) in enumerate(warm_entries()):
+        for i, (desc, entry) in enumerate(warm_entries(modules)):
             name = f"warm{i:02d}_{entry['robot']}"
             spec_path = cdir / f"{name}.spec.json"
             spec_path.write_text(json.dumps({
@@ -1381,7 +1386,15 @@ def report_pool(pool, out_dir: Path) -> int:
                 log_text = res.stdout_tail
             real_build = ("compiling runner" in log_text or "cache miss" in log_text
                           or "executable miss" in log_text)
-        if res.rc not in (0,):
+        drained = getattr(pool, "stopped", False) and (
+            res.rc == -1 or (res.rc < 0 and "not attempted" in res.stdout_tail)
+            or res.rc == -15)
+        if res.rc not in (0,) and drained:
+            # The pool was stopped after the shards finished: killed in flight
+            # (SIGTERM, rc=-15) or never attempted (rc=-1). Nothing depended
+            # on these any more — not a failure.
+            print(f"  POOL-CANCELLED {name}: rc={res.rc} (pool drained)")
+        elif res.rc not in (0,):
             failed += 1
             print(f"  POOL-FAIL {name}: rc={res.rc} {detail} "
                   f"(log: {cdir / (name + '.log')})")

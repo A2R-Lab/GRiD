@@ -46,6 +46,10 @@ Second packaged release (first: 0.5.0, 2026-10-08). User-visible:
   manifest) re-runs the cheapest carried wrapper module so the merge can
   re-sign at HEAD instead of declaring a no-op the verifier would then reject
   (`docs/agent_debugging_guide.md` §7.z45).
+- **Warm pool pruned to the running modules.** Phase A now queues compile-warms
+  only for the wrapper modules a run will execute (a one-module refresh used to
+  queue every manifest warm, then drain-kill the rest); jobs drained after the
+  shards finished are reported `POOL-CANCELLED`, not `POOL-FAIL`.
 - **Website consolidation** (text and links only, no re-timing): PyPI-first
   install on the cover, quickstart and install pages; `docker_setup` folded
   into Installation ("Containers"); the Sphinx editing guide folded into

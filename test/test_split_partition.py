@@ -946,3 +946,33 @@ def test_resign_module_when_receipt_level_fingerprint_moved():
     assert rss.resign_module_if_fingerprint_moved(old, carried, dur, "NEW") == "test_small"
     # only cuda carried → nothing to re-sign with (caller falls through to verify)
     assert rss.resign_module_if_fingerprint_moved(old, ["cuda_00"], dur, "NEW") is None
+
+
+def test_warm_entries_restricted_to_running_modules():
+    """A refresh that re-runs ONE module warms only that module's robots."""
+    everything = {d for d, _ in rss.warm_entries()}
+    mod = next(m for m in rss.WARM_MANIFEST if rss.WARM_MANIFEST[m])
+    only = {d for d, _ in rss.warm_entries([mod])}
+    assert only == {rss._warm_desc(e) for e in rss.WARM_MANIFEST[mod]}
+    assert only <= everything and len(only) < len(everything)
+    assert rss.warm_entries([]) == []
+    assert rss.warm_entries(None) == rss.warm_entries()
+
+
+def test_report_pool_labels_drained_jobs_cancelled_not_failed(tmp_path, capsys):
+    from types import SimpleNamespace
+    import compile_sched
+    (tmp_path / "compile").mkdir()
+    results = {
+        "warm00_ok": compile_sched.JobResult("warm00_ok", 0, 1.0, 0),
+        "warm01_killed": compile_sched.JobResult("warm01_killed", -15, 1.0, 0),
+        "warm02_never": compile_sched.JobResult("warm02_never", -1, 0.0, 0, "not attempted (stopped)"),
+        "warm03_real_fail": compile_sched.JobResult("warm03_real_fail", 2, 1.0, 0),
+    }
+    pool = SimpleNamespace(results=results, stopped=True, ledger=None)
+    assert rss.report_pool(pool, tmp_path) == 1          # only the rc=2 job is a failure
+    out = capsys.readouterr().out
+    assert out.count("POOL-CANCELLED") == 2 and "POOL-FAIL warm03_real_fail" in out
+    # an UNstopped pool reports every non-zero rc as a failure (no silent masking)
+    pool = SimpleNamespace(results=results, stopped=False, ledger=None)
+    assert rss.report_pool(pool, tmp_path) == 3
