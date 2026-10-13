@@ -69,7 +69,7 @@ nvcc --version   # should print CUDA release info
 
 GRiD uses a vendored `glass` SIMT linalg helper subset that needs no extra
 SDK. The cuBLASDx-backed `glass-nvidia` path was removed in v2.0; see
-`docs/source/user_guide/concepts/cublasdx_removal_design.rst` for the
+`docs/design_history/cublasdx_removal_design.rst` for the
 rationale and the `archive/last-cublasdx` git tag for the historical code
 path.
 

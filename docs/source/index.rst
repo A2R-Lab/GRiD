@@ -112,20 +112,24 @@ architecture; the tested deployment platform of this release is Linux x86_64
 Quickstart
 ----------
 
-Install from a recursive clone (editable install; the extras pin the CPU jax
-/ torch packages, so add the CUDA wheels yourself — see
-:doc:`installation <user_guide/getting_started/installation>`):
+Install from PyPI (the extras pin the CPU jax / torch packages, so add the
+CUDA wheels yourself); a recursive clone with an editable install is the
+developer path — see :doc:`installation <user_guide/getting_started/installation>`:
 
 .. code-block:: shell
 
+   pip install "grid-rbd[jax,torch]" "jax[cuda12]"   # extras optional: the JAX and torch surfaces
+
+   # developer checkout instead:
    git clone --recursive https://github.com/A2R-Lab/GRiD && cd GRiD
    bash install/base_install.sh && source .venv/bin/activate
-   pip install -e ".[jax,torch]" "jax[cuda12]"      # optional: the JAX and torch surfaces
+   pip install -e ".[jax,torch]" "jax[cuda12]"
 
-Each example below runs as written from the repository root. The **first**
-``load_robot`` of a robot generates and compiles its ``.so`` — about ten
-minutes for the 7-DoF iiwa14 on an RTX 5090, an hour for a humanoid (the dated
-cold/warm table and the RAM-safe subset builds are on
+Each example below runs as written from a repository checkout (the URDFs live
+under ``config/robot_assets/``). The **first** ``load_robot`` of a robot
+generates and compiles its ``.so`` — about 100 s for the 7-DoF iiwa14 on an
+RTX 5090 and about 6 min for the g1 humanoid since 0.5.1 (the dated cold/warm
+table and the RAM-safe subset builds are on
 :doc:`fast robot setup <user_guide/getting_started/fast_robot_setup>`).
 Every later load is seconds: the artifact is cached by content key and rebuilt
 only when the URDF, the options, the GRiD version or the toolchain change.
@@ -261,7 +265,6 @@ research, cite the original paper and record the software commit or release:
    user_guide/getting_started/installation
    user_guide/getting_started/fast_robot_setup
    user_guide/getting_started/library_overview
-   user_guide/getting_started/docker_setup
    user_guide/getting_started/compatibility
    user_guide/glossary
 

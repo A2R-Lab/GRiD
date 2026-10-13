@@ -62,7 +62,14 @@ All three drive the same persistent cache; pick by ceremony level.
        interactive use never compiles
 
 Once a named robot is in the cache, ``get_robot(name)`` looks it up without
-touching the URDF (raises ``RobotNotRegisteredError`` if absent, and
+touching the URDF. Since 0.5.1, ``get_robot(name, urdf_path=..., **register_opts)``
+compiles and registers that URDF on a *miss* (a hit ignores the URDF), so a
+script can be written as "get or build"; a first build announces itself with a
+one-line ``WARNING`` estimating the build, silenced by ``GRID_RBD_QUIET=1``,
+and ``python -m grid_rbd.gc_cache`` reports (``--execute`` deletes) store
+entries no name binds any more — the *Compile on first use* and *Garbage
+collection* paragraphs of :doc:`../tutorials/python_wrappers` have the detail.
+Without a URDF, ``get_robot(name)`` raises ``RobotNotRegisteredError`` if absent, and
 ``StaleRobotError`` when the registered build cannot be loaded by this
 ``grid_rbd`` — built from another wrapper, torch/jax ABI or GPU arch, or before
 the build-identity record existed; re-run ``register_robot`` / ``precompile``
@@ -167,7 +174,10 @@ parallel units instead of one giant unit. ``GRID_RBD_BUILD_JOBS=N`` caps the
 parallel units (default ``min(8, cores, available RAM / 3 GB)``; ``1`` is
 sequential and still peaks lower than the old single unit). Objects are kept in
 a per-unit cache (``~/.cache/grid-rbd/objects/``), so a wrapper change rebuilds
-only the units whose text changed.
+only the units whose text changed. ``GRID_RBD_SPLIT_COMPILE=N`` (opt-in,
+default off) passes nvcc ``--split-compile N`` on the heaviest unit(s) for
+~3x faster compiles of that unit at ~3x its RAM; it is folded into the cache
+key.
 
 Measured 2026-10-10 on an RTX 5090 / 24-core host, ``max_batch_size=1024``,
 pin-only, one build per process into an empty cache, 8 parallel units, box
@@ -247,9 +257,9 @@ the build tractable:
       grid_rbd.load_robot("g1.urdf", floating_base=True,
                           enable_mujoco_kernels=False)
 
-   On g1-floating this is the difference between not building at all and a
-   ~33 min build; fixed-base and mimic robots never get mjx twins, so the
-   flag is a no-op there.
+   On g1-floating the mjx twins roughly double the build on top of the
+   ~6 min pin-only figure in the table above; fixed-base and mimic robots
+   never get mjx twins, so the flag is a no-op there.
 
 2. **Build only the algorithms you need** with ``algorithm_list=`` — the
    named algorithms plus their auto-expanded dependencies are compiled,

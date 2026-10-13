@@ -1,8 +1,9 @@
 How do I…?
 ==========
 
-Start with :doc:`source installation <user_guide/getting_started/installation>`,
-then choose the task below.
+Start with ``pip install grid-rbd`` (:doc:`installation
+<user_guide/getting_started/installation>` — a source checkout is the
+development alternative), then choose the task below.
 
 .. list-table::
    :header-rows: 1
@@ -74,27 +75,17 @@ then choose the task below.
        ``handle.model_version``; a torch/JAX backward whose forward ran under
        an older version raises — recompute the forward. Same page as above.
    * - **Know what this release supports, what changed, and what it does not do**
-     - :doc:`user_guide/getting_started/compatibility` — platforms and toolchain,
-       runtime contexts and versions, captured graphs, operands, native-interface
-       stability (the wrapper's C symbols are private; ``grid.cuh`` is the
-       supported inline API), differentiation, build cost.
+     - :doc:`user_guide/getting_started/compatibility` (platforms, contexts,
+       graphs, operands, native-interface stability, differentiation, build cost).
    * - **Know what shapes / dtypes / devices a call accepts (and rejects)**
      - One rule set per operand class, enforced natively on every surface:
        :doc:`user_guide/concepts/operand_validation`.
    * - **Understand why something recompiled (or refused to)**
-     - Three DIFFERENT "cache keys" exist: (1) the per-robot ``.so`` cache key
-       (URDF bytes + codegen options + version + arch — ``register_robot``);
-       (2) the test suites' content-keyed nvcc compile caches (header/source
-       bytes — byte-identical codegen edits never rebuild); (3) the receipt
-       fingerprints over ``test/cuda_equivalents`` + ``test/python_wrappers``
-       (what makes shards stale). Details:
-       :doc:`user_guide/getting_started/fast_robot_setup` and
+     - The per-robot ``.so`` cache key: :doc:`user_guide/getting_started/fast_robot_setup`;
+       the test suites' compile caches and receipt fingerprints:
        :doc:`user_guide/tutorials/cuda_validation`.
-   * - **See what a registration would build, or why it rebuilt**
-     - ``grid_rbd.build_plan(name, urdf, cuda_arch=...)`` — options, build
-       identity, keys and cache status without building anything; and
-       ``precompile(..., backends=["numpy"])`` populates the cache without a
-       handle or a CUDA context (build boxes). See
+   * - **See what a registration would build, or warm the cache out-of-band**
+     - ``grid_rbd.build_plan`` / ``grid_rbd.precompile``:
        :doc:`user_guide/getting_started/fast_robot_setup`.
    * - **Tune kernel launch configs for my GPU**
      - ``config/autotune_robot.sh --help`` (writes

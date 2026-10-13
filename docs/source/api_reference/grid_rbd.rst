@@ -30,6 +30,17 @@ Registration
 
 .. autofunction:: grid_rbd.load_robot
 
+.. autofunction:: grid_rbd.get_robot
+
+Cache tools
+-----------
+
+.. autofunction:: grid_rbd.precompile
+
+.. autofunction:: grid_rbd.build_plan
+
+.. autofunction:: grid_rbd.gc_cache
+
 The numpy handle
 ----------------
 

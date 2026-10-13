@@ -1,3 +1,7 @@
+**Historical record** — retired from the GRiD website on 2026-10-13 and kept in the repository only as a design/execution ledger; nothing below is maintained.
+Current behaviour is documented on the live site in ``docs/source/user_guide/concepts/codegen_architecture.rst`` and
+``docs/source/user_guide/concepts/resource_tier_system.rst``.
+
 cuBLASDx Removal & Any-Thread-Count Library Functions
 ======================================================
 

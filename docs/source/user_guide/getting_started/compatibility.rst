@@ -21,26 +21,20 @@ Platforms and toolchain
 * **Backends:** the ``[jax]`` / ``[torch]`` extras pin the CPU packages; install
   the CUDA wheel yourself (``pip install "jax[cuda12]"`` or ``"jax[cuda13]"``, a
   ``cu1xx`` torch). A CPU-only jax is refused at handle construction with that
-  hint. Use the :doc:`source installation <installation>` instructions.
+  hint. See :doc:`installation` for the PyPI install and its extras.
 
 Runtime contexts
 ----------------
 
-* Every native call resolves a **runtime context** by id; ``handle.context()``
-  gives an isolated one (own arena, tables, streams, launch overrides). A handle
-  is the one owner of its context: dropped handles are finalized at garbage
-  collection, ``close()`` is idempotent, views reference the handle.
-* ``workspace_slots=N`` on a context is an explicit cap (``0`` = auto-fit;
-  explicit cap > ``GRID_WORKSPACE_TIMESTEP_SLOTS`` > auto-fit).
-* Runtime-parameter mutations (inertias, transforms, joint dynamics, tool
-  attach/detach) are serialized against every in-flight call and give the
-  context a new ``model_version`` (an artifact-wide epoch). torch and JAX
-  backwards refuse a forward that ran under a different version, including a
-  forward that ran on a since-recreated default context.
-* **Limitation:** concurrent asynchronous calls on ONE context share its scratch
-  buffers — one ordered pipeline per context; use a context per pipeline. Setter
-  and numpy fences and the per-backward stamp check remain synchronisation
-  points; execution is not fully asynchronous.
+Every native call resolves a **runtime context** by id; ``handle.context()``
+opens an isolated one (own arena, tables, streams, launch overrides) and a
+handle is the one owner of its context. Runtime-parameter mutations give the
+context a new ``model_version``, and torch/JAX backwards refuse a forward that
+ran under a different version. **Limitation:** concurrent asynchronous calls on
+ONE context share its scratch buffers — one ordered pipeline per context, so
+use a context per pipeline; execution is not fully asynchronous. Ownership,
+``workspace_slots``, versioning and the synchronisation points are specified in
+:doc:`../concepts/runtime_contexts`.
 
 Captured CUDA graphs (torch)
 ----------------------------
@@ -55,17 +49,13 @@ Captured CUDA graphs (torch)
 Operands
 --------
 
-* One rule set per operand class, enforced natively on all three surfaces
-  (``1 <= B <= max_batch``, exact last dim, every operand carrying the leading
-  batch, ``f_ext`` physically batched, runtime target ids in range). numpy
-  coerces layout and dtype; torch refuses CPU, non-contiguous or wrong-dtype
-  tensors; JAX checks in Python and again in every FFI handler.
-* numpy accepts a per-sample 1D input (batch of one); JAX returns an empty
-  result for an empty batch (XLA elides the call); the JAX methods materialize a
-  supported ``f_ext`` broadcast before the call. Configuration inputs have
-  width ``nq``; velocities, accelerations and generalized forces have width
-  ``nv``. Floating and spherical quaternions make these widths different.
-  See :doc:`../concepts/input_output_abi` for layouts.
+One rule set per operand class is enforced natively on all three surfaces
+(``1 <= B <= max_batch``, exact last dim, every operand carrying the leading
+batch). Configuration inputs have width ``nq``; velocities, accelerations and
+generalized forces have width ``nv`` — floating and spherical quaternions make
+these widths different. What each surface coerces, refuses or elides is
+specified in :doc:`../concepts/operand_validation`; layouts are in
+:doc:`../concepts/input_output_abi`.
 
 Native interface stability
 --------------------------
@@ -75,7 +65,8 @@ Native interface stability
   argument; the pool-less allocator spellings remain).
 * The per-robot wrapper ``.so``'s ``extern "C" grid_rbd_*`` symbols are
   **private to the package**: they are consumed only by the pybind core of the
-  same content-keyed build and gained a leading ``ctx_id`` in this release. Do
+  same content-keyed build and gained a leading ``ctx_id`` in 0.5.0, the first
+  packaged release. Do
   not link against them directly.
 
 Differentiation
@@ -87,7 +78,8 @@ Differentiation
   compiled model to its inertial parameters (a parameters argument does not
   install a new runtime model).
 * Second-order tensors are values (``idsva_so`` / ``fdsva_so``), not
-  autograd-composable operators.
+  autograd-composable operators. Per-method and per-joint-type restrictions
+  are collected on :doc:`../tutorials/backend_coverage`.
 
 Build cost
 ----------

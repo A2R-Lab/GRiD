@@ -8,7 +8,7 @@ source in ``grid_codegen/algorithms/``.
 
 .. note::
 
-   New here (human or agent)? Read :doc:`design_principles` first — it is the
+   New here? Read :doc:`design_principles` first — it is the
    shared mental model (smart inners / thin wrappers, *the inner owns its memory
    placement*, the spill ladder, validation discipline, and the anti-patterns to
    avoid). This page covers the *mechanics* of the three layers; that page covers
@@ -175,8 +175,7 @@ from the robot's DVA parallelism (rounded up to a warp, capped at 512) —
 for iiwa14 it is 352, for go2_fixed it is 288, and so on. The host
 wrappers default to launching with ``dim3(MAX_PERF_LEVEL_THREADS, 1, 1)``.
 
-After the v2.0 cuBLASDx removal, ``MAX_PERF_LEVEL_THREADS`` is **a hint, not
-an enforced floor**. Every emitted ``X_inner`` does block-cooperative
+``MAX_PERF_LEVEL_THREADS`` is **a hint, not an enforced floor**. Every emitted ``X_inner`` does block-cooperative
 compute on one timestep — threads within a block split work via
 *block-stride loops* (the ``gen_add_parallel_loop`` helper emits
 ``for (int i = threadIdx.x + threadIdx.y*blockDim.x; i < max_val;
@@ -186,8 +185,10 @@ the outer ``X_kernel`` via a *grid-stride loop* over ``blockIdx`` —
 each block processes one or more timesteps.
 
 CUDA-inline users can launch GRiD kernels with any block size that
-suits their outer kernel. See :doc:`cublasdx_removal_design` for the
-rationale.
+suits their outer kernel. cuBLASDx, whose call sites pinned a minimum block
+size, was removed in favour of GLASS primitives before the first packaged
+release (0.5.0). The historical design record lives in
+``docs/design_history/`` in the repository.
 
 Design sweet spot: tens-to-hundreds of parallel computations
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -219,9 +220,7 @@ constant; fewer threads cover it).
 Each ``X_kernel`` is emitted with ``__launch_bounds__(tier_max_threads<RESOURCE_TIER>())`` —
 tier-templated and load-bearing (it is what ``grid_rbd_kernel_max_threads`` introspects and
 what the baked-THREADS clamp validates against). Only the integrator family still uses
-``MAX_PERF_LEVEL_THREADS``. (An older revision here said the attribute was "about to drop
-in phase B1" — that plan was superseded; "B1/B2" now name the tier-matrix/kernel-attr
-phases in the live plan.)
+``MAX_PERF_LEVEL_THREADS``.
 
 Per-algo metadata: the descriptor table
 ---------------------------------------

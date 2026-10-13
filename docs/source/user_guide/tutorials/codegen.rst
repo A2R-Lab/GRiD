@@ -1,15 +1,18 @@
 Generate CUDA for a robot
 ==============================
 
-GRiD's code generator lives in ``grid_codegen/`` in this repository. It
-produces a robot-specific ``grid.cuh`` header; generating the header does
-not compile or run CUDA. Complete the :doc:`source installation
-<../getting_started/installation>` first, including the Git submodules.
+GRiD's code generator (``grid_codegen/`` in this repository) produces a
+robot-specific ``grid.cuh`` header; generating the header does not compile or
+run CUDA. The ``grid-generate`` CLI ships in the ``grid-rbd`` wheel, so
+``pip install grid-rbd`` (:doc:`installation <../getting_started/installation>`)
+is enough; only a source checkout additionally needs its Git submodules
+populated.
 
 Generate a header
 -----------------
 
-From the repository root:
+From the repository root (the sample URDFs under ``config/robot_assets/`` are
+in the checkout, not the wheel — substitute your own URDF path):
 
 .. code-block:: shell
 

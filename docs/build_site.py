@@ -17,6 +17,12 @@ LEGACY_ROUTES = {
     "user_guide/concepts/algorithms/rnea.html": "user_guide/concepts/algorithms/inverse_dynamics.html",
     "faq.html": "how_do_i.html",
     "todo_list.html": "contribution_guidelines.html",
+    # 2026-10-13 website consolidation (pages merged or retired off the site).
+    "sphinx_edit_guide.html": "contribution_guidelines.html#documentation",
+    "user_guide/getting_started/docker_setup.html": "user_guide/getting_started/installation.html#containers",
+    "user_guide/concepts/cublasdx_removal_design.html": "user_guide/concepts/codegen_architecture.html",
+    "user_guide/concepts/resource_tier_design_notes.html": "user_guide/concepts/resource_tier_system.html#design-rationale",
+    "user_guide/concepts/resource_tier_changelog.html": "user_guide/concepts/resource_tier_system.html",
 }
 
 
@@ -25,7 +31,8 @@ def redirect_page(target):
     return f'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GRiD documentation has moved</title>
-<script>location.replace({json.dumps(target)} + location.search + location.hash);</script>
+<script>var t = {json.dumps(target)}, i = t.indexOf("#");
+location.replace(i < 0 ? t + location.search + location.hash : t.slice(0, i) + location.search + t.slice(i));</script>
 </head><body><p>GRiD documentation has moved. <a href="{escaped}">Continue to the documentation</a>.</p></body></html>
 '''
 
@@ -44,7 +51,9 @@ def assemble(sphinx, landing, output, preview_assets=None):
         if output.is_relative_to(preview_assets) or preview_assets.is_relative_to(output):
             raise ValueError('Preview assets and site output must not overlap')
     for target in LEGACY_ROUTES.values():
-        if not (sphinx / target).is_file():
+        # A destination may carry a #fragment (merged section); check_site
+        # validates the anchor itself once the redirect page is assembled.
+        if not (sphinx / target.split("#", 1)[0]).is_file():
             raise ValueError(f"Missing legacy route destination: {target}")
     # Keep legacy assets/downloads available as well as the new /docs paths.
     shutil.copytree(sphinx, output, ignore=shutil.ignore_patterns(".doctrees"))
@@ -57,7 +66,7 @@ def assemble(sphinx, landing, output, preview_assets=None):
     for old, new in redirects.items():
         page = output / old
         page.parent.mkdir(parents=True, exist_ok=True)
-        target = "../" * (len(Path(old).parts) - 1) + "docs/" + quote(new, safe="/")
+        target = "../" * (len(Path(old).parts) - 1) + "docs/" + quote(new, safe="/#")
         page.write_text(redirect_page(target), encoding="utf-8")
     shutil.copytree(landing, output / "landing",
                     ignore=shutil.ignore_patterns("README.md", "index.html"))

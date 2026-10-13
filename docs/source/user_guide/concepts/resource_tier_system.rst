@@ -1,14 +1,12 @@
-Resource-Tier System (v2.0)
-============================
+Resource-Tier System
+====================
 
-**Status**: shipped in v2.0 + Phase 3a/b/c/d/e spill machinery (L2 pinning
-is default-OFF since 2026-09-15 — measured; see the spilled-memory section
-below). Inner-controlled placement refactor (below) implemented and
-numerically validated for fdsva_so/Minv/FD/ABA/EE_GRAD. Per-tier surgical
-spill now also lands for **idsva_so (body + world frame)** and the
-**time-integrator value + gradient** kernels — see
-:doc:`resource_tier_changelog`. The global scratch arena is named ``d_workspace`` (device memory);
-earlier revisions of this doc called it ``d_global_temp``.
+The resource-tier system lets an inline-CUDA caller choose the shared-memory
+and register profile of every generated kernel and device routine. It has
+shipped in every packaged release (since 0.5.0), including the per-tier spill
+machinery described below; L2 pinning of the spilled workspace is default-OFF
+(measured — see the spilled-memory section). The global scratch arena is
+``d_workspace`` (device memory).
 
 **Audience**: inline-CUDA users (``#include "grid.cuh"`` from their own
 kernel). The Python wrappers (``grid_rbd.RobotHandle``,
@@ -18,13 +16,9 @@ tier — ``grid::launch_cfg<GRID_ALGO_*>::TIER``, autotuned into
 tuned robot many algos run at ``TIER_LITE``/``TIER_MINIMAL``; an untuned
 robot (or algo) falls back to ``TIER_SHARED``.
 
-
-
 .. note::
-   This page is the REFERENCE (definition, memory model, exposed constants,
-   coverage). The rationale essays live in :doc:`resource_tier_design_notes`
-   and the shipped-work log in :doc:`resource_tier_changelog` (split from this
-   page 2026-09-09; it used to bury the definition 400 lines deep).
+   This page is the reference (definition, memory model, exposed constants,
+   coverage); the design rationale is collected at the end of the page.
 
 What the tier system is
 ------------------------
@@ -241,11 +235,9 @@ migrate. Two consequences worth calling out:
   ``s_temp`` at the workspace before the helper call. (See the null-``s_temp``
   fix history for ``aba``/``end_effector_pose_gradient``.)
 
-Conformance audit and the remaining migration list (``idsva_so`` world inner,
-``inverse_dynamics_gradient``/``forward_dynamics_gradient``/``integrator_gradient``
-kernel-side repoints) live in
-``docs/idsva_so_inner_refactor_notes.md`` — that table is the source of truth for
-propagating this pattern across the project.
+The conformance audit for this pattern (which inners own their placement, and
+the deferred surgical de-alias work) lives in
+``docs/idsva_so_inner_refactor_notes.md`` in the repository.
 
 
 Block-wide parallelism in the inners
@@ -327,13 +319,6 @@ Rule of thumb for an inline call:
    everything in shared).
 #. Call ``<algo>_inner<T, placement>(..., s_temp, d_workspace, ...)``.
 
-**Testing status of the refactor**: all five converted algos
-(fdsva_so / Minv / FD / ABA / EE_GRAD) compile clean at all three tiers across
-iiwa14 / go2 / h1_2 (fixed) + g1 (floating); the tier-instantiation smoke
-passes. Numerical equivalence (``cuda_equivalence``) and the per-tier perf
-sweep are pending a joint testing session — the Minv/FD arena layout changed
-(no_F-then-F instead of F-then-no_F), so equivalence is the gating check.
-
 What's plumbed today
 ---------------------
 
@@ -403,19 +388,57 @@ Inline-CUDA usage example::
 References
 -----------
 
-* P1 baseline matrix:
-  ``test/diagnostics/results/tier_baseline_sm120_rtx5090.md`` —
-  per-(algo, robot) register + smem + spill data driving tier
-  decisions.
+* Tier baseline matrix: ``test/diagnostics/tier_baseline.py`` measures the
+  per-(algo, robot) register + smem + spill data that drives tier decisions
+  (the report it writes is a local artifact, not part of the repository);
+  the shipped picks were made from an RTX 5090 (sm_120) run.
 * Smoke test: ``test/diagnostics/tier_instantiation_smoke.py`` —
   verifies all 9 single-overload kernels compile at all 3 tiers
   AND 17 static_asserts validate per-tier SMEM/WORKSPACE invariants.
-* Reusable arena helper:
-  ``grid_codegen/helpers/_code_generation_helpers.py:504-583``
-  (``gen_declare_shared_arena``, ``tier_workspace_expr``).
+* Reusable arena helper: ``gen_declare_shared_arena`` (and its
+  ``tier_workspace_expr`` keyword) in
+  ``grid_codegen/helpers/_code_generation_helpers.py``.
 * Existing bench harness:
   ``test/benchmarks/run_multi_version.py`` (multi-column driver),
   ``test/benchmarks/baselines/{grid,pinocchio,frax,mjx}/`` (per-
   baseline runners), ``test/benchmarks/generate_report.py`` (output
   renderer that already understands ``frax_cpu``/``frax_gpu`` columns
   and gracefully renders missing cells as ``—``).
+
+Design rationale
+----------------
+
+**Why not three completely independent bodies per tier?** Numerical
+equivalence: the math is identical at every tier; ``if constexpr`` branches
+only differ in pointer routing (``s_temp`` vs ``d_workspace``). One body per
+algorithm, with up to two pointer-routing branches, means less duplicated code
+and fewer drift bugs.
+
+**Why the Python surface has no tier knob.** The Python wrapper is a sealed
+product that never touches nvcc, so the tier is a per-algorithm *baked* choice
+rather than a runtime argument: the autotuners write ``{tier, threads}`` into
+``config/launch_configs/``, codegen bakes it as
+``grid::launch_cfg<GRID_ALGO_*>::TIER``, and every binding launch site (the
+numpy/pybind host-wrapper calls and the jax/torch direct kernel launches)
+instantiates that tier. Divergent-tier instantiations get their own
+dynamic-smem registration in ``init_grid_kernel_attrs`` — a distinct
+``__global__`` per tier is the reason that registration exists. Untuned
+robots/algos fall back to ``TIER_SHARED`` via the primary ``launch_cfg``
+template.
+
+**Why LITE has its own smem target.** With a single codegen-time spill pick,
+``TIER_LITE`` collapsed onto SHARED or MINIMAL on robots with multi-rung spill
+ladders. Codegen therefore computes three picks per algorithm
+(``select_shared_tier_3way`` against the ~48 KB
+``cuda_target_lite_shared_mem_bytes`` target), emits per-tier ``if constexpr``
+bodies where the picks diverge, and routes the ``s_temp`` slot through
+``gen_declare_shared_arena(tier_workspace_expr=...)`` so that LITE is a
+genuinely intermediate level.
+
+**How it relates to the block-size story.** Removing cuBLASDx from the
+generated code (before the first packaged release) made every routine
+block-size-agnostic *below* ``MAX_PERF_LEVEL_THREADS`` (``set_threads_per_block``);
+the tier system extends that *above* ``MAX_PERF_LEVEL_THREADS`` via
+``TIER_MINIMAL``'s ``launch_bounds=1024``. The emission layers the tier
+templates attach to (``_inner`` / ``_device`` / ``_kernel``) are described in
+:doc:`codegen_architecture`.

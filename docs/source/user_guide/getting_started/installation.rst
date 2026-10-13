@@ -1,30 +1,14 @@
 Installation
 ============
 
-GRiD is a single repository with its peer products (``GLASS``, ``RBDReference``,
-``URDFParser``) vendored as git submodules under ``external/``. Clone with
-``--recursive`` so those populate, then run the install script — a single
-``pip install -e .`` installs the codegen toolkit and the ``grid_rbd`` Python
-wrapper together (see the :doc:`../../index` quick-start for the extras).
+GRiD is published on PyPI as ``grid-rbd``: one distribution containing the
+code generator, the ``grid-generate`` / ``grid-spherize`` CLIs and the
+``grid_rbd`` Python wrapper with its NumPy, JAX and PyTorch adapters. Install
+it with pip; work from a source checkout only when you want to develop GRiD or
+use the checkout's sample robots.
 
-.. code-block:: shell
-
-    git clone --recursive https://github.com/A2R-Lab/GRiD.git
-    cd GRiD
-
-If you already cloned without ``--recursive``, populate the submodules with
-``git submodule update --init --recursive``.
-
-Source installation
-~~~~~~~~~~~~~~~~~~~
-
-An **editable install from a Git checkout** uses that checkout's generator,
-peer submodules, wrapper template and launch profiles, so keep it in place.
-``main`` is the branch documented here. Distribution wheels instead contain
-their own pinned resources and do not need Git or a retained checkout.
-
-Installing a distribution artifact
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Install from PyPI
+~~~~~~~~~~~~~~~~~
 
 Release wheels and the source distribution are published on PyPI as
 ``grid-rbd`` (Linux x86-64, CPython 3.10–3.12)::
@@ -33,15 +17,16 @@ Release wheels and the source distribution are published on PyPI as
 
 This does not compile robot CUDA code or access a GPU. On a platform without
 a matching wheel pip builds the source distribution, whose small Python
-extension requires a C++17 compiler. The source installation above remains
-available for development. GRiD is alpha software: APIs may change between
-minor versions (see the repository ``CHANGELOG.md``).
+extension requires a C++17 compiler. GRiD is alpha software: APIs may change
+between minor versions (see the `changelog
+<https://github.com/A2R-Lab/GRiD/blob/main/docs/CHANGELOG.md>`_ for what each
+release ships).
 
-One distribution contains the NumPy, JAX and PyTorch adapters. The base install
-requires NumPy; ``jax``, ``torch`` and ``all`` extras select optional framework
-dependencies. Install a GPU-enabled framework build suitable for your hardware
-**before registering a robot**. Neither these extras nor GRiD install the system
-NVIDIA driver or CUDA Toolkit.
+The base install requires NumPy; the ``jax``, ``torch`` and ``all`` extras
+select optional framework dependencies (see the :doc:`../../index` quick-start
+for the extras). Install a GPU-enabled framework build suitable for your
+hardware **before registering a robot**. Neither these extras nor GRiD install
+the system NVIDIA driver or CUDA Toolkit.
 
 Registration is explicit and can take substantial time for large robots::
 
@@ -56,6 +41,50 @@ adapters share the content-addressed registration cache. A subsequent
 registration with unchanged inputs reuses its compiled library; changed model,
 generator, toolkit or framework ABI inputs can require a new build. See
 :doc:`fast_robot_setup` for cache loading and subset selection.
+
+Source installation (development)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The repository vendors its peer products (``GLASS``, ``RBDReference``,
+``URDFParser``) as git submodules under ``external/``. Clone with
+``--recursive`` so those populate (if you already cloned without it, run
+``git submodule update --init --recursive``), then run the install script — a
+single ``pip install -e .`` installs the codegen toolkit and the ``grid_rbd``
+wrapper together and registers the CLIs in a local ``.venv``:
+
+.. code-block:: shell
+
+    git clone --recursive https://github.com/A2R-Lab/GRiD.git
+    cd GRiD
+    bash install/base_install.sh
+    source .venv/bin/activate
+
+An **editable install from a Git checkout** uses that checkout's generator,
+peer submodules, wrapper template and launch profiles, so keep it in place.
+``main`` is the branch documented here. Distribution wheels instead contain
+their own pinned resources and do not need Git or a retained checkout.
+
+For developer installs (adds Pinocchio, robot-description fixtures,
+documentation tooling, and the Pinocchio second-order pybind11 extension
+used as the golden oracle in the equivalence tests):
+
+.. code-block:: shell
+
+   bash install/developer_install.sh
+
+The developer script will, on Debian/Ubuntu, install the system build
+deps needed by the Pinocchio pybind11 extension via ``apt-get``:
+``pkg-config``, ``g++``, ``libeigen3-dev``, ``liburdfdom-headers-dev``.
+The ``pin`` wheel ships its own ``pinocchio.pc`` inside the venv via
+``cmeel``, and ``install/developer_install.sh`` computes the right
+``PKG_CONFIG_PATH`` automatically for the extension build — no manual
+configuration is required.
+
+You can also install manually, with the extras of your choice:
+
+.. code-block:: shell
+
+   pip install -e ".[all]"
 
 Bundled provenance
 ~~~~~~~~~~~~~~~~~~
@@ -113,40 +142,53 @@ then ``git submodule update --init --recursive``; a bare editable install on
 a non-recursive clone succeeds and then fails at first generation with a
 "GLASS submodule is missing" error naming the fix.
 
-Install Python Dependencies
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Containers
+~~~~~~~~~~
 
-The simplest path is to use the provided install scripts, which create a
-local ``.venv`` and register the ``grid-generate`` CLI.
+GRiD does not ship an official Docker image. The recipes below are starting
+points that are **not tested in CI** — pick a CUDA ``-devel`` base matching
+your toolkit and target compute capability (``nvcc`` and the CUDA headers must
+be in the image; the GPU driver comes from the host). Robot CUDA is compiled
+at ``register_robot`` time, so warm the cache in the image build with
+``grid_rbd.precompile`` (see :doc:`fast_robot_setup`) if production must never
+pay the one-time ``nvcc`` cost.
 
-For end-user installs (just the runtime + CLI):
+PyPI install (runtime + CLI only):
+
+.. code-block:: dockerfile
+
+   FROM nvidia/cuda:13.2.0-devel-ubuntu24.04
+   RUN apt-get update && apt-get install -y --no-install-recommends \
+           python3 python3-venv python3-pip g++ \
+       && rm -rf /var/lib/apt/lists/*
+   RUN python3 -m venv /opt/venv && /opt/venv/bin/pip install grid-rbd
+   ENV PATH="/opt/venv/bin:${PATH}"
+   CMD ["bash"]
+
+Source install (adds the checkout's sample robots and, optionally, the
+developer tooling):
+
+.. code-block:: dockerfile
+
+   FROM nvidia/cuda:13.2.0-devel-ubuntu24.04
+   RUN apt-get update && apt-get install -y --no-install-recommends \
+           python3 python3-venv python3-pip git pkg-config g++ \
+           libeigen3-dev liburdfdom-headers-dev \
+       && rm -rf /var/lib/apt/lists/*
+   WORKDIR /opt
+   RUN git clone --recurse-submodules https://github.com/A2R-Lab/GRiD.git
+   WORKDIR /opt/GRiD
+   RUN bash install/base_install.sh
+   # RUN bash install/developer_install.sh   # Pinocchio oracle + fixtures (several GB)
+   ENV PATH="/opt/GRiD/.venv/bin:${PATH}"
+   CMD ["bash"]
+
+Run with the NVIDIA Container Toolkit to expose the host GPU:
 
 .. code-block:: shell
 
-   bash install/base_install.sh
-   source .venv/bin/activate
-
-For developer installs (adds Pinocchio, robot-description fixtures,
-documentation tooling, and the Pinocchio second-order pybind11 extension
-used as the golden oracle in the equivalence tests):
-
-.. code-block:: shell
-
-   bash install/developer_install.sh
-
-The developer script will, on Debian/Ubuntu, install the system build
-deps needed by the Pinocchio pybind11 extension via ``apt-get``:
-``pkg-config``, ``g++``, ``libeigen3-dev``, ``liburdfdom-headers-dev``.
-The ``pin`` wheel ships its own ``pinocchio.pc`` inside the venv via
-``cmeel``, and ``install/developer_install.sh`` computes the right
-``PKG_CONFIG_PATH`` automatically for the extension build — no manual
-configuration is required.
-
-You can also install manually with:
-
-.. code-block:: shell
-
-   pip3 install -e .
+   docker build -t grid:dev .
+   docker run --rm -it --gpus all grid:dev
 
 Install CUDA Dependencies
 ~~~~~~~~~~~~~~~~~~~~~~~~~

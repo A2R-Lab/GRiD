@@ -11,6 +11,26 @@ in the archival [robot-acceleration/GRiD](https://github.com/robot-acceleration/
 repository. Everything below describes the A2R-Lab rebuild that leads to the
 first packaged release.
 
+## [0.5.1] — faster per-robot builds + receipt infrastructure (2026-10-11)
+
+- **Per-robot `robot.so` builds are 4–8x faster**: multi-unit build with a
+  per-unit object cache kept forever and `GRID_RBD_BUILD_JOBS` (iiwa14 ~100 s,
+  was 10 min; go2-floating ~2 min, was 13; g1 pin-only ~6 min, was 48). A
+  wrapper-only change rebuilds only the touched units.
+- **Compile-on-first-use**: `get_robot(name, urdf_path=...)` compiles and
+  registers on a cache miss with a one-line build estimate; `GRID_RBD_QUIET=1`
+  silences it.
+- **Cache maintenance**: `python -m grid_rbd.gc_cache` (dry run; `--execute`).
+- Opt-in `GRID_RBD_SPLIT_COMPILE=N` (nvcc `--split-compile` on the heavy
+  unit), content-keyed; off by default.
+- `algorithm_list` closure fixes (`forward_dynamics_parameter_gradient` needs
+  `forward_dynamics`; the integrator gradients need `integrator`).
+- Reproducible sdist/wheel builds in CI (`SOURCE_DATE_EPOCH`); the PyPI
+  digests match the CI `SHA256SUMS`.
+- Maintainer-side: CUDA test runners register only the kernels they launch and
+  the GPU receipt runs two shards side by side, so a full receipt takes hours
+  instead of half a day. The dated engineering log is `docs/CHANGELOG.md`.
+
 ## [0.5.0] — first PyPI release (alpha)
 
 The first release installable as a package. `pip install grid-rbd` gives the

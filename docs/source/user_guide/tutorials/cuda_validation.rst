@@ -14,8 +14,9 @@ Plan without collecting tests or starting any compilation::
 
 Add ``--execute`` only on a clean committed candidate in a coordinated quiet
 window. The launcher holds ``/tmp/a2rlab-timing.lock`` throughout the run,
-records logs, validates fresh/carried header-key provenance, checks the
-reviewed minimum test-node set, and stages the generated receipt and header
+records logs, validates fresh/carried header-key provenance, verifies the
+merged receipt under the everyday policy (exact test manifest, expected-skip
+baseline, fingerprint, signature) and stages the generated receipt and header
 manifest. Its ``awaiting-evidence-commit`` state is successful recording, not
 a failed GPU run. Commit only those generated evidence files, then verify the
 clean descendant without rerunning any tests::
@@ -43,22 +44,6 @@ full collection adds, removes or renames tests, regenerate the manifest with
 ``test/receipt_integrity.py --receipt <run>/gpu-proof.json --write-manifest test/gpu-proof-tests.txt``
 and commit it before recording; the manifest diff is reviewed in the PR.
 
-Local Docs Build
-----------------
-
-Developer installs include the Sphinx documentation dependencies. To install
-them manually in an existing environment:
-
-.. code-block:: bash
-
-   .venv/bin/python -m pip install -r docs/requirements.txt
-
-Build the HTML docs from the repository root:
-
-.. code-block:: bash
-
-   .venv/bin/python -m sphinx -W --keep-going -b html docs/source docs/build/html
-
 CUDA Correctness Checks (crash-isolated split driver)
 -----------------------------------------------------
 
@@ -68,7 +53,9 @@ module's abort can't eat the rest) and is pausable/resumable:
 
 .. code-block:: bash
 
-   # everything, sharded + receipt-signed (the standard full pass):
+   # everything, sharded + receipt-signed (every shard fresh — what a
+   # release receipt needs; prefer test/run_validation.py above for the
+   # locked, logged everyday refresh):
    SPLIT=1 test/run_gpu_proof.sh
 
    # only the shards whose inputs changed vs the committed receipt:
@@ -99,12 +86,12 @@ GPU-Proof Signed Receipts
 Because the CUDA equivalence suite needs a real GPU (and a full cold run is
 hours), GRiD records correctness in a *signed receipt* so a merge can be gated
 CPU-only, without re-running GPU tests in CI. This uses the ``pytest-gpu-proof``
-plugin, installed from PyPI via ``requirements-dev.txt`` (it was previously a
-vendored ``test/pytest-gpu-proof`` submodule):
+plugin, installed from PyPI at the exact version pinned in
+``install/requirements-dev.txt`` (CI installs the same pin):
 
 .. code-block:: bash
 
-   .venv/bin/python -m pip install -r requirements-dev.txt   # brings in pytest-gpu-proof
+   .venv/bin/python -m pip install -r install/requirements-dev.txt   # brings in pytest-gpu-proof
 
 Generate the receipt on a quiet GPU box. The scope is tiered so it is never an
 all-or-nothing barrier — the signature, code fingerprint, and commit-SHA proof
@@ -120,24 +107,30 @@ The ``gpu_proof`` marker is auto-applied to every ``cuda_equivalence`` and
 ``python_wrappers`` item by ``test/conftest.py`` (no per-test annotation), so
 receipt membership tracks the existing marker taxonomy. Running the script signs
 ``gpu-proof.json`` in place with your local SSH key and refuses a dirty tree
-(``allow_dirty:false`` in ``test/gpu-proof-policy.yaml``): the fingerprint cannot
-descend into the codegen/GLASS submodules, so a clean tree is what makes the
-receipt's commit SHA an honest pin of the code under test.
+(``allow_dirty:false`` in ``test/gpu-proof-policy.yaml``): the fingerprint
+hashes the tracked generator, bindings, configuration and GPU-test sources and
+pins the peer submodules (GLASS, RBDReference, URDFParser) by gitlink, so a
+clean tree is what makes the receipt's commit SHA an honest pin of the code
+under test.
 
 CI (``.github/workflows/verify-gpu-proof.yml``) verifies whatever receipt is
 committed — signature (via ``github.com/{signer}.keys``), fingerprint, commit
-SHA, freshness — with no GPU and no secrets, and **skips gracefully when no
-receipt is present** so code can ship before the long GPU run lands. A second
-always-on CPU lane runs the no-GPU tests (descriptor parity, kernel-attr
+SHA, freshness, exact test manifest — with no GPU and no secrets, and **fails
+when the receipt is missing or stale**: main always carries current evidence. A
+second always-on CPU lane runs the no-GPU tests (descriptor parity, kernel-attr
 manifest, plant launch hygiene).
 
 The two-tier receipt policy (when CI goes red, and the fix)
 -----------------------------------------------------------
 
 The committed ``gpu-proof.json`` goes stale — and CI's verify-receipt job goes
-RED — the moment a push touches a fingerprinted test file (anything under
-``test/cuda_equivalents/`` or ``test/python_wrappers/``). **That red is by
-design**; the fix is a refresh, not a revert:
+RED — the moment a push touches a fingerprinted path: the generator
+(``grid_codegen/``), the bindings, the peer submodule pins, ``config/``, the
+packaging files, the GPU suites (``test/cuda_equivalents/``,
+``test/python_wrappers/``) and the receipt harness itself (the exact list is
+``tool.gpu_proof.fingerprint_paths`` in ``pyproject.toml``; documentation and
+the website are deliberately outside it). **That red is by design**; the fix
+is a refresh, not a revert:
 
 - **Everyday** (``test/gpu-proof-policy.yaml``, ``allow_carried: true``):
   ``SPLIT=1 SPLIT_REFRESH=1 test/run_gpu_proof.sh`` re-runs ONLY the shards
@@ -335,8 +328,9 @@ Generated headers include a GRiD-owned linear algebra backend adapter
 that vendors the SIMT subset of `GLASS
 <https://github.com/A2R-Lab/GLASS>`_ (``L1/dot``, ``L2/gemv``,
 ``L3/gemm``) at codegen time. Generated headers are self-contained — no
-external SDK dependencies. The cuBLASDx-backed ``glass-nvidia`` path
-was removed in v2.0; see :doc:`../concepts/cublasdx_removal_design`.
+external SDK dependencies. The cuBLASDx-backed ``glass-nvidia`` path was
+removed before the first PyPI release (0.5.0); the historical design record is
+kept in ``docs/design_history/`` in the repository.
 
 Performance Reporting
 ---------------------

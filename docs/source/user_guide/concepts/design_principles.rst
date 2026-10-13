@@ -1,8 +1,8 @@
 Algorithm Design Principles & Best Practices
 ============================================
 
-**Read this first.** This page is the shared mental model for anyone — human or
-agent — writing or modifying a GRiD algorithm. It captures the *why* behind the
+**Read this first.** This page is the shared mental model for anyone writing
+or modifying a GRiD algorithm. It captures the *why* behind the
 generated-code structure so your changes match the existing grain instead of
 fighting it. The mechanics live in :doc:`codegen_architecture` (the emission
 layers) and :doc:`resource_tier_system` (tiers + spill); this page is the ethos
@@ -23,20 +23,9 @@ what spills, the *caller* only sizes the arenas and passes a flag.
 1. Smart inners, thin wrappers
 ------------------------------
 
-Algorithms generally expose **three public layers** (see :doc:`codegen_architecture`):
-``X_device`` (the canonical ``__device__`` orchestrator — *all the value is
-here*; owns its placement),
-``X_kernel`` (grid-stride loop over timesteps; allocates smem and calls
-``_device``), and ``X`` (host launcher).
-
-Scratch signatures are algorithm-specific. Orchestrators accept caller-owned
-scratch; simpler device functions such as RNEA allocate scratch internally.
-Use the generated signature and resource constants, not a universal prototype.
-
-Internal ``X_inner`` helpers (and role-specific sub-step helpers like
-``fdsva_so_contract``) still exist where useful — they are the placement-free
-math building blocks that one ``_device`` may call into another to amortize
-shared work (e.g. an XImats load).
+The emission layers (``X_device`` / ``X_kernel`` / host ``X``) and the
+``_inner`` composition contract are documented in :doc:`codegen_architecture`;
+this section states the rules those layers must obey.
 
 * **Value is concentrated in ``X_device`` (and its ``_inner`` building blocks).**
   The kernel and host layers are noise to the performance user; keep them
@@ -50,6 +39,10 @@ shared work (e.g. an XImats load).
   (e.g. ``fdsva_so`` embeds ``idsva_so``) loads ``XImats`` once at the top of its
   ``_device`` and calls placement-free ``_inner`` variants of sub-algorithms so
   the load is paid once, not per sub-algorithm.
+* **Scratch signatures are algorithm-specific.** Orchestrators accept
+  caller-owned scratch; simpler device functions such as RNEA allocate scratch
+  internally. Use the generated signature and resource constants, not a
+  universal prototype.
 
 
 2. The inner owns its memory placement (the central rule)

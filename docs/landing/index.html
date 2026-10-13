@@ -66,12 +66,15 @@
 
   <section id="get-started">
     <div class="eyebrow">Get started</div><h2>Start with one robot and one computation.</h2>
-    <p>Install from source on a machine with a compatible NVIDIA GPU, CUDA toolkit, and C++ compiler. These commands use the <code>modernizing-tests</code> branch:</p>
-    <pre><code>git clone --recursive --branch modernizing-tests https://github.com/A2R-Lab/GRiD.git
+    <p>Install the <code>grid-rbd</code> package from PyPI (Linux x86-64, Python 3.10–3.12). Installing needs no GPU or compiler; registering a robot compiles its CUDA on a machine with a compatible NVIDIA GPU, CUDA toolkit, and C++ compiler:</p>
+    <pre><code>pip install grid-rbd            # code generator + NumPy backend + grid-generate CLI
+pip install "grid-rbd[jax]"     # or "grid-rbd[torch]", "grid-rbd[all]"</code></pre>
+    <p>To develop GRiD, or to use the sample URDFs, work from a source checkout of <code>main</code> instead:</p>
+    <pre><code>git clone --recursive https://github.com/A2R-Lab/GRiD.git
 cd GRiD
 bash install/base_install.sh
 source .venv/bin/activate</code></pre>
-    <p>Run this from the repository root. Building only the operation you need keeps the first example focused.</p>
+    <p>The example uses a sample URDF from the checkout's <code>config/robot_assets/</code>; with a PyPI install, point it at your own URDF. Building only the operation you need keeps the first example focused.</p>
     <pre><code>import numpy as np
 import grid_rbd
 
@@ -87,7 +90,7 @@ print(qdd.shape)  # (8, 7)
 robot.close()</code></pre>
     <p class="note">The first load generates and compiles code; it can take minutes. Later loads reuse compatible cached artifacts. This NumPy example moves inputs and outputs through host memory. JAX and PyTorch require separately installed CUDA-enabled frameworks.</p>
     <div class="links start-links"><a class="button" href="docs/user_guide/getting_started/installation.html">Installation</a><a class="button" href="docs/user_guide/tutorials/python_wrappers.html">Python examples</a><a class="button" href="docs/user_guide/tutorials/codegen.html">CUDA integration</a><a class="button" href="docs/user_guide/tutorials/collisions.html">Collision codegen</a></div>
-    <details><summary>Platform and interface scope</summary><p>Current validation targets Linux x86_64 with NVIDIA CUDA. Generated code can be rebuilt for different GPU architectures; compiled robot binaries are architecture-specific. This dataset does not cover Jetson. Use the source installation instructions above.</p><p>See <a href="docs/user_guide/getting_started/compatibility.html">compatibility and known limitations</a> for joint types, operation coverage, runtime contexts, differentiation, and graph-capture restrictions.</p></details>
+    <details><summary>Platform and interface scope</summary><p>Current validation targets Linux x86_64 with NVIDIA CUDA. Generated code can be rebuilt for different GPU architectures; compiled robot binaries are architecture-specific. This dataset does not cover Jetson. Use the PyPI install above (or the source checkout for development).</p><p>See <a href="docs/user_guide/getting_started/compatibility.html">compatibility and known limitations</a> for joint types, operation coverage, runtime contexts, differentiation, and graph-capture restrictions.</p></details>
   </section>
 
   <section id="research">
