@@ -679,6 +679,28 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
             wrapper_to_run, cuda_fresh)
 
 
+def resign_module_if_fingerprint_moved(old_receipt: dict, carried_names: list[str],
+                                       durations: dict, digest_now: str | None) -> str | None:
+    """A refresh with NO stale shard but a moved RECEIPT-LEVEL fingerprint
+    (an edit to a fingerprint path outside every shard's narrow paths — the
+    driver itself, pyproject.toml, the test manifest) cannot be a no-op: the
+    committed receipt no longer verifies against this tree, and `gpu-proof
+    merge` needs at least one fresh shard to re-sign at HEAD. Returns the
+    cheapest carried wrapper module to re-run for that (its carry is sound;
+    a fresh run simply replaces it), or None when the fingerprint is unmoved
+    or nothing carried is a wrapper shard."""
+    old_digest = (old_receipt.get("fingerprint") or {}).get("digest")
+    if digest_now is None or digest_now == old_digest:
+        return None
+    by_mod: dict[str, float] = {}
+    for sh in old_receipt.get("shards") or []:
+        ids = sh.get("node_ids") or []
+        if sh.get("name") in carried_names and ids \
+                and str(ids[0]).startswith("test/python_wrappers/"):
+            by_mod[sh["name"]] = sum(float(durations.get(i, 0.0)) for i in ids)
+    return min(by_mod, key=by_mod.get) if by_mod else None
+
+
 def _shard_receipt_repo(out_dir: Path, shard: str) -> dict | None:
     """The `repo` block recorded by a shard's own receipt (None when absent
     or unreadable — non-receipts runs have no per-shard receipt)."""
@@ -1691,8 +1713,24 @@ def main() -> int:
             for n in stale_names:
                 print(f"  STALE {n}")
             if not modules and not refresh_cuda_shards:
-                print("nothing stale — the receipt already covers this tree")
-                return 0
+                from pytest_gpu_proof.fingerprint import recompute_fingerprint  # noqa: PLC0415
+                try:
+                    digest_now = recompute_fingerprint(
+                        old.get("fingerprint") or {}, root=str(REPO_ROOT))["digest"]
+                except Exception as exc:  # unreadable scope → let verify decide
+                    print(f"  receipt-level fingerprint not recomputable ({exc})")
+                    digest_now = None
+                resign = resign_module_if_fingerprint_moved(
+                    old, carried_names, load_durations(), digest_now)
+                if resign is None:
+                    print("nothing stale — the receipt already covers this tree")
+                    return 0
+                print(f"  receipt-level fingerprint moved (a fingerprint path outside "
+                      f"every shard's narrow paths changed); re-running wrapper "
+                      f"module {resign} so the merged receipt is re-signed at HEAD")
+                modules = [resign]
+                stale_names.append(resign)
+                carried_names.remove(resign)
             if os.environ.get("GRID_SPLIT_REFRESH_DRY") == "1":
                 print("GRID_SPLIT_REFRESH_DRY=1 — plan printed, not running")
                 return 0

@@ -926,3 +926,23 @@ def test_plan_refresh_uses_the_real_plan_carry(tmp_path, monkeypatch):
     assert not plan["receipt"]["carryable"]
     stale, carried, wrap_run, fresh = rss.plan_refresh(dirty, [], ["test_a", "test_b"], {}, 7200.0, plan)
     assert set(stale) == {"test_a", "test_b"} and not carried and set(wrap_run) == {"test_a", "test_b"}
+
+
+def test_resign_module_when_receipt_level_fingerprint_moved():
+    """No stale shard + moved receipt-level fingerprint → re-run the cheapest
+    carried wrapper module so the merge can re-sign at HEAD; unmoved → None."""
+    old = {"fingerprint": {"digest": "OLD"}, "shards": [
+        _mk_shard("cuda_00", ["test/cuda_equivalents/a.py::t"], ["a"], "x"),
+        _mk_shard("test_big", ["test/python_wrappers/test_big.py::t1",
+                               "test/python_wrappers/test_big.py::t2"], ["b"], "x"),
+        _mk_shard("test_small", ["test/python_wrappers/test_small.py::t"], ["c"], "x"),
+    ]}
+    dur = {"test/python_wrappers/test_big.py::t1": 5.0,
+           "test/python_wrappers/test_big.py::t2": 5.0,
+           "test/python_wrappers/test_small.py::t": 1.0}
+    carried = ["cuda_00", "test_big", "test_small"]
+    assert rss.resign_module_if_fingerprint_moved(old, carried, dur, "OLD") is None
+    assert rss.resign_module_if_fingerprint_moved(old, carried, dur, None) is None
+    assert rss.resign_module_if_fingerprint_moved(old, carried, dur, "NEW") == "test_small"
+    # only cuda carried → nothing to re-sign with (caller falls through to verify)
+    assert rss.resign_module_if_fingerprint_moved(old, ["cuda_00"], dur, "NEW") is None
