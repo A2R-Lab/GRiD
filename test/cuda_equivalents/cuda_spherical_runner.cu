@@ -237,7 +237,33 @@ template <typename T>
 void run() {
     const T gravity = static_cast<T>(-9.81);
 
-    cudaStream_t *streams = grid::init_grid<T>();
+    // R1 (2026-10-12): streams + only the kernels this runner launches (the
+    // aggregate init_grid<T>() address-took, i.e. compiled, every kernel in the header).
+    cudaStream_t *streams = grid::init_grid_streams<T>();
+#if RUN_INVERSE_DYNAMICS
+    gpuErrchk(grid::init_grid_kernel_attr_inverse_dynamics_checked<T>());
+#endif
+#if RUN_CRBA
+    gpuErrchk(grid::init_grid_kernel_attr_crba_checked<T>());
+#endif
+#if RUN_MINV
+    gpuErrchk(grid::init_grid_kernel_attr_minv_checked<T>());
+#endif
+#if RUN_FORWARD_DYNAMICS
+    gpuErrchk(grid::init_grid_kernel_attr_forward_dynamics_checked<T>());
+#endif
+#if RUN_ABA
+    gpuErrchk(grid::init_grid_kernel_attr_aba_checked<T>());
+#endif
+#if RUN_INVERSE_DYNAMICS_GRADIENT
+    gpuErrchk(grid::init_grid_kernel_attr_inverse_dynamics_gradient_checked<T>());
+#endif
+#if RUN_FORWARD_DYNAMICS_GRADIENT
+    gpuErrchk(grid::init_grid_kernel_attr_forward_dynamics_gradient_checked<T>());
+#endif
+#if RUN_FDSVA_SO
+    gpuErrchk(grid::init_grid_kernel_attr_fdsva_so_checked<T>());
+#endif
     grid::robotModel<T> *d_robot_model = grid::init_robotModel<T>();
 
     // ----- read inputs (q is nq-wide, qd / u are nv-wide) -----

@@ -68,8 +68,9 @@ Second packaged release (first: 0.5.0, 2026-10-08). User-visible:
   `min(8, cores, MemAvailable/3 GB)`, heavy families first) and host-links with
   `-Xfatbin -compress-all` (size ≈ the old monolith). Shared declarations moved
   to `bindings/grid_rbd/wrapper_common.cuh` (package data, hashed into both
-  cache keys). Measured: iiwa14 618 s → ~100 s, go2-floating 755 s → ~160 s;
-  g1 pin-only 48 min → <10 min (prototype), 8.1 → 2.4 GB peak.
+  cache keys). Measured (final, dated table in Fast Robot Setup): iiwa14 618 s →
+  101 s, go2-floating 755 s → 128 s, g1 pin-only 48 min → 6 min 6 s at 8 units
+  (~14 GB build RAM; 2.5 GB per unit, so fewer units = less RAM, more wall).
 - **Core unit address-takes no kernel.** Context creation registers kernel
   attributes through generated per-family `grid_rbd_family_<f>_init_attrs`
   (calling new library-safe `init_grid_kernel_attr_<algo>_checked` /
@@ -116,7 +117,7 @@ Second packaged release (first: 0.5.0, 2026-10-08). User-visible:
 - Bench: XLA prealloc disabled in standalone drivers (launch-time OOM class);
   autotune skips unlaunchable kernels loudly; fresh full receipt @ night-7.
 - C0/C1/C2 cleanup: dead code deletes, archive moves, docs truth fixes
-  (see docs/open-tasks/cleanup_wave_2026-09-07.md).
+  (see docs/open-tasks/archive/cleanup_wave_2026-09-07.md).
 
 ### 2026-07-21 — single-distribution packaging + project hygiene
 

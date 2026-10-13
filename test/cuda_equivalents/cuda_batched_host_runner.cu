@@ -55,7 +55,13 @@ void run() {
     constexpr int NV = grid::NUM_VEL;
     constexpr int B = GRID_BATCH;
 
-    cudaStream_t *streams = grid::init_grid<T>();
+    // R1 (2026-10-12): streams + only the kernels this runner launches (the
+    // aggregate init_grid<T>() address-took, i.e. compiled, every kernel in the header).
+    cudaStream_t *streams = grid::init_grid_streams<T>();
+    gpuErrchk(grid::init_grid_kernel_attr_minv_checked<T>());
+#ifdef GRID_HAS_CRBA
+    gpuErrchk(grid::init_grid_kernel_attr_crba_checked<T>());
+#endif
     grid::robotModel<T> *d_robotModel = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, B>();
 

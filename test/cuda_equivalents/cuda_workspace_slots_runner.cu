@@ -49,7 +49,17 @@ int main() {
     constexpr int NQ = grid::NUM_POS;
     const T gravity = static_cast<T>(9.81);
 
-    cudaStream_t *streams = grid::init_grid<T>();
+    // R1 (2026-10-12): streams + only the kernels this runner launches (the
+    // aggregate init_grid<T>() address-took, i.e. compiled, every kernel in the header).
+    cudaStream_t *streams = grid::init_grid_streams<T>();
+#if GRID_HAS_IDSVA_SO_WORLD_FRAME
+    gpuErrchk(grid::init_grid_kernel_attr_idsva_so_world_frame_checked<T>());
+#endif
+#if GRID_HAS_IDSVA_SO_BODY_FRAME
+    gpuErrchk(grid::init_grid_kernel_attr_idsva_so_body_frame_checked<T>());
+#endif
+    gpuErrchk(grid::init_grid_kernel_attr_fdsva_so_checked<T>());
+    gpuErrchk(grid::init_grid_kernel_attr_f_ext_gradient_dq_checked<T>());
     grid::robotModel<T> *d_robotModel = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, B>();
     // stderr on purpose: the arms' slot counts DIFFER, and the test compares stdout

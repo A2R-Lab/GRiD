@@ -543,7 +543,7 @@ def _emit_fdsva_so_mjx_output(self):
       [OUT,     OUT+4*NV^3)     mjx output band (copied back over s_df2 at the end)
 
     The per-k assembly (explicit form, forward-dynamics analog of idsva_so's) is
-    transcribed verbatim from docs/open-tasks/mjx_proto/proto_fdsva_so_emit_spec.py
+    transcribed verbatim from docs/open-tasks/archive/mjx_proto/proto_fdsva_so_emit_spec.py
     (validated <1e-13 vs second_order_fd_pin_to_mjx)."""
     nv = self.robot.get_num_vel()
     NJ = self.robot.get_num_joints()

@@ -681,11 +681,6 @@ def _shard_receipt_repo(out_dir: Path, shard: str) -> dict | None:
         return None
 
 
-def _shard_receipt_sha(out_dir: Path, shard: str) -> str | None:
-    repo = _shard_receipt_repo(out_dir, shard)
-    return None if repo is None else repo.get("commit_sha")
-
-
 def load_prior_results(out_dir: Path, spec_names: set[str]) -> list[dict]:
     """--resume: keep only CLEAN rows for shards that still exist; everything
     else (failures, casualties, vanished shards) re-runs.
@@ -1154,9 +1149,11 @@ def shard_jobs() -> int:
     writer gained a per-key flock (cuda_harness._cache_key_lock; executable_cache
     already had one) — two shards sharing one cache dir wait for each other's
     build of a key instead of racing it. Host RAM is the practical bound: a
-    shard's INLINE nvcc builds (integrator / second-order smoke runners on the
-    humanoids, 6-10 GB each) are NOT pool-admitted, so raise it only under a
-    MemoryMax'd unit, and read the pilot's wall time before changing the default."""
+    shard's INLINE nvcc builds are NOT pool-admitted. The receipt launcher
+    (test/run_validation.py) sets 2 since 2026-10-10: the 2026-10-01 pilot ran
+    four CUDA shards two at a time clean (~800 MiB VRAM each, ~1.8x throughput)
+    and the runners now register only the kernels they launch, so inline
+    humanoid builds peak ~2-4 GB instead of 6-15. The driver default stays 1."""
     raw = os.environ.get("GRID_SPLIT_SHARD_JOBS", "1")
     try:
         return max(1, int(raw))

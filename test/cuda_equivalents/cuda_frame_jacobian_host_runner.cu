@@ -55,7 +55,16 @@ void run() {
     constexpr int NQ = grid::NUM_POS;
     constexpr int NV = grid::NUM_VEL;
 
-    cudaStream_t *streams = grid::init_grid<T>();
+    // R1 (2026-10-12): streams + only the kernels this runner launches (the
+    // aggregate init_grid<T>() address-took, i.e. compiled, every kernel in the header).
+    cudaStream_t *streams = grid::init_grid_streams<T>();
+    gpuErrchk(grid::init_grid_kernel_attr_frame_jacobian_checked<T>());
+#ifdef GRID_HAS_FRAME_JACOBIAN_DOT
+    gpuErrchk(grid::init_grid_kernel_attr_frame_jacobian_dot_checked<T>());
+#endif
+#ifdef GRID_HAS_OSC_INERTIA
+    gpuErrchk(grid::init_grid_kernel_attr_osc_inertia_checked<T>());
+#endif
     grid::robotModel<T> *d_robotModel = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();
 

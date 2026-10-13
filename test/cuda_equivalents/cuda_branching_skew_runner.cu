@@ -52,7 +52,13 @@ void run() {
     const dim3 block_dimms(1, 1, 1);
     const dim3 thread_dimms(g_num_threads, 1, 1);
 
-    cudaStream_t *streams = grid::init_grid<T>();
+    // R1 (2026-10-12): streams + only the kernels this runner launches (the
+    // aggregate init_grid<T>() address-took, i.e. compiled, every kernel in the header).
+    cudaStream_t *streams = grid::init_grid_streams<T>();
+    gpuErrchk(grid::init_grid_kernel_attr_inverse_dynamics_checked<T>());
+    gpuErrchk(grid::init_grid_kernel_attr_minv_checked<T>());
+    gpuErrchk(grid::init_grid_kernel_attr_aba_checked<T>());
+    gpuErrchk(grid::init_grid_kernel_attr_crba_checked<T>());
     grid::robotModel<T> *d_robot_model = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();
 

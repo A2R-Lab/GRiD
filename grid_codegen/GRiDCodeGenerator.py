@@ -247,7 +247,7 @@ class GRiDCodeGenerator:
         # was bypassed.) SPHERICAL is now supported for inverse_dynamics ONLY
         # (Tier-C, first slice); the per-algorithm guard in gen_all_code rejects
         # spherical for not-yet-ported algorithms (crba/aba/fd/gradients/SO/...).
-        # See docs/open-tasks/joint_types_plan.md (backlog A2).
+        # See docs/open-tasks/archive/joint_types_plan.md (backlog A2).
         _unsupported = {
             jt for jt in robotObj.get_joint_types_by_id().values()
             if jt in ("planar",)
@@ -256,7 +256,7 @@ class GRiDCodeGenerator:
             raise NotImplementedError(
                 f"GRiD codegen does not yet support joint type(s) {sorted(_unsupported)}; "
                 "they parse as groundwork but have no CUDA transform / RBDReference model. "
-                "See docs/open-tasks/joint_types_plan.md."
+                "See docs/open-tasks/archive/joint_types_plan.md."
             )
         self.code_str = ""
         self.indent_level = 0
@@ -464,7 +464,7 @@ class GRiDCodeGenerator:
                     f"inverse_dynamics_gradient + forward_dynamics_gradient + aba + "
                     f"idsva_so + fdsva_so; requested unsupported algorithm(s) "
                     f"{_unported}. Remaining algorithms are follow-on slices "
-                    "(see docs/open-tasks/joint_types_plan.md)."
+                    "(see docs/open-tasks/archive/joint_types_plan.md)."
                 )
         if "idsva_so_world_frame" in algorithms:
             enable_idsva_so_world_frame = True
@@ -472,7 +472,7 @@ class GRiDCodeGenerator:
         # i.e. when the dispatcher routes this robot to world_frame AND nothing else
         # composes the body inner. On h1_2-floating the never-dispatched body-frame
         # diagnostic is a 3 MB / 782,584-float arena that costs compile time and a
-        # dead kernel registration (docs/open-tasks/so_memory_memo_2026-09-08.md).
+        # dead kernel registration (docs/open-tasks/archive/so_memory_memo_2026-09-08.md).
         # It stays emitted when:
         #   - body IS the dispatched frame (cardinal fixed-base, NV < threshold), or
         #   - fdsva_so composes the body inner (fixed-base non-spherical — including

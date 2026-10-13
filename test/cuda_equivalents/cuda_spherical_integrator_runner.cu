@@ -147,7 +147,10 @@ void run() {
     const T gravity = static_cast<T>(-9.81);
     const T dt = static_cast<T>(0.01);
 
-    streams_global = grid::init_grid<T>();
+    // R1 (2026-10-12): streams + only the kernels this runner launches (the
+    // aggregate init_grid<T>() address-took, i.e. compiled, every kernel in the header).
+    streams_global = grid::init_grid_streams<T>();
+    gpuErrchk(grid::init_grid_kernel_attr_integrator_checked<T>());
     grid::robotModel<T> *d_robot_model = grid::init_robotModel<T>();
 
     std::vector<T> h_q(grid::NUM_JOINTS);   // nq (unit-quaternion in ball block)

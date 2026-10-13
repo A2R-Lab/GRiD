@@ -3,7 +3,7 @@
 
 Mirrors timeMJX.py's structure and emits the SAME label format so
 `parse_grid_output` can be reused. See the module docstring of `run.py` and
-`docs/open-tasks/mujoco_warp_baseline_plan.md` for the validation checklist.
+`docs/open-tasks/archive/mujoco_warp_baseline_plan.md` for the validation checklist.
 
 MJWarp (https://github.com/google-deepmind/mujoco_warp) is the NVIDIA-Warp-based
 GPU successor to MJX. It loads a standard MuJoCo MJCF (same models as MJX), and

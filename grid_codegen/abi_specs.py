@@ -1130,7 +1130,7 @@ ABI_SPECS["forward_dynamics_wrt_params"] = AbiSpec(
 # ── torch/jax surface-emitter tables (A1, 2026-09-11) ───────────────────────
 # Transcribed 1:1 from the PROVEN offline drafts (torch bodies 24/24
 # byte-identical, jax handlers 26/26 semantically equal —
-# docs/open-tasks/surface_gen_drafts_2026-09-10). Applied onto the rows via
+# docs/open-tasks/archive/surface_gen_drafts_2026-09-10). Applied onto the rows via
 # dataclasses.replace (the _VJPS pattern) so the draft tables stay visibly
 # what landed. Error-string prefixes are CANONICALIZED to the full op key
 # (user decision 2026-09-11) — there is deliberately NO err_prefix field, and
@@ -1286,7 +1286,7 @@ def smem_bytes_call(spec: "AbiSpec") -> str:
     return f"grid::{stem}<T>()"
 
 
-# ── Multi-TU build families (arc 2026-10-09; ledger docs/open-tasks/multi_tu_arc_2026-10-09.md) ──
+# ── Multi-TU build families (arc 2026-10-09; ledger docs/open-tasks/archive/multi_tu_arc_2026-10-09.md) ──
 # The robot.so is built from one core unit plus one unit per family; a family
 # unit compiles ONLY its algorithms' wrapper bodies, so it instantiates only
 # their kernels. FAMILIES is ordered heavy-first (the build schedules in this

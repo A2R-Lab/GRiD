@@ -26,7 +26,34 @@ CONVERTED = {
     "cuda_plant_smoke_runner.cu": {"integrator", "integrator_gradient"},
     "cuda_centroidal_smoke_runner.cu": set(),
     "cuda_centroidal_mimic_smoke_runner.cu": set(),
+    # 2026-10-12 sweep (the remaining runners)
+    "cuda_batched_host_runner.cu": {"minv", "crba"},
+    "cuda_energy_regressor_smoke_runner.cu": {"kinetic_energy_regressor", "potential_energy_regressor"},
+    "cuda_spherical_integrator_runner.cu": {"integrator"},
+    "cuda_branching_skew_runner.cu": {"inverse_dynamics", "minv", "aba", "crba"},
+    "cuda_coriolis_smoke_runner.cu": {"coriolis_matrix"},
+    "cuda_spherical_kinematics_runner.cu": {"end_effector_pose", "frame_jacobian"},
+    "cuda_frame_jacobian_host_runner.cu": {"frame_jacobian", "frame_jacobian_dot", "osc_inertia"},
+    "cuda_regressor_smoke_runner.cu": {"inverse_dynamics_regressor"},
+    "cuda_workspace_slots_runner.cu": {"idsva_so_world_frame", "idsva_so_body_frame", "fdsva_so", "f_ext_gradient_dq"},
+    "cuda_spherical_eepose_grad_hess_runner.cu": {"end_effector_pose_gradient", "end_effector_pose_hessian"},
+    "cuda_ee_named_depth1_runner.cu": set(),
+    "cuda_idsva_so_world_frame_smoke_runner.cu": {"idsva_so_world_frame"},
+    "cuda_centroidal_host_spill_runner.cu": {"com", "ccrba", "energy"},
+    "cuda_fd_parameter_gradient_smoke_runner.cu": {"forward_dynamics_parameter_gradient"},
+    "cuda_spherical_runner.cu": {"inverse_dynamics", "crba", "minv", "forward_dynamics", "aba",
+                                 "inverse_dynamics_gradient", "forward_dynamics_gradient", "fdsva_so"},
+    "cuda_eepose_runtime_smoke_runner.cu": set(),
+    "cuda_spherical_fdsva_so_runner.cu": {"fdsva_so"},
+    "cuda_dccrba_smoke_runner.cu": {"cmm_time_variation", "dccrba"},
+    "cuda_frame_jacobian_smoke_runner.cu": set(),
+    "cuda_f_ext_gradient_runner.cu": {"f_ext_gradient", "f_ext_gradient_dq"},
+    "cuda_regressor_gradient_runner.cu": {"inverse_dynamics_regressor_gradient"},
+    "cuda_spherical_integrator_gradient_runner.cu": {"integrator_gradient", "integrator_with_gradient"},
+    "cuda_spherical_so_runner.cu": {"idsva_so_world_frame", "idsva_so_body_frame"},
 }
+# a launched host wrapper that dispatches to frame-specific kernels
+_DISPATCH = {"idsva_so": {"idsva_so_world_frame", "idsva_so_body_frame"}}
 _REG = re.compile(r"init_grid_kernel_attr_([a-z_0-9]+)_checked<T>\(\)")
 _HOST_CALL = re.compile(r"grid::([a-z_0-9]+)<T(?:,[^<>()]*)?>\(")
 
@@ -50,7 +77,18 @@ def test_runner_registers_only_what_it_launches(runner):
                 if not m.startswith(("init_", "close_", "free_", "release_", "grid_"))
                 and not m.endswith("_device")}
     launched = {m[:-len("_kernel")] if m.endswith("_kernel") else m for m in launched}
+    launched = set().union(*(_DISPATCH.get(m, {m}) for m in launched)) if launched else set()
     assert launched <= registered, (runner, launched - registered)
+
+
+def test_no_runner_calls_the_aggregate_registration():
+    """Every runner in the directory, listed here or not: the aggregate is banned."""
+    offenders = [p.name for p in sorted(RUNNERS.glob("cuda_*_runner.cu"))
+                 if "grid::init_grid<T>()" in _code(p)]
+    assert not offenders, offenders
+    unlisted = {p.name for p in RUNNERS.glob("cuda_*_runner.cu")
+                if "grid::init_grid_streams<T>()" in _code(p)} - set(CONVERTED)
+    assert not unlisted, f"runners using streams-only init but missing from CONVERTED: {sorted(unlisted)}"
 
 
 def test_every_registration_twin_is_a_manifest_algorithm():

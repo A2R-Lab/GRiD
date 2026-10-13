@@ -59,7 +59,11 @@ int run() {
     const int nb = grid::NUM_BODIES;
     const int Y_size = 10 * nb;
 
-    cudaStream_t *streams = grid::init_grid<T>();
+    // R1 (2026-10-12): streams + only the kernels this runner launches (the
+    // aggregate init_grid<T>() address-took, i.e. compiled, every kernel in the header).
+    cudaStream_t *streams = grid::init_grid_streams<T>();
+    gpuErrchk(grid::init_grid_kernel_attr_kinetic_energy_regressor_checked<T>());
+    gpuErrchk(grid::init_grid_kernel_attr_potential_energy_regressor_checked<T>());
     grid::robotModel<T> *d_robot_model = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();
 

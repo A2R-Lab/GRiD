@@ -5,7 +5,7 @@ fixed ×5 incl. full/multi-target/collision/contact, go2 floating ×2, fr3 mimic
 diff the hashes — the byte-identical-codegen discipline's harness (CLAUDE.md).
 
 Usage: .venv/bin/python tools/byte_gate.py <outdir>
-(promoted from docs/open-tasks/tools_byte_gate.py, 2026-09-09; the repo root
+(promoted from docs/open-tasks/archive/tools_byte_gate.py, 2026-09-09; the repo root
 is derived from this file's location — no hardcoded paths)
 """
 import hashlib, sys, os

@@ -2,7 +2,7 @@
 
 Design note for contributors. User-facing knobs: `bindings/README.md`, Fast Robot Setup.
 Bug-class learnings: `docs/agent_debugging_guide.md` §7.z43 / §7.z44. Ledger (measurements,
-decisions D1–D4, gates): `docs/open-tasks/multi_tu_arc_2026-10-09.md` (gitignored, on the dev box).
+decisions D1–D4, gates): `docs/open-tasks/archive/multi_tu_arc_2026-10-09.md` (gitignored, on the dev box).
 
 ## The problem
 One `nvcc` translation unit per robot: cicc is single-threaded per TU and ptxas is superlinear
@@ -68,6 +68,6 @@ test runners, never a default.
   clean tree and an unmoved HEAD for the run; a grid.cuh byte change re-keys every CUDA
   equivalence header cache (one-time ~4.5 h of prewarms).
 
-## Open (receipt-infra arc, `docs/open-tasks/receipt_infra_arc_2026-10-10.md`)
+## Open (receipt-infra arc, `docs/open-tasks/archive/receipt_infra_arc_2026-10-10.md`)
 CUDA equivalence runner still registers via the aggregate (R1); `compile_sched` peak ledger sees
 only the largest child (S1); heavy-first prewarm order (R3); two wrapper shards at a time (W1).
