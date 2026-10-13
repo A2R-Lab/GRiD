@@ -26,7 +26,7 @@ reductions, no cooperative groups, bit-deterministic and thread-count
 invariant. Artifacts are built per target architecture (``sm_XX``); the
 model, the API and the generated code carry over, the binary does not.
 
-.. grid:: 1 1 3 3
+.. grid:: 1 2 4 4
    :gutter: 3
 
    .. grid-item-card:: numpy
@@ -51,8 +51,17 @@ model, the API and the generated code carry over, the binary does not.
       ``backend="torch"`` → autograd-aware ops on the current CUDA stream,
       plus CUDA-graph capture for fixed-batch replay.
 
-Complete, copy-paste examples for each surface are in the
-:ref:`quickstart <landing-quickstart>` below.
+   .. grid-item-card:: header-only CUDA
+      :link: user_guide/tutorials/codegen
+      :link-type: doc
+
+      ``grid-generate robot.urdf`` → one self-contained ``grid.cuh`` to
+      ``#include`` in your own kernels; only ``nvcc`` needed, no Python at
+      runtime. The power-user entry point.
+
+Complete, copy-paste examples for the Python surfaces are in the
+:ref:`quickstart <landing-quickstart>` below; the header-only path is on
+:doc:`user_guide/tutorials/codegen`.
 
 What you get per robot
 ----------------------
@@ -201,13 +210,6 @@ Go deeper
 
       Design principles, the codegen architecture, resource tiers, runtime
       contexts, operand validation, the I/O ABI, mjx conventions.
-
-   .. grid-item-card:: From raw CUDA
-      :link: user_guide/tutorials/codegen
-      :link-type: doc
-
-      ``grid-generate robot.urdf`` emits a self-contained ``grid.cuh`` to
-      ``#include`` in your own kernels.
 
 .. grid:: 1 1 3 3
    :gutter: 3

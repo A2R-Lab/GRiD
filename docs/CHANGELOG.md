@@ -27,6 +27,17 @@ Second packaged release (first: 0.5.0, 2026-10-08). User-visible:
 
 ## Unreleased — v2.0 — cuBLASDx removal + resource-tier system
 
+### 2026-10-13 — website: two entry points (merge-only)
+- The cover, docs home, Installation and the codegen tutorial now present GRiD's
+  two entry points side by side: **easy** (Python wrappers: `load_robot`,
+  NumPy/JAX/PyTorch) and **power user** (header-only CUDA: `grid-generate` →
+  one self-contained `grid.cuh`, `#include` it in your own kernel, build with
+  `nvcc`; no per-robot `.so`, no Python at runtime). New "Header-only use"
+  install section and "Include it in your kernel" tutorial section with a
+  minimal `_device`-call kernel (compiled against a generated iiwa14 header as
+  part of the edit); the duplicate "From raw CUDA" card is folded into the
+  backends row. Text and links only.
+
 ### 2026-10-13 — pytest-gpu-proof 0.4.1 re-pin + website consolidation (merge-only)
 - **pytest-gpu-proof pinned at 0.4.1** (`install/requirements-dev.txt`, CI). The
   split driver now takes its base carry verdicts from the tool's own
