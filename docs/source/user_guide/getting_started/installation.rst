@@ -42,6 +42,25 @@ registration with unchanged inputs reuses its compiled library; changed model,
 generator, toolkit or framework ABI inputs can require a new build. See
 :doc:`fast_robot_setup` for cache loading and subset selection.
 
+Header-only use (CUDA power users)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The second entry point skips the Python wrappers entirely. The generator
+emits one self-contained ``grid.cuh`` per robot; you ``#include`` it in your
+own CUDA translation unit and build with ``nvcc``. Requirements: the
+``grid-generate`` CLI (from the wheel above, or a source checkout) to produce
+the header, and the CUDA Toolkit's ``nvcc`` plus a host compiler to build your
+kernel. No per-robot ``.so``, no NumPy/JAX/PyTorch and no Python at runtime.
+
+.. code-block:: shell
+
+   pip install grid-rbd
+   grid-generate robot.urdf -o grid.cuh      # -f for a floating base
+   nvcc -arch=sm_90 -std=c++17 my_kernel.cu  # GLASS linear algebra is vendored into the header
+
+See :doc:`../tutorials/codegen` for a minimal kernel and the validated
+example under ``examples/cuda/``.
+
 Source installation (development)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

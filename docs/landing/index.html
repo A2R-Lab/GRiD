@@ -66,9 +66,18 @@
 
   <section id="get-started">
     <div class="eyebrow">Get started</div><h2>Start with one robot and one computation.</h2>
-    <p>Install the <code>grid-rbd</code> package from PyPI (Linux x86-64, Python 3.10–3.12). Installing needs no GPU or compiler; registering a robot compiles its CUDA on a machine with a compatible NVIDIA GPU, CUDA toolkit, and C++ compiler:</p>
-    <pre><code>pip install grid-rbd            # code generator + NumPy backend + grid-generate CLI
+    <p>GRiD has two entry points to the same generated CUDA. Pick the one that matches how you want to use it.</p>
+    <div class="grid">
+      <div class="card"><h3>Easy: Python wrappers</h3><p><code>load_robot(urdf)</code> generates, compiles and caches the robot's CUDA, then exposes it as batched NumPy, JAX or PyTorch calls. No CUDA code to write.</p>
+      <pre><code>pip install grid-rbd            # code generator + NumPy backend + grid-generate CLI
 pip install "grid-rbd[jax]"     # or "grid-rbd[torch]", "grid-rbd[all]"</code></pre>
+      <p class="note">Installing needs no GPU or compiler; registering a robot compiles its CUDA on a machine with a compatible NVIDIA GPU, CUDA toolkit and host compiler. The NumPy example below is this path.</p></div>
+      <div class="card"><h3>Power user: header-only CUDA</h3><p>Generate one self-contained <code>grid.cuh</code> and <code>#include</code> it in your own kernels — fuse dynamics, derivatives and collisions into your MPC, RL or controls kernel. Needs only the generator and <code>nvcc</code>; no per-robot <code>.so</code>, no Python at runtime.</p>
+      <pre><code>pip install grid-rbd
+grid-generate robot.urdf -o grid.cuh        # -f floating base, --algorithm-list to trim
+nvcc -arch=sm_90 -std=c++17 my_kernel.cu    # the header vendors its GLASS linear algebra</code></pre>
+      <p class="note">A minimal kernel and the build-and-validate script are in <a href="docs/user_guide/tutorials/codegen.html#include-it-in-your-kernel">Generate CUDA for a robot</a> and <a href="https://github.com/A2R-Lab/GRiD/tree/main/examples/cuda">examples/cuda/</a>.</p></div>
+    </div>
     <p>To develop GRiD, or to use the sample URDFs, work from a source checkout of <code>main</code> instead:</p>
     <pre><code>git clone --recursive https://github.com/A2R-Lab/GRiD.git
 cd GRiD
@@ -89,7 +98,7 @@ qdd = robot.forward_dynamics(q, qd, tau)
 print(qdd.shape)  # (8, 7)
 robot.close()</code></pre>
     <p class="note">The first load generates and compiles code; it can take minutes. Later loads reuse compatible cached artifacts. This NumPy example moves inputs and outputs through host memory. JAX and PyTorch require separately installed CUDA-enabled frameworks.</p>
-    <div class="links start-links"><a class="button" href="docs/user_guide/getting_started/installation.html">Installation</a><a class="button" href="docs/user_guide/tutorials/python_wrappers.html">Python examples</a><a class="button" href="docs/user_guide/tutorials/codegen.html">CUDA integration</a><a class="button" href="docs/user_guide/tutorials/collisions.html">Collision codegen</a></div>
+    <div class="links start-links"><a class="button" href="docs/user_guide/getting_started/installation.html">Installation</a><a class="button" href="docs/user_guide/tutorials/codegen.html">Header-only CUDA</a><a class="button" href="docs/user_guide/tutorials/python_wrappers.html">Python examples</a><a class="button" href="docs/user_guide/tutorials/codegen.html">CUDA integration</a><a class="button" href="docs/user_guide/tutorials/collisions.html">Collision codegen</a></div>
     <details><summary>Platform and interface scope</summary><p>Current validation targets Linux x86_64 with NVIDIA CUDA. Generated code can be rebuilt for different GPU architectures; compiled robot binaries are architecture-specific. This dataset does not cover Jetson. Use the PyPI install above (or the source checkout for development).</p><p>See <a href="docs/user_guide/getting_started/compatibility.html">compatibility and known limitations</a> for joint types, operation coverage, runtime contexts, differentiation, and graph-capture restrictions.</p></details>
   </section>
 
