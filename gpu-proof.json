@@ -21,7 +21,7 @@
   },
   "fingerprint": {
     "algorithm": "sha256-manifest-v2",
-    "digest": "1822703d10e20bae33128f04c10a333942c1017effc58ea959335f7382902766",
+    "digest": "e43b78cb28d46f4e0ea901cbdd5557792488a40113bdf7f23aaef940a26829d7",
     "excluded_paths": [
       "gpu-proof.json"
     ],
@@ -58,14 +58,14 @@
   "mode": "local",
   "repo": {
     "branch": "batch-2026-10-13-repin-website",
-    "commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
+    "commit_sha": "f61c877170d1c23f487f36ae4754004d3936a7ab",
     "dirty": false,
     "github_username": "plancherb1",
     "remote_url": "git@github.com:A2R-Lab/GRiD.git"
   },
   "schema_version": "3",
   "session": {
-    "ended_at": "2026-10-13T04:49:43Z",
+    "ended_at": "2026-10-13T05:00:09Z",
     "node_ids": [
       "test/python_wrappers/test_any_thread_count.py::test_set_threads_per_block_default",
       "test/python_wrappers/test_any_thread_count.py::test_set_threads_per_block_zero_resets_to_autotuned_default",
@@ -1615,29 +1615,29 @@
         "test/python_wrappers/test_any_thread_count.py",
         "-q",
         "-rf",
-        "--junitxml=/home/plancher/Desktop/GRiD/docs/open-tasks/repin-2026-10-13/shards/test_any_thread_count.xml",
+        "--junitxml=/home/plancher/Desktop/GRiD/docs/open-tasks/repin-2026-10-13b/shards/test_any_thread_count.xml",
         "--gpu-proof-enable",
-        "--gpu-proof-out=/home/plancher/Desktop/GRiD/docs/open-tasks/repin-2026-10-13/shards/receipts/test_any_thread_count.json",
+        "--gpu-proof-out=/home/plancher/Desktop/GRiD/docs/open-tasks/repin-2026-10-13b/shards/receipts/test_any_thread_count.json",
         "--gpu-proof-shard=test_any_thread_count",
         "--gpu-proof-shard-fingerprint-paths=test/python_wrappers/test_any_thread_count.py,bindings/grid_rbd,bindings/src,external/RBDReference"
       ]
     ],
     "shards": [
       {
-        "ended_at": "2026-10-13T04:49:43Z",
+        "ended_at": "2026-10-13T05:00:09Z",
         "node_count": 39,
         "signer": "plancherb1",
         "source": "test_any_thread_count.json",
-        "started_at": "2026-10-13T04:49:41Z"
+        "started_at": "2026-10-13T05:00:08Z"
       }
     ],
-    "started_at": "2026-10-13T04:49:41Z"
+    "started_at": "2026-10-13T05:00:08Z"
   },
   "shards": [
     {
       "carried": null,
       "dirty": false,
-      "ended_at": "2026-10-13T04:49:43Z",
+      "ended_at": "2026-10-13T05:00:09Z",
       "environment": {
         "gpu_info": {
           "cuda_visible_devices": null,
@@ -1715,14 +1715,14 @@
         "test/python_wrappers/test_any_thread_count.py::test_method_at_block_size[fdsva_so-128]",
         "test/python_wrappers/test_any_thread_count.py::test_method_at_block_size[fdsva_so-256]"
       ],
-      "started_at": "2026-10-13T04:49:41Z"
+      "started_at": "2026-10-13T05:00:08Z"
     },
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T19:55:13Z",
@@ -2234,9 +2234,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T19:44:06Z",
@@ -2767,9 +2767,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T20:50:57Z",
@@ -2852,9 +2852,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T20:15:09Z",
@@ -3061,9 +3061,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:38:51Z",
@@ -3114,9 +3114,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:38:57Z",
@@ -3182,9 +3182,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:38:58Z",
@@ -3232,9 +3232,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:39:31Z",
@@ -3293,9 +3293,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:39:03Z",
@@ -3347,9 +3347,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:39:08Z",
@@ -3403,9 +3403,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:39:19Z",
@@ -3481,9 +3481,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:39:27Z",
@@ -3537,9 +3537,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:39:32Z",
@@ -3587,9 +3587,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:39:37Z",
@@ -3643,9 +3643,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:39:39Z",
@@ -3751,9 +3751,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:39:41Z",
@@ -3810,9 +3810,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:41:58Z",
@@ -3866,9 +3866,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:39:47Z",
@@ -3944,9 +3944,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:39:53Z",
@@ -4017,9 +4017,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:40:01Z",
@@ -4097,9 +4097,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:40:07Z",
@@ -4151,9 +4151,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T19:01:38Z",
@@ -4217,9 +4217,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:51:22Z",
@@ -4275,9 +4275,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:51:38Z",
@@ -4363,9 +4363,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:52:55Z",
@@ -4413,9 +4413,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:53:04Z",
@@ -4467,9 +4467,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:53:07Z",
@@ -4527,9 +4527,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:53:13Z",
@@ -4576,9 +4576,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:53:19Z",
@@ -4632,9 +4632,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:58:10Z",
@@ -4686,9 +4686,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T18:58:21Z",
@@ -4751,9 +4751,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T19:00:37Z",
@@ -4809,9 +4809,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T19:16:06Z",
@@ -4865,9 +4865,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T19:06:25Z",
@@ -4918,9 +4918,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T19:06:35Z",
@@ -4972,9 +4972,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T19:09:59Z",
@@ -5033,9 +5033,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T19:13:25Z",
@@ -5093,9 +5093,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T19:16:47Z",
@@ -5152,9 +5152,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T19:16:13Z",
@@ -5206,9 +5206,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T19:16:18Z",
@@ -5257,9 +5257,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T19:16:23Z",
@@ -5306,9 +5306,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-12T19:16:35Z",
@@ -5356,9 +5356,9 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "49df4d82ef51ebb8096703be1b6540f8cc111710",
+        "original_commit_sha": "68ef6e9324d944797056870747f644d1ca932c9f",
         "original_dirty": false,
-        "original_ended_at": "2026-10-12T20:50:57Z",
+        "original_ended_at": "2026-10-13T04:49:43Z",
         "original_signer": "plancherb1"
       },
       "ended_at": "2026-10-10T22:15:53Z",
@@ -5408,7 +5408,7 @@
     }
   ],
   "signature": {
-    "value": "jL9U5V3bAw/NAeAW8IEXejn5FM92FRlIuox+H/WCZEVTqoMFR5HUL7uearmQIkxDB5Z2jxxN4Y4hlzg2bpyYAg=="
+    "value": "fvj+W9E04JMLVZOsnGtRQ9LUEROlbfV6f3BjpvKfGQY8Kqz4ZCYtmr8BlhbK72Tx1hsa/khmP9WmrzPp+zFlDg=="
   },
   "signer": {
     "algorithm": "ed25519",
@@ -5426,7 +5426,7 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0,
+      "duration_s": 0.0001,
       "node_id": "test/python_wrappers/test_any_thread_count.py::test_set_threads_per_block_zero_resets_to_autotuned_default",
       "outcome": "passed",
       "phase": "call"
@@ -5664,7 +5664,7 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0002,
+      "duration_s": 0.0001,
       "node_id": "test/python_wrappers/test_any_thread_count.py::test_method_at_block_size[idsva_so-256]",
       "outcome": "passed",
       "phase": "call"
