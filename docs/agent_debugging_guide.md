@@ -2939,3 +2939,34 @@ unit + 13 family units (SSOT: `docs/open-tasks/archive/multi_tu_arc_2026-10-09.m
 - Watch the driver's `[hh:mm:ss] <shard>: OK|FAIL` lines; `[pool] +/- prewarm_*` lines show the
   compile pool; a long silence with `cicc`/`ptxas` at 100 % CPU is a big header compiling, not a
   stall (the h1_2 second-order runner: 50 min).
+
+### 7.z45 A refresh with ZERO stale shards is not a no-op when the receipt-level fingerprint moved (2026-10-13, 0.4.1 re-pin)
+
+Shard carry is decided on NARROW fingerprints (each shard's test module + the
+bindings source for wrappers); the merged receipt also carries a RECEIPT-LEVEL
+fingerprint over every `tool.gpu_proof.fingerprint_paths` entry (the driver,
+`pyproject.toml`, the test manifest, …). Editing one of those paths that is in
+no shard's narrow set (this batch: `test/run_split_suite.py`, the manifest
+move, `pyproject.toml`) therefore produced a dry plan of "0 stale / 44 carried
+— nothing stale", while `gpu-proof verify` on the committed receipt already
+FAILED on "source fingerprint does not match the checked-out tree". The
+launcher's no-op path would have verified that stale receipt and died after
+the planning step. `gpu-proof merge` needs at least one fresh shard to
+re-sign, so the driver now recomputes the receipt-level digest when nothing
+is stale (`recompute_fingerprint(old["fingerprint"])`, the tool's own helper)
+and, if it moved, re-runs the cheapest carried WRAPPER module
+(`resign_module_if_fingerprint_moved`) so the merge re-signs at HEAD with
+every other shard carried. Lessons: (1) a planner that only consults narrow
+fingerprints must still compare the receipt-level digest before declaring a
+no-op; (2) exercise the real tool on the real receipt (`GRID_SPLIT_REFRESH_DRY=1
+… --refresh-from gpu-proof.json` plus `gpu-proof verify`) after any driver edit
+— the unit suite with synthetic receipts cannot see this class.
+
+Also from the re-pin: pytest-gpu-proof 0.4.1's `plan_carry` is now the BASE
+carry verdict (ancestry, receipt and per-shard dirty flags, narrow
+fingerprint) and GRiD's rules (oracle pin, recorded failures, wrapper
+fingerprint schema, cuda byte-neutrality) only demote; `merge --verify-inputs`
+authenticates every shard receipt's signature; the scope gate is the policy's
+`required_test_manifest` (EXACT set, `test/gpu-proof-tests.txt`) verified by
+the driver right after the merge while the tree is still byte-clean — before
+the launcher promotes the receipt — not a GRiD-side subset check.

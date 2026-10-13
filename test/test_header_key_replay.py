@@ -146,8 +146,15 @@ def test_plan_refresh_per_shard_replay(monkeypatch, tmp_path):
             (True, "identical") if rows[0]["content_sha256"] == "same" else
             (False, "rotated")))
 
+    # pytest-gpu-proof's own plan says every shard is carryable; the header-key
+    # replay layered on top is what demotes cuda_rotated.
+    all_carryable = {"receipt": {"carryable": True, "reason": "ok"},
+                     "shards": [{"name": sh["name"], "verdict": "carryable",
+                                 "reason": "fingerprint unchanged",
+                                 "node_count": len(sh["node_ids"])}
+                                for sh in old["shards"]]}
     stale, carried, _wrap, cuda_fresh = rss.plan_refresh(
-        old, ids, [], {}, 7200.0, lambda paths: "F")
+        old, ids, [], {}, 7200.0, all_carryable)
     assert "cuda_clean" in carried and "cuda_norec" in carried
     assert "cuda_rotated" in stale
     assert len(fallback_calls) == 1  # lazy, computed once
