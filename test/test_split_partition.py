@@ -36,7 +36,7 @@ def test_oracle_pin_change_demotes_cuda_and_wrapper_even_with_identical_headers(
                   ["bindings/grid_rbd"], "same"),
     ]}
     stale, carried, wrappers, fresh = rss.plan_refresh(
-        old, ids, ["test_pose"], {}, 7200, lambda paths: "same")
+        old, ids, ["test_pose"], {}, 7200, _plan(old, lambda paths: "same"))
     assert set(stale) == {"cuda_00_pose", "test_pose"}
     assert not carried and wrappers == ["test_pose"]
     assert [n for s in fresh for n in s.targets] == ids
@@ -462,6 +462,32 @@ def _mk_shard(name, ids, paths, digest):
             "fingerprint": {"included_paths": paths, "digest": digest}}
 
 
+
+def _plan(old, digest_fn):
+    """Emulate pytest-gpu-proof's `plan_carry` report for the SYNTHETIC receipts
+    below (fictitious SHAs, fake digests): the receipt is carryable unless it
+    was recorded dirty; a shard is carryable iff it is clean and `digest_fn`
+    reproduces its recorded narrow digest. The real tool is exercised against a
+    real repo in test_plan_refresh_uses_the_real_plan_carry."""
+    dirty = bool((old.get("repo") or {}).get("dirty"))
+    rec = {"commit_sha": (old.get("repo") or {}).get("commit_sha"), "head": "HEAD",
+           "carryable": not dirty,
+           "reason": "recorded with a dirty working tree" if dirty else "ok"}
+    shards = []
+    for sh in old.get("shards") or []:
+        fp = sh.get("fingerprint") or {}
+        if dirty:
+            v, why = "stale", rec["reason"]
+        elif sh.get("dirty"):
+            v, why = "stale", "recorded with a dirty working tree"
+        elif digest_fn(fp.get("included_paths") or []) == fp.get("digest"):
+            v, why = "carryable", "fingerprint unchanged"
+        else:
+            v, why = "stale", "fingerprint changed"
+        shards.append({"name": sh.get("name"), "verdict": v, "reason": why,
+                       "node_count": len(sh.get("node_ids") or [])})
+    return {"receipt": rec, "shards": shards}
+
 def test_plan_refresh_stale_detection_and_repack(monkeypatch):
     import codegen_neutrality
     monkeypatch.setattr(codegen_neutrality, "cuda_carry_soundness",
@@ -482,7 +508,7 @@ def test_plan_refresh_stale_detection_and_repack(monkeypatch):
     fn = lambda paths: now[tuple(paths)]
     current_cuda = clean_ids + stale_ids  # stale shard's tests still exist
     stale, carried, wrap_run, cuda_fresh = rss.plan_refresh(
-        old, current_cuda, ["test_w1", "test_w2", "test_w3_new"], {}, 7200.0, fn)
+        old, current_cuda, ["test_w1", "test_w2", "test_w3_new"], {}, 7200.0, _plan(old, fn))
     assert set(stale) == {"cuda_01_stale", "test_w2"}
     assert set(carried) == {"cuda_00_clean", "test_w1"}
     # stale wrapper re-runs; NEW module runs; clean wrapper carried
@@ -507,16 +533,16 @@ def test_plan_refresh_edge_cases(monkeypatch):
     old = {"shards": [_mk_shard("cuda_00_crba", ids, ["a.py"], "d1"),
                       _mk_shard("cuda_00_misc", ["x::y"], ["b.py"], "d2")]}
     with pytest.raises(RuntimeError, match="cannot shadow"):
-        rss.plan_refresh(old, ids, [], {}, 7200.0, fn1)
+        rss.plan_refresh(old, ids, [], {}, 7200.0, _plan(old, fn1))
     # CARRIED shard's id missing from collection -> loud refusal
     with pytest.raises(RuntimeError, match="no longer collectable"):
-        rss.plan_refresh(old, [], [], {}, 7200.0, fn1)
+        rss.plan_refresh(old, [], [], {}, 7200.0, _plan(old, fn1))
     # stale WRAPPER shard whose module was deleted -> refuse (no namesake)
     old_w = {"shards": [_mk_shard("test_gone",
                                   ["test/python_wrappers/test_gone.py::t"],
                                   ["b.py"], "OLD")]}
     with pytest.raises(RuntimeError, match="deleted module|no current module"):
-        rss.plan_refresh(old_w, [], ["test_other"], {}, 7200.0, fn1)
+        rss.plan_refresh(old_w, [], ["test_other"], {}, 7200.0, _plan(old_w, fn1))
     # multiple stale cuda names: fresh partition recycles ALL of them, exactly
     stale_a = [_fid("go2", "floating", "aba", t) for t in (1, 32)]
     stale_b = [_fid("g1", "fixed", "minv", t) for t in (1, 32)]
@@ -525,7 +551,7 @@ def test_plan_refresh_edge_cases(monkeypatch):
         _mk_shard("cuda_09_two", stale_b, ["b.py"], "OLD"),
     ]}
     _, carried3, _, fresh3 = rss.plan_refresh(
-        old3, stale_a + stale_b, [], {}, 7200.0, fn1)
+        old3, stale_a + stale_b, [], {}, 7200.0, _plan(old3, fn1))
     assert carried3 == []
     assert {s.name for s in fresh3} == {"cuda_05_one", "cuda_09_two"}
     assert sorted(i for s in fresh3 for i in s.targets) == sorted(stale_a + stale_b)
@@ -557,7 +583,7 @@ def test_plan_refresh_asset_change_demotes_covering_shards(monkeypatch):
            "shards": [_mk_shard("cuda_00_rizon4", hit_ids, ["a.py"], "d1"),
                       _mk_shard("cuda_01_iiwa14", safe_ids, ["a.py"], "d1")]}
     stale, carried, _, fresh = rss.plan_refresh(
-        old, hit_ids + safe_ids, [], {}, 7200.0, lambda paths: "d1")
+        old, hit_ids + safe_ids, [], {}, 7200.0, _plan(old, lambda paths: "d1"))
     assert set(stale) == {"cuda_00_rizon4"}
     assert set(carried) == {"cuda_01_iiwa14"}
     assert {s.name for s in fresh} == {"cuda_00_rizon4"}
@@ -566,7 +592,7 @@ def test_plan_refresh_asset_change_demotes_covering_shards(monkeypatch):
 
 def test_plan_refresh_refuses_monolithic_receipt():
     with pytest.raises(RuntimeError, match="shards"):
-        rss.plan_refresh({"tests": []}, [], [], {}, 7200.0, lambda p: "")
+        rss.plan_refresh({"tests": []}, [], [], {}, 7200.0, _plan({"tests": []}, lambda p: ""))
 
 
 def test_plan_refresh_bindings_fingerprint_schema_upgrade():
@@ -581,7 +607,7 @@ def test_plan_refresh_bindings_fingerprint_schema_upgrade():
     ]}
     # digest fn says "unchanged" — the schema rule must stale it anyway
     stale, carried, wrap_run, cuda_fresh = rss.plan_refresh(
-        old, [], ["test_w_old"], {}, 7200.0, lambda paths: "SAME")
+        old, [], ["test_w_old"], {}, 7200.0, _plan(old, lambda paths: "SAME"))
     assert set(stale) == {"test_w_old"} and not carried
     assert set(wrap_run) == {"test_w_old"} and not cuda_fresh
 
@@ -604,13 +630,13 @@ def test_plan_refresh_cuda_carry_gate(monkeypatch):
     monkeypatch.setattr(codegen_neutrality, "cuda_carry_soundness",
                         lambda r: (True, "proven"))
     stale, carried, wrap_run, cuda_fresh = rss.plan_refresh(
-        old, ids, ["test_w"], {}, 7200.0, same)
+        old, ids, ["test_w"], {}, 7200.0, _plan(old, same))
     assert set(carried) == {"cuda_00_x", "cuda_01_y", "test_w"} and not stale
 
     monkeypatch.setattr(codegen_neutrality, "cuda_carry_soundness",
                         lambda r: (False, "not neutral"))
     stale, carried, wrap_run, cuda_fresh = rss.plan_refresh(
-        old, ids, ["test_w"], {}, 7200.0, same)
+        old, ids, ["test_w"], {}, 7200.0, _plan(old, same))
     assert set(stale) == {"cuda_00_x", "cuda_01_y"}
     assert carried == ["test_w"]          # wrapper carry untouched
     assert {s.name for s in cuda_fresh} == {"cuda_00_x", "cuda_01_y"}
@@ -693,7 +719,7 @@ def test_plan_refresh_never_carries_recorded_failures(monkeypatch):
         _mk_shard("cuda_01_good", [ids[1]], ["test/cuda_equivalents/b.py"], "SAME"),
     ]}
     stale, carried, wrap_run, cuda_fresh = rss.plan_refresh(
-        old, ids, [], {}, 7200.0, lambda paths: "SAME")
+        old, ids, [], {}, 7200.0, _plan(old, lambda paths: "SAME"))
     assert "cuda_00_bad" in stale and carried == ["cuda_01_good"]
     assert {s.name for s in cuda_fresh} == {"cuda_00_bad"}
     assert sorted(i for s in cuda_fresh for i in s.targets) == [ids[0]]
@@ -826,11 +852,11 @@ def test_plan_refresh_dirty_old_receipt_carries_nothing(monkeypatch):
     fn = lambda paths: now[tuple(paths)]
     clean = {"repo": {"commit_sha": "abc", "dirty": False}, "shards": shards}
     stale, carried, wrap_run, cuda_fresh = rss.plan_refresh(
-        clean, ids, ["test_w"], {}, 7200.0, fn)
+        clean, ids, ["test_w"], {}, 7200.0, _plan(clean, fn))
     assert set(carried) == {"cuda_00_x", "test_w"} and not stale
     dirty = {"repo": {"commit_sha": "abc", "dirty": True}, "shards": shards}
     stale, carried, wrap_run, cuda_fresh = rss.plan_refresh(
-        dirty, ids, ["test_w"], {}, 7200.0, fn)
+        dirty, ids, ["test_w"], {}, 7200.0, _plan(dirty, fn))
     assert not carried
     assert set(stale) == {"cuda_00_x", "test_w"}
     assert wrap_run == ["test_w"]
@@ -850,3 +876,53 @@ def test_driver_import_puts_repo_root_ahead_of_stdlib_test_package(tmp_path):
     r = _sp.run([sys.executable, "-c", code], cwd=tmp_path,
                 capture_output=True, text=True)
     assert r.returncode == 0 and r.stdout.strip() == "ok", r.stderr
+
+
+def test_plan_refresh_uses_the_real_plan_carry(tmp_path, monkeypatch):
+    """Integration with pytest-gpu-proof's OWN `plan_carry` (0.4.1): the base
+    verdicts plan_refresh consumes come from the tool against a real git repo,
+    so a clean shard carries, a touched test file stales exactly that shard,
+    and a dirty recording tree stales everything."""
+    import subprocess
+    from pytest_gpu_proof.fingerprint import compute_fingerprint
+    from pytest_gpu_proof.merge import plan_carry
+
+    repo = tmp_path / "repo"
+    (repo / "test/python_wrappers").mkdir(parents=True)
+    (repo / "bindings/grid_rbd").mkdir(parents=True)
+    (repo / "test/python_wrappers/test_a.py").write_text("def test_a(): pass\n")
+    (repo / "test/python_wrappers/test_b.py").write_text("def test_b(): pass\n")
+    (repo / "bindings/grid_rbd/__init__.py").write_text("x = 1\n")
+
+    def git(*a):
+        return subprocess.check_output(["git", *a], cwd=repo, text=True).strip()
+    git("init", "-q"); git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "t"); git("add", "."); git("commit", "-qm", "base")
+    sha = git("rev-parse", "HEAD")
+
+    def shard(mod):
+        paths = [f"test/python_wrappers/{mod}.py", "bindings/grid_rbd"]
+        return {"name": mod, "node_ids": [f"test/python_wrappers/{mod}.py::t"],
+                "fingerprint": compute_fingerprint(paths, root=str(repo)),
+                "carried": None, "dirty": False}
+    old = {"schema_version": "3", "repo": {"commit_sha": sha, "dirty": False},
+           "shards": [shard("test_a"), shard("test_b")]}
+
+    plan = plan_carry(old, repo_root=str(repo))
+    assert plan["receipt"]["carryable"] and \
+        {s["name"]: s["verdict"] for s in plan["shards"]} == {"test_a": "carryable", "test_b": "carryable"}
+    stale, carried, wrap_run, fresh = rss.plan_refresh(old, [], ["test_a", "test_b"], {}, 7200.0, plan)
+    assert not stale and set(carried) == {"test_a", "test_b"} and wrap_run == [] and fresh == []
+
+    (repo / "test/python_wrappers/test_a.py").write_text("def test_a(): pass  # touched\n")
+    git("commit", "-qam", "touch a")
+    plan = plan_carry(old, repo_root=str(repo))
+    assert {s["name"]: s["verdict"] for s in plan["shards"]} == {"test_a": "stale", "test_b": "carryable"}
+    stale, carried, wrap_run, fresh = rss.plan_refresh(old, [], ["test_a", "test_b"], {}, 7200.0, plan)
+    assert stale == ["test_a"] and carried == ["test_b"] and wrap_run == ["test_a"]
+
+    dirty = dict(old, repo={"commit_sha": sha, "dirty": True})
+    plan = plan_carry(dirty, repo_root=str(repo))
+    assert not plan["receipt"]["carryable"]
+    stale, carried, wrap_run, fresh = rss.plan_refresh(dirty, [], ["test_a", "test_b"], {}, 7200.0, plan)
+    assert set(stale) == {"test_a", "test_b"} and not carried and set(wrap_run) == {"test_a", "test_b"}

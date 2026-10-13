@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from test.receipt_integrity import verify_scope, verify_header_keys
+from test.receipt_integrity import write_manifest, verify_header_keys
 from test.run_split_suite import _locked_compile_dependency
 
 
@@ -25,13 +25,25 @@ def test_glass_pin_is_a_codegen_input():
     assert 'external/GLASS' in neutrality.CODEGEN_INPUT_PATHS
 
 
-def test_scope_uses_ids_not_counts():
-    scope = {'node_ids': ['a', 'b']}
-    verify_scope({'tests': [{'node_id': n} for n in ['a', 'b', 'c']]}, scope)
-    with pytest.raises(ValueError, match='omits'):
-        verify_scope({'tests': [{'node_id': n} for n in ['a', 'c']]}, scope)
+def test_manifest_is_exact_sorted_and_keeps_its_header(tmp_path):
+    path = tmp_path / 'gpu-proof-tests.txt'
+    path.write_text('# reviewed scope\nstale::old\n')
+    ids = write_manifest({'tests': [{'node_id': n} for n in ['b', 'a']]}, path)
+    assert ids == {'a', 'b'}
+    assert path.read_text() == '# reviewed scope\na\nb\n'   # removed ids drop out (exact set)
     with pytest.raises(ValueError, match='Duplicate'):
-        verify_scope({'tests': [{'node_id': 'a'}, {'node_id': 'a'}]}, scope)
+        write_manifest({'tests': [{'node_id': 'a'}, {'node_id': 'a'}]}, path)
+
+
+def test_committed_manifest_matches_the_committed_receipt():
+    """The policy gate is EXACT: the reviewed manifest and the committed
+    receipt's collection must agree in both directions."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    receipt = json.loads((root / 'gpu-proof.json').read_text())
+    manifest = {l.strip() for l in (root / 'test/gpu-proof-tests.txt').read_text().splitlines()
+                if l.strip() and not l.startswith('#')}
+    assert set(receipt['session']['node_ids']) == manifest
 
 
 def test_fresh_headers_may_change_count_but_carried_may_not(tmp_path):

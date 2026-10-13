@@ -11,7 +11,7 @@
 #   SCOPE=full  test/run_gpu_proof.sh     # every gpu_proof test — hours cold, the nightly job (DEFAULT)
 #   PYTEST_ARGS="-k go2" test/run_gpu_proof.sh   # ad-hoc scope on top of SCOPE
 #
-# Main requires the reviewed node-ID scope in test/gpu-proof-scope.json.
+# Main requires the reviewed EXACT node-ID scope in test/gpu-proof-tests.txt (policy).
 # Smoke/curated runs are diagnostics, not replacements for the main receipt.
 # Prefer test/run_validation.py for a locked, logged everyday refresh.
 #

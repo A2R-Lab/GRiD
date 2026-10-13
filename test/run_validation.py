@@ -20,7 +20,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 LOCK_PATH = Path('/tmp/a2rlab-timing.lock')
 sys.path.insert(0, str(ROOT))
-from test.receipt_integrity import verify_header_keys, verify_scope
+from test.receipt_integrity import verify_header_keys
 
 
 def validation_env():
@@ -99,7 +99,6 @@ def finalize(out):
         if file_hash(ROOT / relative) != expected:
             raise ValueError(f'Generated evidence changed: {relative}')
     receipt = json.loads((ROOT / 'gpu-proof.json').read_text())
-    verify_scope(receipt, json.loads((ROOT / 'test/gpu-proof-scope.json').read_text()))
     verify_header_keys(json.loads((out / 'header-keys.before.json').read_text()),
                        json.loads((ROOT / 'test/gpu-proof-header-keys.json').read_text()),
                        receipt, Path(state['shard_dir']) / 'receipts')
@@ -194,7 +193,6 @@ def main():
                 raise RuntimeError('HEAD changed during recording')
             merged = shard_dir / 'gpu-proof.json'
             receipt = json.loads(merged.read_text()) if merged.exists() else json.loads((ROOT / 'gpu-proof.json').read_text())
-            verify_scope(receipt, json.loads((ROOT / 'test/gpu-proof-scope.json').read_text()))
             if merged.exists():
                 verify_header_keys(before, json.loads(keys_path.read_text()), receipt, shard_dir / 'receipts')
             elif json.loads(keys_path.read_text()) != before:

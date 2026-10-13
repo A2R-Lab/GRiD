@@ -17,6 +17,7 @@
 allow_dirty: false
 max_age_days: 30
 allow_carried: false
+required_test_manifest: test/gpu-proof-tests.txt
 required_fingerprint_paths:
   - grid_codegen
   - bindings/grid_rbd
@@ -41,7 +42,7 @@ required_fingerprint_paths:
   - test/codegen_neutrality.py
   - test/header_key_replay.py
   - test/receipt_integrity.py
-  - test/gpu-proof-scope.json
+  - test/gpu-proof-tests.txt
   - test/run_validation.py
 required_fingerprint_extra_paths: []
 required_fingerprint_excluded_paths: [gpu-proof.json]

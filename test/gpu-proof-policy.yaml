@@ -15,4 +15,6 @@ max_age_days: 30
 # full-pass policy below at RELEASE time (gpu-proof-policy-release.yaml,
 # allow_carried:false). carried_max_age_days bounds how long a shard can ride.
 allow_carried: true
+# Exact collection gate (0.4.1): the receipt's node IDs must equal this list.
+required_test_manifest: test/gpu-proof-tests.txt
 carried_max_age_days: 30

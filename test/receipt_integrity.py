@@ -1,8 +1,10 @@
 """Structural evidence checks, complementary to gpu-proof signature verification.
 
-The minimum scope is an explicit reviewed node-ID set, not a test-count floor.
-Header-key checks distinguish carried evidence from freshly recorded sidecars.
-This module never restores an old header-key file over a fresh recording.
+The receipt scope itself is enforced by pytest-gpu-proof (policy
+required_test_manifest = test/gpu-proof-tests.txt, an EXACT node-ID set); this
+module only writes that manifest from a verified receipt. Header-key checks
+distinguish carried evidence from freshly recorded sidecars and never restore
+an old header-key file over a fresh recording.
 """
 from __future__ import annotations
 
@@ -18,10 +20,16 @@ def node_ids(receipt):
     return set(ids)
 
 
-def verify_scope(receipt, scope):
-    missing = set(scope['node_ids']) - node_ids(receipt)
-    if missing:
-        raise ValueError(f'Receipt omits {len(missing)} required tests: {sorted(missing)[:5]}')
+def write_manifest(receipt, path):
+    """Rewrite the reviewed scope manifest from a receipt's collection, keeping
+    the file's leading comment block. Explicit maintainer action: the diff
+    (added AND removed node IDs) is reviewed in the PR, and the file is a
+    receipt fingerprint path, so it must be committed BEFORE recording."""
+    ids = node_ids(receipt)
+    header = [line for line in path.read_text().splitlines()
+              if line.startswith('#')] if path.exists() else []
+    path.write_text('\n'.join(header + sorted(ids)) + '\n')
+    return ids
 
 
 def read_sidecar(path):
@@ -60,17 +68,13 @@ def verify_header_keys(before, after, receipt, sidecar_dir):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--receipt', type=Path, required=True)
-    parser.add_argument('--scope', type=Path, required=True)
-    parser.add_argument('--extend-scope', action='store_true',
-                        help='Explicit maintainer action: add nodes from a verified full receipt; never remove nodes')
+    parser.add_argument('--write-manifest', type=Path, required=True, metavar='PATH',
+                        help='Explicit maintainer action: rewrite the reviewed scope manifest '
+                             '(test/gpu-proof-tests.txt) from a verified full-scope receipt')
     args = parser.parse_args()
     receipt = json.loads(args.receipt.read_text())
-    if args.extend_scope:
-        old = json.loads(args.scope.read_text()) if args.scope.exists() else {'node_ids': []}
-        ids = set(old['node_ids']) | node_ids(receipt)
-        args.scope.write_text(json.dumps({'schema': 1, 'node_ids': sorted(ids)}, indent=2) + '\n')
-    verify_scope(receipt, json.loads(args.scope.read_text()))
-    print(f'Receipt minimum scope satisfied ({len(node_ids(receipt))} recorded tests)')
+    ids = write_manifest(receipt, args.write_manifest)
+    print(f'Wrote {len(ids)} node IDs -> {args.write_manifest}')
 
 
 if __name__ == '__main__':

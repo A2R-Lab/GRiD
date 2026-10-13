@@ -35,12 +35,13 @@ Resuming a full run also requires ``--full``. Freeze implementation and package
 inputs before starting this long run; installed-artifact checks complement,
 but do not replace, the source correctness receipt.
 
-Main requires ``test/gpu-proof-scope.json``'s node IDs. A smoke receipt cannot
+Main requires a receipt whose collection equals ``test/gpu-proof-tests.txt``
+exactly (the policies' ``required_test_manifest``). A smoke receipt cannot
 replace full-scope evidence. Carried shards remain permitted by the everyday
 policy; this does not require a fresh release-policy run. After a reviewed
-full collection adds tests, explicitly extend the scope with
-``test/receipt_integrity.py --receipt gpu-proof.json --scope test/gpu-proof-scope.json --extend-scope``.
-Removing or renaming required tests requires a reviewed scope edit.
+full collection adds, removes or renames tests, regenerate the manifest with
+``test/receipt_integrity.py --receipt <run>/gpu-proof.json --write-manifest test/gpu-proof-tests.txt``
+and commit it before recording; the manifest diff is reviewed in the PR.
 
 Local Docs Build
 ----------------

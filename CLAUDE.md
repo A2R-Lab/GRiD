@@ -67,8 +67,8 @@ Markers: `pinocchio_equivalence`, `cuda_equivalence`, `python_wrappers`, `floati
 `robot_{smoke,curated,nightly}`, `gpu_proof`, `notebooks`, `developer_only`. GPU test outcomes are captured in a signed
 `gpu-proof.json` receipt (see `test/run_gpu_proof.sh`) that CPU-only CI verifies against the committed
 test fingerprints (red when correctness inputs change without a refreshed receipt).
-Main requires a receipt covering `test/gpu-proof-scope.json`; diagnostic smoke
-receipts do not replace that evidence. A release needs one fresh full run
+Main requires a receipt whose collection EQUALS `test/gpu-proof-tests.txt` (policy
+`required_test_manifest`); diagnostic smoke receipts do not replace that evidence. A release needs one fresh full run
 verified under the RELEASE policy.
 
 Prefer the crash-isolated split driver for full GPU passes:
@@ -92,7 +92,7 @@ the partition logic live in `test/test_split_partition.py`.
 Compiles run through a RAM-aware parallel pool (`test/compile_sched.py`): Phase A
 wrapper `.so` warms and CUDA flagship, integrator and second-order smoke pre-warms
 (`test/prewarm_cuda_flagship.py` — reuses the tests' actual builders and cache keys;
-`--inventory --node-ids test/gpu-proof-scope.json --out inventory.json` inspects
+`--inventory --node-ids test/gpu-proof-tests.txt --out inventory.json` inspects
 integrator/SO hits without compiling) execute as admission-controlled parallel
 workers (predicted peak RSS from a rolling ledger at `test/.split_suite/compile_rss.json`
 — schema 2 since 2026-10-10: the job's whole process TREE is sampled, because
