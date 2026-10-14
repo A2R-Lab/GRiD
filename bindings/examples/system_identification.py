@@ -29,7 +29,7 @@ import numpy as np
 import grid_rbd
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_DEFAULT_URDF = _REPO_ROOT / "config" / "robot_assets" / "iiwa14.urdf"
+_DEFAULT_URDF = _REPO_ROOT / "grid_assets" / "robots" / "iiwa14.urdf"
 
 
 def main(urdf: str):

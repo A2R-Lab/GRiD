@@ -32,7 +32,7 @@ is documented separately.
 | Task | Start here |
 |------|------------|
 | **Call GRiD from Python** (numpy/JAX/torch) | `grid_rbd.load_robot("robot.urdf", backend=...)` — [Python wrappers docs](https://a2r-lab.org/GRiD/user_guide/tutorials/python_wrappers.html) · [agent guide](https://github.com/A2R-Lab/GRiD/blob/main/bindings/examples/AGENT_INTEGRATION_GUIDE.md) |
-| **Generate CUDA for a new robot** | `grid-generate config/robot_assets/iiwa14.urdf` — see Quick Start below |
+| **Generate CUDA for a new robot** | `grid-generate grid_assets/robots/iiwa14.urdf` — see Quick Start below |
 | **Fit a humanoid build in RAM** | [fast robot setup](https://a2r-lab.org/GRiD/user_guide/getting_started/fast_robot_setup.html) (`algorithm_list=`, `enable_mujoco_kernels=False`) |
 | **Add an algorithm** | [adding an algorithm](https://a2r-lab.org/GRiD/user_guide/tutorials/adding_an_algorithm.html) |
 | **Run tests / fix a red receipt CI job** | [CUDA validation](https://a2r-lab.org/GRiD/user_guide/tutorials/cuda_validation.html) + `test/run_gpu_proof.sh --help` |
@@ -64,11 +64,11 @@ source .venv/bin/activate
 ```
 
 Generate CUDA code for your robot (ten ready-to-use URDFs ship in
-`config/robot_assets/` — iiwa14, go2, fr3, g1, h1_2, …):
+`grid_assets/robots/` — iiwa14, go2, fr3, g1, h1_2, …):
 ```shell
 # Via the installed CLI (works on a clean base install):
-grid-generate config/robot_assets/iiwa14.urdf                # arm, fixed base
-grid-generate config/robot_assets/go2.urdf -f                # quadruped, floating base
+grid-generate grid_assets/robots/iiwa14.urdf                # arm, fixed base
+grid-generate grid_assets/robots/go2.urdf -f                # quadruped, floating base
 grid-generate path/to/robot.urdf [-t EE_JOINT_NAME] [-n NAMESPACE] [-f] [--algorithm-list LIST] [-o OUT.cuh]
 
 # Or via a hardcoded zero-config example (these two pull their URDFs from the
@@ -169,7 +169,7 @@ Additional algorithms and features are in development. If you have a particular 
 | `external/` | the peer-product submodules: `GLASS` (GPU linear algebra), `RBDReference` (Pinocchio-validated numpy oracle), `URDFParser` | each submodule's README |
 | `examples/` | the start-here track: `notebooks/` (Python tour), `codegen/`, `cuda/` | [`examples/README.md`](https://github.com/A2R-Lab/GRiD/blob/main/examples/README.md) |
 | `test/` | pytest suites + the split-suite/receipt machinery (`run_split_suite.py`, `run_gpu_proof.sh`, `compile_sched.py`) | [CUDA validation](https://a2r-lab.org/GRiD/user_guide/tutorials/cuda_validation.html) |
-| `config/` | ten sample URDFs (`robot_assets/`) + tuned per-GPU launch configs (`launch_configs/`) + `autotune_robot.sh` | `config/robot_assets/URDF_SOURCES.md` |
+| `config/` | ten sample URDFs (`robot_assets/`) + tuned per-GPU launch configs (`launch_configs/`) + `autotune_robot.sh` | `grid_assets/robots/URDF_SOURCES.md` |
 | `docs/` | the Sphinx site (`source/`) + `agent_debugging_guide.md` (the bug-class bible) | [docs site](https://a2r-lab.org/GRiD/) |
 | `install/` | install scripts (`base_install.sh`, `developer_install.sh`) + requirements files | [installation guide](https://a2r-lab.org/GRiD/user_guide/getting_started/installation.html) |
 

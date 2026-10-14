@@ -25,7 +25,7 @@ required_fingerprint_paths:
   - external/GLASS
   - external/RBDReference
   - external/URDFParser
-  - config
+  - grid_assets
   - pyproject.toml
   - setup.py
   - _build_resources.py

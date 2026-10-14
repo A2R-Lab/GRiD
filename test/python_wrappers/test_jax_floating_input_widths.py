@@ -13,7 +13,7 @@ pytestmark = pytest.mark.python_wrappers
 @pytest.fixture(scope="module", params=["go2", "g1"])
 def handles(request):
     import grid_rbd
-    from config import robot_urdf
+    from grid_assets import robot_urdf
     options = dict(floating_base=True, enable_mujoco_kernels=False, max_batch_size=8,
                    algorithm_list=["idsva_so_body_frame", "integrator", "integrator_gradient"])
     name = "nv_packing_" + request.param

@@ -38,7 +38,7 @@ Usage (from the repo root):
 
 Refresh-carry soundness (the subtlest contract here, see plan_refresh): a
 carried cuda shard is trusted only after (1) the robot-ASSET gate — oracle-side
-URDF changes (config/robot_assets + the RBDReference submodule copy) demote
+URDF changes (grid_assets/robots + the RBDReference submodule copy) demote
 covering shards BEFORE anything else, because emitted headers never rotate for
 an oracle change; (2) per-shard HEADER-KEY REPLAY — byte-precise regeneration
 of each recorded flagship header under the current tree (records in
@@ -125,7 +125,7 @@ class ShardSpec:
 
 # ─── warm manifest ───────────────────────────────────────────────────────────
 # module -> list of warm_robot kwarg dicts (cache-key-relevant kwargs only).
-# URDFs resolve through config.robot_urdf at runtime. Modules NOT listed (or
+# URDFs resolve through grid_assets.robot_urdf at runtime. Modules NOT listed (or
 # listed with []) still run in Phase B — they are just not pre-warmed:
 #   * force_rebuild=True modules rebuild in-test regardless;
 #   * test_subset_build* use isolated tmp cache_dirs;
@@ -892,7 +892,7 @@ def _nvcc_version() -> str:
 def module_fingerprint(mod: str) -> str:
     import hashlib
     sys.path.insert(0, str(REPO_ROOT))
-    from config import robot_urdf  # noqa: PLC0415
+    from grid_assets import robot_urdf  # noqa: PLC0415
     from grid_rbd._cache import (  # noqa: PLC0415
         _codegen_source_hash, _wrapper_template_hash, detect_cuda_arch,
         package_version)
@@ -989,7 +989,7 @@ def warm_entries(modules: list[str] | None = None) -> list[tuple[str, dict]]:
 def _warm_one_entry(desc: str, entry: dict) -> tuple[str, float, str]:
     """One warm_robot call. Returns (status, secs, detail)."""
     sys.path.insert(0, str(REPO_ROOT))
-    from config import robot_urdf  # noqa: PLC0415
+    from grid_assets import robot_urdf  # noqa: PLC0415
     import grid_rbd  # noqa: PLC0415
 
     kw = dict(entry)

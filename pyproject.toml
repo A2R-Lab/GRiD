@@ -160,7 +160,7 @@ required_marker = "gpu_proof"
 fingerprint_paths = [
     "grid_codegen", "bindings/grid_rbd", "bindings/src",
     "external/GLASS", "external/RBDReference", "external/URDFParser",
-    "config", "pyproject.toml", "setup.py", "_build_resources.py", "MANIFEST.in",
+    "grid_assets", "pyproject.toml", "setup.py", "_build_resources.py", "MANIFEST.in",
     "test/cuda_equivalents", "test/python_wrappers", "test/conftest.py",
     "test/helpers.py", "test/run_gpu_proof.sh", "test/run_split_suite.py",
     "test/compile_sched.py", "test/prewarm_cuda_flagship.py",

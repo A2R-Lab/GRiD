@@ -13,7 +13,7 @@ Parse and look around
 
    from URDFParser import URDFParser
 
-   robot = URDFParser().parse("config/robot_assets/iiwa14.urdf", floating_base=False)
+   robot = URDFParser().parse("grid_assets/robots/iiwa14.urdf", floating_base=False)
 
    robot.get_num_pos(), robot.get_num_vel(), robot.get_num_bodies()
    [j.get_name() for j in robot.get_joints_ordered_by_id()]   # the input-vector order

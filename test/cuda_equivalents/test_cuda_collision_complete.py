@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from config import robot_urdf
+from grid_assets import robot_urdf
 from URDFParser import URDFParser
 from RBDReference import RBDReference
 from grid_codegen.algorithms._spherize import spherize_urdf

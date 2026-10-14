@@ -61,7 +61,7 @@ its position in that frame (welded-link spheres are pre-folded onto the movable 
 Checked-in examples: `collision/assets/go2_spherized.urdf` (all-primitive, full coverage) and
 `collision/assets/iiwa14_spherized.urdf` (historical partial arm model, missing link 6/7 meshes).
 Regenerate iiwa from its source URDF for current use: the two pinned collision meshes and
-their licenses are bundled under `config/robot_assets/drake/`. These use the **foam interchange format**, so a foam-produced
+their licenses are bundled under `grid_assets/robots/drake/`. These use the **foam interchange format**, so a foam-produced
 spherized URDF is drop-in interchangeable (`parse_spherized_urdf` reads either).
 
 ---

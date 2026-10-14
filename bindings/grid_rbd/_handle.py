@@ -485,7 +485,7 @@ class RobotHandle:
           dlopen'd .so (ground truth), for methods that have a twin.
         - ``out_shape``: trailing per-batch-item output dims (ints).
         - ``tier``/``threads``: the tuned launch config baked for this robot/
-          GPU (``None`` without a config/launch_configs entry).
+          GPU (``None`` without a grid_assets/launch_configs entry).
         - ``max_threads``: the compiled kernel's real ``__launch_bounds__``
           ceiling via :py:meth:`kernel_max_threads` (``None`` where the probe
           does not apply).

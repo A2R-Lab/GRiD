@@ -39,7 +39,7 @@ def source_bundle(root):
                       info['peers']['GLASS']['commit']).splitlines()
         files = {f'GLASS/{name}': glass / name for name in tracked
                  if name.endswith('.cuh') and ('/' not in name or name.startswith('src/'))}
-        profiles = root / 'config/launch_configs'
+        profiles = root / 'grid_assets/launch_configs'
         files.update({f'launch_configs/{p.relative_to(profiles).as_posix()}': p for p in profiles.rglob('*.json')})
         for name in PEERS:
             licenses = sorted((root / 'external' / name).glob('LICENSE*'))

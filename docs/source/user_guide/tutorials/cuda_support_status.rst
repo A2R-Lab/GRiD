@@ -52,7 +52,7 @@ Second-order fixed-base diagnostics are still developer-only. The current
 green zero-sample set includes ``iiwa14``, ``go2``, ``gen3``, ``fr3``,
 ``fetch``, and ``rizon4`` (healed 2026-09-15: the upstream flexiv xacro
 emitted each link's origin/mass/inertia triple bare, so the local
-``config/robot_assets/rizon4.urdf`` now wraps them in proper ``<inertial>``
+``grid_assets/robots/rizon4.urdf`` now wraps them in proper ``<inertial>``
 elements).
 
 Floating-Base Robots

@@ -12,7 +12,7 @@ def model_inputs(name, batch=2):
     """Neutral inputs for these two scalar-joint fixtures, not arbitrary URDFs."""
     floating = {"iiwa14": False, "go2": True}[name]
     robot = URDFParser().parse(
-        str(ROOT / "config/robot_assets" / f"{name}.urdf"),
+        str(ROOT / "grid_assets/robots" / f"{name}.urdf"),
         floating_base=floating,
     )
     if robot is None:

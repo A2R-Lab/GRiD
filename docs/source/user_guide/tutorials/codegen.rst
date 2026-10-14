@@ -11,12 +11,12 @@ populated.
 Generate a header
 -----------------
 
-From the repository root (the sample URDFs under ``config/robot_assets/`` are
+From the repository root (the sample URDFs under ``grid_assets/robots/`` are
 in the checkout, not the wheel — substitute your own URDF path):
 
 .. code-block:: shell
 
-   grid-generate config/robot_assets/iiwa14.urdf --algorithm-list dynamics -o /tmp/iiwa_grid.cuh
+   grid-generate grid_assets/robots/iiwa14.urdf --algorithm-list dynamics -o /tmp/iiwa_grid.cuh
 
 ``--algorithm-list`` restricts emission to named algorithms or profiles.
 Omit it to use the full profile. Add ``-f`` for a floating base; use
@@ -31,7 +31,7 @@ Generate from Python
    from URDFParser import URDFParser
    from grid_codegen import GRiDCodeGenerator
 
-   robot = URDFParser().parse("config/robot_assets/iiwa14.urdf")
+   robot = URDFParser().parse("grid_assets/robots/iiwa14.urdf")
    generator = GRiDCodeGenerator(robot)
    generator.gen_all_code(
        algorithm_list=["dynamics"],

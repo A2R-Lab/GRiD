@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-ASSETS = REPO / "config/robot_assets"
+ASSETS = REPO / "grid_assets/robots"
 
 
 def register_subset(name, urdf, *, floating, algos, max_batch=16, runtime_inertia=False, mujoco=False):

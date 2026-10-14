@@ -168,7 +168,7 @@ def plant():
     """The plant smoke's artifact (same registration → cache hit)."""
     if shutil.which("nvcc") is None:
         pytest.skip("nvcc not on PATH")
-    h = grid_rbd.register_robot(name="iiwa14_plant_smoke", urdf_path=str(_REPO / "config/robot_assets/iiwa14.urdf"),
+    h = grid_rbd.register_robot(name="iiwa14_plant_smoke", urdf_path=str(_REPO / "grid_assets/robots/iiwa14.urdf"),
                                 floating_base=False, max_batch_size=8)
     yield h
     h.close()

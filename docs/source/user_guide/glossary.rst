@@ -65,7 +65,7 @@ doc.
 
    ffi_bases
       The per-algo ``{tier, threads}`` block of a robot's tuned launch config
-      (``config/launch_configs/<robot>/<gpu>.json``) used by the jax/torch
+      (``grid_assets/launch_configs/<robot>/<gpu>.json``) used by the jax/torch
       FFI launch path; ``pybind_bases`` / ``torch_bases`` are runtime
       overlays over the same bake.
 

@@ -206,7 +206,7 @@ class GRiDCodeGenerator:
         # + load_launch_config). Falls back per-algo to host when ffi is absent.
         self.launch_config_profile = LAUNCH_CONFIG_PROFILE
         # A1b launch-config bake: the robot id used to locate the autotuned
-        # config/launch_configs/<robot>/<DEFAULT_GPU>.json (per-algo {tier,threads}).
+        # grid_assets/launch_configs/<robot>/<DEFAULT_GPU>.json (per-algo {tier,threads}).
         # The launch_configs dir is keyed by the URDF FILENAME stem (e.g.
         # "iiwa14", "go2", "g1"), which does NOT always equal the URDF
         # <robot name=...> (e.g. go2_description, g1_29dof). Callers that know
@@ -215,7 +215,7 @@ class GRiDCodeGenerator:
         # falls back to the conservative MAX_PERF_LEVEL_THREADS default so
         # un-tuned robots keep compiling exactly as before (additive, Gate-A safe).
         self.launch_config_robot = LAUNCH_CONFIG_ROBOT
-        # W15 (2026-09-22): which config/launch_configs/<robot>/<gpu>.json to bake.
+        # W15 (2026-09-22): which grid_assets/launch_configs/<robot>/<gpu>.json to bake.
         # None = LAUNCH_CONFIG_DEFAULT_GPU (byte-identical to before); the bindings
         # pass launch_config.select_launch_config_gpu(robot, cuda_arch).
         self.launch_config_gpu = LAUNCH_CONFIG_GPU if LAUNCH_CONFIG_GPU else LAUNCH_CONFIG_DEFAULT_GPU

@@ -31,7 +31,7 @@ from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 
 REPO = Path(__file__).resolve().parents[2]
 RUNNER_SOURCE = Path(__file__).with_name("cuda_safe_init_runner.cu")
-ASSETS = REPO / "config" / "robot_assets"
+ASSETS = REPO / "grid_assets" / "robots"
 
 CASES = [
     ("iiwa14", False, {}),

@@ -41,7 +41,7 @@ def _sanitizer():
 def test_go2_floating_composition_is_racecheck_clean(tmp_path):
     cs = _sanitizer()
     with contextlib.redirect_stdout(io.StringIO()):
-        robot = URDFParser().parse(str(REPO / "config" / "robot_assets" / "go2.urdf"), floating_base=True)
+        robot = URDFParser().parse(str(REPO / "grid_assets" / "robots" / "go2.urdf"), floating_base=True)
         gen = GRiDCodeGenerator(robot, DEBUG_MODE=False, NEED_PRINT_MAT=False, FILE_NAMESPACE="grid")
         gen.gen_all_code(algorithm_list=["forward_dynamics", "end_effector_pose", "integrator"],
                          output_path=str(tmp_path / "grid.cuh"), enable_mujoco_kernels=False)

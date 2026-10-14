@@ -84,7 +84,7 @@ Load a model with the operations you need before calling the examples above::
    import grid_rbd
 
    h = grid_rbd.load_robot(
-       "config/robot_assets/iiwa14.urdf",
+       "grid_assets/robots/iiwa14.urdf",
        algorithm_list=["end_effector_pose", "end_effector_pose_gradient",
                        "end_effector_pose_hessian"],
    )

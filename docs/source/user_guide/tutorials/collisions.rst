@@ -90,7 +90,7 @@ its visual meshes. Unresolved assets and incomplete fits are errors.
 For ``package://`` meshes, the importer checks paths relative to the URDF and
 explicit ``ROS_PACKAGE_PATH`` roots (either a package directory or its parent).
 It never downloads assets. Drake's collision meshes for iiwa14 links 6 and 7
-are bundled under ``config/robot_assets/drake`` with their upstream licenses,
+are bundled under ``grid_assets/robots/drake`` with their upstream licenses,
 revision and hashes; the bundled URDF resolves them without environment setup.
 The historical iiwa14 sphere asset omits those meshes and is not a complete
 replacement for the source collision model.

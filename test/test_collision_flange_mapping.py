@@ -4,7 +4,7 @@ The FLANGE mapping is the #1 silent-wrong-frame hazard in the collision pipeline
 sphere must bind to ITS OWN GRiD `s_Xworld` frame slot. This test certifies that mapping WITHOUT
 the (heavy, optional) foam toolchain, on:
 
-  1. REAL iiwa14 (`config/robot_assets/iiwa14.urdf`): movable links `iiwa_link_1..7` -> joint ids 0..6
+  1. REAL iiwa14 (`grid_assets/robots/iiwa14.urdf`): movable links `iiwa_link_1..7` -> joint ids 0..6
      (base-0 MONOTONE down the chain, T=I); the WELDED `iiwa_link_ee` folds onto its movable
      parent (`iiwa_joint_7` = jid 6) carrying the fixed transform.
   2. A synthetic 3-joint + fixed-flange robot: full `build_sphere_tiers` PRE-COMPOSES a welded
@@ -29,7 +29,7 @@ from grid_codegen.algorithms._collision import (
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
-from config import robot_urdf
+from grid_assets import robot_urdf
 IIWA = robot_urdf("iiwa14")
 
 

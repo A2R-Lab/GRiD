@@ -18,7 +18,7 @@ development alternative), then choose the task below.
        ``bindings/examples/AGENT_INTEGRATION_GUIDE.md``.
    * - **Generate CUDA for a new robot**
      - ``grid-generate path/to/robot.urdf [-f]`` (ten sample URDFs in
-       ``config/robot_assets/``); walkthrough:
+       ``grid_assets/robots/``); walkthrough:
        :doc:`user_guide/tutorials/codegen`.
    * - **Make a big (humanoid) robot build fit in RAM / finish faster**
      - :doc:`user_guide/getting_started/fast_robot_setup` — subset the build
@@ -89,5 +89,5 @@ development alternative), then choose the task below.
        :doc:`user_guide/getting_started/fast_robot_setup`.
    * - **Tune kernel launch configs for my GPU**
      - ``config/autotune_robot.sh --help`` (writes
-       ``config/launch_configs/<robot>/<gpu>.json``, baked at codegen time,
+       ``grid_assets/launch_configs/<robot>/<gpu>.json``, baked at codegen time,
        overlay-able at runtime via ``apply_profile_overlay``).

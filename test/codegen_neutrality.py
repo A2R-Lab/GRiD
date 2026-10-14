@@ -26,7 +26,7 @@ new Python-conditional emission block (the 7.z7 lesson: byte-identity gates
 only cover configurations something actually emits).
 
 ⚠The matrix proof covers codegen LOGIC, never per-robot DATA: an edit to
-config/robot_assets/<robot>.urdf changes only THAT robot's emission, and
+grid_assets/robots/<robot>.urdf changes only THAT robot's emission, and
 every matrix row stays byte-identical unless the robot happens to be one of
 the six (2026-09-15 rizon4 lesson — the fixed URDF slid under a "PROVEN
 byte-neutral" verdict). `changed_robot_assets()` names the affected robots
@@ -52,7 +52,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # Generator-input paths: a change here (vs the old receipt's commit) is what
 # triggers the proof. Submodule pin bumps for URDFParser show up in git diff
 # under its path.
-CODEGEN_INPUT_PATHS = ("grid_codegen", "config/robot_assets",
+CODEGEN_INPUT_PATHS = ("grid_codegen", "grid_assets/robots",
                       "external/URDFParser", "external/GLASS")
 
 
@@ -105,7 +105,7 @@ _GEN_SCRIPT = textwrap.dedent("""\
     import contextlib, os, sys
     sys.path.insert(0, "test"); sys.path.insert(0, ".")
     import warnings; warnings.filterwarnings("ignore")
-    from config import robot_urdf
+    from grid_assets import robot_urdf
     from external.URDFParser.URDFParser import URDFParser
     from grid_codegen.GRiDCodeGenerator import GRiDCodeGenerator
     robot_id, floating, out_path = sys.argv[1], sys.argv[2] == "1", sys.argv[3]
@@ -141,7 +141,7 @@ def codegen_inputs_changed(old_sha: str) -> bool:
 
 def changed_robot_assets(old_sha: str) -> set[str]:
     """Robot ids whose URDF assets differ between the old commit and the
-    current tree — BOTH copies: config/robot_assets/ (the codegen input) and
+    current tree — BOTH copies: grid_assets/robots/ (the codegen input) and
     the RBDReference submodule's robot_assets/ (what the equivalence fleet's
     resolver + oracle actually load). Per-robot data changes are OUTSIDE the
     covering-matrix proof, and an ORACLE-side change is invisible even to
@@ -153,11 +153,11 @@ def changed_robot_assets(old_sha: str) -> set[str]:
     # contributes nothing here — production shas come from a verified
     # receipt, and a truly broken tree still fails loudly in the prover.
     changed = subprocess.run(
-        ["git", "diff", "--name-only", old_sha, "--", "config/robot_assets"],
+        ["git", "diff", "--name-only", old_sha, "--", "grid_assets/robots"],
         cwd=REPO_ROOT, capture_output=True, text=True).stdout
     names = set(changed.splitlines())
     for line in _git("status", "--porcelain", "--",
-                     "config/robot_assets").splitlines():
+                     "grid_assets/robots").splitlines():
         if line.startswith("??"):
             names.add(line[3:].strip())
     # Oracle-side leg: diff the submodule's assets between the old receipt's

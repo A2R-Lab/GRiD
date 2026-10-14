@@ -15,12 +15,12 @@ HOW THE PER-TIER PROBE .so IS BUILT (no changes to any existing file):
 The wrapper instantiates every kernel/host launcher at
 `grid::launch_cfg<GRID_ALGO_*>::TIER` (bindings/grid_rbd/wrapper_template.cu),
 and that table is baked by gen_add_launch_config_helpers from
-`config/launch_configs/<resolved-robot>/<DEFAULT_GPU>.json`
+`grid_assets/launch_configs/<resolved-robot>/<DEFAULT_GPU>.json`
 (grid_codegen/_launch_config.py:load_launch_config). The robot is resolved from
 the URDF FILENAME STEM, exact-directory-match first
 (bindings/grid_rbd/_compile.py:_resolve_launch_config_robot). So per tier we:
   1. write a TEMPORARY probe config dir
-     config/launch_configs/tierprobe_<robot>_<tier>/<DEFAULT_GPU>.json whose
+     grid_assets/launch_configs/tierprobe_<robot>_<tier>/<DEFAULT_GPU>.json whose
      host `bases` force EVERY launch-config algo to that tier (both bases);
   2. copy the robot's URDF to <tmp>/tierprobe_<robot>_<tier>.urdf so the stem
      resolves to that probe dir (verified by a pre-flight load_launch_config
@@ -51,7 +51,7 @@ INTEGRITY GUARDS:
 
 DEFAULT IS DRY-RUN-LIKE: the matrix is printed; nothing is written unless
 --write is passed, which merges the `matrix` + `matrix_meta` blocks into
-config/launch_configs/<robot>/<gpu>.json preserving the existing
+grid_assets/launch_configs/<robot>/<gpu>.json preserving the existing
 2-space-indent sort_keys format (existing suggested_threads profiles in a
 cell are preserved and merged, never clobbered).
 
@@ -311,7 +311,7 @@ def print_matrix(robot, matrix, statuses, all_problems):
 
 
 def write_matrix(robot, gpu, matrix, n, statuses):
-    """Merge the E5 `matrix` block into config/launch_configs/<robot>/<gpu>.json.
+    """Merge the E5 `matrix` block into grid_assets/launch_configs/<robot>/<gpu>.json.
     Format mirrors bake_by_n_bucket.py / write_ffi_config: 2-space indent,
     sort_keys, trailing newline. Existing per-profile entries inside a cell are
     merged, not clobbered; cells from a non-ok (base, tier) are never written."""
@@ -369,7 +369,7 @@ def main():
                     help="kernel_limits_<host>.json for the min_smem join "
                          "(default: results/kernel_limits_<host>.json if present)")
     ap.add_argument("--write", action="store_true",
-                    help="merge the matrix into config/launch_configs/<robot>/<gpu>.json "
+                    help="merge the matrix into grid_assets/launch_configs/<robot>/<gpu>.json "
                          "(default: print only)")
     ap.add_argument("--dry-run", action="store_true",
                     help="force print-only even if --write was given")
@@ -425,7 +425,7 @@ def main():
             print(f"  (skipped non-ok tiers: {skipped})")
     else:
         print(f"\n  (dry-run: not writing matrix; pass --write to merge into "
-              f"config/launch_configs/{args.robot}/{args.gpu}.json)")
+              f"grid_assets/launch_configs/{args.robot}/{args.gpu}.json)")
     if bad:
         print(f"\nFATAL-ISH: probe not applied for {bad} — those cells were "
               "withheld; investigate before trusting any numbers from this run.")

@@ -17,7 +17,7 @@ repository root:
    from URDFParser import URDFParser
    from RBDReference import RBDReference
 
-   robot = URDFParser().parse("config/robot_assets/iiwa14.urdf")
+   robot = URDFParser().parse("grid_assets/robots/iiwa14.urdf")
    if robot is None:
        raise ValueError("URDF parsing failed")
    rbd = RBDReference(robot)

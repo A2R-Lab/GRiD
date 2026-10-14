@@ -20,7 +20,7 @@ REPO = Path(__file__).resolve().parents[1]
 
 def _gen(name="iiwa14", floating=False):
     with contextlib.redirect_stdout(io.StringIO()):
-        robot = URDFParser().parse(str(REPO / "config" / "robot_assets" / f"{name}.urdf"), floating_base=floating)
+        robot = URDFParser().parse(str(REPO / "grid_assets" / "robots" / f"{name}.urdf"), floating_base=floating)
     return GRiDCodeGenerator(robot, DEBUG_MODE=False, NEED_PRINT_MAT=False, FILE_NAMESPACE="grid")
 
 

@@ -11,7 +11,7 @@ prune docs
 prune test
 prune examples
 prune install
-prune config
+prune grid_assets
 prune .github
 prune external/GLASS
 prune external/URDFParser/tests

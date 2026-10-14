@@ -17,7 +17,7 @@ run from the GRiD repository root:
    from URDFParser import URDFParser
    from RBDReference import RBDReference
 
-   robot = URDFParser().parse("config/robot_assets/iiwa14.urdf")
+   robot = URDFParser().parse("grid_assets/robots/iiwa14.urdf")
    rbd = RBDReference(robot)
    q = np.zeros(robot.get_num_pos())  # this example is fixed-base
    qd = np.zeros(robot.get_num_vel())

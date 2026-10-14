@@ -12,7 +12,7 @@ machinery described below; L2 pinning of the spilled workspace is default-OFF
 kernel). The Python wrappers (``grid_rbd.RobotHandle``,
 ``grid_rbd.jax.JaxRobotHandle``) launch each kernel at its PER-ALGO BAKED
 tier — ``grid::launch_cfg<GRID_ALGO_*>::TIER``, autotuned into
-``config/launch_configs/<robot>/<gpu>.json`` and baked at codegen. On a
+``grid_assets/launch_configs/<robot>/<gpu>.json`` and baked at codegen. On a
 tuned robot many algos run at ``TIER_LITE``/``TIER_MINIMAL``; an untuned
 robot (or algo) falls back to ``TIER_SHARED``.
 
@@ -417,7 +417,7 @@ and fewer drift bugs.
 **Why the Python surface has no tier knob.** The Python wrapper is a sealed
 product that never touches nvcc, so the tier is a per-algorithm *baked* choice
 rather than a runtime argument: the autotuners write ``{tier, threads}`` into
-``config/launch_configs/``, codegen bakes it as
+``grid_assets/launch_configs/``, codegen bakes it as
 ``grid::launch_cfg<GRID_ALGO_*>::TIER``, and every binding launch site (the
 numpy/pybind host-wrapper calls and the jax/torch direct kernel launches)
 instantiates that tier. Divergent-tier instantiations get their own

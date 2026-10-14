@@ -20,7 +20,7 @@ import re
 
 import pytest
 
-from config import ROBOT_ASSETS_DIR, robot_urdf
+from grid_assets import ROBOT_ASSETS_DIR, robot_urdf
 from external.URDFParser.URDFParser import URDFParser
 from grid_codegen.GRiDCodeGenerator import GRiDCodeGenerator
 

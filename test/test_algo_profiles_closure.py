@@ -12,7 +12,7 @@ into the set the generator actually emits. Two defects were found by the
 
 The last test is the general net: for every registry algorithm, the SINGLETON
 header must define every ``*_inner`` device function it calls (a static scan,
-no nvcc). CPU-only; iiwa14-fixed from config/robot_assets.
+no nvcc). CPU-only; iiwa14-fixed from grid_assets/robots.
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from grid_codegen._algo_profiles import normalize_codegen_algorithms
 from grid_codegen.algo_registry import ALGO_DESCRIPTORS
 
 REPO = Path(__file__).resolve().parent.parent
-URDF = REPO / "config" / "robot_assets" / "iiwa14.urdf"
+URDF = REPO / "grid_assets" / "robots" / "iiwa14.urdf"
 
 
 def _gen():
@@ -151,7 +151,7 @@ def test_contact_frames_subset_without_kinematics_is_self_contained(tmp_path):
 # twins ON as well — found 2026-09-19 by a go2 subset build that failed in ptxas
 # with "Unresolved extern function grid::crba_inner".
 # --------------------------------------------------------------------------
-GO2 = REPO / "config" / "robot_assets" / "go2.urdf"
+GO2 = REPO / "grid_assets" / "robots" / "go2.urdf"
 
 
 def _gen_go2_floating():

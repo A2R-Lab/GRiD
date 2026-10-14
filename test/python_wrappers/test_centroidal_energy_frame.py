@@ -28,7 +28,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 for _p in (str(_REPO_ROOT / "bindings"), str(_REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
-from config import ROBOT_ASSETS_DIR
+from grid_assets import ROBOT_ASSETS_DIR
 
 
 # ─── skip preconditions ─────────────────────────────────────────────────────

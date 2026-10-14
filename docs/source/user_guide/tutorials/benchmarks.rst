@@ -149,7 +149,7 @@ GRiD kernels are single-block and **thread-count-invariant** (same result
 at any block size), so the optimal ``(resource_tier, threads_per_block)``
 for each algorithm is a pure *performance* choice that depends on the
 **robot** (DoF / topology) and the **GPU**. GRiD ships measured-optimal
-launch configs under ``config/launch_configs/<robot>/<gpu>.json``; codegen bakes
+launch configs under ``grid_assets/launch_configs/<robot>/<gpu>.json``; codegen bakes
 the matching file into the generated header and the host launchers
 (and therefore the python / jax / torch bindings) default their launch
 config from it. With no entry for your (robot, GPU), GRiD falls back to a
@@ -175,7 +175,7 @@ This:
    --stage sweep``) for that robot + bases. The build is **RAM-safe
    serial** (``--compile-jobs 1``, one per-algo TU at a time) so the
    big-robot second-order TUs never OOM the box.
-#. Converts the swept winners into ``config/launch_configs/<robot>/<gpu>.json`` in
+#. Converts the swept winners into ``grid_assets/launch_configs/<robot>/<gpu>.json`` in
    the documented schema (``gpu``, ``cuda_arch``, ``gpu_name``,
    ``autotune_N``, ``source``, ``bases``).
 
@@ -197,11 +197,11 @@ Run the sweep on a **quiet GPU** — timing must be isolated, so close other
 GPU workloads first.
 
 **Crowdsource it (please do!):** once you have a good config, open a PR
-adding ``config/launch_configs/<robot>/<gpu>.json`` (one file per (robot, GPU)) so
+adding ``grid_assets/launch_configs/<robot>/<gpu>.json`` (one file per (robot, GPU)) so
 everyone defaults to fast launches on your hardware. No code changes are
 needed — codegen auto-discovers the file. See
-`config/launch_configs/README.md
-<https://github.com/A2R-Lab/GRiD/blob/main/config/launch_configs/README.md>`_
+`grid_assets/launch_configs/README.md
+<https://github.com/A2R-Lab/GRiD/blob/main/grid_assets/launch_configs/README.md>`_
 for the full contribution checklist (GPU model, driver / CUDA version,
 robot DoF / base to include in the PR description).
 
@@ -209,12 +209,12 @@ Cheap re-bake: ``refresh_launch_configs.sh``
 --------------------------------------------
 
 ``config/refresh_launch_configs.sh`` re-bakes the live
-``config/launch_configs/<robot>/<gpu>.json`` picks from an existing
+``grid_assets/launch_configs/<robot>/<gpu>.json`` picks from an existing
 tier-sweep **without** the day-long recompile: it harvests the latest
 ``results/tier_sweep_phased_*`` sweep (or a ``--sweep-dir`` you pass),
 merges the picks, and bakes the per-robot ``bases`` (optionally
 ``ffi_bases`` with ``--with-ffi``), printing a ``git diff`` of
-``config/launch_configs/`` at the end (it never commits).
+``grid_assets/launch_configs/`` at the end (it never commits).
 
 **Which one when:** ``autotune_robot.sh`` builds a **full monolithic
 per-tier binary**, so big robots (g1 / h2_plus) hit the ~hour

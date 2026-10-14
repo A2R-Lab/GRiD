@@ -985,7 +985,7 @@ def test_joint_limits_land_at_true_q_offsets(tmp_path):
     # iiwa14 fixed: 7 revolute limits at slots 0..6 exactly (regression guard for
     # the fixed-base case, which the old code got right).
     header = _generate_header(tmp_path, "iiwa14", "fixed", algorithm_list="inverse_dynamics")
-    limits = urdf_limits_in_doc_order(REPO_ROOT / "config" / "robot_assets" / "iiwa14.urdf")
+    limits = urdf_limits_in_doc_order(REPO_ROOT / "grid_assets" / "robots" / "iiwa14.urdf")
     n = 7
     rows = emitted_rows(header, n)
     for i, lim in enumerate(limits):
@@ -996,7 +996,7 @@ def test_joint_limits_land_at_true_q_offsets(tmp_path):
     # go2 floating: slots 0..6 (base pose incl quaternion) must be +/-inf, and the
     # 12 leg limits land at slots 7..18 in joint order.
     header = _generate_header(tmp_path, "go2", "floating", algorithm_list="inverse_dynamics")
-    limits = urdf_limits_in_doc_order(REPO_ROOT / "config" / "robot_assets" / "go2.urdf")
+    limits = urdf_limits_in_doc_order(REPO_ROOT / "grid_assets" / "robots" / "go2.urdf")
     assert len(limits) == 12
     n = 19
     rows = emitted_rows(header, n)
@@ -1038,7 +1038,7 @@ def test_tracking_cost_fc_overloads_emit_and_compile(tmp_path):
     from grid_codegen.GRiDCodeGenerator import GRiDCodeGenerator as _G
     from grid_codegen.algorithms._f_ext_contact import contact_frames_from_urdf as _cf
 
-    urdf = str(REPO_ROOT / "config" / "robot_assets" / "iiwa14.urdf")
+    urdf = str(REPO_ROOT / "grid_assets" / "robots" / "iiwa14.urdf")
     algos = ["end_effector_pose", "end_effector_pose_gradient", "f_ext_gradient"]
 
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Autotune GRiD launch configs for YOUR robot + GPU, then write a
-# config/launch_configs/<robot>/<gpu>.json override that codegen bakes into
+# grid_assets/launch_configs/<robot>/<gpu>.json override that codegen bakes into
 # grid_launch_config.cuh (A1 launch-config feature).
 #
 # WHAT IT DOES
@@ -11,7 +11,7 @@
 #      (B8 default; it's hard to time and needs the rdc shim — batch N=256
 #      timing is what we tune on). Serial build (--compile-jobs 1, one
 #      per-algo TU at a time) so the big-robot SO TUs never OOM the box.
-#   3. Converts the swept winners into config/launch_configs/<robot>/<gpu>.json in the
+#   3. Converts the swept winners into grid_assets/launch_configs/<robot>/<gpu>.json in the
 #      documented schema (via config/autotune_to_launch_config.py).
 #   4. Prints next steps: re-codegen + rebuild to pick up the values, and how to
 #      PR the JSON to crowdsource the matrix.
@@ -120,7 +120,7 @@ echo "    GPU_KEY   = $GPU_KEY"
 echo "    gpu_name  = $GPU_NAME"
 echo "    cuda_arch = $CUDA_ARCH"
 echo "    autotune_N= $AUTOTUNE_N"
-echo "    output    = config/launch_configs/$ROBOT/$GPU_KEY.json"
+echo "    output    = grid_assets/launch_configs/$ROBOT/$GPU_KEY.json"
 
 HOST="$(python3 -c 'import platform;print(platform.node().replace(" ","_"))' 2>/dev/null || hostname)"
 BEST_FILE="$REPO_ROOT/test/benchmarks/results/autotune_best_${HOST}.json"
@@ -157,7 +157,7 @@ else
   fi
 fi
 
-# ---- convert winners -> config/launch_configs/<robot>/<gpu>.json ----------------
+# ---- convert winners -> grid_assets/launch_configs/<robot>/<gpu>.json ----------------
 if [ "${AUTOTUNE_DRY_RUN:-0}" = "1" ] && [ ! -f "$BEST_FILE" ]; then
   echo "=== AUTOTUNE_DRY_RUN: no autotune_best file to convert (expected in a dry run) ==="
 else
@@ -172,18 +172,18 @@ fi
 # ---- next steps ----------------------------------------------------------
 cat <<EOF
 
-=== DONE: config/launch_configs/$ROBOT/$GPU_KEY.json written ===
+=== DONE: grid_assets/launch_configs/$ROBOT/$GPU_KEY.json written ===
 
 Next steps:
   1. Re-run codegen + rebuild so the host launchers pick up your tuned values
-     (codegen bakes config/launch_configs/<robot>/<gpu>.json into grid_launch_config.cuh):
+     (codegen bakes grid_assets/launch_configs/<robot>/<gpu>.json into grid_launch_config.cuh):
 
          grid-generate <urdf> ...      # your usual codegen for $ROBOT
          # then rebuild your GRiD / bindings as usual
 
   2. (Optional, please do!) PR the JSON to crowdsource the matrix:
-         git add config/launch_configs/$ROBOT/$GPU_KEY.json
-     See config/launch_configs/README.md for the contribution checklist (GPU model,
+         git add grid_assets/launch_configs/$ROBOT/$GPU_KEY.json
+     See grid_assets/launch_configs/README.md for the contribution checklist (GPU model,
      driver/CUDA version, robot DoF/base in the PR description).
 
 Note: single-call timing is OFF by default (B8) — it is hard to time and needs

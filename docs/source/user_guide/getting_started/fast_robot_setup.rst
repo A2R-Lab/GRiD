@@ -154,7 +154,7 @@ but no usable GPU (a CI builder, a container image build) can produce the
 device at warm time (they register FFI targets against it).
 
 The baked launch profile is chosen for the **architecture you build for**:
-among ``config/launch_configs/<robot>/*.json`` the profile whose name ends
+among ``grid_assets/launch_configs/<robot>/*.json`` the profile whose name ends
 in ``_sm<arch>`` matching ``cuda_arch`` is used (several profiles for one
 architecture resolve to the default, else the first by name — GPU *models*
 sharing an architecture are not told apart yet); if none exists the default
@@ -307,7 +307,7 @@ The exact one-liner to warm a robot from a script, CI job, or agent shell
 
 .. code-block:: shell
 
-   .venv/bin/python -c "import grid_rbd; grid_rbd.precompile('go2', 'config/robot_assets/go2.urdf', floating_base=True, backends=('numpy', 'jax'))"
+   .venv/bin/python -c "import grid_rbd; grid_rbd.precompile('go2', 'grid_assets/robots/go2.urdf', floating_base=True, backends=('numpy', 'jax'))"
 
 Run it once per robot before any interactive or latency-sensitive use; every
 subsequent ``load_robot`` / ``get_robot`` / ``jax.jit`` in any process is

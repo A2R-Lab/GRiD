@@ -27,7 +27,7 @@ import numpy as np
 import grid_rbd
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_DEFAULT_URDF = _REPO_ROOT / "config" / "robot_assets" / "go2.urdf"
+_DEFAULT_URDF = _REPO_ROOT / "grid_assets" / "robots" / "go2.urdf"
 GO2_FEET = ["FR_foot_joint", "FL_foot_joint", "RR_foot_joint", "RL_foot_joint"]
 
 

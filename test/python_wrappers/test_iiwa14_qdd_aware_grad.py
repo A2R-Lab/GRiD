@@ -34,7 +34,7 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
-from config import robot_urdf
+from grid_assets import robot_urdf
 
 
 # ─── preconditions ───────────────────────────────────────────────────────────

@@ -35,7 +35,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "external"))  # peer submodules (RBDReference/URDFParser/GLASS)
 
-from config import robot_urdf  # noqa: E402
+from grid_assets import robot_urdf  # noqa: E402
 from grid_codegen.env_knobs import generation_env
 from grid_codegen import GRiDCodeGenerator  # noqa: E402
 from grid_codegen.algo_registry import ALGO_REGISTRY  # noqa: E402

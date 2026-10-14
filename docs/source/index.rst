@@ -135,7 +135,7 @@ developer path — see :doc:`installation <user_guide/getting_started/installati
    pip install -e ".[jax,torch]" "jax[cuda12]"
 
 Each example below runs as written from a repository checkout (the URDFs live
-under ``config/robot_assets/``). The **first** ``load_robot`` of a robot
+under ``grid_assets/robots/``). The **first** ``load_robot`` of a robot
 generates and compiles its ``.so`` — about 100 s for the 7-DoF iiwa14 on an
 RTX 5090 and about 6 min for the g1 humanoid since 0.5.1 (the dated cold/warm
 table and the RAM-safe subset builds are on
@@ -152,7 +152,7 @@ only when the URDF, the options, the GRiD version or the toolchain change.
          import numpy as np
          import grid_rbd
 
-         r = grid_rbd.load_robot("config/robot_assets/iiwa14.urdf")
+         r = grid_rbd.load_robot("grid_assets/robots/iiwa14.urdf")
          q, qd, u = (np.zeros((8, r.nq), np.float32) for _ in range(3))
          qdd = r.forward_dynamics(q, qd, u)                 # (8, 7)
          dqdd = r.forward_dynamics_gradient(q, qd, u)       # (8, 7, 14) = [d/dq | d/dqd]
@@ -166,7 +166,7 @@ only when the URDF, the options, the GRiD version or the toolchain change.
          import jax.numpy as jnp
          import grid_rbd
 
-         r = grid_rbd.load_robot("config/robot_assets/go2.urdf", backend="jax",
+         r = grid_rbd.load_robot("grid_assets/robots/go2.urdf", backend="jax",
                                  floating_base=True)
          q = jnp.zeros((8, r.nq), jnp.float32).at[:, 6].set(1.0)   # unit quaternion (x, y, z, w)
          qd = jnp.zeros((8, r.nv), jnp.float32)                    # nv-wide: the tangent width
@@ -182,7 +182,7 @@ only when the URDF, the options, the GRiD version or the toolchain change.
          import torch
          import grid_rbd
 
-         r = grid_rbd.load_robot("config/robot_assets/iiwa14.urdf", backend="torch")
+         r = grid_rbd.load_robot("grid_assets/robots/iiwa14.urdf", backend="torch")
          q = torch.zeros(8, r.nq, device="cuda", requires_grad=True)
          qd = torch.zeros(8, r.nq, device="cuda")
          u = torch.zeros(8, r.nq, device="cuda")

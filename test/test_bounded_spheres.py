@@ -102,7 +102,7 @@ def test_codegen_cli_sphere_path_implies_collision_and_rejects_native(tmp_path, 
 def test_bundled_iiwa_collision_meshes_are_complete_and_pinned(tmp_path, monkeypatch):
     import hashlib
     from pathlib import Path
-    from config import robot_urdf
+    from grid_assets import robot_urdf
     from grid_codegen.algorithms._spherize import _resolve_mesh_path
     from grid_codegen.algorithms._collision import parse_spherized_urdf
     monkeypatch.delenv('ROS_PACKAGE_PATH', raising=False)
@@ -127,7 +127,7 @@ def test_bundled_iiwa_collision_meshes_are_complete_and_pinned(tmp_path, monkeyp
 
 
 def test_codegen_cli_consumes_supplied_sphere_model(tmp_path, monkeypatch):
-    from config import robot_urdf
+    from grid_assets import robot_urdf
     from grid_codegen.cli import main
     source = robot_urdf('iiwa14')
     spheres = tmp_path / 'spheres.urdf'

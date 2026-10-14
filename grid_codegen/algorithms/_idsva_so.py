@@ -2901,7 +2901,7 @@ def gen_idsva_so_body_frame_kernel(self, use_qdd_input = False, single_call_timi
     # (+25 % / +50 % at N = 256 / 1024, -17 % below); __maxnreg__(64) = two blocks there (-12..-21 %
     # at N <= 256, -1 % at 1024), and at the wrappers' SHARED launch 64 regs x 256 threads = four
     # blocks (N = 1024: -18 % vs the old kernel at its best count; 320 threads = three blocks and
-    # +25 %, hence the re-autotuned 256-thread pick in config/launch_configs/iiwa14). 64 x 1024
+    # +25 %, hence the re-autotuned 256-thread pick in grid_assets/launch_configs/iiwa14). 64 x 1024
     # fits the register file, so every tier's max block still launches. __maxnreg__ and
     # __launch_bounds__ are mutually exclusive.
     self.gen_add_code_line("__maxnreg__(64)")

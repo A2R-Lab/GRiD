@@ -30,7 +30,7 @@ import numpy as np
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-URDF = REPO_ROOT / "config" / "robot_assets" / "iiwa14.urdf"
+URDF = REPO_ROOT / "grid_assets" / "robots" / "iiwa14.urdf"
 
 _CHILD = r"""
 import os, sys
