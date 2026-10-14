@@ -240,7 +240,7 @@ kept in lockstep by hand; the descriptor table removed that duplication. Adding
 an algorithm is now (metadata-wise) one row. ``test/test_algo_descriptor_parity.py``
 locks the table to the generated output so a mismatch fails CPU-only in CI. The
 per-algo arena/spill ``t_count`` math is now folded into the table too (the
-``ArenaRegion`` / ``SpillRung`` / ``ArenaCtx`` machinery in ``algo_registry.py``,
+``ArenaCtx`` / ``compose_arena_*`` machinery in ``algo_registry.py``,
 composed by ``compose_arena_full`` / ``compose_arena_rungs``): every
 ``select_shared_tier_3way`` site is driven from the composer, so arena sizes are no
 longer hand-written in ``GRiDCodeGenerator.py``. The arena's correctness is guarded

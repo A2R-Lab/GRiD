@@ -10,10 +10,11 @@ and diffs block by block against RBDReference.equivalents.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import sys
 
 import numpy as np
-from robot_descriptions import iiwa14_description
 
 from URDFParser import URDFParser
 from RBDReference import RBDReference
@@ -36,7 +37,7 @@ def parse_block(text: str) -> np.ndarray:
 
 
 def main() -> int:
-    robot = URDFParser().parse(iiwa14_description.URDF_PATH, floating_base=False)
+    robot = URDFParser().parse(str(Path(__file__).resolve().parents[2] / "grid_assets" / "robots" / "iiwa14.urdf"), floating_base=False)
     nv = robot.get_num_joints()
     n = nv
 

@@ -8,7 +8,7 @@ environment. The broad tier rejects/masks quickly; the fine tier confirms — th
 verdict is bit-identical to a fine-only check (see
 test/cuda_equivalents/test_cuda_collision_two_tier.py).
 
-Requires: pip install robot_descriptions  (dev dependency)
+Uses the vendored URDF under grid_assets/robots/ (no extra dependency)
 
 Run:
     python examples/codegen/generate_collision.py --output /tmp/grid_iiwa14_collision.cuh
@@ -18,13 +18,12 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from robot_descriptions import iiwa14_description
 
 from URDFParser import URDFParser
 from grid_codegen import GRiDCodeGenerator
 from grid_codegen.algorithms._collision import multi_tier_collision_spec_from_urdf
 
-URDF_PATH = iiwa14_description.URDF_PATH
+URDF_PATH = str(Path(__file__).resolve().parents[2] / "grid_assets" / "robots" / "iiwa14.urdf")  # vendored copy
 
 
 def main():

@@ -70,8 +70,9 @@ all = [
 ]
 # Test deps for the bindings suite (imports grid_rbd.jax / grid_rbd.torch to
 # exercise the jax<->torch parity + autograd paths). The optional real-MuJoCo
-# cross-check is importorskip-guarded, so `mujoco` stays optional. The heavy
-# comparator/oracle stack (pinocchio/mjx/frax) lives in install/requirements-dev.txt.
+# cross-check is importorskip-guarded, so `mujoco` stays optional. The Pinocchio
+# oracle stack lives in install/requirements-dev.txt; frax and the GPU frameworks
+# come from install/developer_install.sh.
 dev = [
     "grid-rbd[all]",
     "pytest>=7.0",
@@ -109,27 +110,6 @@ grid_rbd = ["wrapper_template.cu", "wrapper_common.cuh", "py.typed"]
 "grid_rbd.torch" = ["py.typed"]
 grid_codegen = ["collision/*.cuh", "collision/assets/*.urdf", "_data/**/*", "_data/provenance.json"]
 
-[tool.black]
-line-length = 88  # Sets the maximum line length; default is 88, but you can adjust it if needed.
-target-version = ['py39']  # Specify the Python version(s) you're targeting, e.g., 'py39' for Python 3.9.
-skip-string-normalization = true  # Optional: keep existing string quotes instead of converting to double quotes
-exclude = '''
-/(
-    \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.nox
-  | \.tox
-  | \.venv
-  | _build
-  | source
-  | buck-out
-  | build
-  | dist
-)/
-'''
-
 [tool.pytest.ini_options]
 # pytest's defaults plus the gitignored local scratch dir at the repo root (a stray
 # scratchpad/*/_test.py produced 10 collection errors in a full-tree run, 2026-09-24).
@@ -139,8 +119,6 @@ markers = [
     "developer_only: Optional developer-only tests that require extra dependencies.",
     "floating_base: Tests that exercise floating-base model paths.",
     "robot_smoke: Smoke-tier robot coverage.",
-    "robot_curated: Curated-tier robot coverage.",
-    "robot_nightly: Nightly-tier robot coverage.",
     "cuda_equivalence: CUDA executable equivalence coverage for generated GRiD code.",
     "python_wrappers: grid-rbd Python wrapper coverage; requires CUDA + grid-rbd installed.",
     "notebooks: Executable example notebooks (run via nbval-lax); requires CUDA + grid-rbd installed.",
@@ -167,6 +145,17 @@ fingerprint_paths = [
     "test/codegen_neutrality.py", "test/header_key_replay.py",
     "test/receipt_integrity.py", "test/gpu-proof-tests.txt", "test/run_validation.py",
     "tools/check_installed_package.py",
+    # 2026-10-14 audit: executed by every GPU import / consulted by the verifier.
+    "test/__init__.py", "test/gpu-proof-policy.yaml", "test/gpu-proof-policy-release.yaml",
+    "test/gpu-proof-expected-skips.txt",
+]
+# Documentation that lives inside fingerprinted directories must not stale evidence
+# (docs are outside the receipt by design); keep this list == the release policy's.
+fingerprint_excluded_paths = [
+    "gpu-proof.json",
+    "grid_assets/robots/URDF_SOURCES.md", "grid_assets/robots/drake/README.md",
+    "grid_assets/launch_configs/README.md", "grid_codegen/README.md",
+    "grid_codegen/collision/HANDOFF.md",
 ]
 max_age_days = 30
 require_gpu = true

@@ -91,9 +91,19 @@ used as the golden oracle in the equivalence tests):
 
    bash install/developer_install.sh
 
-The developer script will, on Debian/Ubuntu, install the system build
-deps needed by the Pinocchio pybind11 extension via ``apt-get``:
-``pkg-config``, ``g++``, ``libeigen3-dev``, ``liburdfdom-headers-dev``.
+The developer script is the *everything* install (the base install stays
+NumPy-only): on top of the base install it adds the GPU frameworks
+(``[all]`` extras, ``jax[cuda12]`` and a torch CUDA wheel from
+``TORCH_INDEX_URL``, default cu128), the Pinocchio oracle stack pinned at
+``pin<4``, ``frax`` for the benchmark column, builds CppADCodeGen into
+``/usr/local`` (``sudo make install``) and the Pinocchio second-order
+extension, and prepares the reference models. Opt out of the pieces you do
+not need with ``SKIP_GPU_FRAMEWORKS=1``, ``SKIP_FRAX_INSTALL=1`` and
+``SKIP_CPPADCG_INSTALL=1``; ``PINOCCHIO_EQUIVALENCE_TIER`` selects the robot
+tier (only ``smoke`` exists today). On Debian/Ubuntu it installs the system
+build deps needed by the Pinocchio pybind11 extension via ``apt-get``:
+``pkg-config``, ``g++``, ``cmake``, ``libeigen3-dev``, ``liburdfdom-headers-dev``,
+``libcppad-dev``.
 The ``pin`` wheel ships its own ``pinocchio.pc`` inside the venv via
 ``cmeel``, and ``install/developer_install.sh`` computes the right
 ``PKG_CONFIG_PATH`` automatically for the extension build — no manual

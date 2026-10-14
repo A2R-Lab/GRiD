@@ -19,29 +19,11 @@ from grid_codegen import GRiDCodeGenerator
 from grid_codegen.cli import parseInputs, validateRobot
 
 
+from grid_codegen.cuda_env import detect_cuda_arch as _detect_cuda_arch  # noqa: E402
+
+
 def detect_cuda_arch() -> str:
-    env_arch = os.environ.get("GRID_CUDA_ARCH")
-    if env_arch:
-        return env_arch.replace("sm_", "").replace("compute_", "").replace(".", "")
-
-    nvidia_smi = shutil.which("nvidia-smi")
-    if nvidia_smi is not None:
-        result = subprocess.run(
-            [
-                nvidia_smi,
-                "--query-gpu=compute_cap",
-                "--format=csv,noheader,nounits",
-            ],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            for line in result.stdout.splitlines():
-                compute_cap = line.strip()
-                if compute_cap:
-                    return compute_cap.replace(".", "")
-
-    return "86"
+    return _detect_cuda_arch(os.environ.get("GRID_CUDA_ARCH"))
 
 
 def main():

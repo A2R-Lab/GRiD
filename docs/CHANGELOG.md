@@ -27,6 +27,42 @@ Second packaged release (first: 0.5.0, 2026-10-08). User-visible:
 
 ## Unreleased — v2.0 — cuBLASDx removal + resource-tier system
 
+### 2026-10-14 — audit batch 1: fix what was broken (merge-only)
+From the 2026-10-13 skeptical audit (four read-only lanes, every claim re-verified):
+- **`config/` → `grid_assets/`** (`robots/`, `launch_configs/`): the repo-only asset
+  package no longer shadows a generic module name; every path reference, the
+  resource resolver, the fingerprint scope and the policies follow.
+- **Suite floor repaired:** `test/conftest.py::_ENV_GUARD_SKIP` matched "nvcc not
+  found" but none of the harness's real skip strings ("nvcc was not found", "CUDA
+  runtime is unavailable", "… not found in the robot manifest", …); widened and
+  pinned by `test/test_suite_floor.py`.
+- **Dev install fixed:** `install/requirements-dev.txt` pins `pin<4` + `cmeel-eigen`
+  + `cmeel-urdfdom<5` (bare `pin` resolved 4.x and broke `import pinocchio`), adds
+  `pyyaml` + `matplotlib` (CI used to add them by hand); `base_install.sh` initialises
+  submodules BEFORE the editable install; `developer_install.sh` installs the GPU
+  frameworks (`[all]`, `jax[cuda12]`, torch cu128; `SKIP_GPU_FRAMEWORKS=1`).
+- **CI:** one pytest-gpu-proof pin (read from requirements-dev), compile-free CUDA
+  sentinels added to the cpu-lane, the Pinocchio peer suites run on every PR, and
+  `publish.yml` refuses a tag without a fresh release-policy receipt. `make verify`
+  (still calling the deleted scope file) and `make test-cpu` (a different set from
+  CI) fixed.
+- **Receipt scope:** `test/__init__.py`, both policies and the expected-skips
+  baseline are fingerprinted; READMEs inside fingerprinted dirs are excluded.
+- **Dead code/config removed:** `ArenaRegion`/`SpillRung` (never instantiated, yet
+  documented as the live mechanism), `_grid_repo_root`, `cuda_harness.pytest_configure`,
+  `KERNEL_ARG_TOKENS`, `_POS`, `DEFAULT_AUTOTUNE_BATCH_ITERS`, `PTR_ALIAS`,
+  `[tool.black]`, dead `robot_curated`/`robot_nightly` markers, unused Sphinx
+  extensions, `grid_codegen/requirements.txt`, orphan pre-commit/flake8 files,
+  `prune_results.py`.
+- **One toolchain probe:** `grid_codegen/cuda_env.py` replaces four drifting
+  nvidia-smi detectors and two nvcc readers in the test/bench/example code (the
+  bindings' cache-key probes are deliberately untouched); the benchmark `_hash_tree`
+  now hashes paths like the harness's.
+- Examples default to the vendored `grid_assets/robots/*.urdf` (no
+  `robot_descriptions` needed); stale skip-message install hints fixed; rizon4
+  sha in `URDF_SOURCES.md` corrected; `prepare_reference_models.py` default target
+  fixed.
+
 ### 2026-10-13 — website: two entry points (merge-only)
 - The cover, docs home, Installation and the codegen tutorial now present GRiD's
   two entry points side by side: **easy** (Python wrappers: `load_robot`,

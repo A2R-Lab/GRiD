@@ -18,7 +18,7 @@ help:
 	@echo "  gen             regenerate the checked-in generated regions (wrapper_body_gen + core_body_gen)"
 	@echo "  gen-check       fail if a generated region is out of date vs abi_specs.py"
 	@echo "  build           gen + rebuild the grid-rbd package (_core pybind module) via pip install -e ."
-	@echo "  test-cpu        the CPU-only suite (drift gates, partition logic, pinocchio oracle smoke)"
+	@echo "  test-cpu        the CPU-only lane (same file list as CI: drift gates, partition logic, packaging)"
 	@echo "  test-gpu        full GPU pass via the crash-isolated split driver (hours; quiet box!)"
 	@echo "  receipt-refresh re-run ONLY the stale receipt shards and re-sign gpu-proof.json"
 	@echo "  verify          verify the committed gpu-proof.json against the everyday policy"
@@ -37,8 +37,11 @@ gen-check:
 build: gen
 	.venv/bin/pip install -e . --no-deps
 
+# The SAME file list CI's cpu-lane runs (.github/workflows/verify-gpu-proof.yml).
+CPU_TESTS = test/test_*.py test/benchmarks/test_*.py test/cuda_equivalents/test_pin_only_default.py test/cuda_equivalents/test_cuda_matmul_blockwrap_regression.py bindings/tests/test_mujoco_view.py bindings/tests/test_mujoco_transforms.py bindings/tests/test_register_forwarding.py docs/test_doc_examples.py
+
 test-cpu:
-	$(PY) -m pytest -q -m "not cuda_equivalence and not python_wrappers and not notebooks" test/
+	$(PY) -m pytest -q $(CPU_TESTS)
 
 # Full GPU receipt pass (SPLIT = crash-isolated shards; see test/run_gpu_proof.sh --help).
 test-gpu:
@@ -50,8 +53,7 @@ receipt-refresh:
 	SPLIT=1 SPLIT_REFRESH=1 test/run_gpu_proof.sh
 
 verify:
-	.venv/bin/gpu-proof verify --receipt gpu-proof.json --policy test/gpu-proof-policy.yaml --expected-skips test/gpu-proof-expected-skips.txt
-	$(PY) test/receipt_integrity.py --receipt gpu-proof.json --scope test/gpu-proof-scope.json
+	.venv/bin/gpu-proof verify --receipt gpu-proof.json --repo . --policy test/gpu-proof-policy.yaml --expected-skips test/gpu-proof-expected-skips.txt
 
 clean-pycache:
 	rm -rf grid_codegen/__pycache__ grid_codegen/algorithms/__pycache__

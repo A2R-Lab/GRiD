@@ -13,7 +13,16 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 VENV_DIR="${REPO_ROOT}/.venv"
-TIER="${PINOCCHIO_EQUIVALENCE_TIER:-smoke}"
+TIER="${PINOCCHIO_EQUIVALENCE_TIER:-smoke}"   # only `smoke` exists in RBDReference's manifest today
+
+# GPU frameworks for the jax/torch wrapper suites and the bench columns: the
+# full developer box gets everything (user ruling 2026-10-14); the base install
+# stays NumPy-only. jax[cuda12] + a torch CUDA wheel matching the GPU arch (cu128
+# covers sm_120 / RTX 5090). Skip with `SKIP_GPU_FRAMEWORKS=1`.
+if [[ -z "${SKIP_GPU_FRAMEWORKS:-}" ]]; then
+  "${VENV_DIR}/bin/python" -m pip install -e "${REPO_ROOT}[all]" "jax[cuda12]"
+  "${VENV_DIR}/bin/python" -m pip install torch --index-url "${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
+fi
 
 # System build deps for the pinocchio pybind11 extension built below. The `pin`
 # wheel ships pinocchio.pc inside the venv via cmeel, but that .pc file
@@ -77,8 +86,7 @@ fi
 
 # Optional: frax JAX reference (one of the bench columns in
 # test/benchmarks/run_multi_version.py). Small pure-Python wheel; depends on
-# jax which requirements-dev should have if you're running the bench. Skip
-# with `SKIP_FRAX_INSTALL=1`.
+# jax (installed with the GPU frameworks above). Skip with `SKIP_FRAX_INSTALL=1`.
 if [[ -z "${SKIP_FRAX_INSTALL:-}" ]]; then
   if ! "${VENV_DIR}/bin/python" -c "import frax" >/dev/null 2>&1; then
     echo "Installing frax for bench multi-version frax column..."

@@ -16,7 +16,26 @@ on:
 permissions:
   contents: read
 jobs:
+  receipt:
+    # A tag never publishes without a FRESH release-policy receipt at that commit
+    # (no carried shards). Rehearsal dispatches skip this gate.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install "$(grep -o '^pytest-gpu-proof==[0-9.]*' install/requirements-dev.txt)" pyyaml
+      - run: |
+          gpu-proof verify --receipt gpu-proof.json --repo . \
+            --policy test/gpu-proof-policy-release.yaml \
+            --expected-skips test/gpu-proof-expected-skips.txt
   build:
+    needs: receipt
+    if: ${{ !cancelled() && (needs.receipt.result == 'success' || needs.receipt.result == 'skipped') }}
     runs-on: ubuntu-24.04
     strategy:
       matrix:

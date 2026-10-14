@@ -881,12 +881,9 @@ STATE_PATH = REPO_ROOT / "test" / ".split-suite-state.json"
 
 
 def _nvcc_version() -> str:
-    try:
-        out = subprocess.run(["nvcc", "--version"], capture_output=True, text=True,
-                             timeout=30).stdout
-        return out.strip().splitlines()[-1] if out else "unknown"
-    except Exception:
-        return "unknown"
+    from grid_codegen.cuda_env import nvcc_version_text  # noqa: PLC0415
+    text = nvcc_version_text()
+    return text.splitlines()[-1] if text and not text.startswith(("missing", "error")) else "unknown"
 
 
 def module_fingerprint(mod: str) -> str:

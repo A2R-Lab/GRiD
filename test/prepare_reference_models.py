@@ -21,7 +21,7 @@ from RBDReference.tests import MANIFEST_PATH, SOURCE_LOCK_PATH
 
 
 SUITE_ROOT = REPO_ROOT / "external" / "RBDReference" / "tests"
-DEFAULT_TARGET = SUITE_ROOT / "test_all.py"
+DEFAULT_TARGET = SUITE_ROOT   # the whole RBDReference suite (no test_all.py exists)
 
 
 def list_tests(manifest_path: Path, tier: str | None) -> int:

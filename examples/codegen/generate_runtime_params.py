@@ -18,7 +18,7 @@ From Python these are reachable on the grid-rbd handle (numpy / jax / torch), e.
     h.set_inertia_params(perturbed)      # domain randomization, no rebuild
     qdd = h.forward_dynamics(q, qd, u)   # uses the poked values
 
-Requires: pip install robot_descriptions  (dev dependency)
+Uses the vendored URDF under grid_assets/robots/ (no extra dependency)
 
 Run:
     python examples/codegen/generate_runtime_params.py --output /tmp/grid_iiwa14_rt.cuh
@@ -28,12 +28,11 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from robot_descriptions import iiwa14_description
 
 from URDFParser import URDFParser
 from grid_codegen import GRiDCodeGenerator
 
-URDF_PATH = iiwa14_description.URDF_PATH
+URDF_PATH = str(Path(__file__).resolve().parents[2] / "grid_assets" / "robots" / "iiwa14.urdf")  # vendored copy
 
 
 def main():

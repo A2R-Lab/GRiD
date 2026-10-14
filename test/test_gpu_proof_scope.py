@@ -43,7 +43,10 @@ def test_release_policy_requires_exact_recorded_scope():
     policy = yaml.safe_load((ROOT / 'test/gpu-proof-policy-release.yaml').read_text())
     assert sorted(policy['required_fingerprint_paths']) == sorted(SCOPE)
     assert policy['required_fingerprint_extra_paths'] == []
-    assert policy['required_fingerprint_excluded_paths'] == ['gpu-proof.json']
+    excluded = tomllib.loads((ROOT / 'pyproject.toml').read_text())['tool']['gpu_proof']['fingerprint_excluded_paths']
+    assert sorted(policy['required_fingerprint_excluded_paths']) == sorted(excluded)
+    for path in excluded[1:]:
+        assert git(ROOT, 'ls-files', '--', path), f'Excluded doc missing: {path}'
     assert policy['allow_carried'] is False
     assert policy['allow_dirty'] is False
     assert not any(p.startswith('docs') or p == '.' for p in SCOPE)

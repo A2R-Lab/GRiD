@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Quickstart: generate GRiD CUDA code for the KUKA iiwa14 arm (fixed base).
 
-Requires: pip install robot_descriptions  (included in dev dependencies)
+Uses the vendored URDF under grid_assets/robots/ (no extra dependency)
 
 Run:
     python examples/codegen/generate_iiwa14.py --output /tmp/grid_iiwa14.cuh
@@ -13,12 +13,11 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from robot_descriptions import iiwa14_description
 
 from URDFParser import URDFParser
 from grid_codegen import GRiDCodeGenerator
 
-URDF_PATH = iiwa14_description.URDF_PATH
+URDF_PATH = str(Path(__file__).resolve().parents[2] / "grid_assets" / "robots" / "iiwa14.urdf")  # vendored copy
 
 
 def main():

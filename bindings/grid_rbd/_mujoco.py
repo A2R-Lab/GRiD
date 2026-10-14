@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import numpy as np
 
-_POS = slice(0, 3)
 _QUAT = slice(3, 7)
 _LIN = slice(0, 3)
 _ANG = slice(3, 6)

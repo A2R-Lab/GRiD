@@ -64,7 +64,11 @@ cache entry; do not clear shared caches while another worker may be using them.
 ```
 
 Markers: `pinocchio_equivalence`, `cuda_equivalence`, `python_wrappers`, `floating_base`,
-`robot_{smoke,curated,nightly}`, `gpu_proof`, `notebooks`, `developer_only`. GPU test outcomes are captured in a signed
+`robot_smoke`, `gpu_proof`, `notebooks`, `developer_only`. Robot URDFs and launch profiles live in
+`grid_assets/` (`robots/`, `launch_configs/`; renamed from `config/` 2026-10-14 — a repo-only package that
+never ships in the wheel). `make test-cpu` runs the SAME file list as CI's cpu-lane; `make verify` = the
+everyday-policy receipt verify. The capable-box suite floor (`test/conftest.py::_ENV_GUARD_SKIP`) is pinned
+to the harness's real skip strings by `test/test_suite_floor.py`. GPU test outcomes are captured in a signed
 `gpu-proof.json` receipt (see `test/run_gpu_proof.sh`) that CPU-only CI verifies against the committed
 test fingerprints (red when correctness inputs change without a refreshed receipt).
 Main requires a receipt whose collection EQUALS `test/gpu-proof-tests.txt` (policy

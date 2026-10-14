@@ -183,7 +183,7 @@ class AbiSpec:
     # jax_kernel_args set -> substitution-emitted on jax. Rows with neither
     # keep bespoke hand-written surface bodies (id/id_grad torch qdd forks,
     # integrator pair, idsva_so frame fork, runtime-EE offset staging).
-    # kernel_args: ordered launch-arg tokens (see KERNEL_ARG_TOKENS); the
+    # kernel_args: ordered launch-arg tokens (OUT/WS/QQDU/STRIDE/…); the
     # SAME tuple drives both surfaces except where jax_kernel_args overrides
     # (id/id_grad: jax always passes d_qdd, no flag fork on that surface).
     kernel_args: tuple[str, ...] | None = None
@@ -1140,10 +1140,6 @@ ABI_SPECS["forward_dynamics_wrt_params"] = AbiSpec(
 # Launch-arg token vocabulary. OUT expands per-row from out_buffer; GRAV is
 # the one per-surface difference ((T)gravity on torch, gravity on jax — the
 # jax impl signature already types it T).
-KERNEL_ARG_TOKENS = (
-    "OUT", "WS", "QQDU", "STRIDE", "QDD", "FEXT", "IDSVA", "EEGRAD",
-    "JID", "FRAME", "ROBOT", "GRAV", "BATCH")
-
 _KERNEL_ARGS = {
     "minv":         ("OUT", "WS", "QQDU", "STRIDE", "ROBOT", "BATCH"),
     "forward_dynamics": ("OUT", "WS", "QQDU", "STRIDE", "FEXT", "ROBOT", "GRAV", "BATCH"),

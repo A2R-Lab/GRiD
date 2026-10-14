@@ -25,7 +25,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
 from grid_assets import robot_urdf
 
-_grid_rbd = pytest.importorskip("grid_rbd", reason="grid-rbd not installed (pip install python/)")
+_grid_rbd = pytest.importorskip("grid_rbd", reason="grid-rbd not installed (pip install -e . (repo root))")
 
 # In-repo URDF (always present) so this smoke is self-contained.
 _URDF = robot_urdf("iiwa14")

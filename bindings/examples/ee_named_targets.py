@@ -33,10 +33,7 @@ from pathlib import Path
 
 import numpy as np
 
-_DEFAULT_URDF = (
-    Path.home()
-    / ".cache/robot_descriptions/drake/manipulation/models/iiwa_description/urdf/iiwa14_primitive_collision.urdf"
-)
+_DEFAULT_URDF = Path(__file__).resolve().parents[2] / "grid_assets" / "robots" / "iiwa14.urdf"  # vendored copy
 
 
 def main() -> None:

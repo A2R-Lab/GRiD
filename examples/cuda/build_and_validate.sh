@@ -39,10 +39,9 @@ SO_OUT="$(mktemp -u /tmp/grid_so_out.XXXXXX)"
 echo ">> [1/4] generating $SO_HEADER (idsva_so_body_frame only)"
 "$PY" - "$SO_HEADER" >/dev/null <<'PYGEN'
 import sys
-from robot_descriptions import iiwa14_description
 from URDFParser import URDFParser
 from grid_codegen import GRiDCodeGenerator
-robot = URDFParser().parse(iiwa14_description.URDF_PATH, floating_base=False)
+robot = URDFParser().parse("grid_assets/robots/iiwa14.urdf", floating_base=False)  # vendored copy (run from the repo root)
 GRiDCodeGenerator(robot, FILE_NAMESPACE="grid").gen_all_code(
     algorithm_list=["idsva_so_body_frame"], output_path=sys.argv[1])
 PYGEN

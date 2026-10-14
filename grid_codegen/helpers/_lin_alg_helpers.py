@@ -47,10 +47,6 @@ _GLASS_BASE_FILES = [
 ]
 
 
-def _grid_repo_root():
-    return Path(__file__).resolve().parents[2]
-
-
 def _glass_root():
     from ..resources import resource_path
     return resource_path('GLASS')

@@ -41,11 +41,10 @@ the oracle (`worst rel_err ≈ 2.7e-07` on this box, float32, tol 1e-4).
 ### 0. Generate the header for your robot (one line of Python)
 
 ```python
-from robot_descriptions import iiwa14_description
 from URDFParser import URDFParser
 from grid_codegen import GRiDCodeGenerator
 
-robot = URDFParser().parse(iiwa14_description.URDF_PATH, floating_base=False)
+robot = URDFParser().parse("grid_assets/robots/iiwa14.urdf", floating_base=False)  # or your own URDF
 GRiDCodeGenerator(robot, FILE_NAMESPACE="grid").gen_all_code(
     algorithm_list=["inverse_dynamics"], output_path="grid.cuh")
 ```
