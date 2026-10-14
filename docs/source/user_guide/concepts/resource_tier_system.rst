@@ -178,14 +178,14 @@ existing call sites are unchanged):
 buffers are recursion-hot, and the original design pinned the workspace in
 persisting L2 (``GRID_CUDA_ENABLE_L2_PERSISTING=1``) so a spilled access
 would cost an L2 hit rather than an HBM round-trip. A controlled A/B on an
-RTX 5090 (2026-09-15: spilling algos + shared-tier controls on
+RTX 5090 (spilling algos + shared-tier controls on
 iiwa14-fixed / g1-floating / h1_2-floating, four interleaved reps, spreads
 ≤0.7%) found the pin **never helped and hurt 17 of 51 cells** — up to 23%
 (integrator family), including shared-tier cells that spill nothing,
 because the persisting window is installed on the stream whenever a
 workspace exists and its carve evicts more general L2 traffic than it
 saves (modern L2s already cache the spilled band well on their own). The
-generated default is therefore **0** since 2026-09-15; opt back in
+generated default is therefore **0**; opt back in
 per-build with ``-DGRID_CUDA_ENABLE_L2_PERSISTING=1`` if your
 GPU/workload measures otherwise.
 
@@ -237,7 +237,7 @@ migrate. Two consequences worth calling out:
 
 The conformance audit for this pattern (which inners own their placement, and
 the deferred surgical de-alias work) lives in
-``docs/idsva_so_inner_refactor_notes.md`` in the repository.
+``docs/design_history/idsva_so_inner_refactor_notes.md`` in the repository.
 
 
 Block-wide parallelism in the inners

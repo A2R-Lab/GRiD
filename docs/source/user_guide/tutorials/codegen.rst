@@ -18,10 +18,69 @@ in the checkout, not the wheel — substitute your own URDF path):
 
    grid-generate grid_assets/robots/iiwa14.urdf --algorithm-list dynamics -o /tmp/iiwa_grid.cuh
 
-``--algorithm-list`` restricts emission to named algorithms or profiles.
-Omit it to use the full profile. Add ``-f`` for a floating base; use
-``--no-mujoco-kernels`` to omit the additional MuJoCo-convention kernels.
-For collision geometry, see :doc:`collisions`.
+``--algorithm-list`` restricts emission to named algorithms or profiles
+(next section). Omit it to use the full profile. Add ``-f`` for a floating
+base; use ``--no-mujoco-kernels`` to omit the additional MuJoCo-convention
+kernels. For collision geometry, see :doc:`collisions`.
+
+Profiles
+--------
+
+``--algorithm-list`` (and ``algorithm_list=`` / ``codegen_profile=`` in
+Python) accepts algorithm keys (underscored, e.g. ``inverse_dynamics``) and
+profile names (hyphenated). A profile is a curated set; whatever you name is
+expanded with its dependencies before emission. The profiles, from
+``grid_codegen/_algo_profiles.py``:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 26 74
+
+   * - Profile
+     - Selects
+   * - ``all`` (default)
+     - every default algorithm: dynamics, gradients, second order, kinematics,
+       integrators, regressors, centroidal and energy terms (the opt-in keys
+       ``frame_jacobian``, ``frame_jacobian_dot``, ``osc_inertia``,
+       ``end_effector_pose_runtime``, ``end_effector_pose_gradient_runtime``,
+       ``idsva_so_world_frame``, ``integrator_hessian`` must be named
+       explicitly)
+   * - ``dynamics``
+     - inverse / forward dynamics, ``minv``, ``aba``, ``crba``, both
+       first-order gradients, the second-order pair, and the integrator
+       family (aliases: ``all-dynamics``, ``dynamics-only``)
+   * - ``dynamics-core``
+     - ``inverse_dynamics``, ``minv``, ``forward_dynamics``
+   * - ``dynamics-gradients``
+     - the core three plus ``inverse_dynamics_gradient``,
+       ``forward_dynamics_gradient``, ``f_ext_gradient``
+   * - ``second-order``
+     - the core three, both first-order gradients, ``idsva_so_body_frame``,
+       ``fdsva_so``
+   * - ``integrators``
+     - the core three, both first-order gradients, ``integrator``,
+       ``integrator_gradient``, ``integrator_with_gradient``
+   * - ``kinematics``
+     - ``end_effector_pose`` (alias: ``kinematics-only``)
+   * - ``kinematics-derivatives``
+     - ``end_effector_pose`` with its gradient and Hessian
+   * - ``frame-jacobian``
+     - ``end_effector_pose``, ``minv``, ``frame_jacobian``,
+       ``frame_jacobian_dot``, ``osc_inertia``
+   * - ``regressor``
+     - ``inverse_dynamics``, ``inverse_dynamics_regressor`` and the kinetic /
+       potential energy regressors
+   * - ``energy-regressor``
+     - ``inverse_dynamics``, ``end_effector_pose`` and the kinetic / potential
+       energy regressors
+   * - ``fd-param-gradient``
+     - the core three, ``inverse_dynamics_regressor``,
+       ``forward_dynamics_parameter_gradient``
+   * - ``f-ext-gradient``
+     - ``inverse_dynamics``, ``minv``, ``f_ext_gradient``
+
+Fewer kernels in the header means a smaller header, a faster ``nvcc`` and
+less RAM — see *Compile time and footprint* below.
 
 Generate from Python
 --------------------
@@ -82,12 +141,66 @@ you fuse GRiD dynamics into an MPC, RL or controls kernel:
        __syncthreads();   // fuse your own math on s_tau here
        for (int i = threadIdx.x; i < grid::NUM_JOINTS; i += blockDim.x) d_tau[i] = s_tau[i];
    }
-   // host: grid::init_grid<float>(); auto *model = grid::init_robotModel<float>();
+   // host: see "Initialising the header" below for the two init spellings;
+   // auto *model = grid::init_robotModel<float>();
    // my_kernel<float><<<1, 128, grid::INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES<float>()>>>(...);
 
 .. code-block:: shell
 
    nvcc -arch=sm_90 -std=c++17 my_kernel.cu -o my_kernel   # pick your GPU's arch
+
+Initialising the header: aggregate or per algorithm
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Before the first launch the generated kernels' dynamic shared-memory
+attributes must be registered and the host streams created. The header
+offers two spellings of that:
+
+.. code-block:: cuda
+
+   // (a) aggregate — simplest. Registers EVERY kernel in the header, so the
+   //     translation unit also compiles every one of them.
+   cudaStream_t *streams = grid::init_grid<float>();
+
+   // (b) per algorithm — register only what you launch; what the test
+   //     runners and the grid_rbd bindings use.
+   cudaStream_t *streams = grid::init_grid_streams<float>();
+   gpuErrchk(grid::init_grid_kernel_attr_inverse_dynamics_checked<float>());
+   // one init_grid_kernel_attr_<algo>_checked<T>() per algorithm you launch
+
+``init_grid<T>()`` is fine — and the shortest path — when the header was
+generated with a trimmed ``--algorithm-list``, because then "every kernel"
+is the handful you asked for. With a full-profile header it is what makes a
+small ``.cu`` file take minutes to compile: a translation unit compiles every
+kernel it takes the address of, so compile time and peak RAM scale with the
+number of kernels in the header, not with the number you call. The
+per-algorithm twins ``init_grid_streams<T>()`` +
+``init_grid_kernel_attr_<algo>_checked<T>()`` (one per algorithm key, e.g.
+``..._attr_forward_dynamics_checked``, ``..._attr_minv_checked``; grep your
+header for ``init_grid_kernel_attr_``) register only what you name, so the
+rest of the header stays uncompiled. The ``_checked`` form returns
+``cudaError_t`` and never exits; :doc:`../concepts/library_safe_initialization`
+has the full contract and the matching teardown.
+
+Compile time and footprint
+--------------------------
+
+Three levers decide how long ``nvcc`` takes on a generated header and how
+much RAM it needs:
+
+* **Emit less** — ``--algorithm-list`` / ``algorithm_list=`` with the
+  profiles above (and ``--no-mujoco-kernels`` on a floating base, where the
+  MuJoCo-convention twins roughly double a build). The header only contains
+  what you name plus dependencies.
+* **Register less** — with a full header, the per-algorithm init twins above
+  compile only the kernels you launch.
+* **Fit the device** — the :doc:`resource tiers <../concepts/resource_tier_system>`
+  trade shared memory for global workspace per kernel; the tier you
+  instantiate is the one that gets compiled.
+
+Measured cold-build times, RAM and the warm path for the Python wrapper's
+``.so`` (which compiles the same header) are tabulated on
+:doc:`../getting_started/fast_robot_setup`.
 
 ``examples/cuda/`` holds the full version of this kernel (the easy ``_device``
 call and the full-control ``_inner`` call with explicit workspace), plus

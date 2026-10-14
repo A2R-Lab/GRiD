@@ -4,15 +4,17 @@ Empirical resource-and-perf characterization scripts. Not pytest tests —
 these are *diagnostics* that drive codegen-time decisions and validate
 that the emitted code fits target GPUs.
 
-Each script writes a markdown report into `results/`. Reports under
-`results/` are committed when they represent a useful reference baseline
-for a specific GPU (filename includes hardware tag, e.g.
-`tier_baseline_sm120_rtx5090.md`).
+Each script writes a markdown report into `results/`. That directory is
+gitignored (`test/diagnostics/.gitignore`), so reports stay local to the box
+that produced them; tag the filename with the hardware (e.g.
+`tier_baseline_sm120_rtx5090.md`) so a report you share out-of-band is
+self-describing.
 
 ## Scripts
 
 ### `tier_baseline.py` — current
-Empirical resource matrix for the v2.0 resource-tier design. For each
+Empirical resource matrix for the resource-tier design
+(`docs/source/user_guide/concepts/resource_tier_system.rst`). For each
 algorithm × robot config, captures:
 
 - Per-thread register count + spill stores at `__launch_bounds__(MAX_PERF_LEVEL_THREADS)`
@@ -43,11 +45,13 @@ sibling directory `../GRiD-A2R-pre-glass/`). See
 `test/benchmarks/run_multi_version.py --columns pre_glass` for how to
 set up the worktree.
 
-## Results
+## Results (local, not tracked)
+
+Reports produced so far on the development box, under the ignored `results/`:
 
 | File | What |
 |---|---|
-| `results/tier_baseline_sm120_rtx5090.md` | Tier baseline matrix on RTX 5090 / sm_120 / CUDA 13. Reference data for the v2.0 design. |
+| `results/tier_baseline_sm120_rtx5090.md` | Tier baseline matrix on RTX 5090 / sm_120 / CUDA 13. Reference data for the tier design. |
 | `results/glass_vs_pre_glass_sm120_rtx5090.md` | Pre-vs-post GLASS register / spill diff (2026-05). |
 
 Each results file is gpu-tagged because resource footprints (register
@@ -76,7 +80,7 @@ codegen variants. Conventions:
   Strict numerical equivalence.
 - `test/python_wrappers/` — pytest suites for `grid_rbd` Python +
   JAX APIs.
-- `RBDReference/tests/` — correctness tests against Pinocchio.
+- `external/RBDReference/tests/` — correctness tests against Pinocchio.
 
 Diagnostics sit alongside these as a fourth category: tooling that
 informs design decisions, not assertion suites.

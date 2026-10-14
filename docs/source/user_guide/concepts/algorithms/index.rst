@@ -39,8 +39,8 @@ Here's a quick overview of the main algorithms:
   with body-frame and world-frame variants and a codegen-time
   dispatcher (body-frame for fixed-base, world-frame for floating-base).
 * **FDSVA-SO**: Second-order Forward Dynamics, layered on top of IDSVA-SO
-  with a four-tier shared-memory selector for large floating-base
-  robots.
+  with a shared-memory spill ladder (nine rungs, chosen per robot and
+  resource tier at codegen time) for large floating-base robots.
 * **Kinematics** (:doc:`kinematics`): end-effector pose, its Jacobian and
   Hessian, batched forward kinematics and runtime-selected targets.
 * **Integrators and the plant layer** (:doc:`integrators_and_plant`): the

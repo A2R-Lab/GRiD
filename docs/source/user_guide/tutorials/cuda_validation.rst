@@ -5,12 +5,20 @@ This page summarizes the developer CUDA validation flow for generated GRiD
 headers. The checks are intentionally staged so long GPU runs provide useful
 progress and can be resumed with cached generated artifacts.
 
-Everyday refresh entry point
-------------------------------------------------------------
+There is one entry point story. ``test/run_validation.py`` is the
+**launcher**: plan, then ``--execute``, then commit the generated evidence,
+then ``--finalize`` (add ``--full`` for a release receipt). Underneath it,
+``test/run_split_suite.py`` is the crash-isolated **driver** that shards and
+runs the suites, and ``test/run_gpu_proof.sh`` is a thin wrapper over that
+driver for ad-hoc runs. All three write the same ``gpu-proof.json``.
 
-Plan without collecting tests or starting any compilation::
+The launcher
+------------
 
-   .venv/bin/python test/run_validation.py --out docs/open-tasks/validation-next
+Plan without collecting tests or starting any compilation (the ``--out``
+directory holds the run's logs and shards; it is yours to choose)::
+
+   .venv/bin/python test/run_validation.py --out validation-runs/next
 
 Add ``--execute`` only on a clean committed candidate in a coordinated quiet
 window. The launcher holds ``/tmp/a2rlab-timing.lock`` throughout the run,
@@ -23,7 +31,7 @@ clean descendant without rerunning any tests::
 
    git add gpu-proof.json test/gpu-proof-header-keys.json
    git commit -m "Record GPU correctness evidence"
-   .venv/bin/python test/run_validation.py --finalize docs/open-tasks/validation-next
+   .venv/bin/python test/run_validation.py --finalize validation-runs/next
 
 Finalization rejects altered evidence, dirty trees and source changes since
 the recorded candidate. It does not commit files or start GPU work.
@@ -44,18 +52,19 @@ full collection adds, removes or renames tests, regenerate the manifest with
 ``test/receipt_integrity.py --receipt <run>/gpu-proof.json --write-manifest test/gpu-proof-tests.txt``
 and commit it before recording; the manifest diff is reviewed in the PR.
 
-CUDA Correctness Checks (crash-isolated split driver)
------------------------------------------------------
+The driver and the thin wrapper
+-------------------------------
 
-The full GPU pass runs through the crash-isolated split driver, which partitions
-the ``cuda_equivalence`` and ``python_wrappers`` suites into bounded shards (one
-module's abort can't eat the rest) and is pausable/resumable:
+The launcher above runs the GPU pass through the crash-isolated split driver,
+which partitions the ``cuda_equivalence`` and ``python_wrappers`` suites into
+bounded shards (one module's abort can't eat the rest) and is
+pausable/resumable. ``test/run_gpu_proof.sh`` drives the same driver without
+the launcher's lock, logs and provenance checks:
 
 .. code-block:: bash
 
-   # everything, sharded + receipt-signed (every shard fresh — what a
-   # release receipt needs; prefer test/run_validation.py above for the
-   # locked, logged everyday refresh):
+   # everything, sharded + receipt-signed, every shard fresh (prefer
+   # test/run_validation.py above for the locked, logged refresh):
    SPLIT=1 test/run_gpu_proof.sh
 
    # only the shards whose inputs changed vs the committed receipt:
@@ -93,15 +102,12 @@ plugin, installed from PyPI at the exact version pinned in
 
    .venv/bin/python -m pip install -r install/requirements-dev.txt   # brings in pytest-gpu-proof
 
-Generate the receipt on a quiet GPU box. The scope is tiered so it is never an
-all-or-nothing barrier — the signature, code fingerprint, and commit-SHA proof
-are identical regardless of how many tests the receipt attests:
-
-.. code-block:: bash
-
-   SCOPE=smoke   test/run_gpu_proof.sh   # ~2 robots, cached cells — minutes; proves the plumbing
-   SCOPE=curated test/run_gpu_proof.sh   # representative robot set — tens of minutes
-   SCOPE=full    test/run_gpu_proof.sh   # every gpu_proof test — hours cold, the nightly job (default)
+Generate the receipt on a quiet GPU box with the launcher (``--execute``).
+The receipt's scope is not negotiable: main accepts only a receipt whose
+collection equals ``test/gpu-proof-tests.txt`` exactly (the policies'
+``required_test_manifest``). A narrowed run of the wrapper
+(``PYTEST_ARGS="-k go2" test/run_gpu_proof.sh``) is a local diagnostic that
+exercises the plumbing, never a candidate receipt.
 
 The ``gpu_proof`` marker is auto-applied to every ``cuda_equivalence`` and
 ``python_wrappers`` item by ``test/conftest.py`` (no per-test annotation), so
@@ -160,9 +166,13 @@ every emission-shaping env var must be folded into the header cache key —
 ``GRID_ENABLE_MUJOCO_KERNELS`` once changed emission without changing the
 key and served stale headers.
 
-The full test-pyramid rationale (which suite exists for what, and why the
-receipt is trustworthy) lives in ``test/TESTING_STRATEGY.md``; a bucket map of
-everything in ``test/``'s root is ``test/README.md``.
+How the equivalence tests are designed (the two reference layers —
+``RBDReference`` against Pinocchio, then generated CUDA against
+``RBDReference`` — and the test-design principles) is written up in
+``test/TESTING_STRATEGY.md``; a bucket map of everything in ``test/``'s root
+is ``test/README.md``. What makes the receipt trustworthy is the policy
+described on this page: signature, fingerprint, commit SHA and the exact
+manifest.
 
 CUDA Artifact Cache
 -------------------
@@ -258,8 +268,6 @@ Useful environment variables for fallback testing:
   The generated default is now ``0``: a controlled A/B measured the pin never
   helping and hurting by up to 23%. The harness forwards the env var to the
   compile as ``-DGRID_CUDA_ENABLE_L2_PERSISTING=<n>``.
-* ``GRID_CUDA_FORCE_SHARED_TIER=GRID_SPILL_DA_DF_OUTPUT`` forces a gradient
-  shared-memory tier when generated support is available.
 
 The shared-memory target is a legality and first-pass performance heuristic, not
 a full occupancy model. It does not currently account for register pressure,
@@ -310,12 +318,15 @@ from stable, representative GPU machines:
      --fallback-tier GRID_SPILL_DA_DF_OUTPUT --precision float --save \
      -- ./path/to/generated_timing_binary
 
-Second-order diagnostics are opt-in:
+The second-order forced-fallback diagnostics
+(``test/cuda_equivalents/test_cuda_second_order_fallback.py``) are selected by
+their markers only (``cuda_equivalence``, ``developer_only``, ``robot_smoke``);
+no environment variable opts them in. Narrow the robot set and the runner's
+thread count when reproducing one cell:
 
 .. code-block:: bash
 
-   GRID_CUDA_RUN_SECOND_ORDER_FALLBACK_SMOKE=1 \
-   GRID_CUDA_SECOND_ORDER_SMOKE_ROBOT=iiwa14 \
+   GRID_CUDA_SECOND_ORDER_SMOKE_ROBOTS=iiwa14 \
    .venv/bin/python -m pytest test/cuda_equivalents/test_cuda_second_order_fallback.py -q -s
 
 Use ``GRID_CUDA_SECOND_ORDER_TEST_THREADS`` to override the diagnostic runner's

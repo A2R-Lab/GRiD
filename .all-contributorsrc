@@ -2,7 +2,6 @@
     "projectName": "GRiD",
     "projectOwner": "A2R-Lab",
     "files": [
-        "docs/contributors.qmd",
         "README.md"
     ],
     "contributors": [
@@ -31,7 +30,7 @@
             "login": "Danelle Tuchman",
             "name": "Danelle Tuchman",
             "avatar_url": "https://www.gravatar.com/avatar/b619b0ff13333ce2a22bb110eda8f7a9?d=identicon&s=100",
-            "profile": "https://github.com/harvard-edge/cs249r_book/graphs/contributors",
+            "profile": "https://github.com/A2R-Lab/GRiD/graphs/contributors",
             "contributions": []
         },
         {
@@ -87,14 +86,14 @@
             "login": "Kimiya Shahamat",
             "name": "Kimiya Shahamat",
             "avatar_url": "https://www.gravatar.com/avatar/b6a2a74133224e85e9714e282a1576df?d=identicon&s=100",
-            "profile": "https://github.com/harvard-edge/cs249r_book/graphs/contributors",
+            "profile": "https://github.com/A2R-Lab/GRiD/graphs/contributors",
             "contributions": []
         },
         {
             "login": "Kimiya Shahamat",
             "name": "Kimiya Shahamat",
             "avatar_url": "https://www.gravatar.com/avatar/b6a2a74133224e85e9714e282a1576df?d=identicon&s=100",
-            "profile": "https://github.com/harvard-edge/cs249r_book/graphs/contributors",
+            "profile": "https://github.com/A2R-Lab/GRiD/graphs/contributors",
             "contributions": []
         }
     ],

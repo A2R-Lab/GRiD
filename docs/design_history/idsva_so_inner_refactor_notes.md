@@ -1,9 +1,7 @@
-# IDSVA-SO inner-layout refactor — deferred task notes
+> **Retired design note (moved to `docs/design_history/`, 2026-10-14).** The durable rule — the inner owns its
+> scratch placement — and the conformance audit now live in `design_principles.rst` (section 2); this file keeps the SO internals.
 
-**Status:** DEFERRED. Filed 2026-05-22 during the idsva_so per-tier spill work.
-Revisit **after a benchmark sweep** quantifies how much LITE/MINIMAL perf we
-actually lose with the current "whole-inner-to-global" fallback. Only invest in
-this refactor if the sweep shows the whole-arena spill is a real bottleneck.
+# IDSVA-SO inner-layout refactor — design notes
 
 ## Core design principle: the INNER owns scratch placement (read this first)
 
@@ -572,11 +570,3 @@ path was rejected per the value-path-stability mandate, so the change was REVERT
 and `idsva_so_body_frame`/`fdsva_so` remain in the G0 mimic refusal set.
 Floating-base mimic SO stays deferred regardless (the floating root's 6-DoF
 subspace needs a loop over root DoFs, not the scalar v-slot/alpha fold).
-
-**Resume hint for next session:** dump the CUDA internal `4*NB^3` buffer in full
-(the truncation-runner trick: patch the fold to `s_idsva_so[...] = src[(a*SO_INT+
-b)*SO_INT+c]`) and diff cell-by-cell vs the oracle internal captured by hooking
-`np.einsum('ia,ijk,jb,kc->abc', ...)` in `RBDReference.idsva_so_body_frame`. The
-zero-force `d2tau_dq2` garbage is the highest-signal lead (a block that should be
-~0 but isn't ⇒ a stale/mis-strided read in the internal layout, despite the
-offset math checking out).

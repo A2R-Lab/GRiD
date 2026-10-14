@@ -117,7 +117,7 @@ Step-by-step recipe (worked example: ``fdsva_so``)
 
    .. code:: python
 
-      def gen_fdsva_so_contract(self, use_thread_group=False):
+      def gen_fdsva_so_contract(self):
           n = self.robot.get_num_vel()
           # ... function signature emit ...
           self.gen_add_code_line(
@@ -162,15 +162,15 @@ Step-by-step recipe (worked example: ``fdsva_so``)
           "if constexpr (!SCRATCH_IN_SMEM) { s_temp = d_workspace; }"
           " else { (void)d_workspace; }"
       )
-      self.gen_load_update_XImats_helpers_function_call(use_thread_group)
-      self.gen_minv_inner_function_call(use_thread_group, f_in_smem_expr="true")
+      self.gen_load_update_XImats_helpers_function_call()
+      self.gen_minv_inner_function_call(f_in_smem_expr="true")
       self.gen_add_code_line(
           "forward_dynamics_inner<T, true>(s_qdd, s_q, s_qd, s_u, "
           + self.gen_insert_helpers_function_call()
           + "s_temp, nullptr, gravity);"
       )
       # ... IDSVA-SO sub-inners ...
-      self.gen_fdsva_so_contract_function_call(use_thread_group)
+      self.gen_fdsva_so_contract_function_call()
 
    The XImats load is paid ONCE here; every sub-inner gets it for free.
    That's the entire reason the ``_inner`` / ``_device`` split exists —
@@ -307,22 +307,34 @@ Most useful helpers (in ``grid_codegen/helpers/``):
 
 * ``gen_add_code_line(line)`` / ``gen_add_code_lines([...])`` — emit
   text into the current function.
-* ``gen_add_parallel_loop(var, max_val, use_thread_group=False,
-  block_level=False)`` — emit a block-stride
-  ``for (i = tid; i < max_val; i += blockDim...)``.
-* ``gen_add_sync(use_thread_group=False)`` — emit ``__syncthreads()``.
-* ``gen_add_serial_ops(use_thread_group=False)`` — wrap the next block
+* ``gen_add_parallel_loop(var_name, max_val, block_level=False)`` — emit a
+  block-stride ``for (i = tid; i < max_val; i += blockDim...)``
+  (``block_level=True`` strides over ``blockIdx`` instead).
+* ``gen_add_sync()`` — emit ``__syncthreads()``.
+* ``gen_add_serial_ops()`` — wrap the next block
   in an ``if (threadIdx.x == 0 && threadIdx.y == 0)`` (use sparingly —
   this is the bottleneck class to avoid; see *Single-thread Gauss-
   Jordan inverse* above).
-* ``gen_add_func_doc(description, notes, params, return_val)`` — emit a
-  Doxygen-style header.
-* ``gen_kernel_load_inputs(name, stride, amount, ...)`` and
-  ``gen_kernel_save_result(name, stride, amount, ...)`` — boilerplate
-  for global ↔ shared memory transfer in the kernel.
+* ``gen_add_func_doc(func_desc, notes=[], params=[], return_val=None)`` —
+  emit a Doxygen-style header.
+* ``gen_kernel_load_inputs(name, amount, name2=None, amount2=1, name3=None,
+  amount3=1, stride=None, stride2=None, stride3=None)`` and
+  ``gen_kernel_save_result(store_to_name, amount, load_from_name=None,
+  stride=None, sync=True)`` — boilerplate for global ↔ shared memory
+  transfer in the kernel; batched kernels pass ``stride`` to address
+  timestep ``k``'s slot, single-call kernels omit it.
+* Sub-algorithm calls take keyword overrides, e.g.
+  ``gen_minv_inner_function_call(updated_var_names=None,
+  f_in_smem_expr="true")`` and
+  ``gen_fdsva_so_contract_function_call(updated_var_names=None,
+  scratch_in_smem_expr="true")`` — ``updated_var_names`` renames the
+  default ``s_*`` operands when the caller's buffers differ.
 * ``grid_linalg_gemm<T, M, N, K>`` / ``grid_linalg_gemv<T, M, N>`` —
   thin wrappers around ``glass::gemm`` / ``glass::gemv``. Always
   prefer these over rolling your own loops.
+
+The signatures above are the ones in ``grid_codegen/helpers/`` and
+``grid_codegen/algorithms/`` today; there is no thread-group argument.
 
 When you're done
 ----------------

@@ -1,10 +1,10 @@
 # GRiD Benchmarks
 
-Performance comparison of GRiD vs. Pinocchio vs. MJX across 13 core algorithms,
+Performance comparison of GRiD vs. Pinocchio vs. MJX across 14 core algorithms,
 for `iiwa14`, `baxter`, `go2`, `g1`, and `h2_plus` robots in fixed and
 floating-base configurations.
 
-The 13 rows are the first-order set (`inverse_dynamics`, `minv`, `forward_dynamics`,
+The 14 rows are the first-order set (`inverse_dynamics`, `minv`, `forward_dynamics`,
 `aba`, `crba`, `inverse_dynamics_gradient`, `forward_dynamics_gradient`,
 `end_effector_pose`, `end_effector_pose_gradient`, `end_effector_pose_hessian`)
 plus the second-order set — 4 algorithms, 3 rows per cell (`idsva_so`
@@ -12,8 +12,8 @@ plus the second-order set — 4 algorithms, 3 rows per cell (`idsva_so`
 `fdsva_so`). The two IDSVA-SO variants are mathematically equivalent and ship
 side-by-side so the table shows the body-vs-world crossover; `idsva_so` itself
 is the codegen-time dispatcher (body-frame for fixed-base, world-frame for
-floating-base — see [docs/notes/sweep-on-5090.md](../../docs/notes/sweep-on-5090.md) (local notes, gitignored) for
-the crossover numbers).
+floating-base; the published crossover numbers are on the site's release
+measurements page).
 
 ---
 
@@ -22,13 +22,18 @@ the crossover numbers).
 All commands use the project virtualenv.  Create it once if it doesn't exist:
 
 ```bash
-python -m venv .venv
-.venv/bin/pip install -e ".[dev]"
-# For an apples-to-apples Pinocchio comparison, also install CppADCodeGen
-# (enables the codegen-accelerated inverse_dynamics/minv/aba/forward_dynamics/crba/inverse_dynamics_gradient/forward_dynamics_gradient paths;
-# without it those algorithms appear as null in the Pinocchio results):
-.venv/bin/pip install cmeel-cppadcodegen
+bash install/developer_install.sh
 ```
+
+That script creates `.venv`, installs GRiD editable with every backend
+(`jax[cuda12]`, a cu128 torch wheel), the Pinocchio oracle from
+`install/requirements-dev.txt` (`pin<4` via cmeel — note that the `[dev]`
+extra alone is `[all]` + pytest and does NOT bring Pinocchio), `frax`, and
+builds CppADCodeGen from source into `/usr/local` so the codegen-accelerated
+Pinocchio paths (inverse_dynamics / minv / aba / forward_dynamics / crba /
+inverse_dynamics_gradient / forward_dynamics_gradient) populate; without
+CppADCodeGen those algorithms appear as null in the Pinocchio results. See
+*Prerequisites* below for the pieces no script installs (MJX, BARD).
 
 Then run benchmarks:
 
@@ -52,8 +57,10 @@ Then run benchmarks:
 .venv/bin/python test/benchmarks/run_benchmarks.py --no-recompile
 ```
 
-Results are saved to `test/benchmarks/results/` (gitignored) and
-`test/benchmarks/benchmark.md` (committed snapshot).
+Results are saved to `test/benchmarks/results/` (gitignored); the report
+`test/benchmarks/benchmark.md` is generated locally by `generate_report.py`
+(its default output) and is not tracked either — the curated numbers that ship
+come from the release pipeline under `release/`.
 
 ---
 
@@ -68,14 +75,17 @@ nvcc --version   # should print CUDA release info
 ```
 
 GRiD uses a vendored `glass` SIMT linalg helper subset that needs no extra
-SDK. The cuBLASDx-backed `glass-nvidia` path was removed in v2.0; see
-`docs/design_history/cublasdx_removal_design.rst` for the
-rationale and the `archive/last-cublasdx` git tag for the historical code
+SDK. The cuBLASDx-backed `glass-nvidia` path was removed before the 0.5.0
+release; `docs/design_history/cublasdx_removal_design.rst` records the
+rationale and the `archive/last-cublasdx` git tag keeps the historical code
 path.
 
 ### Pinocchio (CPU)
 
-Pinocchio is installed as part of the dev dependencies (see Quick Start above).
+Pinocchio comes from `install/requirements-dev.txt` (`pin<4`, `cmeel-eigen`,
+`cmeel-urdfdom<5`), which `install/developer_install.sh` installs. It is NOT
+part of the `[dev]` extra (`[dev]` = `[all]` + pytest); on a hand-rolled venv
+run `pip install -r install/requirements-dev.txt` yourself.
 
 Verify:
 
@@ -92,59 +102,59 @@ those algorithms are silently reported as null and the direct-API algorithms
 The dispatched `IDSVA_SO` row mirrors whichever variant the codegen picked.
 FDSVA_SO has no Pinocchio equivalent and is GRiD-only.
 
-Install the cmeel-packaged version into the same venv as Pinocchio:
+Two install routes work; the runner (`baselines/pinocchio/run.py::has_cppadcg`)
+finds either via `pkg-config --exists cppadcg` or `cppad/cg.hpp` under the
+venv's `cmeel.prefix`:
 
-```bash
-.venv/bin/pip install cmeel-cppadcodegen
-```
+- **What `install/developer_install.sh` does** (default; skip with
+  `SKIP_CPPADCG_INSTALL=1`): `apt-get install libcppad-dev cmake`, then clones
+  CppADCodeGen into `.cache/CppADCodeGen` and `cmake`/`make install`s it to
+  `/usr/local`.
+- **pip, into the same venv as Pinocchio**:
 
-This drops `cppad/cg.hpp` into `.venv/lib/pythonX.Y/site-packages/cmeel.prefix/`
-where the runner looks for it; no other configuration needed.  Bust the pinocchio
-binary cache after installing so the rebuild picks up `-DHAVE_CPPADCG`:
+  ```bash
+  .venv/bin/pip install cmeel-cppadcodegen
+  ```
+
+  This drops `cppad/cg.hpp` into `.venv/lib/pythonX.Y/site-packages/cmeel.prefix/`.
+
+Either way, bust the pinocchio binary cache after installing so the rebuild
+picks up `-DHAVE_CPPADCG`:
 
 ```bash
 rm -rf .grid_build_cache/cuda/pinocchio_benchmarks
 ```
 
-If you'd rather use the system package or build from source, those still work too:
-
-```bash
-# Ubuntu/Debian (if available):
-sudo apt-get install libcppadcg-dev
-# Or build from source: https://github.com/joaoleal/CppADCodeGen
-```
-
 #### Pinocchio C++ binding for the equivalence suite (`pin_so_ext`)
 
-The `RBDReference/` suite uses Pinocchio's C++ implementation
+The `external/RBDReference/` suite uses Pinocchio's C++ implementation
 as the golden oracle for RBDReference + CUDA equivalence tests
 (particularly for second-order derivatives, where Python Pinocchio's
 SO API isn't directly comparable). This binding is built automatically
 by `install/developer_install.sh` and on first import of the suite via
 `setuptools`.
 
-Requirements (on top of the standard dev install):
+Requirements (what `developer_install.sh` installs: `pkg-config g++
+libeigen3-dev liburdfdom-headers-dev` via apt, `pybind11` via
+`requirements-dev.txt`; the `pin` wheel's `pinocchio.pc` lives under the venv's
+`cmeel.prefix`, so the script points `PKG_CONFIG_PATH` there):
 
 ```bash
-# Ubuntu/Debian — pkg-config-discoverable Pinocchio + a modern compiler:
-sudo apt-get install pkg-config libpinocchio-dev g++
-
-# Verify pinocchio's pkg-config is on the path:
+# Verify pinocchio's pkg-config resolves (with PKG_CONFIG_PATH set as the script does):
 pkg-config --modversion pinocchio
 
-# pybind11 is in the dev dependencies but confirm:
+# pybind11 is in requirements-dev.txt but confirm:
 .venv/bin/python -c "import pybind11; print(pybind11.__version__)"
 ```
 
-If `pkg-config pinocchio` doesn't resolve (common when Pinocchio came
-from cmeel rather than apt), the binding's `setup.py` falls back to
-the cmeel prefix in the same venv.
+If `pkg-config pinocchio` doesn't resolve, the binding's `setup.py` falls back
+to the cmeel prefix in the same venv.
 
 **Verify the binding builds + runs:**
 
 ```bash
 # Builds pin_so_ext on first run (~30s); subsequent runs are cache hits.
-.venv/bin/pytest RBDReference/tests/test_second_order_pinocchio_equivalence.py -k iiwa14 -x
+.venv/bin/pytest external/RBDReference/tests/test_second_order_pinocchio_equivalence.py -k iiwa14 -x
 ```
 
 If you hit build errors, the most common fixes are:
@@ -250,7 +260,7 @@ The G1 humanoid has two distinct EE use cases:
 | `g1` (arm) | `right_hand_palm_joint` | `right_rubber_hand` | Manipulation |
 | `g1-foot` | — (no fixed ankle joint) | `right_ankle_roll_link` | Locomotion |
 
-Both appear as separate rows in EE kinematics sections of `benchmark.md`.
+Both appear as separate rows in EE kinematics sections of the generated `benchmark.md`.
 
 ---
 
@@ -268,29 +278,31 @@ Frax exposes inverse_dynamics/forward_dynamics/crba/minv; the others render `—
 **Prereqs on a fresh machine:**
 
 ```bash
-# 1. Clone + check out the working branch + init submodules.
-git clone <repo-url> GRiD-A2R
-cd GRiD-A2R
-git checkout <branch>
-git submodule update --init --recursive
+# 1. Clone with submodules (the pre-GLASS worktree is created by the harness, see below).
+git clone --recursive https://github.com/A2R-Lab/GRiD.git
+cd GRiD
 
-# 2. Python venv + dependencies (same as Quick Start above).
-python -m venv .venv
-.venv/bin/pip install -e ".[dev]"
-.venv/bin/pip install cmeel-cppadcodegen     # Pinocchio codegen-accelerated algos
+# 2. Developer install: venv, every backend, Pinocchio + CppADCodeGen, frax
+#    (same as Quick Start above).
+bash install/developer_install.sh
 
 # 3. CUDA toolkit + nvcc on PATH (required for all GRiD columns).
 nvcc --version
 
-# 4. MuJoCo MJX for the mjx column (skip with --columns if not wanted).
+# 4. MuJoCo MJX for the mjx column — installed by no script (skip with --columns if not wanted).
 .venv/bin/pip install mujoco mujoco-mjx
-.venv/bin/pip install --upgrade "jax[cuda12]"
 .venv/bin/python -c "import mujoco.mjx; import jax; print(jax.devices())"
 
-# 5. Frax for the frax column (skip with --columns if not wanted).
-.venv/bin/pip install frax
+# 5. frax is installed by developer_install.sh; verify:
 .venv/bin/python -c "import frax; print('frax OK')"
 ```
+
+The **pre-GLASS column needs no manual checkout**: `run_multi_version.py`
+(`setup_pre_glass_worktree`) runs `git worktree add --detach <path> d2c0d18`
+from this checkout, initialises that worktree's submodules, and reuses it on
+later runs (warning if its HEAD drifted). The path is
+`$GRID_PRE_GLASS_WORKTREE` / `--worktree-path` (default
+`../GRiD-A2R-pre-glass`); `--skip-setup` assumes it already exists.
 
 **Run the sweep:**
 
@@ -302,7 +314,8 @@ export GRID_PRE_GLASS_WORKTREE=../GRiD-A2R-pre-glass
 .venv/bin/python test/benchmarks/run_multi_version.py \
     --robots iiwa14 --bases fixed
 
-# Full sweep (~30+ min, dominated by g1 pinocchio cppadcg compile):
+# Full sweep (~1.5 hours on an RTX 5090 per docs/source/user_guide/tutorials/benchmarks.rst;
+# dominated by the g1 pinocchio cppadcg compile):
 .venv/bin/python test/benchmarks/run_multi_version.py
 
 # Skip a specific (robot, base) combo (e.g. if it hangs the compiler):
@@ -346,9 +359,10 @@ The orchestrator:
 - Floating-base rows show `—` in the pre_glass column (harness doesn't support
   it at `d2c0d18`).
 
-**Caches:** each version uses its own `.pytest_cache/grid_cuda/` directory
-under its respective worktree, so codegen + binary caches don't collide.
-Pass `--no-recompile` to reuse cached binaries on rerun.
+**Caches:** each version uses its own `.grid_build_cache/cuda/` directory
+under its respective worktree (the pre-GLASS harness still writes its own
+cache location under *its* worktree), so codegen + binary caches don't
+collide. Pass `--no-recompile` to reuse cached binaries on rerun.
 
 **ccache (strongly recommended — large iteration speedup):** both the GRiD
 nvcc compile and the Pinocchio g++ compile transparently route through
@@ -360,8 +374,8 @@ preprocessed source + flags are cache hits and skip the heavy ptxas /
 Eigen-template work entirely — typically going from tens of seconds to
 under a second per compile. Most useful when:
 
-- Clearing `.pytest_cache/grid_benchmarks/` or `pinocchio_benchmarks/` but
-  the underlying `.cu` / `.cpp` source hasn't changed.
+- Clearing `.grid_build_cache/cuda/` (or just its `pinocchio_benchmarks/`)
+  when the underlying `.cu` / `.cpp` source hasn't changed.
 - Iterating on the harness Python code without touching codegen output.
 
 Disable per-binary with `GRID_NO_CCACHE=1` (GRiD) or `PIN_NO_CCACHE=1`
@@ -371,30 +385,34 @@ Default cache size is 5 GB — bump if you're caching many builds:
 
 ---
 
-## Adding Results from a New Machine
+## Results from a New Machine
 
 1. Run the full suite on your machine:
    ```bash
    python test/benchmarks/run_benchmarks.py
    ```
-2. Review `test/benchmarks/benchmark.md` (auto-updated by the coordinator).
-3. Commit the updated `benchmark.md`.
-4. Optionally commit your raw JSON from `results/` as a named snapshot.
+2. Review `test/benchmarks/benchmark.md` — generated locally by
+   `generate_report.py`, not tracked (gitignored, like `results/`).
+3. Numbers that should ship go through the validation-gated release
+   collector (`release/README.md`), not through this report; a new
+   (robot, GPU) launch config is contributed via
+   `grid_assets/launch_configs/README.md`.
 
 ---
 
 ## File Structure
 
-(Refreshed 2026-09-08 — tools added since the last sweep:)
+Tuning and analysis tools beside the runners:
 
-- `autotune_tier_matrix.py` — per-tier forced-probe matrix sweep; writes the `matrix` block (E5)
-- `bake_by_n_bucket.py` — E6 batch-switch bake (`ffi_bases_by_n`)
+- `autotune_tier_matrix.py` — per-tier forced-probe matrix sweep; writes the launch config's `matrix` block
+- `bake_by_n_bucket.py` — batch-switch bake (`ffi_bases_by_n`); `autotune_bake_from_logs.py` — re-bake surface overlays from sweep logs
 - `collect_kernel_limits.py` — kernel limit collection (min_smem join for the matrix tool)
 - `gpu_resident_timing.py` — GPU-resident/no-transfer timing
 - `analyze_competitive.py` / `plot_benchmarks.py` / `run_competitive_gpu_baselines.sh` — competitive pipeline
-- `run_tier_sweep_phased.sh` — phased tier sweep driver
-- `test_autotune_picker.py` / `test_per_algo_specs_bijection.py` — CPU gates over the pickers/specs
-- `archive/` — superseded scripts + historical report snapshots
+- `run_tier_sweep_phased.sh` / `overnight_batch.sh` — sweep drivers
+- `release/` — the validation-gated release collector (see `release/README.md`)
+- `test_*.py` — CPU gates over the pickers/specs/timing contracts and the release collector; these run in the CPU lane (`make test-cpu`)
+- `BENCHMARK_METHODOLOGY.md` — how the numbers are taken
 
 
 ```
@@ -404,13 +422,12 @@ test/benchmarks/
 ├── per_algo_bench.py            ← per-exe GRiD orchestrator (one TU / exe / process per algo)
 ├── run_multi_version.py         ← multi-version comparison sweep (columns + baselines)
 ├── autotune_ffi.py              ← FFI-lane (bindings) launch-config autotuner
-├── generate_report.py           ← JSON → benchmark.md
+├── generate_report.py           ← JSON → benchmark.md (generated locally, gitignored)
 ├── timing_parser.py             ← shared output parser
-├── benchmark.md                 ← committed curated snapshot
 ├── baselines.json               ← committed curated baselines
 ├── setCPU.sh                    ← CPU frequency locking helper (Linux)
 ├── perf_regression_report.py    ← CI regression tool
-├── results/                     ← GITIGNORED per-run JSON
+├── results/                     ← GITIGNORED per-run JSON (and the generated *.md reports)
 ├── .gitignore
 └── baselines/
     ├── grid/

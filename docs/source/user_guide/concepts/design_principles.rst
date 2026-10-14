@@ -96,6 +96,26 @@ rank-3 contraction sub-step), ``fdsva_so_device``,
 placement inside the ``_device`` body — no kernel-side ``s_temp`` repoint
 remains.
 
+Project-wide conformance (the standard for every algorithm)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This is not a second-order-only pattern: every algorithm's inner owns its
+scratch placement. The audit of 2026-05-29 (refreshed after the
+``inverse_dynamics_gradient`` / ``forward_dynamics_gradient`` /
+``integrator_gradient`` ``_device``-orchestrator landing) records which
+placement template each inner carries — a new inner joins this list:
+
+* ``aba_inner`` — ``TEMP_IN_SMEM`` (whole arena) + ``COLD_IN_SMEM`` (surgical cold sub-band)
+* ``forward_dynamics_inner``, ``minv_inner``, ``integrator_inner`` — ``MINV_F_IN_SMEM`` / ``F_IN_SMEM`` (the F region)
+* ``fdsva_so_contract`` — ``SCRATCH_IN_SMEM`` (4·NV³)
+* ``fdsva_so_device`` (orchestrator) — ``SCRATCH_IN_SMEM × FD_GRAD_USE_SPILL × CONTRACT_IN_SMEM`` (the canonical three-lever pattern)
+* ``crba_inner``, ``end_effector_pose_gradient_inner`` — ``TEMP_IN_SMEM``
+* ``idsva_so_body_frame_inner`` — ``SCRATCH_IN_SMEM × BC_IN_SMEM`` (whole arena + surgical BC; mutually exclusive per the body tier table)
+* ``idsva_so_world_frame_inner`` — ``SCRATCH_IN_SMEM × COLD_IN_SMEM`` (whole arena + surgical cold trio Xdown/v_w/a_w; mutually exclusive)
+* ``inverse_dynamics_gradient_device``, ``forward_dynamics_gradient_device`` — ``SCRATCH_IN_SMEM`` (whole arena via the ``_device`` orchestrator)
+* ``integrator_gradient_device`` — per-tier rung (Dqdd / dAB / inverse_dynamics_gradient level) via the ``_device`` orchestrator
+
+
 
 3. Memory-hierarchy design
 --------------------------
@@ -203,5 +223,5 @@ Go deeper
   ``_inner`` composition contract.
 * :doc:`resource_tier_system` — tiers, spill levels, ``select_shared_tier_3way``,
   L2 pinning, the placement-parameter table, and the per-robot tier→level map.
-* ``docs/idsva_so_inner_refactor_notes.md`` — the inner-owns-placement standard,
-  the project-wide conformance audit, and the deferred surgical de-alias work.
+* ``docs/design_history/idsva_so_inner_refactor_notes.md`` — the second-order
+  inner internals behind the rule above and the (deferred) surgical de-alias work.

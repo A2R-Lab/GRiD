@@ -19,7 +19,7 @@ This does not compile robot CUDA code or access a GPU. On a platform without
 a matching wheel pip builds the source distribution, whose small Python
 extension requires a C++17 compiler. GRiD is alpha software: APIs may change
 between minor versions (see the `changelog
-<https://github.com/A2R-Lab/GRiD/blob/main/docs/CHANGELOG.md>`_ for what each
+<https://github.com/A2R-Lab/GRiD/blob/main/CHANGELOG.md>`_ for what each
 release ships).
 
 The base install requires NumPy; the ``jax``, ``torch`` and ``all`` extras

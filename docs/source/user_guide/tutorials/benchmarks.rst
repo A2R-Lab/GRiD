@@ -43,7 +43,8 @@ producing the canonical markdown report:
        --output-dir test/benchmarks/results/comparison_<tag> \
        --report test/benchmarks/benchmark_multi_version_<tag>.md
 
-The full sweep takes ~1.5 hours on an RTX 5090. The cuBLASDx-backed
+``test/benchmarks/results/`` is the local benchmark archive (not tracked);
+any output directory works. The full sweep takes ~1.5 hours on an RTX 5090. The cuBLASDx-backed
 ``glass_nvidia`` column was removed before the first PyPI release (0.5.0); the
 historical design record is kept in ``docs/design_history/`` in the
 repository and the ``archive/last-cublasdx`` git tag holds the last
@@ -186,12 +187,11 @@ bindings as usual. The host launchers will default to your tuned
 
 .. note::
 
-   **Single-call timing is OFF by default** (it is hard to time and needs
-   the ``-rdc`` shim). The autotuner tunes on **batch** timing (``N=256`` by
-   default; override with ``AUTOTUNE_N``), which is what the host launch
-   config should optimize for. Opt single-call timing back in with
-   ``--single-timing`` / ``GRID_BENCH_SINGLE_TIMING=1`` only if you
-   specifically need it.
+   **The autotuner tunes on batch timing** (``N=256`` by default; override
+   with ``AUTOTUNE_N``), which is what the host launch config should optimize
+   for. Single-call timing is not part of the sweep (the former
+   ``--single-timing`` / ``GRID_BENCH_SINGLE_TIMING`` opt-in has been
+   dropped; ``run_multi_version.py`` rejects it).
 
 Run the sweep on a **quiet GPU** — timing must be isolated, so close other
 GPU workloads first.
@@ -208,10 +208,11 @@ robot DoF / base to include in the PR description).
 Cheap re-bake: ``refresh_launch_configs.sh``
 --------------------------------------------
 
-``config/refresh_launch_configs.sh`` re-bakes the live
+``grid_assets/refresh_launch_configs.sh`` re-bakes the live
 ``grid_assets/launch_configs/<robot>/<gpu>.json`` picks from an existing
 tier-sweep **without** the day-long recompile: it harvests the latest
-``results/tier_sweep_phased_*`` sweep (or a ``--sweep-dir`` you pass),
+``tier_sweep_phased_*`` sweep in the local benchmark archive (or a
+``--sweep-dir`` you pass),
 merges the picks, and bakes the per-robot ``bases`` (optionally
 ``ffi_bases`` with ``--with-ffi``), printing a ``git diff`` of
 ``grid_assets/launch_configs/`` at the end (it never commits).
@@ -249,8 +250,8 @@ memory. Two example pairs demonstrate and time this
 iiwa14, and ``..._go2.py`` twins for the floating-base go2), driven by
 ``test/benchmarks/gpu_resident_timing.py``.
 
-Measured on the RTX 5090 (sm_120, 2026-08-09; raw results live in the local
-benchmark archive, which is not tracked):
+Measured on the RTX 5090 (sm_120; raw results live in the local benchmark
+archive, which is not tracked):
 
 * **JAX resident rollout vs host round-trip** (a ``lax.scan`` rollout calling
   GRiD's dynamics each step): iiwa14 **24.3x / 14.5x / 7.3x** faster at batch
@@ -265,7 +266,8 @@ benchmark archive, which is not tracked):
   replay-only and copy-in variants are now recorded separately.)
 
 Reproduce with ``.venv/bin/python test/benchmarks/gpu_resident_timing.py``
-(quiet GPU; results land under ``test/benchmarks/results/``).
+(quiet GPU; results land in the local benchmark archive, which is not
+tracked).
 
 Second-order derivatives: the transfer question
 -----------------------------------------------
@@ -284,8 +286,8 @@ Two fixes ship for this:
   effective D2H bandwidth on large payloads from 13.3 to ~21 GB/s (the
   box's PCIe-lane ceiling). That alone flipped **8 with-mem cells** vs
   Pinocchio (CPU, 24 threads) (11 losses + 2 ties → 5 losses + 8 wins); the
-  per-cell before/after table is in the 2026-08-26 competitive analysis in the
-  local benchmark archive.
+  per-cell before/after table is in the competitive analysis in the local
+  benchmark archive.
 * **Not copying at all** — keep the tensor on the GPU (next section).
 
 Staying resident (jax)
@@ -295,7 +297,7 @@ The ``grid_rbd`` jax FFI path is device-in / device-out: under ``jit`` /
 ``lax.scan`` composition the nv³ tensor is produced on-device and consumed
 by the next pipeline stage (a Hessian-vector product, a DDP backward pass)
 with **zero host transfer**. Layer-3 timings (jax FFI, medians of 30 iters
-after warmup, RTX 5090, 2026-08-27 capture in the local benchmark archive), in
+after warmup, RTX 5090, capture in the local benchmark archive), in
 total-batch µs — *resident* = device-in/device-out, *out_host* = outputs
 pulled to host, *roundtrip* = numpy-in → numpy-out:
 
@@ -354,8 +356,8 @@ See also
 * To run a full sweep yourself, use the harness under
   `test/benchmarks/
   <https://github.com/A2R-Lab/GRiD/tree/main/test/benchmarks>`_;
-  results are written under ``test/benchmarks/results/`` locally
-  (hardware-specific, e.g. sm_120).
+  results are written to the local benchmark archive (not tracked;
+  hardware-specific, e.g. sm_120).
 * :doc:`cuda_support_status` — currently exercised CUDA paths.
 * :doc:`../concepts/algorithms/idsva` and :doc:`../concepts/algorithms/fdsva_so`
   — algorithm details.

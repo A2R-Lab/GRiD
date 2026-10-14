@@ -1,6 +1,6 @@
 # Integrating GRiD via `grid_rbd` — a guide for agents & users
 
-*Last verified against repo state `f0db1a1` (2026-09-18). If the code and this guide disagree, trust the code and fix the guide.*
+*Last reviewed 2026-10-14 against main `f4f72e7` (grid-rbd 0.5.1). The API surface below — entry points, `get_robot` compile-on-miss, cache layout and `gc_cache`, build knobs, method shapes — was re-checked against `bindings/grid_rbd` and `docs/source/user_guide/tutorials/python_wrappers.rst`; the measured numbers quoted inline (the 2026-10-01 host-copy timings, the iiwa14 FFI block-size figure, the CUDA-graph submit costs) were not re-measured. If the code and this guide disagree, trust the code and fix the guide.*
 
 How to call GRiD's GPU rigid-body dynamics from Python **as effectively as possible**. The
 golden rule: **place your data on the GPU once and keep it there.** GRiD is a GPU library;
@@ -18,12 +18,13 @@ one-shot calls that round-trip to the host.
 All three share **one cache** (the same compiled `.so`, keyed by URDF bytes + codegen options +
 GRiD version + CUDA arch + wrapper/codegen source hashes — editing grid_codegen or the
 wrapper rotates every key; rebuilds are automatic, no force_rebuild needed). Build once, use from any surface. Install is opt-in per backend:
-`pip install -e ".[jax]"` / `[torch]` / `[all]` (base is numpy-only). `nvcc` must be on
+`pip install "grid-rbd[jax]"` / `[torch]` / `[all]` from PyPI (base is numpy-only; `pip install -e ".[all]"`
+from a checkout to develop GRiD). `nvcc` must be on
 `PATH` at build time (not at `pip install` time); the per-robot `.so` is built on first use.
 
 ## Lifecycle: load_robot / register → precompile → get_robot
 
-**Runtime contexts (W04-B B1).** A handle dispatches to the artifact's *default* context
+**Runtime contexts.** A handle dispatches to the artifact's *default* context
 (`handle.ctx_id == 0`, shared by every handle over the same `.so`). `handle.context()` (numpy,
 jax and torch handles alike) gives you an isolated context on the same artifact — its own
 arena, tables, streams and launch overrides — closed when that handle closes; `handle.device_profile`
@@ -31,7 +32,7 @@ reports what the context was fitted to (device/artifact arch, memory at init, ar
 slots, `max_batch`). Ids are salted per artifact: a foreign or closed id raises a clear error, never a
 use-after-free. Details: the *Runtime contexts* concepts page.
 
-**Model versions (W04-B B2).** Runtime-parameter mutations (`set_inertia_params`, `set_transform_params`,
+**Model versions.** Runtime-parameter mutations (`set_inertia_params`, `set_transform_params`,
 `set_joint_dynamics`, `attach_tool`/`detach_tool`) take the context's admission lock exclusively (ordered
 after every admitted call, before every later one) and bump `handle.model_version`. torch/JAX autograd
 forwards stamp that version on device at execution time and their backwards refuse a stale stamp
@@ -39,21 +40,22 @@ forwards stamp that version on device at execution time and their backwards refu
 working across mutations (forward and backward stamp/check inside one execution); only a backward
 deferred across a mutation is refused. Launch overrides serialize the same way but do not bump the version.
 
-**Operand validation (W03).** Every input belongs to one operand class (configuration `(B, nq)`, force
+**Operand validation.** Every input belongs to one operand class (configuration `(B, nq)`, force
 `(B, 6*num_bodies)`, plant state `(B, nq+nv)`, plant operands, tool operands, runtime offset, scalars) and each
 surface enforces the class rule natively: `1 <= B <= max_batch`, 2D with the exact last dim, every operand
 carrying the leading operand's batch, `f_ext` never broadcast. numpy coerces layout/dtype (contiguous copy,
 cast); torch refuses CPU / non-contiguous / wrong-dtype tensors; JAX checks in Python first and again in every
 FFI handler. Details + the not-checked column: the *Operand validation* concepts page.
 
-Four entry points over the same cache:
+Three build calls plus one lookup, all over the same cache (the *Fast Robot
+Setup* page is the canonical description):
 
 | Call | Does | Use when |
 |------|------|----------|
 | `load_robot(urdf_path, backend=...)` | ZERO-ceremony: derives a stable content-addressed name, builds-if-missing, returns a handle | the frictionless default — no name to invent |
-| `register_robot(name, urdf_path, ...)` | build-if-missing **and** return a handle under YOUR name | you want a human-friendly handle name |
+| `register_robot(name, urdf_path, ...)` | build-if-missing **and** return a handle under YOUR name; the full option surface | you want a human-friendly handle name or non-default build options |
 | `precompile(name, urdf_path, tiers=..., backends=...)` | build + cache only (no handle) | warm the cache offline (CI / Docker), maybe several tiers/backends |
-| `get_robot(name)` | look up an already-registered robot by name | fast start once the cache is warm; raises `RobotNotRegisteredError` if absent, `StaleRobotError` if the cached build is from another wrapper/ABI/arch (rebuild) |
+| `get_robot(name[, urdf_path=..., **register_opts])` | look up a registered robot by name; since 0.5.1, with `urdf_path=` a *miss* compiles and registers that URDF just-in-time (a hit ignores it) | fast start once the cache is warm, or "get or build" in one call. Without `urdf_path` a miss raises `RobotNotRegisteredError`; `StaleRobotError` means the cached build is from another wrapper/ABI/arch (rebuild) |
 
 ```python
 import grid_rbd
@@ -68,8 +70,15 @@ grid_rbd.precompile("iiwa14", "/path/to/iiwa14.urdf",
 `precompile` is idempotent: a cached tier is an instant no-op (no `nvcc`). The `numpy` backend is
 warmed without a handle or a CUDA context (a GPU-less build box works with `cuda_arch=`);
 `grid_rbd.build_plan(name, urdf, cuda_arch=...)` shows what a build would key on and whether the
-cache already holds it, without building. First build of a
-small arm is ~30–60 s; large humanoids with second-order kernels take minutes (and lots of RAM).
+cache already holds it, without building. Build times are tabulated on the
+*Fast Robot Setup* page (0.5.1 multi-unit build: iiwa14 ~100 s, go2-floating ~2 min, g1
+pin-only ~6 min on an RTX 5090 / 24-core host; humanoid second-order units need
+a few GB of RAM each). A first build announces itself with a one-line `WARNING`
+on the `grid_rbd` logger (robot, unit count, rough duration, cache path);
+`GRID_RBD_QUIET=1` silences it. `GRID_RBD_BUILD_JOBS=N` caps the parallel
+units; `GRID_RBD_SPLIT_COMPILE=N` (opt-in) trades RAM for a faster heavy unit;
+`python -m grid_rbd.gc_cache` lists (`--execute` deletes) store entries no name
+binds any more.
 Ship the cache dir (`grid_rbd.default_cache_dir()`, default `~/.cache/grid-rbd/` or
 `$GRID_RBD_CACHE_DIR`) and every later run starts in well under a second.
 
@@ -228,7 +237,7 @@ pokes, so one `set_*_params` call is seen by every surface over that `.so`:
 | Build flag | Mutator | Table shape | Mutates |
 |------------|---------|-------------|---------|
 | `runtime_inertia=True` | `handle.set_inertia_params(t)` | `(num_bodies, 10)` rows `[m, hx,hy,hz, Ixx,Ixy,Ixz, Iyy,Iyz, Izz]` | spatial inertia in **every** dynamics call (id/fd/aba/crba/minv/gradients) |
-| `runtime_transform=True` | `handle.set_transform_params(t)` | `(num_joints, 6)` rows `[x,y,z,roll,pitch,yaw]` (URDF `<origin>`) | each joint's `Xfixed` in the **dynamics** (EE pose still uses the baked origin in v1) | **Dynamics only**: baked end-effector kinematics keep the URDF geometry after a transform update (documented partial capability).
+| `runtime_transform=True` | `handle.set_transform_params(t)` | `(num_joints, 6)` rows `[x,y,z,roll,pitch,yaw]` (URDF `<origin>`) | each joint's `Xfixed` in the **dynamics only** — the baked end-effector kinematics keep the URDF geometry after a transform update (documented partial capability) |
 
 Fetch the baked table from `handle.inertia_params` / `handle.transform_params`, mutate, set it
 back. Passing the baked values back is byte-identical to a plain build. Each flag re-keys the
@@ -298,7 +307,7 @@ fastest at 128 threads but the FFI path is fastest at ~768 — the same kernel, 
 Per-algo introspection: `handle.kernel_max_threads(key)` returns the REAL compiled
 `__launch_bounds__` ceiling for that algo's baked-tier kernel (keys = the autotune
 short names: id, fd, minv, id_du, fd_du, ee_pose, idsva_so, ...; -1 = unknown/absent).
-Batch-regime switching (E6): `set_threads_for_n`/`apply_batch_overlay`/`get_batch_switch`
+Batch-regime switching: `set_threads_for_n`/`apply_batch_overlay`/`get_batch_switch`
 apply per-algo small-batch thread overrides from the config's `ffi_bases_by_n` block.
 
 
@@ -323,8 +332,9 @@ apply per-algo small-batch thread overrides from the config's `ffi_bases_by_n` b
 
 ## Common pitfalls
 
-- **`RobotNotRegisteredError`** from `get_robot` → the cache isn't warm; run `register_robot` /
-  `precompile` first (or ship the cache dir).
+- **`RobotNotRegisteredError`** from `get_robot` → the cache isn't warm and no `urdf_path=` was
+  given; pass `urdf_path=` (compile on miss), run `register_robot` / `precompile` first, or ship
+  the cache dir.
 - **`StaleRobotError`** from `get_robot` → the manifest names a build this `grid_rbd` cannot load
   (older wrapper / torch-jax ABI / GPU arch, or a pre-2026-09-22 entry with no build record); re-run
   `register_robot` / `precompile` — byte-identical sources re-hit the store without `nvcc`.

@@ -2346,13 +2346,13 @@ static void register_runner(py::module_& m, const char* cls_name) {
             "or not yet initialized); equals device_pool_bytes(ws_slots) after a "
             "pool-mode init — the no-drift referee.")
         .def("ctx_id", &R::ctx_id, "The runtime-context id this runner dispatches to (0 = the artifact's default context).")
-        .def("bind_context", &R::bind_context, py::arg("id"), "Dispatch every later call to the given context id (W04-B B1).")
+        .def("bind_context", &R::bind_context, py::arg("id"), "Dispatch every later call to the given context id.")
         .def("ctx_create", &R::ctx_create, py::arg("base_ptr") = 0, py::arg("bytes") = 0, py::arg("ws_slots") = 0,
              "Create a NEW runtime context on this artifact (optional caller-owned slab), returning its salted id.")
         .def("ctx_close", &R::ctx_close, py::arg("id"), "Close a context: refuse new admissions, drain, free.")
         .def("ctx_default_id", &R::ctx_default_id, "The default context's real id (created if absent).")
         .def("ctx_profile", &R::ctx_profile, py::arg("id"), "The device-profile record captured when the context was created.")
-        .def("ctx_version", &R::ctx_version, py::arg("id"), "The context's model version (bumps on every runtime-parameter mutation; W04-B B2).")
+        .def("ctx_version", &R::ctx_version, py::arg("id"), "The context's model version (bumps on every runtime-parameter mutation).")
         .def("graph_begin", &R::graph_begin, py::arg("id"), py::arg("version"), "Take a replay admission on a context at a captured model version; returns a token (R5).")
         .def("graph_end", &R::graph_end, py::arg("token"), "Release a replay admission token (R5).")
         .def("ctx_count", &R::ctx_count, "Number of live runtime contexts of this artifact.")
@@ -2609,7 +2609,7 @@ static void register_runner(py::module_& m, const char* cls_name) {
              py::arg("q"), py::arg("qd"))
         .def("set_inertia_params", &R::set_inertia_params,
              py::arg("params"),
-             "Update the device-resident mutable inertia table (D.4 / Phase 5). "
+             "Update the device-resident mutable inertia table. "
              "params is a flat (10*num_joints,) array, bodies 1..N, each a length-10 "
              "[m, h(3), I_O(6)] vector. Only available on a .so built with "
              "runtime_inertia=True; raises otherwise.")

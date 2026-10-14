@@ -1496,7 +1496,7 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
     self.gen_add_code_lines(["struct grid_device_pool_t;  // defined with the allocator below", \
                              "template <typename T, gridDataKind KIND = GRID_DATA_ALL>", \
                              "struct gridData {", \
-                             "    grid_device_pool_t *pool;  // the allocator this arena was carved from (W04-B B1/K1); the default pool unless init_gridData_checked was given one", \
+                             "    grid_device_pool_t *pool;  // the allocator this arena was carved from; the default pool unless init_gridData_checked was given one", \
                              "    // GPU INPUTS", \
                              "    T *d_q_qd_u;", \
                              "    T *d_q_qd;", \
@@ -2036,7 +2036,7 @@ def gen_init_gridData(self):
                   "        }", \
                   "        hd_data->workspace_timestep_slots = _ws_slots;", \
                   "        gpuErrchk(cudaMalloc((void**)&hd_data->d_workspace, _ws_per_ts*(size_t)_ws_slots));", \
-                  "        // Phase 3a/b/c/e: L2-pin d_workspace for its lifetime. Spilled buffers", \
+                  "        // L2-pin d_workspace for its lifetime. Spilled buffers", \
                   "        // (Minv-F, FD's Minv-F, ABA's inner scratch, FDSVA_SO's df_du/Minv) are", \
                   "        // recursion-hot — L2 pinning narrows the smem→HBM gap to smem→L2.", \
                   "        gpuErrchk(grid_begin_l2_persisting(0, hd_data->d_workspace, _ws_per_ts*(size_t)_ws_slots));", \
@@ -2097,7 +2097,7 @@ def gen_init_gridData(self):
         "    return p;",
         "}",
         "__host__ __device__ constexpr size_t grid_pool_align(size_t b) { return (b + 255) & ~(size_t)255; }",
-        "// W04-B B1 (K1): the allocator takes its pool EXPLICITLY so several arenas (runtime",
+        "// The allocator takes its pool EXPLICITLY so several arenas (runtime",
         "// contexts) on one .so never share a cursor; the pool-less overloads below keep the",
         "// historical one-liners (HJCD/GATO consumers) on the default pool — same caller API.",
         "__host__ inline cudaError_t grid_device_alloc(grid_device_pool_t *pool, void **p, size_t bytes) {",

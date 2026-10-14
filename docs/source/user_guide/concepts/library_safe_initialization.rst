@@ -8,7 +8,7 @@ transform, joint dynamics). Historically these initializers used the
 ``gpuErrchk`` policy: on any CUDA error they printed, called
 ``cudaDeviceReset()`` and ``exit()``-ed the process. That is right for a
 benchmark binary and wrong for a library embedded in a Python interpreter or a
-long-lived service. Since 2026-09-22 the header emits a second, nonterminating
+long-lived service. The header therefore also emits a second, nonterminating
 spelling of the same construction and destruction logic.
 
 The contract
@@ -88,6 +88,15 @@ can be brought up and torn down without a single terminating path:
   ``cudaFuncSetAttribute`` / shared-memory fit-check error and names the
   kernel; ``init_grid_streams_checked`` destroys every stream it created
   before reporting a later failure; ``init_grid_checked`` composes the two.
+  The aggregate registers — and therefore makes the translation unit
+  compile — every kernel in the header. The per-algorithm twins
+  ``init_grid_kernel_attr_<algo>_checked<T>(&op)`` (one per algorithm key,
+  e.g. ``init_grid_kernel_attr_forward_dynamics_checked``) register only
+  that algorithm's kernels; pair one per launched algorithm with
+  ``init_grid_streams_checked`` to keep a library's compile time and footprint
+  proportional to what it launches (this is what ``grid_rbd`` and the test
+  runners do; the :doc:`generation tutorial <../tutorials/codegen>` shows
+  both spellings).
 * ``init_gridData_checked`` guards all ~80 device and host allocations of the
   batch arena (and the memsets/copies between them). Its release list is
   **derived from the allocation list at generation time** (one emitted line

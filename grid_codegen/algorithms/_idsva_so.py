@@ -85,7 +85,7 @@ def _idsva_so_use_world_frame(self):
     alpha == 1 and n_int == NV, so the existing non-mimic world path is already
     exactly correct (no internal slab / fold needed). Mirrors how floating/mimic
     already route here. Byte-identical for low/mid-DOF cardinal fixed-base robots
-    (predicate false). See docs/idsva_so_inner_refactor_notes.md + the spherical
+    (predicate false). See docs/design_history/idsva_so_inner_refactor_notes.md + the spherical
     progress memo + docs/open-tasks/archive/perf_idsva_so_bigrobot.md (EXP-1 high-DOF route).
     """
     return (self.robot.floating_base
@@ -3152,7 +3152,7 @@ def gen_idsva_so_world_frame_inner(self):
         "// world-frame IDSVA-SO shared-memory layout.",
         "// Inner owns scratch placement: SCRATCH_IN_SMEM picks s_temp (shared) vs",
         "// d_workspace (global). Repointing s_temp here keeps every layout line below",
-        "// unchanged. See docs/idsva_so_inner_refactor_notes.md (inner-owns-placement).",
+        "// unchanged. See docs/design_history/idsva_so_inner_refactor_notes.md (inner-owns-placement).",
         "if constexpr (!SCRATCH_IN_SMEM) { s_temp = d_workspace; } else { (void)d_workspace; }",
     ])
     # XImats is loaded INSIDE the inner, AFTER the s_temp repoint — so its sincos

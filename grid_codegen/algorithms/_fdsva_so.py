@@ -341,7 +341,7 @@ def gen_fdsva_so_device_function_call(self,
 def gen_fdsva_so_device(self):
     """Emit `fdsva_so_device` — the whole fdsva_so orchestration as ONE
     inner that OWNS its scratch (s_temp) placement (inner-owns-placement; see
-    docs/idsva_so_inner_refactor_notes.md). It wraps, in order:
+    docs/design_history/idsva_so_inner_refactor_notes.md). It wraps, in order:
       load_update_XImats -> minv_inner -> forward_dynamics_inner ->
       fd-gradient-inline -> idsva_so_{world,body}_inner -> fdsva_so_contract.
     Because the s_temp repoint happens at the very top, EVERY consumer below —
@@ -684,7 +684,7 @@ def _emit_fdsva_so_kernel_body_for_flags(self, n, NUM_POS, use_global_tensors, u
     placement and accept SCRATCH_IN_SMEM=false, so the whole-arena pool->global
     fallback composes uniformly. (Earlier revisions of this comment said
     floating-only because the body inner had not yet migrated; that has since
-    landed — see docs/idsva_so_inner_refactor_notes.md.)
+    landed — see docs/design_history/idsva_so_inner_refactor_notes.md.)
 
     idsva_cold_in_global (A4): SURGICAL — route ONLY the embedded WORLD-frame
     idsva_so inner's cold trio (Xdown 36*NB + v_w/a_w 12*NB, dead before the hot

@@ -34,7 +34,7 @@ numpy oracle in `RBDReference` (validated against Pinocchio) and the generated C
   see `examples/README.md`), `examples/codegen/` + `examples/cuda/` (generate + validate walkthroughs).
 - `test/` — pytest suites (see markers below); `test/cuda_equivalents/` (CUDA equivalence runners),
   `test/python_wrappers/` (jax/torch), `test/benchmarks/` (timing harness + orchestration scripts).
-- `docs/source/` — Sphinx docs (published to https://a2r-lab.github.io/GRiD/).
+- `docs/source/` — Sphinx docs (published to https://a2r-lab.org/GRiD/).
 - `docs/agent_debugging_guide.md` — **the** debugging bible: enumerated bug classes (smem init,
   beta==0 output-reads, reduction nondeterminism, false-positive racecheck, …). Append learnings here.
 - `docs/open-tasks/` — gitignored planning docs / SSOT ledgers (local-only, survive across sessions).
@@ -69,7 +69,7 @@ Markers: `pinocchio_equivalence`, `cuda_equivalence`, `python_wrappers`, `floati
 never ships in the wheel). `make test-cpu` runs the SAME file list as CI's cpu-lane; `make verify` = the
 everyday-policy receipt verify. The capable-box suite floor (`test/conftest.py::_ENV_GUARD_SKIP`) is pinned
 to the harness's real skip strings by `test/test_suite_floor.py`. GPU test outcomes are captured in a signed
-`gpu-proof.json` receipt (see `test/run_gpu_proof.sh`) that CPU-only CI verifies against the committed
+`gpu-proof.json` receipt (launcher: `test/run_validation.py`) that CPU-only CI verifies against the committed
 test fingerprints (red when correctness inputs change without a refreshed receipt).
 Main requires a receipt whose collection EQUALS `test/gpu-proof-tests.txt` (policy
 `required_test_manifest`); diagnostic smoke receipts do not replace that evidence. A release needs one fresh full run
@@ -97,7 +97,7 @@ node-id shards bounded to ~2h each (bin-packed from rolling measured durations;
 never `-k` — explicit node-id lists with a set-equality completeness gate). Runs
 are pausable: `touch <out>/PAUSE` stops cleanly between shards, Ctrl-C/SIGTERM
 stops within one, and `--resume <out>` continues without re-running completed
-shards. `SPLIT=1 test/run_gpu_proof.sh` drives both domains and merges + re-signs
+shards. `test/run_validation.py --execute` (or the thin ad-hoc wrapper `SPLIT=1 test/run_gpu_proof.sh`) drives both domains and merges + re-signs
 all shard receipts into the same repo-root `gpu-proof.json` the monolithic path
 writes (`SPLIT_RESUME=<out>` to continue an interrupted pass). CPU-only gates for
 the partition logic live in `test/test_split_partition.py`.
@@ -123,7 +123,7 @@ wording/figures are excluded: committed documentation-only descendants retain
 the evidence. Do not edit or commit anything during an active split pass.
 That red is by design, and the fix is a refresh or a full pass:
 - **Everyday** (`test/gpu-proof-policy.yaml`, `allow_carried: true`):
-  `SPLIT=1 SPLIT_REFRESH=1 test/run_gpu_proof.sh` re-runs ONLY the shards
+  the everyday refresh (`test/run_validation.py --execute`; ad hoc: `SPLIT=1 SPLIT_REFRESH=1 test/run_gpu_proof.sh`) re-runs ONLY the shards
   whose narrow fingerprints changed vs the committed receipt and CARRIES the
   rest (`gpu-proof merge --carry-from`); commit the refreshed receipt and CI
   goes green — minutes-to-hours, not the full pass. A carried shard attests
@@ -166,7 +166,7 @@ seconds of regeneration, never an nvcc rebuild.
   referee fails. Numbers: iiwa14 101 s (was 11 min), go2 128 s (was 15), g1 366 s (was 53), 12–15 GB
   per 8-unit humanoid build. Never `--split-compile` the test runners (user ruling); the bindings
   knob `GRID_RBD_SPLIT_COMPILE` is opt-in and content-keyed. Full learnings:
-  `docs/agent_debugging_guide.md` §7.z43/§7.z44, design: `docs/compile_time_arc_2026-10.md`.
+  `docs/agent_debugging_guide.md` §7.z43/§7.z44, design: `docs/design_history/compile_time_arc_2026-10.md`.
 - **A TU compiles every kernel it address-takes.** The header's aggregate `init_grid_kernel_attrs`
   registers everything (incl. bench-only `_single_timing` twins); library and test code must register
   per algorithm through `init_grid_kernel_attr_<algo>_checked` for what it actually launches (3x on

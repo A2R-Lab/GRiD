@@ -92,7 +92,7 @@ ladder. Body rungs are {full, output→global, +BC→global (surgical),
 +whole-s_temp→global}. The fixed body inner is monolithic/aliased, so the
 surgical BC spill is small relative to a humanoid's smem gap and the whole-arena
 rung is what makes h1_2 fit (at a perf cost); a finer hot/cold de-alias of that
-inner remains a tracked refactor (``docs/idsva_so_inner_refactor_notes.md``).
+inner remains a tracked refactor (``docs/design_history/idsva_so_inner_refactor_notes.md``).
 
 Humanoid-scale spill (``humanoid-tier-spill``, landed)
 ------------------------------------------------------
@@ -237,7 +237,7 @@ emits 2 or 3 specialized bodies inside ``if constexpr`` branches.
   Where a surgical sub-split exists it is preferred; the whole-inner rung is the
   guaranteed-fit backstop. The remaining finer-grained win (de-aliasing the
   monolithic idsva_so / fdsva_so inners so even MINIMAL keeps more of the hot
-  band in smem) is tracked in ``docs/idsva_so_inner_refactor_notes.md``.
+  band in smem) is tracked in ``docs/design_history/idsva_so_inner_refactor_notes.md``.
 
 **L2 cache pinning (default-ON in v2.0; flipped to default-OFF 2026-09-15
 on measurement)**
@@ -380,7 +380,7 @@ unified ``(s_temp, d_workspace)`` signature and spill per tier (whole-arena at
 the deepest rung). The remaining refinement is a *finer-grained* partial spill:
 the SO body emitters have heavily-aliased intermediate lifetimes, so keeping
 more of the hot band in smem even at MINIMAL needs per-sub-buffer lifetime
-analysis. Tracked in ``docs/idsva_so_inner_refactor_notes.md``.
+analysis. Tracked in ``docs/design_history/idsva_so_inner_refactor_notes.md``.
 
 Deferred validation sweep (P7 / P8)
 ------------------------------------
@@ -432,7 +432,7 @@ Existing entry points to extend:
 
 The result lands as a dated, committed snapshot
 ``test/benchmarks/tier_validation_matrix_<ts>.md`` (e.g.
-``tier_validation_matrix_20260523_2200.md``). Same row × column structure as the existing
+``tier_validation_matrix_20260523_2200.md``, removed from the tree 2026-10-14, in git history). Same row × column structure as the existing
 ``benchmark_multi_version_sm120_5090_full.md`` but with GRiD split
 into three tier columns (``grid_shared``, ``grid_lite``,
 ``grid_minimal``).

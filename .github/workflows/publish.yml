@@ -7,7 +7,7 @@ name: Publish to PyPI
 #   tag v*             -> builds, uploads to TestPyPI, then (after a second
 #                         approval) to PyPI
 #
-# Set-up checklist (one time, by a maintainer): see docs/PACKAGING.md,
+# Set-up checklist (one time, by a maintainer): see RELEASING.md,
 # "Freeze and publish".
 on:
   push:

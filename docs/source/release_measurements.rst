@@ -368,8 +368,8 @@ From the repository root, plan without launching GPU work:
    .venv/bin/python docs/release_pipeline.py --output <new-review-directory>
 
 Add ``--execute --output <fresh-capture>`` only in a coordinated quiet window.
-Raw captures remain in ``test/benchmarks/results/``; published assets contain
-their hashes and provenance.
+Raw captures remain in the local benchmark archive (not tracked); published
+assets contain their hashes and provenance.
 
 Measurement scope
 -----------------

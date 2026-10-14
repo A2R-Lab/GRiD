@@ -1687,7 +1687,7 @@ immune to the loaded-vs-disk skew by construction.
 
 ---
 
-*Companion: `docs/idsva_so_inner_refactor_notes.md` (SO internals + resume hints).*
+*Companion: `docs/design_history/idsva_so_inner_refactor_notes.md` (SO internals + resume hints).*
 
 ### 7.z2 Lie-chart second derivatives: the dN(0) chart-slope term is easy to drop (2026-08-11)
 
@@ -2856,7 +2856,7 @@ cannot self-match. Related: kill by PID only (the `pkill` bracket trick is unrel
 
 Measured on an RTX 5090 / 24-core host while splitting the bindings `robot.so` into one core
 unit + 13 family units (SSOT: `docs/open-tasks/archive/multi_tu_arc_2026-10-09.md`; design note:
-`docs/compile_time_arc_2026-10.md`). The facts, in the order they bit us:
+`docs/design_history/compile_time_arc_2026-10.md`). The facts, in the order they bit us:
 
 1. **Whoever address-takes a kernel compiles it.** The header's aggregate
    `init_grid_kernel_attrs` registers EVERY kernel (incl. the bench-only `_single_timing` twins

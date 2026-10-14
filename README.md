@@ -11,228 +11,97 @@ A GPU-accelerated library for robot dynamics, kinematics, and collisions, with a
 ![The GRiD package ecosystem: a user's URDF goes through URDFParser to the code generator (built on GLASS) and RBDReference, producing CUDA C++ with NumPy, JAX, and PyTorch wrappers; benchmarks and tests, backed by pytest-gpu-proof and external oracles, produce validated outputs and performance benchmarks.](https://raw.githubusercontent.com/A2R-Lab/GRiD/main/docs/imgs/GRiD.png)
 
 GRiD turns a URDF into optimized, per-robot CUDA C++ for rigid-body dynamics, kinematics, their analytical
-first- and second-order derivatives and a trajectory-optimization plant layer, then hands you that code three
-ways — a numpy handle, a `jax.jit`-able FFI surface, or `torch.autograd`-aware ops — from one content-addressed
-`.so` cache. One CUDA block per problem, batched, bit-deterministic and thread-count invariant; the same
-model and API rebuild for each target architecture (one artifact per `sm_XX`), with runtime memory
-adaptation from embedded Jetson class devices to desktop GPUs. Website: https://a2r-lab.org/GRiD/.
+first- and second-order derivatives and a trajectory-optimization plant layer, then hands you that code as a
+NumPy handle, a `jax.jit`-able FFI surface, `torch.autograd`-aware ops, or one header-only `grid.cuh` for your own
+kernels. One CUDA block per problem, batched, bit-deterministic and thread-count invariant; the same model and API
+rebuild for each target architecture (one artifact per `sm_XX`). GRiD builds on our
+[URDFParser](https://github.com/A2R-Lab/URDFParser), [RBDReference](https://github.com/A2R-Lab/RBDReference) and
+[GLASS](https://github.com/A2R-Lab/GLASS) packages (URDF parsing, Pinocchio-validated reference dynamics, GPU linear algebra).
 
-GRiD builds on our [URDFParser](https://github.com/A2R-Lab/URDFParser), [RBDReference](https://github.com/A2R-Lab/RBDReference), and [GLASS](https://github.com/A2R-Lab/GLASS) packages (URDF parsing, Pinocchio-validated reference dynamics, and GPU linear algebra), together with its own bundled code generator. Using its scripts, users can easily generate and test optimized rigid body dynamics CUDA C++ code for their URDF files.
+**📖 The full documentation is the website: <https://a2r-lab.org/GRiD/>** (installation, tutorials, the
+[How do I…?](https://a2r-lab.org/GRiD/docs/how_do_i.html) index, concepts, API reference, benchmarks, validation). This README is only a router.
 
-**Status: 0.5.1 (the first packaged release was 0.5.0) is alpha software.** APIs may still change between
-minor versions; see [CHANGELOG.md](https://github.com/A2R-Lab/GRiD/blob/main/CHANGELOG.md) for what has
-landed since the paper and what is known to be missing. The [original ICRA 2022 paper](https://a2r-lab.org/publication/grid/)
+**Status:** 0.5.1 on [PyPI](https://pypi.org/project/grid-rbd/) (first packaged release: 0.5.0) — alpha software, APIs may
+change between minor versions ([CHANGELOG.md](https://github.com/A2R-Lab/GRiD/blob/main/CHANGELOG.md)). Linux x86-64,
+CPython 3.10–3.12, CUDA 12+/13; validated on an RTX 5090. The [original ICRA 2022 paper](https://a2r-lab.org/publication/grid/)
 describes the implementation preserved in the archival [robot-acceleration/GRiD](https://github.com/robot-acceleration/GRiD)
-repository, not the feature set or performance of this release. See the [project website](https://a2r-lab.org/GRiD/)
-for the overview. Collision routines use the generated CUDA interface; numerical Python interface coverage
-is documented separately.
+repository, not the feature set or performance of this release.
 
-## I want to…
+## Two entry points
+Both reach the same generated CUDA; pick the one that matches how you want to use it.
 
-| Task | Start here |
-|------|------------|
-| **Call GRiD from Python** (numpy/JAX/torch) | `grid_rbd.load_robot("robot.urdf", backend=...)` — [Python wrappers docs](https://a2r-lab.org/GRiD/user_guide/tutorials/python_wrappers.html) · [agent guide](https://github.com/A2R-Lab/GRiD/blob/main/bindings/examples/AGENT_INTEGRATION_GUIDE.md) |
-| **Generate CUDA for a new robot** | `grid-generate grid_assets/robots/iiwa14.urdf` — see Quick Start below |
-| **Fit a humanoid build in RAM** | [fast robot setup](https://a2r-lab.org/GRiD/user_guide/getting_started/fast_robot_setup.html) (`algorithm_list=`, `enable_mujoco_kernels=False`) |
-| **Add an algorithm** | [adding an algorithm](https://a2r-lab.org/GRiD/user_guide/tutorials/adding_an_algorithm.html) |
-| **Run tests / fix a red receipt CI job** | [CUDA validation](https://a2r-lab.org/GRiD/user_guide/tutorials/cuda_validation.html) + `test/run_gpu_proof.sh --help` |
-| **Benchmark** | [benchmarks](https://a2r-lab.org/GRiD/user_guide/tutorials/benchmarks.html) |
-| **Debug a CUDA-vs-numpy mismatch** | [docs/agent_debugging_guide.md](https://github.com/A2R-Lab/GRiD/blob/main/docs/agent_debugging_guide.md) — the bug-class bible |
-| **Get MuJoCo/mjx-convention I/O** | `handle.mujoco.<method>(...)` — values AND derivatives/second-order |
-| **Everything else** | [How do I…?](https://a2r-lab.org/GRiD/how_do_i.html) on the docs site |
-
-**Start-here track:** [`examples/README.md`](https://github.com/A2R-Lab/GRiD/blob/main/examples/README.md) routes the four usage tracks — the [`examples/notebooks/`](https://github.com/A2R-Lab/GRiD/tree/main/examples/notebooks/) Python-bindings tour (01-quickstart → 07-inline-cuda), the runnable [`bindings/examples/`](https://github.com/A2R-Lab/GRiD/tree/main/bindings/examples/) scripts, codegen scripts, and hand-written-CUDA walkthroughs.
-
-**A checkout contains submodules: run ```git submodule update --init --recursive``` after cloning without `--recursive`.** A PyPI install bundles them.
-
-## Quick Start
-
-Install from PyPI (Linux x86-64, Python 3.10–3.12; no GPU or compiler needed to install — robot CUDA is
-compiled by `register_robot` using the `nvcc` on your `PATH`):
+### Easy: Python wrappers
+`load_robot(urdf)` generates, compiles and caches the robot's CUDA, then exposes it as batched NumPy, JAX or PyTorch
+calls. No CUDA code to write.
 ```shell
-pip install grid-rbd            # code generator + numpy backend + grid-generate / grid-spherize CLIs
-pip install "grid-rbd[jax]"     # + JAX FFI surface   (install a CUDA jax wheel yourself)
-pip install "grid-rbd[torch]"   # + torch backend     (install a CUDA torch wheel yourself)
-pip install "grid-rbd[all]"     # jax + torch
+pip install grid-rbd            # code generator + NumPy backend + grid-generate CLI
+pip install "grid-rbd[jax]"     # or "grid-rbd[torch]", "grid-rbd[all]"
 ```
+```python
+import numpy as np, grid_rbd
+robot = grid_rbd.load_robot("grid_assets/robots/iiwa14.urdf",
+                            algorithm_list=["forward_dynamics"], enable_mujoco_kernels=False)
+q = np.zeros((8, robot.nq), dtype=np.float32)
+qd, tau = (np.zeros((8, robot.nv), dtype=np.float32) for _ in range(2))
+print(robot.forward_dynamics(q, qd, tau).shape)  # (8, 7)
+```
+→ [Python wrappers](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/python_wrappers.html) ·
+[installation](https://a2r-lab.org/GRiD/docs/user_guide/getting_started/installation.html)
 
-Or work from a checkout (creates a local venv, editable install, registers the CLIs):
+### Power user: header-only CUDA
+Generate one self-contained `grid.cuh` and `#include` it in your own kernels. Needs only the generator and `nvcc`;
+no per-robot `.so`, no Python at runtime.
 ```shell
-git clone --recursive https://github.com/A2R-Lab/GRiD.git && cd GRiD
-bash install/base_install.sh
-source .venv/bin/activate
+pip install grid-rbd
+grid-generate robot.urdf -o grid.cuh        # -f floating base, --algorithm-list to trim
+nvcc -arch=sm_90 -std=c++17 my_kernel.cu    # the header vendors its GLASS linear algebra
 ```
+→ [Generate CUDA for a robot](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/codegen.html) ·
+[`examples/cuda/`](https://github.com/A2R-Lab/GRiD/tree/main/examples/cuda)
 
-Generate CUDA code for your robot (ten ready-to-use URDFs ship in
-`grid_assets/robots/` — iiwa14, go2, fr3, g1, h1_2, …):
-```shell
-# Via the installed CLI (works on a clean base install):
-grid-generate grid_assets/robots/iiwa14.urdf                # arm, fixed base
-grid-generate grid_assets/robots/go2.urdf -f                # quadruped, floating base
-grid-generate path/to/robot.urdf [-t EE_JOINT_NAME] [-n NAMESPACE] [-f] [--algorithm-list LIST] [-o OUT.cuh]
+Installing needs no GPU or compiler; registering a robot compiles its CUDA on a machine with a compatible NVIDIA
+GPU, CUDA toolkit and C++17 host compiler (the first load can take minutes; later loads reuse the cache). To develop
+GRiD, or to use the sample URDFs in `grid_assets/robots/`, work from a checkout instead: `git clone --recursive
+https://github.com/A2R-Lab/GRiD.git && cd GRiD && bash install/base_install.sh && source .venv/bin/activate`.
 
-# Or via a hardcoded zero-config example (these two pull their URDFs from the
-# robot_descriptions package — a DEV dependency; install install/requirements-dev.txt first):
-python examples/codegen/generate_iiwa14.py       # iiwa14 fixed base
-python examples/codegen/generate_go2_floating.py # Go2 floating base
-```
+## Where things are documented
 
-Validate and debug:
-```shell
-# Print CPU reference values for all algorithms:
-python examples/codegen/print_reference_values.py path/to/robot.urdf
-
-# Compile and run the CUDA print kernel (requires nvcc):
-python examples/codegen/print_grid.py path/to/robot.urdf
-```
-
-Write your own CUDA kernel against the generated header:
-```shell
-# Step-by-step walkthrough + compiling/validated example kernels:
-#   examples/cuda/README.md   (and examples/cuda/wrapper_types.md)
-bash examples/cuda/build_and_validate.sh   # generate → nvcc → run → validate
-```
-
-> **Requires a C++17-capable host compiler** (e.g., g++ ≥ 7, clang++ ≥ 5).
-> The benchmark and codegen runtime compile with `-std=c++17` — needed for
-> inline variables in the bench common header. With the `[torch]` extra the
-> per-robot `.so` follows torch's ATen requirement (`-std=c++20` from torch
-> 2.14; needs CUDA 12+ and g++ ≥ 10).
-
-## Usage
-+ `grid-generate PATH_TO_URDF` — generate `grid.cuh`; add `-d` for full debug mode, `-f` for floating base, `-t JOINT_NAME` to target a specific end-effector joint
-+ `python examples/codegen/print_reference_values.py PATH_TO_URDF` — print CPU reference values for all algorithms to validate CUDA output
-+ `python examples/codegen/print_grid.py PATH_TO_URDF` — compile and run the CUDA print kernel against the generated header
-
-## Floating-Base Conventions
-Floating-base parsing and the Python reference path now accept a public
-floating-base convention flag. The default is Pinocchio-compatible:
-
-+ `floating_base_convention="pinocchio"`:
-  `q = [x, y, z, qx, qy, qz, qw]`,
-  `v = [vx, vy, vz, wx, wy, wz]`
-+ `floating_base_convention="legacy"`:
-  `q = [x, y, z, qw, qx, qy, qz]`,
-  `v = [wx, wy, wz, vx, vy, vz]`
-
-GRiD normalizes both public conventions into one shared internal floating-base
-representation, so the code generator and `RBDReference` stay consistent under
-the hood while callers can choose the input/output ordering they need.
-
-## Developer Testing
-
-Contributor-facing test workflows (floating-convention regression suite, CUDA
-equivalence env overrides, shared-memory targets) moved to
-[CONTRIBUTING.md](https://github.com/A2R-Lab/GRiD/blob/main/CONTRIBUTING.md#developer-testing); the receipt/verification
-policy lives in the
-[CUDA validation guide](https://a2r-lab.org/GRiD/user_guide/tutorials/cuda_validation.html).
-
-
-## Current Support
-GRiD supports open-chain and tree models with revolute, prismatic, fixed,
-floating, mimic, and additional joint types. Support is operation-specific;
-see the [joint and algorithm restrictions](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/cuda_support_status.html)
-and [backend inventory](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/backend_coverage.html).
-
-GRiD implements the full modern rigid-body-dynamics stack: RNEA / CRBA / ABA /
-Minv / forward dynamics; analytical first-order gradients (ID + FD, incl.
-external-force gradients); the second-order derivatives (IDSVA-SO both frames
-with a codegen-time dispatcher, FDSVA-SO); the kinematics family (EE pose /
-Jacobian / Hessian, general-frame `frame_jacobian`/`J̇`/OSC inertia, runtime
-multi-EE targets); integrators + integrator gradients; the centroidal family
-(CoM, CCRBA, `dccrba`, CMM time-variation, Coriolis matrix, energy/ID
-regressors); the inertial-parameter (π) family (the joint-torque regressor
-`Y` with its analytic gradient ∂Y/∂(q,v) and the FD parameter gradient
-∂q̈/∂π); contact-frame wrench mapping (`contact_fext` /
-`register_robot(contact_frames=...)`); runtime tool/payload welding
-(`attach_tool`/`tool_fext`); runtime multi-target positions; the collision
-family (two-tier `config_free`); a trajectory-optimization `grid_plant`
-cost/step layer; and
-runtime-mutable inertia/transform/joint-dynamics tables. The **complete
-per-algorithm catalog with citations and per-feature detail** lives in the
-[CUDA support status page](https://a2r-lab.org/GRiD/user_guide/tutorials/cuda_support_status.html).
-
-`RBDReference` additionally provides numpy reference oracles — validated against [Pinocchio](https://github.com/stack-of-tasks/pinocchio) — for generalized gravity, nonlinear effects, kinetic/potential/mechanical energy, the Coriolis matrix, the centroidal quantities (CoM, CoM Jacobian, CCRBA, centroidal momentum) and their derivatives (the analytic `dccrba` ∂A/∂q tensor — replacing the prior finite-difference oracle — and `cmm_time_variation` Ȧ), the inverse-dynamics and kinetic/potential-energy regressors, the general-frame Jacobian / J̇ / OSC inertia described above, and the plant/cost/barrier layer above.
-
-**Dual-surface equivalence.** Every algorithm exists on two surfaces that are tested for numerical agreement: the `RBDReference` numpy implementation (the oracle, checked against Pinocchio) and the generated CUDA C++ kernels (checked against that same numpy reference). This keeps the GPU codegen honest against an independent, Pinocchio-validated baseline.
-
-**Mimic-joint support:** per-robot gating is now essentially eliminated. Non-gradient algorithms (RNEA, forward dynamics, ABA, CRBA, …) work for robots with mimic joints, and every **gradient** emits a correct mimic-reduced result on **both** the fixed and floating base: `inverse_dynamics_gradient`/`forward_dynamics_gradient`, `end_effector_pose_gradient`/`end_effector_pose_hessian`, the second-order `idsva_so`/`fdsva_so`, the external-force gradients (`f_ext_gradient`), and the integrator gradients. The centroidal family — `com`, `ccrba`, `energy`, and the centroidal derivatives `dccrba`/`cmm_time_variation` — now also runs on mimic robots (the per-body Jacobian and per-unit motion columns carry the mimic multiplier α, validated against the mimic-aware reference). `dccrba`/`cmm_time_variation` additionally run on big floating-base robots (e.g. `g1`/`h1_2`-floating) via the sweep-pool spill path. No algorithm raises `NotImplementedError` for mimic robots anymore.
-
-Additional algorithms and features are in development. If you have a particular algorithm or feature in mind please let us know by posting a GitHub issue. We'd also love your collaboration in implementing the Python reference implementation of any algorithm you'd like implemented!
+| Topic | Site page |
+|-------|-----------|
+| Everyday tasks, index of everything | [How do I…?](https://a2r-lab.org/GRiD/docs/how_do_i.html) |
+| Python API (`register_robot`/`load_robot`, backends, env knobs, fp64) | [Python wrappers](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/python_wrappers.html) |
+| `grid-generate` CLI, the generated header, debug/print helpers | [Generate CUDA for a robot](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/codegen.html) |
+| Floating-base conventions (`pinocchio` / `legacy` orderings), URDF parsing | [URDF API](https://a2r-lab.org/GRiD/docs/api_reference/urdf.html) |
+| Supported joints, algorithms and restrictions; per-backend inventory | [CUDA support status](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/cuda_support_status.html) · [backend coverage](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/backend_coverage.html) |
+| C++ API layers (`*_device` / `*_kernel` / host wrapper) | [codegen architecture](https://a2r-lab.org/GRiD/docs/user_guide/concepts/codegen_architecture.html) |
+| Tests, signed GPU receipts, fixing a red receipt CI job | [CUDA validation](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/cuda_validation.html) |
+| Benchmark harness, bench-only troubleshooting (e.g. `--ptxas-opt-level`) | [benchmarks](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/benchmarks.html) |
+| Release measurements and their method | [release measurements](https://a2r-lab.org/GRiD/docs/release_measurements.html) |
+| Contributing, adding an algorithm | [contribution guidelines](https://a2r-lab.org/GRiD/docs/contribution_guidelines.html) · [adding an algorithm](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/adding_an_algorithm.html) · [CONTRIBUTING.md](https://github.com/A2R-Lab/GRiD/blob/main/CONTRIBUTING.md) |
 
 ## Repo map
 
-| Directory | Owns | Entry doc |
-|-----------|------|-----------|
-| `grid_codegen/` | the code-generation engine: emits `grid.cuh` AND the checked-in generated binding regions, all driven by the `abi_specs.py` table | [codegen architecture](https://a2r-lab.org/GRiD/user_guide/concepts/codegen_architecture.html) |
-| `bindings/` | the `grid-rbd` Python package (numpy/jax/torch handles over a cached per-robot `.so`) | [`bindings/README.md`](https://github.com/A2R-Lab/GRiD/blob/main/bindings/README.md) · [agent guide](https://github.com/A2R-Lab/GRiD/blob/main/bindings/examples/AGENT_INTEGRATION_GUIDE.md) |
-| `external/` | the peer-product submodules: `GLASS` (GPU linear algebra), `RBDReference` (Pinocchio-validated numpy oracle), `URDFParser` | each submodule's README |
-| `examples/` | the start-here track: `notebooks/` (Python tour), `codegen/`, `cuda/` | [`examples/README.md`](https://github.com/A2R-Lab/GRiD/blob/main/examples/README.md) |
-| `test/` | pytest suites + the split-suite/receipt machinery (`run_split_suite.py`, `run_gpu_proof.sh`, `compile_sched.py`) | [CUDA validation](https://a2r-lab.org/GRiD/user_guide/tutorials/cuda_validation.html) |
-| `config/` | ten sample URDFs (`robot_assets/`) + tuned per-GPU launch configs (`launch_configs/`) + `autotune_robot.sh` | `grid_assets/robots/URDF_SOURCES.md` |
-| `docs/` | the Sphinx site (`source/`) + `agent_debugging_guide.md` (the bug-class bible) | [docs site](https://a2r-lab.org/GRiD/) |
-| `install/` | install scripts (`base_install.sh`, `developer_install.sh`) + requirements files | [installation guide](https://a2r-lab.org/GRiD/user_guide/getting_started/installation.html) |
+| Directory | Owns |
+|-----------|------|
+| `grid_codegen/` | the code-generation engine: emits `grid.cuh` and the checked-in generated binding regions, driven by the `abi_specs.py` table |
+| `bindings/` | the `grid-rbd` Python package (NumPy/JAX/torch handles over a cached per-robot `.so`) — [`bindings/README.md`](https://github.com/A2R-Lab/GRiD/blob/main/bindings/README.md) |
+| `grid_assets/` | ten sample URDFs (`robots/`) + tuned per-GPU launch configs (`launch_configs/`) |
+| `test/` | pytest suites + the split-suite/receipt machinery |
+| `examples/` | `notebooks/` (Python tour), `codegen/`, `cuda/` — [`examples/README.md`](https://github.com/A2R-Lab/GRiD/blob/main/examples/README.md) |
+| `docs/` | the Sphinx site (`source/`), the cover page (`landing/`), `agent_debugging_guide.md`, `design_history/` |
+| `external/` · `install/` | peer submodules (`GLASS`, `RBDReference`, `URDFParser`) · install scripts and requirements files |
 
-## C++ API
-The generated external interface has three layers: `*_device` (algorithm-specific
-buffer and scratch contract, with placement owned by the device function),
-`*_kernel` (global entry point with batched timestep loop), and the
-host wrapper (CPU launcher with H↔D copies). Internal `*_inner` helpers support
-composition without repeating shared setup. See the
-[codegen architecture docs](https://a2r-lab.org/GRiD/user_guide/concepts/codegen_architecture.html)
-for the rationale and concrete signatures.
+## Performance
 
-## Python API (`grid-rbd`)
+![Core-operation speedups against seven baseline modes, with timing boundaries and fp64 exceptions labeled.](https://raw.githubusercontent.com/A2R-Lab/GRiD/main/docs/source/_static/release/speedup_core.png)
 
-For Python users the `grid-rbd` package (in [`bindings/`](https://github.com/A2R-Lab/GRiD/tree/main/bindings/)) wraps
-the per-robot codegen behind a register-then-run UX with `numpy`, `jax`,
-and `torch` backends. It ships in the same `grid-rbd` distribution as the code generator, so
-`pip install grid-rbd` (or `pip install -e .` from a checkout, what `install/base_install.sh` runs)
-installs the codegen toolkit *and* the `grid_rbd` wrapper together. The base install is minimal;
-pick a backend extra for the surface you want:
-
-```bash
-pip install grid-rbd            # base: numpy backend only
-pip install "grid-rbd[jax]"     # + JAX FFI surface
-pip install "grid-rbd[torch]"   # + torch backend (CUDA wheel matching your GPU arch)
-pip install "grid-rbd[all]"     # jax + torch
-```
-
-See the [install matrix in `bindings/README.md`](https://github.com/A2R-Lab/GRiD/blob/main/bindings/README.md#install-editable-from-a-grid-checkout)
-for what each extra unlocks (and the torch CUDA-wheel note).
-
-```python
-import grid_rbd
-
-# numpy (default), jax, or torch; urdf_string= also accepted instead of urdf_path
-handle = grid_rbd.register_robot("iiwa14", urdf_path="iiwa.urdf", backend="torch")
-
-qdd = handle.forward_dynamics(q, qd, u)   # autograd-aware torch.Tensor
-qdd.sum().backward()                      # gradients flow to q, qd, u
-```
-
-The `torch` backend exposes autograd-aware `inverse_dynamics` / `forward_dynamics` /
-`aba` / `integrator` (analytic backward passes) plus CUDA-Graphs capture,
-and the handle also surfaces the `grid_plant` cost/barrier methods. `inverse_dynamics`
-(alias `rnea`) takes an optional `qdd=` (the
-autograd gradient is qdd-aware, returning the correct ∂τ/∂(q,q̇) including the
-∂(M·q̈)/∂q term), and all three backends expose the value ops `coriolis_matrix`,
-`kinetic_energy_regressor`, `potential_energy_regressor`, `dccrba`, and
-`cmm_time_variation` (forward-only on jax/torch). The π-regressor family
-(`inverse_dynamics_regressor`, the differentiable
-`inverse_dynamics_wrt_params`/`forward_dynamics_wrt_params`, and the
-`forward_dynamics_parameter_gradient` ∂q̈/∂π), runtime tool welding
-(`attach_tool`/`tool_fext`, via `enable_tool=True`), and multi-contact
-wrench mapping (`contact_fext`, via `register_robot(contact_frames=[...])`)
-are bound as well. For true fp64 compute build with
-`register_robot(..., dtype="float64")` (its own cache entry); `allow_fp64=True`
-is only the numpy handle's fp64-in/fp64-out convenience cast on an fp32 build
-(ignored when `dtype="float64"`). See
-[`bindings/README.md`](https://github.com/A2R-Lab/GRiD/blob/main/bindings/README.md) and the
-[Python wrappers docs](https://a2r-lab.org/GRiD/user_guide/tutorials/python_wrappers.html).
+Release measurements (September–October 2026, one NVIDIA RTX 5090 + Intel Core Ultra 9 285K): RNEA, its analytical gradient
+and Hessian on iiwa14, go2 and G1 at batch sizes 16–1024; ratios are baseline time over GRiD time, above 1× favors GRiD.
+Method, every timing boundary and the caveats: [release measurements](https://a2r-lab.org/GRiD/docs/release_measurements.html);
+the [benchmark harness](https://github.com/A2R-Lab/GRiD/tree/main/test/benchmarks/) reproduces the collection.
 
 ## Citing GRiD
-To cite GRiD in your research, please use the following bibtex for our paper ["GRiD: GPU-Accelerated Rigid Body Dynamics with Analytical Gradients"](https://brianplancher.com/publication/grid/):
+Please cite our paper ["GRiD: GPU-Accelerated Rigid Body Dynamics with Analytical Gradients"](https://a2r-lab.org/publication/grid/):
 ```
 @inproceedings{plancher2022grid,
   title={GRiD: GPU-Accelerated Rigid Body Dynamics with Analytical Gradients}, 
@@ -243,57 +112,8 @@ To cite GRiD in your research, please use the following bibtex for our paper ["G
 }
 ```
 
-## Performance
-Release measurements from the 27 September 2026 run on one NVIDIA RTX 5090 with an Intel Core Ultra 9 285K cover RNEA,
-its analytical gradient (∇RNEA), and its analytical Hessian (∇²RNEA) on iiwa14 (fixed base, 7 velocities), go2
-(floating base, 18), and G1 (floating base, 35) at batch sizes 16–1024. The
-[release measurements](https://a2r-lab.org/GRiD/release_measurements.html) page gives the method, every timing boundary, and the
-caveats; the [benchmark harness](https://github.com/A2R-Lab/GRiD/tree/main/test/benchmarks/) reproduces the collection.
-
-![Core-operation speedups against seven baseline modes, with timing boundaries and fp64 exceptions labeled.](https://raw.githubusercontent.com/A2R-Lab/GRiD/main/docs/source/_static/release/speedup_core.png)
-
-Ratios are baseline time divided by GRiD time; above 1× favors GRiD. Each column names its timing boundary: GRiD host
-calls including copies against the CPU libraries, and GRiD compute-only calls against the GPU libraries' resident
-calls. `*` marks cells where the evaluated baseline path required fp64 and `~` a side whose run means span more than
-1.5×. Colors are clipped at 100×.
-
-![Clustered GRiD, Pinocchio and MuJoCo timing bars on three robots; Hessians compare GRiD with Pinocchio's standard API only.](https://raw.githubusercontent.com/A2R-Lab/GRiD/main/docs/source/_static/release/stacked_core.png)
-
-Microseconds per complete batch on a log axis. GRiD's bar splits into its CUDA compute-only call, the GPU–CPU I/O
-increment, and the JAX wrapper increment. These are differences of measured call times, not isolated measurements of
-each component.
-
-![Call wall times for RNEA, its gradient and its Hessian on three robots: a no-I/O group (CUDA Device, PyTorch resident, JAX resident) beside a host-call group (C++ Host, NumPy, PyTorch, JAX); Python host bars are solid to the allocate-once call and hatched up to the default call.](https://raw.githubusercontent.com/A2R-Lab/GRiD/main/docs/source/_static/release/wrappers.png)
-
-Call wall times through each API boundary: native CUDA, the C++ host call, NumPy, PyTorch, and JAX. Pick the
-boundary your application uses. For the Python surfaces the solid bar is the call with its buffers allocated once
-and reused (measured 2 October 2026), and the hatched cap reaches the default call, which allocates its output every
-time. With reused buffers, NumPy and PyTorch land within a few percent of the C++ host call on large outputs.
-
-## Installation
-The Quick Start above covers the common-case install. For CUDA Toolkit
-setup, developer dependencies (Pinocchio, robot_descriptions, benchmarks),
-and Docker, see the full
-[installation guide](https://a2r-lab.org/GRiD/user_guide/getting_started/installation.html).
-
-## Troubleshooting
-
-### Bench harness `nvcc` hangs on floating-base kernels (sm_8x)
-
-On Ampere (sm_86 / CUDA 12.6) the bench harness can wedge `nvcc` /
-`ptxas` at 100 % CPU when compiling heavy floating-base GRiD harnesses.
-Pass `--ptxas-opt-level 2` to `test/benchmarks/run_multi_version.py` — it
-forwards `-Xptxas -O2` to floating-base compiles only. Blackwell (sm_120) does
-not hit this. Typical user code that includes `grid.cuh` and calls the
-batch host wrappers (e.g. `grid::forward_dynamics<T>(...)`) does not
-trigger the hang — it's specific to the timing-bench template surface.
-
-
-## Contributing
-
-Contributions welcome — see [CONTRIBUTING.md](https://github.com/A2R-Lab/GRiD/blob/main/CONTRIBUTING.md) for the
-workflow (and [CLAUDE.md](https://github.com/A2R-Lab/GRiD/blob/main/CLAUDE.md) for the repo conventions AI agents and
-humans both follow).
+## License
+MIT — see [LICENSE](https://github.com/A2R-Lab/GRiD/blob/main/LICENSE).
 
 ## Contributors
 
@@ -306,7 +126,7 @@ humans both follow).
       <td align="center" valign="top" width="20%"><a href="https://github.com/plancherb1"><img src="https://avatars.githubusercontent.com/plancherb1?s=100" width="100px;" alt="Brian Plancher"/><br /><sub><b>Brian Plancher</b></sub></a><br /></td>
       <td align="center" valign="top" width="20%"><a href="https://github.com/Z4KH"><img src="https://avatars.githubusercontent.com/Z4KH?s=100" width="100px;" alt="Zachary Pestrikov"/><br /><sub><b>Zachary Pestrikov</b></sub></a><br /></td>
       <td align="center" valign="top" width="20%"><a href="https://github.com/kawotwi"><img src="https://avatars.githubusercontent.com/kawotwi?s=100" width="100px;" alt="Kwamena A"/><br /><sub><b>Kwamena A</b></sub></a><br /></td>
-      <td align="center" valign="top" width="20%"><a href="https://github.com/harvard-edge/cs249r_book/graphs/contributors"><img src="https://www.gravatar.com/avatar/b619b0ff13333ce2a22bb110eda8f7a9?d=identicon&s=100?s=100" width="100px;" alt="Danelle Tuchman"/><br /><sub><b>Danelle Tuchman</b></sub></a><br /></td>
+      <td align="center" valign="top" width="20%"><a href="https://github.com/A2R-Lab/GRiD/graphs/contributors"><img src="https://www.gravatar.com/avatar/b619b0ff13333ce2a22bb110eda8f7a9?d=identicon&s=100?s=100" width="100px;" alt="Danelle Tuchman"/><br /><sub><b>Danelle Tuchman</b></sub></a><br /></td>
       <td align="center" valign="top" width="20%"><a href="https://github.com/anncli"><img src="https://avatars.githubusercontent.com/anncli?s=100" width="100px;" alt="Ann Li"/><br /><sub><b>Ann Li</b></sub></a><br /></td>
     </tr>
     <tr>
@@ -318,8 +138,8 @@ humans both follow).
     </tr>
     <tr>
       <td align="center" valign="top" width="20%"><a href="https://github.com/pruyontrarakk"><img src="https://avatars.githubusercontent.com/pruyontrarakk?s=100" width="100px;" alt="pruyontrarakk"/><br /><sub><b>pruyontrarakk</b></sub></a><br /></td>
-      <td align="center" valign="top" width="20%"><a href="https://github.com/harvard-edge/cs249r_book/graphs/contributors"><img src="https://www.gravatar.com/avatar/b6a2a74133224e85e9714e282a1576df?d=identicon&s=100?s=100" width="100px;" alt="Kimiya Shahamat"/><br /><sub><b>Kimiya Shahamat</b></sub></a><br /></td>
-      <td align="center" valign="top" width="20%"><a href="https://github.com/harvard-edge/cs249r_book/graphs/contributors"><img src="https://www.gravatar.com/avatar/b6a2a74133224e85e9714e282a1576df?d=identicon&s=100?s=100" width="100px;" alt="Kimiya Shahamat"/><br /><sub><b>Kimiya Shahamat</b></sub></a><br /></td>
+      <td align="center" valign="top" width="20%"><a href="https://github.com/A2R-Lab/GRiD/graphs/contributors"><img src="https://www.gravatar.com/avatar/b6a2a74133224e85e9714e282a1576df?d=identicon&s=100?s=100" width="100px;" alt="Kimiya Shahamat"/><br /><sub><b>Kimiya Shahamat</b></sub></a><br /></td>
+      <td align="center" valign="top" width="20%"><a href="https://github.com/A2R-Lab/GRiD/graphs/contributors"><img src="https://www.gravatar.com/avatar/b6a2a74133224e85e9714e282a1576df?d=identicon&s=100?s=100" width="100px;" alt="Kimiya Shahamat"/><br /><sub><b>Kimiya Shahamat</b></sub></a><br /></td>
     </tr>
   </tbody>
 </table>

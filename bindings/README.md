@@ -6,8 +6,9 @@ Python wrappers for GPU-accelerated rigid body dynamics on top of
 ```python
 import grid_rbd
 
-# One-time per (robot, options, GRiD version, CUDA arch): ~30s-15min.
-# Generates grid.cuh, compiles to .so, caches under ~/.cache/grid-rbd/.
+# One-time per (robot, options, GRiD version, CUDA arch) — build times are
+# tabulated on the Fast Robot Setup page. Generates grid.cuh, compiles to
+# .so, caches under ~/.cache/grid-rbd/.
 handle = grid_rbd.register_robot(
     name="iiwa14",
     urdf_path="iiwa.urdf",      # or urdf_string="<inline URDF text>"
@@ -23,9 +24,9 @@ M   = handle.crba(q)
 
 Full reference (gravity convention, cache layout, EE-target selection,
 JAX FFI, etc.) lives in the
-[main docs](https://a2r-lab.github.io/GRiD/).
+[main docs](https://a2r-lab.org/GRiD/).
 
-## Status — v0.5
+## Status — 0.5.1 (on PyPI as `grid-rbd`)
 
 The full method surface — core dynamics/kinematics, analytical gradients, the
 second-order derivatives, the centroidal / energy / general-frame value ops
@@ -42,10 +43,10 @@ validated against
 [`RBDReference`](https://github.com/A2R-Lab/RBDReference) at float32 precision,
 with operation-specific backend coverage. In particular, `*_wrt_params` and
 `forward_dynamics_parameter_gradient` are JAX/PyTorch interfaces, not NumPy
-handle methods. See the [backend inventory](https://a2r-lab.github.io/GRiD/docs/user_guide/tutorials/backend_coverage.html).
+handle methods. See the [backend inventory](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/backend_coverage.html).
 The per-method table (shapes, arguments,
 conventions) lives in the
-[Python wrappers docs](https://a2r-lab.github.io/GRiD/user_guide/tutorials/python_wrappers.html)
+[Python wrappers docs](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/python_wrappers.html)
 (`docs/source/user_guide/tutorials/python_wrappers.rst` in-repo).
 
 Shape legend: `NJ = num_joints (== num_pos == nq)`, `NV = num_vel (tangent /
@@ -82,7 +83,7 @@ cross-checked against the ABI specification by a CPU test.
 
 ## JAX FFI (`grid_rbd[jax]`)
 
-The `[jax]` extra (see the [install matrix](#install-editable-from-a-grid-checkout))
+The `[jax]` extra (see [Install](#install))
 enables the JAX-side bridge, which shares the same per-robot `.so` cache.
 Methods are exposed via `jax.ffi.ffi_call` and run device-resident on
 JAX-supplied CUDA streams — no host round-trip — so they slot directly into
@@ -97,13 +98,13 @@ def step(q, qd, u):
     return handle.forward_dynamics(q, qd, u)
 ```
 
-See the [Python wrappers docs](https://a2r-lab.github.io/GRiD/user_guide/tutorials/python_wrappers.html)
+See the [Python wrappers docs](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/python_wrappers.html)
 for the JAX surface details (autograd-aware methods, `f_ext` parity, the
 π-regressor VJP path, and the forward-only value ops).
 
 ## PyTorch backend (`backend="torch"`)
 
-The `[torch]` extra (see the [install matrix](#install-editable-from-a-grid-checkout))
+The `[torch]` extra (see [Install](#install))
 enables the torch backend. `register_robot(..., backend="torch")` returns a
 `TorchRobotHandle` whose methods return `torch.Tensor`; `inverse_dynamics` /
 `forward_dynamics` / `aba` / `integrator` are autograd-aware (analytic backward
@@ -133,7 +134,7 @@ qdd.sum().backward()                 # gradients flow to q, qd, u
 ## Everything else — see the docs
 
 The full reference for the rest of the surface lives in the
-[Python wrappers docs](https://a2r-lab.github.io/GRiD/user_guide/tutorials/python_wrappers.html)
+[Python wrappers docs](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/python_wrappers.html)
 (`docs/source/user_guide/tutorials/python_wrappers.rst` in-repo):
 
 * the per-method table (shapes, `qdd=`-aware gradients, `ee_joint_names`,
@@ -157,18 +158,28 @@ The full reference for the rest of the surface lives in the
   for `pip install grid-rbd` itself.
 * numpy ≥ 1.23
 
-## Install (editable, from a GRiD checkout)
+## Install
 
-`grid_rbd` ships as part of the single repo distribution, so `pip install -e .`
-installs the codegen toolkit and the wrapper together; each GPU backend is an
-opt-in extra on top of the numpy base. Pick the row for the wrapper surface you want:
+`grid_rbd` ships inside the `grid-rbd` distribution on PyPI (0.5.1: Linux
+x86-64 wheels and an sdist, CPython 3.10–3.12) together with the code
+generator and the `grid-generate` / `grid-spherize` CLIs. Each GPU backend is
+an opt-in extra on top of the numpy base; pick the row for the wrapper surface
+you want:
+
+```bash
+pip install grid-rbd            # base: numpy backend only
+pip install "grid-rbd[jax]"     # + JAX FFI surface (grid_rbd.jax)
+pip install "grid-rbd[torch]"   # + torch backend (backend="torch")
+pip install "grid-rbd[all]"     # jax + torch (both backends)
+```
+
+To develop GRiD (or to use the checkout's vendored robots under
+`grid_assets/robots/`), install editable from a checkout instead — same extras,
+plus `[dev]` for the bindings' own test suite:
 
 ```bash
 cd path/to/GRiD
-pip install -e "."          # base: numpy backend only
-pip install -e ".[jax]"     # + JAX FFI surface (grid_rbd.jax)
-pip install -e ".[torch]"   # + torch backend (backend="torch")
-pip install -e ".[all]"     # jax + torch (both backends)
+pip install -e ".[all]"     # or "." / ".[jax]" / ".[torch]"
 pip install -e ".[dev]"     # all backends + pytest (run the bindings' tests)
 ```
 
@@ -186,15 +197,16 @@ Notes:
   `pip install` time** — pip only stages Python deps; the per-robot `.so` is
   built (and cached) on first use.
 * **The GPU wheels are the user's choice**, mirroring `jax` vs `jax[cuda]`: we
-  pin only the minimum API version, never a CUDA-variant. For `[torch]` you must
-  install a torch **CUDA wheel matching the GPU arch** (e.g. a **cu128** build
-  for sm_120 / RTX 5090 — a cu124 wheel maxes at sm_90 and cannot launch on
-  sm_120). For `[jax]`, install `jax[cuda12]` for your platform.
-* The heavy comparator/oracle stack (Pinocchio / mjx / frax / bard) is **not**
-  in any extra here — that's a developer concern carried by
-  `install/requirements-dev.txt` / `install/developer_install.sh`.
-
-A PyPI release will follow once the surface is feature-complete.
+  pin only the minimum API version, never a CUDA-variant. For `[jax]`, install
+  `jax[cuda12]` for your platform; for `[torch]`, a torch CUDA wheel matching
+  the GPU arch (see the compatibility note in the PyTorch section above).
+* `[dev]` is `[all]` + pytest, nothing more. The Pinocchio oracle (`pin<4`
+  via cmeel) comes **only** from `install/requirements-dev.txt`, which
+  `install/developer_install.sh` installs; that script also installs
+  `jax[cuda12]`, a cu128 torch wheel and `frax`, and builds CppADCodeGen for
+  the Pinocchio benchmark column. mjx and BARD are installed by no script —
+  add them by hand when you want those benchmark columns
+  (`test/benchmarks/README.md`).
 
 ### Precompile (AOT cache-warming)
 

@@ -877,14 +877,14 @@ def _run_runner(executable: Path, sample_input: str, compile_cmd: list[str], num
         # ancestor-pair scratch can't be independently spilled (168784 B > the
         # ~101 KB cap); h1_2's PRODUCTION SO path is world-frame, which fits and
         # passes. Closing the body-frame gap = the deferred de-alias refactor in
-        # docs/idsva_so_inner_refactor_notes.md (gated on the perf sweep).
+        # docs/design_history/idsva_so_inner_refactor_notes.md (gated on the perf sweep).
         if "shared-memory request" in combined_output and "this device supports" in combined_output:
             pytest.skip(
                 "Kernel shared-memory request exceeds this GPU's per-block cap even "
                 "at the most-spilled tier (hardware limit, not a bug). See:\n"
                 f"  stderr: {result.stderr.strip()}\n"
                 "For the body-frame IDSVA-SO case this is the deferred ancestor-scratch "
-                "de-alias (docs/idsva_so_inner_refactor_notes.md); world-frame is the "
+                "de-alias (docs/design_history/idsva_so_inner_refactor_notes.md); world-frame is the "
                 "production path and fits."
             )
         # Register-pressure launch limit: at the robot's MAX_PERF_LEVEL_THREADS

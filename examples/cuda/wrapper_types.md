@@ -1,7 +1,9 @@
-# GRiD wrapper-type tour: `_inner` → `_device` → `_kernel` → `_host` → batch
+# GRiD wrapper-type tour: `_inner` → `_device` → `_kernel` → host function → batch
 
-For every algorithm, the GRiD codegen emits the **same five layers** of surface,
-each wrapping the one before. Picking the right layer is the main decision when
+For every algorithm, the GRiD codegen emits the **same three layers** of surface
+— `_device`, `_kernel` and the unsuffixed host function — each wrapping the one
+before, on top of an internal `_inner` helper; the batch launch convention is
+the fifth stop on this tour but not a separate symbol. Picking the right layer is the main decision when
 you write CUDA against `grid.cuh`. This tour uses `inverse_dynamics` (companion to
 `inverse_dynamics_kernel_example.cu`); every other algorithm follows the identical
 shape with its own macro prefix, which matches the verbose function name
@@ -57,13 +59,14 @@ holds `s_q_qd`/`s_c`/`s_vaf` for the load/store).
 **Reach for it when:** you want the batched launcher but are managing the device
 buffers + memcpy yourself, and don't want the `gridData` bookkeeping.
 
-### 4. `_host` — gridData orchestration + memcpy  (`__host__`)
+### 4. the host function (no suffix) — gridData orchestration + memcpy  (`__host__`)
 ```cpp
 inverse_dynamics<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/true>(
     hd_data, d_robotModel, gravity, num_timesteps,
     block_dimms, thread_dimms, streams);
 ```
-The top of the stack. Takes a `grid::gridData<T>` (from `init_gridData`) that
+The top of the stack, spelled `grid::<algo><T, ...>` with no suffix (there is
+no `_host` symbol). Takes a `grid::gridData<T>` (from `init_gridData`) that
 bundles all host+device input/output pointers, async-copies `h_*` → `d_*`,
 launches `_kernel`, copies results `d_*` → `h_*`. Template flags select the
 qdd-input and compressed-memory variants.
@@ -72,12 +75,12 @@ qdd-input and compressed-memory variants.
 no CUDA plumbing — closest to what `grid_rbd` does under the hood. See the
 `#else` (fixed-base) branch of `test/cuda_equivalents/cuda_equivalence_runner.cu`
 for the full `init_grid` / `init_robotModel` / `init_gridData` / `close_grid`
-lifecycle around these `_host` calls.
+lifecycle around these host calls.
 
 ### 5. batch — one block per problem
 Not a separate emitted symbol but the **launch convention**: GRiD is
 single-block-per-problem (one robot/timestep per CUDA block, never split across
-blocks). `_kernel` and `_host` bake this in via their `NUM_TIMESTEPS` block loop;
+blocks). `_kernel` and the host function bake this in via their `NUM_TIMESTEPS` block loop;
 when you write your own kernel around `_device`, you express it as
 `<<<B, threads, smem>>>` + a `for (k = blockIdx.x; k < B; k += gridDim.x)` grid
 stride (Path C in the flagship example). The single-block design means batching is
@@ -90,8 +93,8 @@ free — more blocks, same per-block code.
 | fusing GRiD into a bigger kernel, sharing `s_XImats`/scratch across algos | `_inner` |
 | writing your **own** kernel, one algo, don't want to manage scratch | `_device` |
 | want the batched `__global__` but own your device buffers + memcpy | `_kernel` |
-| just call one algorithm from host, no CUDA plumbing | `_host` |
-| many robots/timesteps | launch `B` blocks (built into `_kernel`/`_host`; grid-stride around `_device` in your own kernel) |
+| just call one algorithm from host, no CUDA plumbing | the host function |
+| many robots/timesteps | launch `B` blocks (built into `_kernel` and the host function; grid-stride around `_device` in your own kernel) |
 
 ## How it maps to the flagship example
 
@@ -103,6 +106,6 @@ hand:
 - **Path C** wraps `_device` in a `<<<B, …>>>` grid-stride kernel — the batch
   convention.
 
-Layers 3–4 (`_kernel` / `_host`) are exercised end-to-end by
+Layers 3–4 (`_kernel` / host function) are exercised end-to-end by
 `test/cuda_equivalents/cuda_equivalence_runner.cu`, which is the place to look for
 the full `gridData` lifecycle.

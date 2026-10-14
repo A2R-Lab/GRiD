@@ -14,7 +14,8 @@ development alternative), then choose the task below.
    * - **Call GRiD from Python** (numpy / JAX / torch)
      - ``grid_rbd.load_robot("robot.urdf", backend=...)`` — one call, no name
        ceremony. Guided tour: :doc:`user_guide/tutorials/python_wrappers`;
-       API: :doc:`api_reference/grid_rbd`; agent-facing lifecycle notes:
+       API: :doc:`api_reference/grid_rbd`; GPU-resident lifecycle notes
+       (stay on device, CUDA graphs, zero-copy interop):
        ``bindings/examples/AGENT_INTEGRATION_GUIDE.md``.
    * - **Generate CUDA for a new robot**
      - ``grid-generate path/to/robot.urdf [-f]`` (ten sample URDFs in
@@ -55,8 +56,9 @@ development alternative), then choose the task below.
    * - **Benchmark GRiD (or compare against Pinocchio / MJX / Warp)**
      - :doc:`user_guide/tutorials/benchmarks`.
    * - **Debug a CUDA-vs-numpy mismatch or a weird kernel failure**
-     - the `agent debugging guide <https://github.com/A2R-Lab/GRiD/blob/main/docs/agent_debugging_guide.md>`_ — the accumulated bug-class bible
-       (shared-memory init, output-convention traps, reduction
+     - the `debugging guide <https://github.com/A2R-Lab/GRiD/blob/main/docs/agent_debugging_guide.md>`_
+       (``docs/agent_debugging_guide.md``) — the catalogue of known bug
+       classes (shared-memory init, output-convention traps, reduction
        nondeterminism, launch-config pitfalls, …).
    * - **Get MuJoCo/mjx-convention inputs & outputs**
      - ``handle.mujoco.<method>(...)`` (per-call, thread-safe) or

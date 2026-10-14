@@ -20,11 +20,11 @@ runs on an RTX 5090 (`sm_120`) and is numerically validated against the
 | file | what it is |
 |------|------------|
 | `inverse_dynamics_kernel_example.cu` | the flagship — three hand-written kernels (`_device`, `_inner`, batched) |
-| `idsva_so_host_example.cu` | a heavy second-order kernel (`idsva_so`) via the `_host` surface |
+| `idsva_so_host_example.cu` | a heavy second-order kernel (`idsva_so`) via the host function (`grid::idsva_so<T, ...>`) |
 | `gen_iiwa14_header.py` | the one-line codegen invocation, wrapped in a CLI |
 | `validate.py` / `validate_so.py` | diff the examples' output against the `RBDReference` oracle |
 | `build_and_validate.sh` | generate → compile → run → validate, both examples, end to end |
-| `wrapper_types.md` | the `_inner` → `_device` → `_kernel` → `_host` → batch surface tour |
+| `wrapper_types.md` | the `_inner` → `_device` → `_kernel` → host function → batch surface tour |
 
 ## Quickstart
 
@@ -71,7 +71,7 @@ exact name** — for `inverse_dynamics` the emitted names are:
 
 | macro | used by |
 |-------|---------|
-| `grid::INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>()` | the generated `_kernel` / `_host` launchers |
+| `grid::INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>()` | the generated `_kernel` and its host launcher |
 | `grid::INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()` | the `_device` auto-scratch wrapper |
 
 > Note: the macro prefix matches the algorithm's verbose function name — the
@@ -116,9 +116,31 @@ grid::inverse_dynamics_inner<T>(
 for iiwa14; robots that need it allocate `TOPOLOGY_HELPERS_COUNT` ints.
 
 See `wrapper_types.md` for when to reach for `_inner` vs `_device` vs `_kernel`
-vs `_host`.
+vs the host function.
 
-### 4. Register the smem and launch — then CHECK errors
+### 4. Initialise the header, register the smem, launch — then CHECK errors
+
+The header needs its streams created and its kernels' dynamic shared-memory
+attributes registered once, before the first launch. Two spellings:
+
+```cpp
+// (a) aggregate — simplest; registers (and so compiles) EVERY kernel in the header
+cudaStream_t *streams = grid::init_grid<T>();
+
+// (b) per algorithm — register only what you launch (what the test runners do)
+cudaStream_t *streams = grid::init_grid_streams<T>();
+gpuErrchk(grid::init_grid_kernel_attr_inverse_dynamics_checked<T>());
+```
+
+The examples here use (a): their headers were generated with a one-entry
+`algorithm_list`, so "every kernel" is just the one. With a full-profile header
+prefer (b) — a translation unit compiles every kernel it address-takes, so
+`init_grid<T>()` makes compile time and RAM scale with the whole header rather
+than with what you call. The per-algorithm twins are named
+`init_grid_kernel_attr_<algo>_checked<T>()` (grep your header). The *Compile
+time and footprint* section of the codegen tutorial on the site has the levers.
+
+Your own kernel is not in the header, so register its shared memory yourself:
 
 ```cpp
 gpuErrchk(cudaFuncSetAttribute(my_kernel,
@@ -155,7 +177,8 @@ The single-block design scales for free — the batched kernel just wraps the sa
 
 `idsva_so_host_example.cu` runs `idsva_so` (analytical second-order inverse
 dynamics: `d2tau/dq`, `d2tau/dqd`, `d2tau/dvdq`, `dM/dq`) through the generated
-**`_host`** wrapper — the layer you reach for when you just want to *call* a heavy
+**host function** (`grid::idsva_so<T, ...>` — unsuffixed; there is no `_host`
+symbol) — the layer you reach for when you just want to *call* a heavy
 algorithm and let GRiD own the `gridData`, the host↔device memcpy, the L2-pinned
 `d_workspace`, and the launch. It validates block-by-block at `worst rel_err ≈
 2.7e-6` (float32, tol 1e-3). Its header uses the fixed-base second-order token:
@@ -164,8 +187,8 @@ algorithm and let GRiD own the `gridData`, the host↔device memcpy, the L2-pinn
 gen_all_code(algorithm_list=["idsva_so_body_frame"], output_path="grid_so.cuh")
 ```
 
-See `wrapper_types.md` for why a heavy kernel wants `_host` while your own fused
-kernel wants `_inner`/`_device`.
+See `wrapper_types.md` for why a heavy kernel wants the host function while
+your own fused kernel wants `_inner`/`_device`.
 
 ## Adapting to another robot / algorithm
 

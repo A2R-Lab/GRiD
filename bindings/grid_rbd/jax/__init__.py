@@ -1586,7 +1586,7 @@ def register_robot(
 ) -> JaxRobotHandle:
     """Register a robot for use with JAX.
 
-    ``dtype="float64"`` (Wave 2a) builds/loads the fp64 .so — methods then take
+    ``dtype="float64"`` builds/loads the fp64 .so — methods then take
     and return float64 jax arrays. Requires ``jax.config.update("jax_enable_x64",
     True)`` (checked here; without it jax would silently downcast inputs).
 

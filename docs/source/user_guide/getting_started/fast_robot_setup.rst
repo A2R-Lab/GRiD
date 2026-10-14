@@ -33,10 +33,12 @@ one URDF get distinct, stable names and distinct cache entries). Any
 ``register_robot`` keyword (``ee_joint_names``, ``max_batch_size``,
 ``algorithm_list``, ``dtype``, …) passes straight through.
 
-The three entry points
-----------------------
+The three build calls
+---------------------
 
-All three drive the same persistent cache; pick by ceremony level.
+Three calls build a robot into the cache — ``load_robot``, ``register_robot``
+and ``precompile``; all three drive the same persistent cache, so pick by
+ceremony level. ``get_robot`` (below) is the lookup, not a build.
 
 .. list-table::
    :header-rows: 1
@@ -159,13 +161,13 @@ in ``_sm<arch>`` matching ``cuda_arch`` is used (several profiles for one
 architecture resolve to the default, else the first by name — GPU *models*
 sharing an architecture are not told apart yet); if none exists the default
 profile is baked with a one-time warning (correct, just not this GPU's
-measured optimum — ``config/autotune_robot.sh`` adds one). The choice rides
+measured optimum — ``grid_assets/autotune_robot.sh`` adds one). The choice rides
 the cache key and is recorded in ``meta.json`` as ``launch_config_gpu``.
 
 What to expect: cold vs. warm
 -----------------------------
 
-**Multi-unit build (2026-10-09).** The per-robot ``.so`` is no longer one
+**Multi-unit build.** Since 0.5.1 the per-robot ``.so`` is no longer one
 ``nvcc`` translation unit: the wrapper is split into a core unit plus one unit
 per algorithm family (integrator gradients, plant step gradients, the
 second-order kernels, ...), compiled in parallel and host-linked. Wall time is
@@ -179,11 +181,12 @@ default off) passes nvcc ``--split-compile N`` on the heaviest unit(s) for
 ~3x faster compiles of that unit at ~3x its RAM; it is folded into the cache
 key.
 
-Measured 2026-10-10 on an RTX 5090 / 24-core host, ``max_batch_size=1024``,
-pin-only, one build per process into an empty cache, 8 parallel units, box
-otherwise idle. "Build RAM" is the drop in system ``MemAvailable`` during the
-build (the sum over the parallel ``nvcc`` units; the old table's per-process RSS
-no longer measures a build). A warm start is a fresh process calling
+This table is the single source for build-time numbers on this site; other
+pages link here rather than repeating them. Measured for 0.5.1 on an RTX 5090
+/ 24-core host, ``max_batch_size=1024``, pin-only (no mjx twins), one build
+per process into an empty cache, 8 parallel units, box otherwise idle. "Build
+RAM" is the drop in system ``MemAvailable`` during the build (the sum over the
+parallel ``nvcc`` units). A warm start is a fresh process calling
 ``get_robot`` and one ``forward_dynamics``; "generation-only" (a codegen edit
 with byte-identical output) is unchanged at 1–3 s.
 
@@ -193,7 +196,7 @@ with byte-identical output) is unchanged at 1–3 s.
 
    * - Robot / build
      - Cold build
-     - was (one unit, 09-24)
+     - was (one unit, 0.5.0)
      - Build RAM
      - Warm start
      - Host RSS after one call
@@ -227,7 +230,7 @@ double a build; they are not in this table (they were 27 min on go2 and 1 h 16
 min on g1 as one unit).
 
 Three things to take from the table. The multi-unit build made every cold
-build 2–9x faster (g1: 53 → 6 min), and ``algorithm_list`` still cuts the rest
+build several times faster (the two columns; g1: 53 → 6 min), and ``algorithm_list`` still cuts the rest
 (g1: 6 min → 78 s, and 6.4 → 1.1 GB of host RAM to run). The mjx twins roughly
 double a floating-base build, so ``enable_mujoco_kernels=False`` is the default
 advice for humanoids. And the host RSS of a full build is dominated by per-algorithm workspaces sized by
@@ -299,11 +302,11 @@ Note that the first ``import jax`` / ``import torch`` and the first
 ``jax.jit`` trace in a fresh process carry their own one-time framework
 costs — those belong to the framework, not to GRiD's cache.
 
-For agents and CI: the non-interactive warm
--------------------------------------------
+For CI and scripts: the non-interactive warm
+--------------------------------------------
 
-The exact one-liner to warm a robot from a script, CI job, or agent shell
-(idempotent — safe to run every time):
+The exact one-liner to warm a robot from a script or CI job (idempotent —
+safe to run every time):
 
 .. code-block:: shell
 
@@ -335,6 +338,6 @@ See also
 * :doc:`../tutorials/python_wrappers` — the full ``grid-rbd`` API tour:
   method surface, cache layout, jax/torch backends, ``grid_plant``.
 * ``bindings/examples/AGENT_INTEGRATION_GUIDE.md`` — GPU-resident usage
-  patterns for agents (stay on device, CUDA graphs, zero-copy interop).
+  patterns (stay on device, CUDA graphs, zero-copy interop).
 * `examples/notebooks/ <https://github.com/A2R-Lab/GRiD/tree/main/examples/notebooks>`_ — the guided notebook track (start with
   ``01_quickstart_iiwa14``).

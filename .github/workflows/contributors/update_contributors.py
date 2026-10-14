@@ -398,7 +398,7 @@ def main(_):
     # Update profile URL
     merged_df["profile"] = merged_df.apply(
         lambda row: (
-            "https://github.com/harvard-edge/cs249r_book/graphs/contributors"
+            "https://github.com/A2R-Lab/GRiD/graphs/contributors"
             if pd.isna(row["username"])
             else f"https://github.com/{row['username']}"
         ),
@@ -411,7 +411,7 @@ def main(_):
     final_result = dict(
         projectName=REPO,
         projectOwner=OWNER,
-        files=["docs/contributors.qmd", "README.md"],
+        files=["README.md"],
         contributors=[
             dict(
                 login=(

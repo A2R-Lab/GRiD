@@ -20,8 +20,11 @@ workers, capped by batch size; secondary tables retain their original policy.
 The worker count is retained per cell. It is not CPU affinity or a BLAS limit.
 
 ```bash
-.venv/bin/python docs/release_pipeline.py --output docs/open-tasks/release-review
+.venv/bin/python docs/release_pipeline.py --output <scratch-dir>
 ```
+
+`--output` is a scratch directory of your choice (outside the tracked tree;
+the script refuses to overwrite an existing one).
 
 This CPU-only step verifies capture hashes and numerical statuses, rebuilds the
 report, and exports figures and tables under `website-preview/`. It requires

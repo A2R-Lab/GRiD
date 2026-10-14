@@ -137,9 +137,9 @@ developer path — see :doc:`installation <user_guide/getting_started/installati
 Each example below runs as written from a repository checkout (the URDFs live
 under ``grid_assets/robots/``). The **first** ``load_robot`` of a robot
 generates and compiles its ``.so`` — about 100 s for the 7-DoF iiwa14 on an
-RTX 5090 and about 6 min for the g1 humanoid since 0.5.1 (the dated cold/warm
-table and the RAM-safe subset builds are on
-:doc:`fast robot setup <user_guide/getting_started/fast_robot_setup>`).
+RTX 5090 and about 6 min for the g1 humanoid built pin-only (without the mjx
+kernel twins) since 0.5.1; the cold/warm table and the RAM-safe subset builds
+are on :doc:`fast robot setup <user_guide/getting_started/fast_robot_setup>`.
 Every later load is seconds: the artifact is cached by content key and rebuilt
 only when the URDF, the options, the GRiD version or the toolchain change.
 

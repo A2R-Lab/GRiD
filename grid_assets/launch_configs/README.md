@@ -42,19 +42,19 @@ from its overlay when present, falling back to `bases`.
 
 Two further blocks (written by newer tools; absent on older configs):
 
-- **`matrix`** — the per-tier autotune matrix (E5), written by
+- **`matrix`** — the per-tier autotune matrix, written by
   `test/benchmarks/autotune_tier_matrix.py --write`:
   `matrix.<fixed|floating>.<algo>.<shared|lite|minimal> = {batch_N, max_threads,
   max_threads_source, min_smem, suggested_threads.<profile>, us_at_optimal.<profile>}`.
   Forced-tier probe data for tier-policy design; NOT read by the codegen bake.
-- **`ffi_bases_by_n` + `ffi_by_n_meta`** — the E6 batch-switch table: per-algo
+- **`ffi_bases_by_n` + `ffi_by_n_meta`** — the batch-switch table: per-algo
   small-batch overrides `{algo: {n_threshold, threads[, tier]}}` applied at
   runtime by `apply_batch_overlay` (entries whose tier differs from the baked
   tier are skipped — batch regimes share the baked tier).
 
 ## Generate a config for YOUR robot / GPU
 ```
-bash config/autotune_robot.sh <robot> [fixed floating]
+bash grid_assets/autotune_robot.sh <robot> [fixed floating]
 ```
 This runs the GRiD autotune sweep (single-call timing off by default; RAM-safe serial build for big robots) and
 writes `grid_assets/launch_configs/<robot>/<your_gpu>.json`. Re-run codegen + rebuild and the host launchers pick up your
@@ -68,9 +68,8 @@ values. (See the **"Autotune launch config for your robot / GPU"** section of
    description: GPU model, driver/CUDA version, and the robot's DoF/base. No code changes needed — codegen
    auto-discovers the file.
 
-Currently seeded: **baxter, g1, go2, h1_2, h2_plus, iiwa14** on `rtx5090_sm120`. Note that
-  (All six robots' `torch_bases`/`pybind_bases` — and h1_2's `ffi_bases` —
-  were re-baked 2026-09-14 from the N=16 batch-to-land sweep via
-  `test/benchmarks/autotune_bake_from_logs.py`; the other five robots keep
-  N=256-tuned `ffi_bases` plus `ffi_bases_by_n["16"]` small-batch overlays.
-  Treat every config as current, not legacy.)
+Currently seeded: **baxter, g1, go2, h1_2, h2_plus, iiwa14** on `rtx5090_sm120`. All six robots'
+`torch_bases` / `pybind_bases` — and h1_2's `ffi_bases` — were re-baked 2026-09-14 from the N=16
+batch-to-land sweep via `test/benchmarks/autotune_bake_from_logs.py`; the other five robots keep
+N=256-tuned `ffi_bases` plus `ffi_bases_by_n["16"]` small-batch overlays. Treat every config as
+current, not legacy.

@@ -1,4 +1,7 @@
-# Distribution and release checks
+# Releasing `grid-rbd`
+
+Maintainer playbook: what the package contains, the gates before a release, and how the
+tag → TestPyPI → PyPI workflow (`.github/workflows/publish.yml`) runs.
 
 `grid-rbd` is one distribution with NumPy, JAX and PyTorch adapters. Extras
 select framework dependencies; they do not install the CUDA Toolkit or driver.
@@ -63,21 +66,45 @@ macOS, Jetson or precompiled robot wheels in this release path.
 
 ## Freeze and publish
 
-Set the agreed version before freezing. Run the CPU/docs/artifact gates and
-focused GPU/sanitizer checks, then commit all correctness inputs. Coordinate
-other projects' quiet timing before starting `test/run_validation.py --full`.
-After recording, commit only the generated evidence and use `--finalize` to
-verify its signature, complete scope and release policy on the clean descendant.
-No carried shards, policy bypass or tolerance relaxation.
+Set the agreed version in `pyproject.toml` before freezing. Run the CPU/docs/artifact
+gates and focused GPU/sanitizer checks, then commit all correctness inputs. Coordinate
+other projects' quiet timing before starting `test/run_validation.py --full`. After
+recording, commit only the generated evidence and use `--finalize` to verify its
+signature, complete scope and release policy on the clean descendant. No carried
+shards, policy bypass or tolerance relaxation: a release receipt is ONE fresh full
+pass at the release tip, verified under `test/gpu-proof-policy-release.yaml`.
 
-Inspect final package provenance and verify the exact frozen artifacts before
-TestPyPI rehearsal and production upload. Package ownership, publisher setup,
+Inspect final package provenance and verify the exact frozen artifacts before the
+TestPyPI rehearsal and the production upload. Package ownership, publisher setup,
 tagging, pushes and uploads need maintainer approval; the artifact workflow
-has no publishing credentials and never uploads to a package index. TestPyPI
-is a distribution rehearsal, not a replacement for numerical evidence.
+(`packages.yml`) has no publishing credentials and never uploads to a package index.
+TestPyPI is a distribution rehearsal, not a replacement for numerical evidence.
+
+### The publish workflow
 
 `.github/workflows/publish.yml` is the only upload path. It uses PyPI trusted
-publishing (OIDC), so no token is stored anywhere. One-time set-up:
+publishing (OIDC), so no token is stored anywhere, and nothing in it runs on an
+ordinary push. Its jobs, in order:
+
+1. **`receipt`** (tags `v*` only; skipped on a `workflow_dispatch` rehearsal) — checks
+   out the tagged commit with submodules, installs the pinned `pytest-gpu-proof` from
+   `install/requirements-dev.txt`, and runs
+   `gpu-proof verify --receipt gpu-proof.json --repo . --policy test/gpu-proof-policy-release.yaml --expected-skips test/gpu-proof-expected-skips.txt`.
+   A tag whose committed receipt is not a fresh release-policy receipt at that exact
+   commit (carried shards, stale fingerprints, missing scope) fails here and nothing is
+   built.
+2. **`build`** (CPython 3.10 / 3.11 / 3.12) — refuses a tag that does not equal
+   `v<pyproject version>`; builds the sdist and the wheel from that sdist under
+   `SOURCE_DATE_EPOCH` (reproducible artifacts), `auditwheel repair`s, `twine check`s,
+   installs the wheel into a fresh venv outside the checkout with no GPU or build tools
+   and runs `tools/check_installed_package.py`; uploads one sdist (the 3.12 job's) plus
+   every wheel and their `SHA256SUMS-cp*.txt` as the `release-cp*` artifacts.
+3. **`testpypi`** — gated by the protected `testpypi` GitHub environment (a required
+   reviewer approves by hand); uploads the artifacts to TestPyPI (`skip-existing`).
+4. **`pypi`** (tags only) — gated by the protected `pypi` environment (second manual
+   approval); uploads the same artifacts to PyPI.
+
+One-time set-up:
 
 1. On pypi.org and test.pypi.org, add a *pending* trusted publisher for the
    project name `grid-rbd`: owner `A2R-Lab`, repository `GRiD`, workflow
@@ -85,13 +112,19 @@ publishing (OIDC), so no token is stored anywhere. One-time set-up:
    created by its first upload.
 2. In the GitHub repository settings create environments `testpypi` and
    `pypi`, each with a required reviewer; restrict `pypi` to tags `v*`.
-3. Rehearse: run the workflow by hand (`workflow_dispatch`), approve the
-   `testpypi` environment, then install from TestPyPI into a clean virtual
-   environment and run `tools/check_installed_package.py --gpu` on a GPU box.
-4. Release: push the tag `v<version>` (the workflow refuses a tag that does
-   not match `pyproject.toml`), approve `testpypi`, re-check, approve `pypi`.
-5. Write the GitHub release from `CHANGELOG.md` and attach the SHA256SUMS
-   files from the build artifacts.
+
+Per release:
+
+1. Rehearse: run the workflow by hand (`workflow_dispatch`; the receipt gate is
+   skipped and only TestPyPI is reachable), approve the `testpypi` environment, then
+   install from TestPyPI into a clean virtual environment and run
+   `tools/check_installed_package.py --gpu` on a GPU box.
+2. Release: push the tag `v<version>` at the commit that carries the fresh release
+   receipt. The `receipt` job verifies it, `build` runs, then approve `testpypi`,
+   re-check the installed package, and approve `pypi`.
+3. Write the GitHub release from `CHANGELOG.md` (the release notes; add the
+   `[<version>]:` compare link at its bottom) and attach the `SHA256SUMS` files
+   from the build artifacts.
 
 Build-hook behavior follows the [setuptools extension protocol](https://setuptools.pypa.io/en/stable/userguide/extension.html);
 the artifact sequence follows the [PyPA packaging flow](https://packaging.python.org/en/latest/flow/).

@@ -12,8 +12,8 @@ supported but are not the active development target.
 Joint and interface restrictions
 --------------------------------
 
-The per-method and per-joint-type restrictions (NumPy-only methods, the
-Euler-only step Hessian, the dense ``minv`` on mimic/spherical joints, the
+The per-method and per-joint-type restrictions (NumPy-only methods, the step
+Hessian's Euler / semi-implicit Euler scope, the dense ``minv`` on mimic/spherical joints, the
 differentiation scope) live in one place: :doc:`backend_coverage`. This page
 catalogs the generated CUDA paths.
 

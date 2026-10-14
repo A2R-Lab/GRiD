@@ -859,7 +859,7 @@ def list_registered(cache_dir: str | Path | None = None) -> list[dict[str, Any]]
 
 
 def build_plan(name: str, urdf_path: str | None = None, **opts: Any) -> dict[str, Any]:
-    """Resolve a registration WITHOUT building it (audit W10): the effective
+    """Resolve a registration WITHOUT building it: the effective
     codegen options, the build identity (toolchain / GLASS content / env
     knobs), the stage-1 input key, and whether the cache already holds a
     sound artifact for it (``cached`` / ``content_key`` / ``stale_reasons``).

@@ -11,6 +11,21 @@ in the archival [robot-acceleration/GRiD](https://github.com/robot-acceleration/
 repository. Everything below describes the A2R-Lab rebuild that leads to the
 first packaged release.
 
+## [Unreleased]
+
+- **Checkout layout:** `config/` is now `grid_assets/` (`robots/` for the sample
+  URDFs, `launch_configs/` for the tuned per-GPU profiles). Nothing in the wheel
+  changes; only paths inside a checkout (`grid_assets/robots/iiwa14.urdf`).
+- Examples default to the vendored sample URDFs; `robot_descriptions` is no longer
+  needed to run them.
+- Developer install: `install/requirements-dev.txt` pins the Pinocchio oracle
+  (`pin<4`), `install/developer_install.sh` installs the GPU frameworks (opt out
+  with `SKIP_GPU_FRAMEWORKS=1`); the base install stays NumPy-only.
+- Documentation consolidated: the README is a router to the site, the site has one
+  story per topic, and the generated header is documented with both init paths.
+- Maintainers: publishing a tag now requires a fresh release-policy receipt; the
+  Pinocchio peer suites run on every PR.
+
 ## [0.5.1] — faster per-robot builds + receipt infrastructure (2026-10-11)
 
 - **Per-robot `robot.so` builds are 4–8x faster**: multi-unit build with a
@@ -29,7 +44,7 @@ first packaged release.
   digests match the CI `SHA256SUMS`.
 - Maintainer-side: CUDA test runners register only the kernels they launch and
   the GPU receipt runs two shards side by side, so a full receipt takes hours
-  instead of half a day. The dated engineering log is `docs/CHANGELOG.md`.
+  instead of half a day. The dated engineering log is `docs/design_history/engineering_log.md`.
 
 ## [0.5.0] — first PyPI release (alpha)
 
@@ -130,4 +145,5 @@ update on top of that, organised here by theme:
 - Closed kinematic loops are unsupported.
 - No Windows, macOS, Jetson or precompiled-robot wheels.
 
+[0.5.1]: https://github.com/A2R-Lab/GRiD/releases/tag/v0.5.1
 [0.5.0]: https://github.com/A2R-Lab/GRiD/releases/tag/v0.5.0
