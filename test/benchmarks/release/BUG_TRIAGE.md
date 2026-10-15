@@ -357,3 +357,27 @@ zero-fills its output inside the timer; new `grid_cuda` backend (GRiD's own
 C++ host calls, compute-only and with-memory, bitwise-checked against NumPy)
 so the report can decompose GRiD's wrapper costs; CPU/tensor baselines on the
 core operations get their own collection command. CPU suite: 62 tests pass.
+
+## Fixed (2026-10-15): CUDA bridge link flags, and the gap cells
+
+- `grid_adapter.kernel_library` built `kernel_bridge.cu` with the wrapper's
+  `_NVCC_DEFAULT_FLAGS`, which lost `--shared` in the 2026-10-09 multi-unit
+  build (units are compiled with `-c` and host-linked). The one-file bridge
+  therefore linked as an executable (`undefined reference to main`) for every
+  `grid_cuda` cell whose bridge was not already cached. The adapter names
+  `--shared` itself now.
+- The bridge registers one operation's kernels per context
+  (`grid_kernel_create(op)`: `init_grid_streams` plus the per-algorithm
+  `init_grid_kernel_attr_<op>_checked` twin) and covers the end-effector pose
+  gradient; `test/benchmarks/test_release_kernel_bridge.py` is the referee.
+- Frax floating-base RNEA and FD gradients transport through
+  `frax_floating.py` (first order only). B=16 smoke: go2 and g1 grad RNEA
+  strict passes (relative L2 at most `1.3e-6`); grad FD retained as
+  `accuracy_warning` under `fp32-fd-warnings` (go2 14 of 5,184 entries,
+  relative L2 `7.8e-6`; g1 1,748 of 19,600, relative L2 `1.1e-4`), the same
+  fp32 grad-FD class as the Pinocchio codegen and MJX G1 cells above.
+- BARD end-effector pose gradient: `torch.func.vmap(jacfwd)` through BARD's
+  floating-base forward kinematics works once and fails on the next call
+  (storage-less tensors left in the workspace by the transformed call). The
+  adapter uses reverse-mode autograd through one batched forward, one
+  backward pass per pose row. B=16 smoke: all three robots strict passes.

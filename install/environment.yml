@@ -1,0 +1,24 @@
+# Conda environment for grid-rbd with the JAX and PyTorch surfaces.
+#
+#   conda env create -f install/environment.yml
+#   conda activate grid
+#
+# Everything comes from pip inside the conda env: grid-rbd pinned to the
+# released version, jax[cuda12] (bundles its CUDA 12 libraries) and a torch
+# cu128 wheel from the PyTorch index. Conda provides only the interpreter and
+# pip. The CUDA Toolkit (nvcc, for register_robot) and the NVIDIA driver come
+# from the system, not from this file. Edit the cu128 index and the version
+# pin together with pyproject.toml when releasing.
+#
+# Untested: the lab box has no conda, mamba or micromamba (2026-10-15).
+name: grid
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu128
+      - grid-rbd[jax,torch]==0.5.1
+      - jax[cuda12]
+      - torch

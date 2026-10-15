@@ -49,9 +49,11 @@ double now_us() {
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-// Operation codes = the collector's OPS order (pin_adapter.OPS / grid_adapter.KERNEL_OPS).
+// Operation codes: 0..12 = the collector's OPS order (pin_adapter.OPS); 13 = the
+// end-effector pose gradient (grid_adapter.KERNEL_OPS carries the same table).
 constexpr int OP_ID = 0, OP_ID_GRAD = 1, OP_IDSVA_SO = 2, OP_MINV = 3, OP_FD = 4, OP_FD_GRAD = 5,
-              OP_FDSVA_SO = 6, OP_EE_POSE = 7, OP_CRBA = 8, OP_NLE = 9, OP_GRAVITY = 10, OP_CCRBA = 11, OP_CORIOLIS = 12;
+              OP_FDSVA_SO = 6, OP_EE_POSE = 7, OP_CRBA = 8, OP_NLE = 9, OP_GRAVITY = 10, OP_CCRBA = 11, OP_CORIOLIS = 12,
+              OP_EE_GRAD = 13;
 #define KB_CAT_(a, b) a##b
 #define KB_CAT(a, b) KB_CAT_(a, b)
 #if !defined(GRID_HAS_IDSVA_SO)
@@ -87,6 +89,9 @@ bool op_built(int op) {
 #if GRID_HAS_END_EFFECTOR_POSE && defined(GRID_RBD_EE_POSE_FN)
         case OP_EE_POSE: return true;
 #endif
+#if GRID_HAS_END_EFFECTOR_POSE_GRADIENT && defined(GRID_RBD_EE_POSE_GRADIENT_FN)
+        case OP_EE_GRAD: return true;
+#endif
 #if GRID_HAS_CRBA
         case OP_CRBA: return true;
 #endif
@@ -116,6 +121,7 @@ int output_size(int op) {
 #endif
         case OP_MINV: case OP_CRBA: case OP_CORIOLIS: return nv * nv;
         case OP_EE_POSE: return 6 * GRID_KERNEL_NUM_EES;
+        case OP_EE_GRAD: return 6 * GRID_KERNEL_NUM_EES * nv;
         case OP_NLE: case OP_GRAVITY: return nv;
         case OP_CCRBA: return 6 * nv + 6;
         default: return 0;
@@ -132,6 +138,7 @@ int baked_threads(int op) {
         case OP_FD_GRAD: return grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::THREADS;
         case OP_FDSVA_SO: return grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::THREADS;
         case OP_EE_POSE: return grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::THREADS;
+        case OP_EE_GRAD: return grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::THREADS;
         case OP_CRBA: return grid::launch_cfg<grid::GRID_ALGO_CRBA>::THREADS;
         case OP_NLE: return grid::launch_cfg<grid::GRID_ALGO_NONLINEAR_EFFECTS>::THREADS;
         case OP_GRAVITY: return grid::launch_cfg<grid::GRID_ALGO_GENERALIZED_GRAVITY>::THREADS;
@@ -222,6 +229,75 @@ dim3 clamp_threads(KernelPtr kernel, dim3 requested) {
 #define KB_EE_FN grid::GRID_RBD_EE_POSE_FN
 #define KB_EE_FN_CO grid::KB_CAT(GRID_RBD_EE_POSE_FN, _compute_only)
 #endif
+#if GRID_HAS_END_EFFECTOR_POSE_GRADIENT && defined(GRID_RBD_EE_POSE_GRADIENT_FN)
+#if defined(GRID_RBD_SIG_MJX_EE_POSE_GRADIENT)
+#define KB_EEG_ARGS T, false, grid::GRID_DATA_ALL, false, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER
+#else
+#define KB_EEG_ARGS T, false, grid::GRID_DATA_ALL, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER
+#endif
+#define KB_EEG_FN grid::GRID_RBD_EE_POSE_GRADIENT_FN
+#define KB_EEG_FN_CO grid::KB_CAT(GRID_RBD_EE_POSE_GRADIENT_FN, _compute_only)
+#endif
+
+// Per-algorithm kernel-attribute registration for the ONE operation this
+// context times (the aggregate grid::init_grid<T>() would address-take, and so
+// compile, every kernel of the header). idsva_so is the header's dispatcher
+// over the body- and world-frame kernels, so both emitted twins are registered.
+cudaError_t register_op(int op, const char **failed_op) {
+    switch (op) {
+#if GRID_HAS_INVERSE_DYNAMICS
+        case OP_ID: return grid::init_grid_kernel_attr_inverse_dynamics_checked<T>(failed_op);
+#endif
+#if GRID_HAS_INVERSE_DYNAMICS_GRADIENT
+        case OP_ID_GRAD: return grid::init_grid_kernel_attr_inverse_dynamics_gradient_checked<T>(failed_op);
+#endif
+#if GRID_HAS_IDSVA_SO
+        case OP_IDSVA_SO: {
+#if GRID_HAS_IDSVA_SO_BODY_FRAME
+            { cudaError_t e = grid::init_grid_kernel_attr_idsva_so_body_frame_checked<T>(failed_op); if (e != cudaSuccess) return e; }
+#endif
+#if GRID_HAS_IDSVA_SO_WORLD_FRAME
+            { cudaError_t e = grid::init_grid_kernel_attr_idsva_so_world_frame_checked<T>(failed_op); if (e != cudaSuccess) return e; }
+#endif
+            return cudaSuccess;
+        }
+#endif
+#if GRID_HAS_MINV
+        case OP_MINV: return grid::init_grid_kernel_attr_minv_checked<T>(failed_op);
+#endif
+#if GRID_HAS_FORWARD_DYNAMICS
+        case OP_FD: return grid::init_grid_kernel_attr_forward_dynamics_checked<T>(failed_op);
+#endif
+#if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
+        case OP_FD_GRAD: return grid::init_grid_kernel_attr_forward_dynamics_gradient_checked<T>(failed_op);
+#endif
+#if GRID_HAS_FDSVA_SO
+        case OP_FDSVA_SO: return grid::init_grid_kernel_attr_fdsva_so_checked<T>(failed_op);
+#endif
+#if GRID_HAS_END_EFFECTOR_POSE && defined(GRID_RBD_EE_POSE_FN)
+        case OP_EE_POSE: return grid::init_grid_kernel_attr_end_effector_pose_checked<T>(failed_op);
+#endif
+#if GRID_HAS_END_EFFECTOR_POSE_GRADIENT && defined(GRID_RBD_EE_POSE_GRADIENT_FN)
+        case OP_EE_GRAD: return grid::init_grid_kernel_attr_end_effector_pose_gradient_checked<T>(failed_op);
+#endif
+#if GRID_HAS_CRBA
+        case OP_CRBA: return grid::init_grid_kernel_attr_crba_checked<T>(failed_op);
+#endif
+#if GRID_HAS_NONLINEAR_EFFECTS
+        case OP_NLE: return grid::init_grid_kernel_attr_nonlinear_effects_checked<T>(failed_op);
+#endif
+#if GRID_HAS_GENERALIZED_GRAVITY
+        case OP_GRAVITY: return grid::init_grid_kernel_attr_generalized_gravity_checked<T>(failed_op);
+#endif
+#if GRID_HAS_CCRBA
+        case OP_CCRBA: return grid::init_grid_kernel_attr_ccrba_checked<T>(failed_op);
+#endif
+#if GRID_HAS_CORIOLIS_MATRIX
+        case OP_CORIOLIS: return grid::init_grid_kernel_attr_coriolis_matrix_checked<T>(failed_op);
+#endif
+        default: return cudaErrorInvalidValue;
+    }
+}
 
 void with_mem(KernelCtx &c, int op, T gravity, int n, dim3 thr) {
     const dim3 blocks((unsigned)n, 1, 1);
@@ -249,6 +325,9 @@ void with_mem(KernelCtx &c, int op, T gravity, int n, dim3 thr) {
 #endif
 #if GRID_HAS_END_EFFECTOR_POSE && defined(GRID_RBD_EE_POSE_FN)
         case OP_EE_POSE: KB_EE_FN<KB_EE_ARGS>(c.data, c.model, n, blocks, thr, c.streams); break;
+#endif
+#if GRID_HAS_END_EFFECTOR_POSE_GRADIENT && defined(GRID_RBD_EE_POSE_GRADIENT_FN)
+        case OP_EE_GRAD: KB_EEG_FN<KB_EEG_ARGS>(c.data, c.model, n, blocks, thr, c.streams); break;
 #endif
 #if GRID_HAS_CRBA
         case OP_CRBA: grid::crba<KB_CRBA_ARGS>(c.data, c.model, gravity, n, blocks, thr, c.streams); break;
@@ -296,6 +375,9 @@ void compute_only(KernelCtx &c, int op, T gravity, int n, dim3 thr) {
 #if GRID_HAS_END_EFFECTOR_POSE && defined(GRID_RBD_EE_POSE_FN)
         case OP_EE_POSE: KB_EE_FN_CO<KB_EE_ARGS>(c.data, c.model, n, blocks, thr); break;
 #endif
+#if GRID_HAS_END_EFFECTOR_POSE_GRADIENT && defined(GRID_RBD_EE_POSE_GRADIENT_FN)
+        case OP_EE_GRAD: KB_EEG_FN_CO<KB_EEG_ARGS>(c.data, c.model, n, blocks, thr); break;
+#endif
 #if GRID_HAS_CRBA
         case OP_CRBA: grid::crba_compute_only<KB_CRBA_ARGS>(c.data, c.model, gravity, n, blocks, thr); break;
 #endif
@@ -329,6 +411,7 @@ const T *host_output(const KernelCtx &c, int op) {
         case OP_FD: return c.data->h_qdd;
         case OP_FD_GRAD: return c.data->h_df_du;
         case OP_EE_POSE: return c.data->h_end_effector_pose;
+        case OP_EE_GRAD: return c.data->h_end_effector_pose_gradient;
         case OP_CRBA: return c.data->h_M;
         case OP_CCRBA: return c.data->h_ccrba;
         case OP_CORIOLIS: return c.data->h_coriolis;
@@ -350,6 +433,7 @@ const T *device_output(const KernelCtx &c, int op) {
         case OP_FD: return c.data->d_qdd;
         case OP_FD_GRAD: return c.data->d_df_du;
         case OP_EE_POSE: return c.data->d_end_effector_pose;
+        case OP_EE_GRAD: return c.data->d_end_effector_pose_gradient;
         case OP_CRBA: return c.data->d_M;
         case OP_CCRBA: return c.data->d_ccrba;
         case OP_CORIOLIS: return c.data->d_coriolis;
@@ -399,9 +483,19 @@ extern "C" int grid_kernel_max_batch() { return GRID_KERNEL_MAX_BATCH; }
 extern "C" int grid_kernel_op_built(int op) { return op_built(op) ? 1 : 0; }
 extern "C" int grid_kernel_output_size(int op) { return output_size(op); }
 
-extern "C" void *grid_kernel_create() {
+// Streams plus the kernel attributes of the ONE operation `op` (per-algorithm
+// registration; the aggregate grid::init_grid<T>() is never called here).
+extern "C" void *grid_kernel_create(int op) {
+    if (!op_built(op)) return nullptr;
+    const char *failed_op = nullptr;
+    const cudaError_t e = register_op(op, &failed_op);
+    if (e != cudaSuccess) {
+        std::fprintf(stderr, "kernel bridge: kernel attribute registration failed in %s: %s\n",
+                     failed_op ? failed_op : "?", cudaGetErrorString(e));
+        return nullptr;
+    }
     KernelCtx *c = new KernelCtx;
-    c->streams = grid::init_grid<T>();
+    c->streams = grid::init_grid_streams<T>();
     c->model = grid::init_robotModel<T>();
     c->data = grid::init_gridData<T, GRID_KERNEL_MAX_BATCH>();
     if (!c->streams || !c->model || !c->data) { delete c; return nullptr; }

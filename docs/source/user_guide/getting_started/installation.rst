@@ -153,8 +153,9 @@ What each activity needs:
    * - ``backend="jax"`` / ``backend="torch"``
      - the ``[jax]`` / ``[torch]`` extra **plus a CUDA build of that framework
        matching your GPU arch** (the extras pin the CPU packages only; the
-       CUDA wheel is your choice, e.g. ``pip install "jax[cuda12]"`` or
-       ``"jax[cuda13]"``, and a ``cu1xx`` torch wheel; see the
+       CUDA wheel is your choice. We run ``jax[cuda12]`` and a cu128 torch
+       wheel on a CUDA 13.2 toolkit; ``jax[cuda13]`` and other torch wheels
+       are untested. See the
        `bindings README <https://github.com/A2R-Lab/GRiD/blob/main/bindings/README.md>`_).
        A missing framework, or a CPU-only jax, is reported at
        ``register_robot`` time, not deep inside a call.
@@ -162,9 +163,11 @@ What each activity needs:
      - ``install/developer_install.sh`` (apt build deps, ``pin``,
        robot-description fixtures, the Pinocchio second-order extension).
 
-Platform: Linux x86_64 with CUDA 12.x/13.x is what is built and tested
-(the committed GPU-proof receipt names the exact GPU and toolkit). Windows
-and macOS are not supported. The submodules
+Platform: Linux x86-64 (Ubuntu 24.04) with CUDA toolkit 13.2, driver
+615.71.09 and one RTX 5090 (sm_120) is what was built and tested; the
+committed GPU-proof receipt names the GPU and driver, and :doc:`compatibility`
+lists the full environment. CUDA 12 toolkits are untested. Windows and macOS
+are not supported. The submodules
 must be populated before the first **generation** (not before the editable
 install itself): ``install/base_install.sh`` runs ``pip install -e .`` and
 then ``git submodule update --init --recursive``; a bare editable install on
@@ -174,8 +177,8 @@ a non-recursive clone succeeds and then fails at first generation with a
 Containers
 ~~~~~~~~~~
 
-GRiD does not ship an official Docker image. The recipes below are starting
-points that are not tested in CI. Pick a CUDA ``-devel`` base matching
+GRiD publishes ``ghcr.io/a2r-lab/grid`` (see Docker image below). The
+recipes below are starting points for your own image and are not tested in CI. Pick a CUDA ``-devel`` base matching
 your toolkit and target compute capability (``nvcc`` and the CUDA headers must
 be in the image; the GPU driver comes from the host). Robot CUDA is compiled
 at ``register_robot`` time, so warm the cache in the image build with
@@ -262,3 +265,72 @@ Add the following to ``~/.bashrc``
     (``-std=c++20`` from torch 2.14 on, detected from the header guard), so
     a torch-enabled build needs an nvcc and host compiler that accept C++20
     (CUDA 12+, ``g++ >= 10``). ``GRID_RBD_CXX_STD`` forces the standard.
+
+Docker image
+~~~~~~~~~~~~
+
+The repository ships ``install/docker/Dockerfile`` and a workflow
+(``.github/workflows/docker.yml``) that publishes it as
+``ghcr.io/a2r-lab/grid:<version>`` and ``ghcr.io/a2r-lab/grid:latest``
+after each release reaches PyPI. The image is
+``nvidia/cuda:13.2.0-devel-ubuntu24.04``, the toolkit the release was built
+and tested with, plus ``grid-rbd`` pinned to the release, ``jax[cuda12]``, a
+cu128 torch wheel and the generated iiwa14 header at
+``/opt/grid/iiwa14/grid.cuh``. The image is built in CI without a GPU and no
+receipt exercises it. Run it with the NVIDIA Container Toolkit:
+
+.. code-block:: shell
+
+   docker run --rm -it --gpus all -v grid-cache:/var/cache/grid-rbd ghcr.io/a2r-lab/grid:latest
+
+The image contains no compiled robot library. The first ``load_robot`` or
+``register_robot`` in a container compiles the robot for the host GPU with
+the image's ``nvcc`` and caches it under ``GRID_RBD_CACHE_DIR``
+(``/var/cache/grid-rbd``). Mount that directory as a volume, as above, to
+keep the cache across containers. The header-only path needs no compile
+step: ``nvcc -arch=sm_90 -std=c++17 -I /opt/grid/iiwa14 my_kernel.cu``
+builds against the baked header. Build the image yourself from the
+repository root with ``docker build -f install/docker/Dockerfile -t grid .``;
+the build argument ``GRID_RBD_VERSION`` selects the PyPI version.
+
+Conda environment
+~~~~~~~~~~~~~~~~~
+
+``install/environment.yml`` creates a conda environment named ``grid`` with
+Python 3.12 and pip, and pip-installs ``grid-rbd[jax,torch]`` pinned to the
+release, ``jax[cuda12]`` and a cu128 torch wheel:
+
+.. code-block:: shell
+
+   conda env create -f install/environment.yml
+   conda activate grid
+
+The CUDA Toolkit and the NVIDIA driver come from the system, not from the
+environment file. This recipe is not exercised on the lab box, which has no
+conda.
+
+uv
+~~
+
+With `uv <https://docs.astral.sh/uv/>`_ the install is two commands. The
+``jax[cuda12]`` extra and the torch index pick the CUDA builds of the
+frameworks:
+
+.. code-block:: shell
+
+   uv venv .venv --python 3.12
+   uv pip install --python .venv/bin/python "grid-rbd[jax,torch]" "jax[cuda12]"
+   uv pip install --python .venv/bin/python torch --index-url https://download.pytorch.org/whl/cu128
+
+Activate with ``source .venv/bin/activate`` or keep passing ``--python``.
+This recipe is not exercised on the lab box, which has no ``uv``.
+
+Release check
+~~~~~~~~~~~~~
+
+Maintainers verify a release candidate with ``make release-check``
+(``tools/release_fresh_install.sh``). It builds the sdist and wheel, installs
+the wheel into a throwaway virtual environment outside the checkout and runs
+both entry points from there: ``load_robot`` on iiwa14 against the bundled
+RBDReference oracle, and ``grid-generate`` plus ``nvcc`` on the
+``examples/cuda/`` kernel. The gate list is in ``RELEASING.md``.

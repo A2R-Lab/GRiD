@@ -376,6 +376,23 @@ Add ``--execute --output <fresh-capture>`` only in a coordinated quiet window.
 Raw captures remain in the local benchmark archive (not tracked); published
 assets contain their hashes and provenance.
 
+Regenerating the figures
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+The figures on this page and on the cover page are ``stacked_core``,
+``speedup_core``, ``speedup_pinocchio``, ``speedup_cpu_compute``,
+``speedup_gpu_resident``, ``speedup_gpu_jax_resident``,
+``speedup_gpu_full`` and ``wrappers``, each as the SVG the pages link and the
+PNG thumbnail the cover page and the README show. They are regenerated only
+by ``docs/plot_release_figures.py`` from a reviewed report directory and are
+never edited by hand. ``docs/release_pipeline.py`` rebuilds that report from
+the pinned captures and writes a preview; ``docs/plot_release_figures.py
+<report> --approve`` then writes the figure set and ``manifest.json`` into
+``docs/source/_static/release``, and ``docs/export_release_tables.py
+--approve`` refreshes the tables and audit files there. ``manifest.json``
+lists every file in that directory with its hash, and ``docs/check_site.py``
+refuses a site whose assets differ from it.
+
 Measurement scope
 -----------------
 

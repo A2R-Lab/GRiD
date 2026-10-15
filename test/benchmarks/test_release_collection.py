@@ -31,7 +31,11 @@ def test_capability_gaps_are_not_library_claims():
     assert p.capability("mjx","idsva_so","iiwa14").startswith("excluded_method:")
     assert p.capability("frax","inverse_dynamics","g1") is None and p.capability("frax","end_effector_pose_gradient","go2") is None
     assert p.capability("frax","inverse_dynamics_gradient","iiwa14") is None
-    assert p.capability("frax","inverse_dynamics_gradient","g1").startswith("adapter_pending:")
+    # floating-base Frax gradients collect through the Euler-coordinate transport (frax_floating.py)
+    assert all(p.capability("frax",op,r) is None for op in ("inverse_dynamics_gradient","forward_dynamics_gradient") for r in ("go2","g1"))
+    assert p.capability("frax","idsva_so","g1").startswith("excluded_method:")
+    assert p.capability("bard","end_effector_pose_gradient","go2") is None
+    assert p.capability("bard","end_effector_pose_hessian","go2").startswith("excluded_method:")
     assert p.capability("curobo","inverse_dynamics","iiwa14") is None
     assert p.capability("curobo","inverse_dynamics","go2").startswith("adapter_pending:")
     assert p.capability("curobo","inverse_dynamics_gradient","iiwa14").startswith("adapter_pending:")
@@ -40,6 +44,7 @@ def test_capability_gaps_are_not_library_claims():
     assert p.capability("pinocchio","end_effector_pose_hessian","iiwa14").startswith("adapter_pending:")
     assert all(p.capability("grid_cuda",op,"g1") is None for op in p.CORE)
     assert p.capability("grid_cuda","minv","g1") is None and p.capability("grid_cuda","end_effector_pose_hessian","g1").startswith("adapter_pending:")
+    assert p.capability("grid_cuda","end_effector_pose_gradient","g1") is None
     assert p.capability("grid_native","idsva_so","g1").startswith("adapter_pending:")
     assert p.capability("pinocchio_plain","ccrba","g1") is None and p.capability("pinocchio","ccrba","g1").startswith("adapter_pending:")
     assert p.capability("mjx","crba","go2") is None and p.capability("mujoco_warp","crba","go2") is None

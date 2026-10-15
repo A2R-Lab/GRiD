@@ -40,7 +40,7 @@ you are developing GRiD and want the bindings that match your checkout:
 
 ```bash
 pip install grid-rbd                           # numpy backend
-pip install "grid-rbd[jax]" "jax[cuda12]"      # + JAX FFI bridge — the extra pins CPU jax; install the CUDA wheel (cuda12/cuda13) yourself
+pip install "grid-rbd[jax]" "jax[cuda12]"      # + JAX FFI bridge — the extra pins CPU jax; install the CUDA wheel yourself (we run jax[cuda12]; cuda13 is untested)
 pip install "grid-rbd[torch]"                  # + torch autograd bridge (notebook 02) — needs a CUDA (cu1xx) torch wheel; torch >= 2.14 compiles the .so with C++20
 
 # developing GRiD instead? from the repo root:

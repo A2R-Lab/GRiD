@@ -5,9 +5,10 @@ This page summarizes the generated CUDA paths that are currently exercised by
 the GRiD developer test suite. For the commands that run these checks, see
 :doc:`cuda_validation`.
 
-Development testing currently targets sm_120 (RTX 5090) for correctness
-and performance validation. Earlier compute capabilities (sm_8x) remain
-supported but are not the active development target.
+The GPU receipt and the release timing ran on sm_120 (RTX 5090) with CUDA
+toolkit 13.2. No other compute capability has been run in this release; the
+:doc:`compatibility page <../getting_started/compatibility>` lists the exact
+environment.
 
 Joint and interface restrictions
 --------------------------------

@@ -9,19 +9,67 @@ Platforms and toolchain
   different architecture is refused at context creation with a clear error.
   The model, the API and the generated code carry over between machines; the
   binary does not.
-* The tested deployment platform is Linux x86_64 with CUDA 12+ (the release
-  receipt was produced on an RTX 5090). Jetson-class devices are supported by
-  the design (single-block kernels, resource tiers, runtime memory fitting) but
-  are not certified by this receipt.
+* The GPU test receipt and the release timing ran on Linux x86-64 with CUDA
+  toolkit 13.2 and one RTX 5090 (sm_120); the table below lists that
+  environment. CUDA 12 toolkits and other GPUs are untested. Jetson-class
+  devices are within the design (single-block kernels, resource tiers, runtime
+  memory fitting) but no receipt covers them.
 * The host compiler standard is C++17 for the code generator, benchmarks and a
-  numpy-only build. With the ``[torch]`` extra the wrapper follows torch's ATen
-  requirement (``-std=c++20`` from torch 2.14 on), so a torch-enabled build
-  needs an nvcc and host compiler accepting C++20. ``GRID_RBD_CXX_STD`` forces
-  the standard.
-* The ``[jax]`` / ``[torch]`` extras pin the CPU packages; install
-  the CUDA wheel yourself (``pip install "jax[cuda12]"`` or ``"jax[cuda13]"``, a
-  ``cu1xx`` torch). A CPU-only jax is refused at handle construction with that
-  hint. See :doc:`installation` for the PyPI install and its extras.
+  numpy-only build. With the ``[torch]`` extra the wrapper reads the standard
+  that torch's ATen header guard demands and compiles with it. The torch we run
+  (2.12.0, cu128) compiles with C++17. A torch that demands C++20 needs an nvcc
+  and host compiler accepting C++20, and that path is untested here.
+  ``GRID_RBD_CXX_STD`` forces the standard.
+* The ``[jax]`` / ``[torch]`` extras pin the CPU packages; install the CUDA
+  wheel yourself. We run ``jax[cuda12]`` (``jax-cuda12-plugin`` 0.10.0) and a
+  cu128 torch wheel; ``jax[cuda13]`` and other torch wheels are untested. A
+  CPU-only jax is refused at handle construction with that hint. See
+  :doc:`installation` for the PyPI install and its extras.
+
+What we ran
+-----------
+
+One machine produced every piece of GPU evidence in this release: the full
+test receipt (``gpu-proof.json``, verified by CI), the release timing on the
+:doc:`release measurements <../../release_measurements>` page, and the
+installed-wheel check of the release playbook.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 9 9 9 9 7 12 11 10 12 12
+
+   * - GPU architecture
+     - GPU
+     - CUDA toolkit (nvcc)
+     - Driver
+     - Python
+     - torch wheel
+     - jax plugin
+     - OS
+     - What ran
+     - Date
+   * - sm_120 (compute capability 12.0)
+     - NVIDIA GeForce RTX 5090, 32 GB
+     - 13.2 (V13.2.86)
+     - 615.71.09
+     - CPython 3.12.3
+     - 2.12.0.dev20260408+cu128 (CUDA 12.8 runtime)
+     - jax 0.10.0 with jax-cuda12-plugin 0.10.0
+     - Ubuntu 24.04.5, Linux 7.0.0-38, x86-64
+     - full receipt; release timing; install check (a fresh venv with
+       torch 2.11.0+cu128 and jax 0.11.2 from PyPI)
+     - receipt 2026-10-15; timing 2026-09-27 to 2026-10-07; install check
+       2026-10-15
+
+The toolkit and the framework wheels are separate things. ``nvcc`` 13.2
+compiles the generated kernels and the per-robot ``.so``. The torch wheel
+carries its own CUDA 12.8 runtime libraries for torch's kernels, and the
+``jax-cuda12-plugin`` carries CUDA 12 runtime libraries for XLA; neither uses
+``nvcc``. The driver has to satisfy every runtime in the process, and
+615.71.09 does. A ``jax[cuda13]`` plugin, a torch wheel other than cu128, a
+CUDA 12 toolkit and CPython 3.10 or 3.11 on a GPU are untested; the CI wheel
+builds for CPython 3.10 and 3.11 run on CPU only. Jetson Orin (sm_87) and
+Xavier (sm_72) rows are planned and will be filled from real runs.
 
 Runtime contexts
 ----------------

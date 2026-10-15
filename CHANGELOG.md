@@ -13,6 +13,33 @@ first packaged release.
 
 ## [Unreleased]
 
+- Release gate: `tools/release_fresh_install.sh` (`make release-check`) builds the sdist
+  and wheel, installs the repaired wheel into a throwaway venv outside the checkout and
+  exercises both entry points (`load_robot` on iiwa14 against RBDReference; `grid-generate`,
+  `nvcc` and `examples/cuda/validate.py`). RELEASING.md requires it before freezing.
+- Install recipes: `install/docker/Dockerfile` and `.github/workflows/docker.yml` publish
+  `ghcr.io/a2r-lab/grid` (CUDA 13.2 devel base, grid-rbd from PyPI, `jax[cuda12]`, torch
+  cu128, baked iiwa14 header; robots compile on first load); `install/environment.yml`
+  (conda) and a uv recipe on the installation page. Neither recipe is tested in CI.
+- Tutorials: `examples/cuda/fused_control_step/` fuses a computed-torque control step
+  around `inverse_dynamics_device` in one kernel and checks and times it against the
+  host-function path (`build_and_time.sh --json`); `examples/jax/ik_gradient_descent.py`
+  runs `jax.grad` through `end_effector_pose` with a hand-written descent. Both have site
+  pages; `docs/test_doc_examples.py` covers them on CPU.
+- Docs: platform claims now state what ran (Linux x86-64, Ubuntu 24.04, CPython 3.12, CUDA
+  toolkit 13.2, driver 615.71.09, torch 2.12.0 cu128, jax 0.10.0 with the cuda12 plugin, one
+  RTX 5090 sm_120); "CUDA 12 or 13", "jax[cuda13]", "sm_8x remain supported" and "cu128 or
+  newer" are replaced by "untested". The compatibility page has a "What we ran" table; Jetson
+  Orin (sm_87) and Xavier (sm_72) rows are planned.
+- Release figures: the unreferenced `stacked_all` and `grid_composition` outputs are removed
+  from `docs/plot_release_figures.py`, the manifest and the tracked assets; the release
+  measurements page documents how the figure set is regenerated.
+- Benchmarks: the release collector covers the Frax floating-base RNEA and FD gradients
+  (Euler-coordinate transport in `frax_floating.py`), the GRiD CUDA end-effector pose
+  gradient and the BARD autograd end-effector pose gradient; the CUDA bridge registers one
+  operation per context through `init_grid_kernel_attr_<op>_checked` and links with
+  `--shared` again; `test/benchmarks/timing_night.sh` runs the gap cells, the release
+  re-collection and the fused control-step microbench as one resumable overnight job.
 - **Checkout layout:** `config/` is now `grid_assets/` (`robots/` for the sample
   URDFs, `launch_configs/` for the tuned per-GPU profiles). Nothing in the wheel
   changes; only paths inside a checkout (`grid_assets/robots/iiwa14.urdf`).

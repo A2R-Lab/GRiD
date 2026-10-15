@@ -396,6 +396,51 @@ The default cache size is 5 GB; bump it when caching many builds:
 
 ---
 
+## Overnight timing run
+
+`timing_night.sh` runs the release timing work as one resumable job on a quiet
+GPU. Its stages are the gap cells of the release matrix (the Frax
+floating-base RNEA and FD gradients, the `grid_cuda` end-effector pose
+gradient and the BARD end-effector pose gradient), the release re-collection
+of `release/README.md` (core and wrappers at 300 samples, the table at 30
+samples under the fp32-fd-warnings policy, the CPU and tensor baselines on
+the core operations), the fused control-step microbench
+(`examples/cuda/fused_control_step/build_and_time.sh`, recorded as skipped
+when the example is absent) and a CPU-only diagnostic report. The GPU-idle
+guard of `overnight_batch.sh` runs before every stage and aborts the run when
+another process holds the device. Each capture and each stage leaves a done
+marker under `<out>/markers/`, so a rerun skips completed work; an
+interrupted capture is set aside, never merged.
+
+The script holds no lock. The maintainer coordinates other projects' timing
+before launching it.
+
+```bash
+# Plan and job counts only; nothing runs and nothing is written.
+bash test/benchmarks/timing_night.sh --dry-run
+
+# Launch in a quiet window (results under test/benchmarks/results/timing_night_<UTC date>/).
+OUT=test/benchmarks/results/timing_night_$(date -u +%Y%m%d); mkdir -p "$OUT"
+nohup bash test/benchmarks/timing_night.sh --out "$OUT" > "$OUT/night.log" 2>&1 &
+
+# Continue an interrupted run, or run a subset of stages.
+bash test/benchmarks/timing_night.sh --resume "$OUT"
+bash test/benchmarks/timing_night.sh --stages gaps,tutorial
+```
+
+The run directory holds `provenance.json` (the collector's provenance plus the
+stage list), one capture directory and log per collection, the microbench
+JSON, `report/` and a final `summary.txt`. With the published repeat counts
+(three process repeats, six batch sizes, 300 samples for core and wrappers,
+30 for the table) the full run takes about eight to nine hours on the
+release box: the core stage about two hours, wrappers about one and a half,
+the table about four, the baselines and gap cells under one hour together.
+The captures are inputs to the release pipeline, not website data: point
+`docs/release_dataset.json` at the ones that replace published data and run
+`docs/release_pipeline.py`.
+
+---
+
 ## Results from a New Machine
 
 1. Run the full suite on your machine:
@@ -421,6 +466,7 @@ Tuning and analysis tools beside the runners:
 - `gpu_resident_timing.py`: GPU-resident/no-transfer timing
 - `analyze_competitive.py` / `plot_benchmarks.py` / `run_competitive_gpu_baselines.sh`: competitive pipeline
 - `run_tier_sweep_phased.sh` / `overnight_batch.sh`: sweep drivers
+- `timing_night.sh`: the resumable overnight release timing run (gap cells, re-collection, microbench, report)
 - `release/`: the validation-gated release collector (see `release/README.md`)
 - `test_*.py`: CPU gates over the pickers/specs/timing contracts and the release collector; these run in the CPU lane (`make test-cpu`)
 - `BENCHMARK_METHODOLOGY.md`: how the numbers are taken

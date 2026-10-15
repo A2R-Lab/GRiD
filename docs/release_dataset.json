@@ -13,6 +13,7 @@
     "test/benchmarks/release/competitors.py",
     "test/benchmarks/release/frax_floating.py",
     "test/benchmarks/release/grid_adapter.py",
+    "test/benchmarks/release/kernel_bridge.cu",
     "test/benchmarks/release/pin_adapter.py",
     "test/benchmarks/release/pin_bridge.cpp",
     "test/benchmarks/release/protocol.py",

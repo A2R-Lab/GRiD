@@ -699,11 +699,13 @@ same route: ``torch.from_numpy(a).pin_memory().to("cuda", non_blocking=True)``.
 .. note::
 
    The backward VJP contractions run torch's own CUDA kernels, so the
-   installed torch build must support the GPU's compute capability. On an
-   RTX 5090 (sm_120) a torch cu128 (or newer) build is required; a cu124
-   wheel (max sm_90) cannot launch on sm_120. The ``grid`` / ``grid_plant``
-   kernels themselves are always nvcc-built for the detected arch and are
-   unaffected.
+   installed torch wheel must carry kernels for the GPU's compute capability.
+   We run torch 2.12.0 cu128 on an RTX 5090 (sm_120) with a CUDA 13.2 nvcc
+   toolkit; the wheel's CUDA 12.8 runtime and the toolkit are separate things.
+   A torch wheel without sm_120 kernels fails in the backward with torch's "no
+   kernel image is available" error. Other torch wheels are untested. The
+   ``grid`` / ``grid_plant`` kernels themselves are always nvcc-built for the
+   detected arch and are unaffected.
 
 ``grid_plant`` cost / barrier / plant-step methods
 --------------------------------------------------

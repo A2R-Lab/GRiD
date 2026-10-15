@@ -21,6 +21,7 @@ runs on an RTX 5090 (`sm_120`) and is numerically validated against the
 |------|------------|
 | `inverse_dynamics_kernel_example.cu` | the flagship: three hand-written kernels (`_device`, `_inner`, batched) |
 | `idsva_so_host_example.cu` | a heavy second-order kernel (`idsva_so`) via the host function (`grid::idsva_so<T, ...>`) |
+| `fused_control_step/` | the deep tutorial: a computed-torque control step fused into one kernel around `grid::inverse_dynamics_device`, checked and timed against the host-function path (`build_and_time.sh`) |
 | `gen_iiwa14_header.py` | the one-line codegen invocation, wrapped in a CLI |
 | `validate.py` / `validate_so.py` | diff the examples' output against the `RBDReference` oracle |
 | `build_and_validate.sh` | generate, compile, run and validate both examples, end to end |
@@ -189,6 +190,27 @@ gen_all_code(algorithm_list=["idsva_so_body_frame"], output_path="grid_so.cuh")
 
 See `wrapper_types.md` for why a heavy kernel wants the host function while
 your own fused kernel wants `_inner`/`_device`.
+
+## Fused control step (the deep tutorial)
+
+`fused_control_step/fused_control_step.cu` is the kernel this directory's
+surfaces exist for: one block per state runs a PD term, GRiD's inverse
+dynamics (`grid::inverse_dynamics_device`) and an Euler step on shared-memory
+operands, with no launch or host round trip between the stages. The same
+step through the generated host function `grid::inverse_dynamics<T, ...>`
+(copies in, kernel, copies out, host loops around it) is the layered
+reference; the binary checks the two agree to 1e-4 relative and reports
+the median cudaEvent time of each.
+
+```bash
+bash examples/cuda/fused_control_step/build_and_time.sh --batch 256 --repeats 200 [--json out.json]
+```
+
+The script registers the one generated kernel it launches through
+`init_grid_kernel_attr_inverse_dynamics_checked` and the fused kernel's
+arena by hand (spelling (b) above). The tutorial page on the site walks
+through the kernel in build order; the measured ratio belongs to the
+release measurements page, not to this README.
 
 ## Adapting to another robot / algorithm
 

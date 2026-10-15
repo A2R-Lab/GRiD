@@ -365,6 +365,22 @@ class TensorAdapter:
             self.model = bard.build_model_from_urdf(fixture.urdf, floating_base=fixture.base == "floating", dtype=torch.float32, device="cuda")
             if (self.model.nq, self.model.nv) != (fixture.nq, fixture.nv):
                 raise ValueError("BARD model dimensions differ")
+            if operation == "end_effector_pose_gradient":
+                # BARD folds a fixed joint into its parent body and names frames
+                # after links: compose the parent joint's child-link transform
+                # with the fixed offset, then differentiate the xyz+RPY pose
+                # along the pin tangent (local translation, local rotation)
+                # with torch.func.jacfwd, one sample at a time under vmap.
+                model = fixture.oracle.model
+                frame = model.frames[fixture.oracle._resolve_frame_id(fixture.target)]
+                parent = getattr(frame, "parentJoint", None)
+                parent = frame.parent if parent is None else parent
+                joint_name = model.names[parent]
+                link = ET.parse(fixture.urdf).getroot().find(f"joint[@name='{joint_name}']").find("child").get("link")
+                self.ee_frame = self.model.get_frame_id(link)
+                self.ee_offset = torch.tensor(np.asarray(frame.placement.homogeneous), dtype=torch.float32, device="cuda")
+                self.metadata.update(method="autodiff (torch.autograd reverse mode through the library forward kinematics along the pin tangent; one backward pass per pose row)",
+                                     end_effector={"parent_joint": joint_name, "library_frame": link, "fixed_offset_from_pin_frame": True})
         else:
             import jax
             from frax.core.robot import Robot
@@ -456,6 +472,16 @@ class TensorAdapter:
                 value = fr.minv_frax(out[i])
             elif op == "end_effector_pose_gradient":
                 value = fr.pose_jacobian_frax(out[i])
+            elif op == "inverse_dynamics_gradient":
+                a = np.asarray(f.a[i], np.float64)
+                dq, dv = fr.id_gradient_frax(out[i, :, :f.nv], out[i, :, f.nv:], f.oracle.crba(q),
+                                             f.oracle.inverse_dynamics(q, v, a), v, a)
+                value = np.concatenate((dq, dv), axis=-1)
+            elif op == "forward_dynamics_gradient":
+                u = np.asarray(f.u[i], np.float64)
+                dq, dv = fr.fd_gradient_frax(out[i, :, :f.nv], out[i, :, f.nv:], f.oracle.minv(q),
+                                             f.oracle.forward_dynamics(q, v, u), v, u)
+                value = np.concatenate((dq, dv), axis=-1)
             else:
                 raise NotImplementedError(f"no Frax floating-base transport for {op}")
             converted.append(value)
@@ -477,14 +503,18 @@ class TensorAdapter:
                 args = (q,*args[1:])
             data = bard.create_data(self.model, max_batch_size=batch)
             gravity = torch.tensor([0, 0, -9.81], dtype=torch.float32, device="cuda")
-            def fn(q, v, t):
-                with torch.no_grad():
-                    bard.update_kinematics(self.model, data, q, v)
-                    if self.op == "crba":
-                        return bard.crba(self.model, data)
-                    if self.op == "forward_dynamics":
-                        return bard.aba(self.model, data, t, gravity=gravity)
-                    return bard.rnea(self.model, data, t, gravity=gravity)
+            if self.op == "end_effector_pose_gradient":
+                args = (args[0],)
+                fn = self._bard_pose_gradient(data, batch)
+            else:
+                def fn(q, v, t):
+                    with torch.no_grad():
+                        bard.update_kinematics(self.model, data, q, v)
+                        if self.op == "crba":
+                            return bard.crba(self.model, data)
+                        if self.op == "forward_dynamics":
+                            return bard.aba(self.model, data, t, gravity=gravity)
+                        return bard.rnea(self.model, data, t, gravity=gravity)
             dev = tuple(torch.from_numpy(a).to("cuda") for a in args)
             torch.cuda.synchronize()
             self.resident = lambda: fn(*dev)
@@ -533,6 +563,44 @@ class TensorAdapter:
             self.resident = lambda: fn(*dev)
             self.host = lambda: jax.device_get(fn(*(jax.device_put(a.copy()) for a in args)))
             self.sync, self.download = jax.block_until_ready, jax.device_get
+
+    def _bard_pose_gradient(self, data, batch):
+        """d(xyz+RPY)/d tangent of the library forward kinematics by reverse-mode
+        autograd: one batched forward through the pin retraction at zero (fixed
+        base: q + delta), then one backward pass per output row. Samples are
+        independent, so the gradient of each row's batch sum is that row of
+        every sample's Jacobian. (functorch's vmap(jacfwd) works once on BARD's
+        floating-base path and fails on the next call: the transformed call
+        leaves storage-less tensors in the workspace.)"""
+        import bard
+        import torch
+        model, frame, offset, nv, floating = self.model, self.ee_frame, self.ee_offset, self.f.nv, self.f.base == "floating"
+        def rpy(T):
+            r = T[..., :3, :3]
+            return torch.stack((torch.atan2(r[..., 2, 1], r[..., 2, 2]),
+                                torch.atan2(-r[..., 2, 0], torch.hypot(r[..., 2, 2], r[..., 2, 1])),
+                                torch.atan2(r[..., 1, 0], r[..., 0, 0])), -1)
+        def pose(q):
+            T = bard.forward_kinematics(model, data, frame, q=q) @ offset
+            return torch.cat((T[:, :3, 3], rpy(T)), 1)
+        def retract(q, d):
+            if not floating:
+                return q + d
+            w, xyz = q[:, 3:4], q[:, 4:7]     # BARD stores the free-flyer quaternion scalar first
+            x, y, z = xyz[:, 0:1], xyz[:, 1:2], xyz[:, 2:3]
+            R = torch.stack((torch.cat((1 - 2*(y*y + z*z), 2*(x*y - z*w), 2*(x*z + y*w)), 1),
+                             torch.cat((2*(x*y + z*w), 1 - 2*(x*x + z*z), 2*(y*z - x*w)), 1),
+                             torch.cat((2*(x*z - y*w), 2*(y*z + x*w), 1 - 2*(x*x + y*y)), 1)), 1)
+            h = d[:, 3:6] * .5                # exact first derivative of the local retract at 0
+            quat = torch.cat((w - (xyz * h).sum(1, keepdim=True), xyz + w*h + torch.cross(xyz, h, dim=1)), 1)
+            quat = quat / torch.linalg.norm(quat, dim=1, keepdim=True)
+            return torch.cat((q[:, :3] + (R @ d[:, :3, None])[:, :, 0], quat, q[:, 7:] + d[:, 6:]), 1)
+        def grad(q):
+            d = torch.zeros(q.shape[0], nv, dtype=torch.float32, device="cuda", requires_grad=True)
+            out = pose(retract(q, d))
+            rows = [torch.autograd.grad(out[:, i].sum(), d, retain_graph=i < 5)[0] for i in range(6)]
+            return torch.stack(rows, 1)
+        return grad
 
     def normalize(self, out):
         a = np.asarray(self.download(out))
