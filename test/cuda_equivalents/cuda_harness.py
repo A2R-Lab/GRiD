@@ -457,39 +457,12 @@ def _glass_commit() -> str:
         return _hash_tree(base, (".cuh",)) if base.exists() else "unknown"
 
 
-def _nvcc_version_text() -> str:
-    nvcc = shutil.which("nvcc")
-    if nvcc is None:
-        return "missing"
-    result = subprocess.run([nvcc, "--version"], capture_output=True, text=True)
-    if result.returncode != 0:
-        return f"error:{result.returncode}:{result.stderr.strip()}"
-    return result.stdout.strip()
+from grid_codegen.cuda_env import detect_cuda_arch as _probe_cuda_arch  # noqa: E402
+from grid_codegen.cuda_env import nvcc_version_text as _nvcc_version_text  # noqa: E402
 
 
 def _detect_cuda_arch() -> str:
-    env_arch = os.environ.get("GRID_CUDA_ARCH")
-    if env_arch:
-        return env_arch.replace(".", "")
-
-    nvidia_smi = shutil.which("nvidia-smi")
-    if nvidia_smi is not None:
-        result = subprocess.run(
-            [
-                nvidia_smi,
-                "--query-gpu=compute_cap",
-                "--format=csv,noheader,nounits",
-            ],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            for line in result.stdout.splitlines():
-                compute_cap = line.strip()
-                if compute_cap:
-                    return compute_cap.replace(".", "")
-
-    return "86"
+    return _probe_cuda_arch(os.environ.get("GRID_CUDA_ARCH"))
 
 
 def _linalg_backend_compile_flags(arch: str) -> tuple[str, list[str], str]:
@@ -528,12 +501,6 @@ def _fallback_summary(header_path: Path) -> str:
         if name in constants
     ]
     return ", ".join(parts) if parts else "fallback constants unavailable"
-
-
-def pytest_configure(config):
-    config.addinivalue_line("markers", "cuda_equivalence")
-    config.addinivalue_line("markers", "developer_only")
-    config.addinivalue_line("markers", "floating_base")
 
 
 def build_cuda_case_params(base_mode: str):
@@ -910,14 +877,14 @@ def _run_runner(executable: Path, sample_input: str, compile_cmd: list[str], num
         # ancestor-pair scratch can't be independently spilled (168784 B > the
         # ~101 KB cap); h1_2's PRODUCTION SO path is world-frame, which fits and
         # passes. Closing the body-frame gap = the deferred de-alias refactor in
-        # docs/idsva_so_inner_refactor_notes.md (gated on the perf sweep).
+        # docs/design_history/idsva_so_inner_refactor_notes.md (gated on the perf sweep).
         if "shared-memory request" in combined_output and "this device supports" in combined_output:
             pytest.skip(
                 "Kernel shared-memory request exceeds this GPU's per-block cap even "
                 "at the most-spilled tier (hardware limit, not a bug). See:\n"
                 f"  stderr: {result.stderr.strip()}\n"
                 "For the body-frame IDSVA-SO case this is the deferred ancestor-scratch "
-                "de-alias (docs/idsva_so_inner_refactor_notes.md); world-frame is the "
+                "de-alias (docs/design_history/idsva_so_inner_refactor_notes.md); world-frame is the "
                 "production path and fits."
             )
         # Register-pressure launch limit: at the robot's MAX_PERF_LEVEL_THREADS

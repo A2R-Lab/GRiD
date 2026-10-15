@@ -3,9 +3,9 @@ API Reference
 
 GRiD exposes the following Python interfaces:
 
-* :doc:`grid_rbd <grid_rbd>` is the Python package users actually call:
-  ``register_robot(...)`` → cached per-robot ``.so`` → numpy / JAX / torch
-  handles.
+* :doc:`grid_rbd <grid_rbd>` is the Python package users call:
+  ``register_robot(...)`` builds a cached per-robot ``.so`` and returns
+  numpy / JAX / torch handles.
 * :doc:`RBDReference <rbd>` contains CPU reference rigid-body dynamics and
   kinematics algorithms used for validation.
 * :doc:`URDFParser <urdf>` parses robot descriptions into the internal model

@@ -1011,13 +1011,13 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
 - **NEW robot or NEW GPU → run the launch-config autotune so it defaults to a FAST launch (A1).** The
   per-`(robot, base, algo)` optimal `(tier, threads)` is device- AND robot-specific (register-clamped big
   kernels want LOW threads; it is NOT "bigger → more threads"). Codegen bakes
-  `config/launch_configs/<robot>/<gpu>.json` into `grid_launch_config.cuh` so the host launchers (and every
+  `grid_assets/launch_configs/<robot>/<gpu>.json` into `grid_launch_config.cuh` so the host launchers (and every
   python/jax/torch binding) default to it — fixing the FFI thread-default pathology at the C++ root. If a
   `(robot, GPU)` pair has no entry, GRiD falls back to a conservative (slow) default. To generate one:
-  `bash config/autotune_robot.sh <robot> [fixed floating]` (RAM-safe serial build; single-call timing OFF —
+  `bash grid_assets/autotune_robot.sh <robot> [fixed floating]` (RAM-safe serial build; single-call timing OFF —
   it needs the `-rdc` shim; tunes on batch N=256). It auto-detects the GPU key `<model>_sm<arch>` (override
-  with `GPU_KEY=`), writes the override JSON via `config/autotune_to_launch_config.py`, then you re-codegen +
-  rebuild to pick it up, and optionally PR the JSON (`config/launch_configs/README.md`) to crowdsource the matrix.
+  with `GPU_KEY=`), writes the override JSON via `grid_assets/autotune_to_launch_config.py`, then you re-codegen +
+  rebuild to pick it up, and optionally PR the JSON (`grid_assets/launch_configs/README.md`) to crowdsource the matrix.
   Run it on a QUIET GPU (timing must be isolated). Full workflow:
   `docs/source/user_guide/tutorials/benchmarks.rst` ("Autotune launch config for your robot / GPU").
 
@@ -1687,7 +1687,7 @@ immune to the loaded-vs-disk skew by construction.
 
 ---
 
-*Companion: `docs/idsva_so_inner_refactor_notes.md` (SO internals + resume hints).*
+*Companion: `docs/design_history/idsva_so_inner_refactor_notes.md` (SO internals + resume hints).*
 
 ### 7.z2 Lie-chart second derivatives: the dN(0) chart-slope term is easy to drop (2026-08-11)
 
@@ -1894,7 +1894,7 @@ Two traps from slicing gen_all_code's emission into fragments:
    ones.
 
 ### 7.z12 Launch-config rows outlive the kernels they measured (2026-09-15, g1 idsva_so stale bake)
-`config/launch_configs/<robot>/<gpu>.json` rows are MEASUREMENTS, and nothing
+`grid_assets/launch_configs/<robot>/<gpu>.json` rows are MEASUREMENTS, and nothing
 re-measures them when codegen changes what a row's symbol actually launches.
 Two sub-classes, both found by the 2026-09-15 parked-list audit:
 1. **Dispatch re-routing**: EXP-1 (@6ef48ff, 2026-06-17) re-routed g1-fixed
@@ -1928,7 +1928,7 @@ SPLIT_REFRESH's cuda-carry soundness has three rungs: header-key replay
 (per-shard, byte-precise), else the 6-row covering-matrix byte-neutrality
 prover, else re-run. The matrix rows are SIX FIXED ROBOTS chosen to cover
 Python-conditional emission families — so an edit to ONE robot's URDF
-(config/robot_assets/rizon4.urdf's healed <inertial>s) left all 6 rows
+(grid_assets/robots/rizon4.urdf's healed <inertial>s) left all 6 rows
 byte-identical and the fallback printed "PROVEN byte-neutral" while rizon4's
 own emission changed; its carried shards kept attesting skips the tree no
 longer produces. FIX (@ this commit): codegen_neutrality.changed_robot_assets
@@ -1943,7 +1943,7 @@ detector.
 
 **7.z13 addendum (same day, leg 2 + two git gotchas):** the equivalence
 fleet resolves vendored URDFs from the RBDReference SUBMODULE's
-robot_assets/ (manifest resolver), NOT config/robot_assets/ — the rizon4 fix
+robot_assets/ (manifest resolver), NOT grid_assets/robots/ — the rizon4 fix
 had to land in BOTH copies, and an ORACLE-side asset change is invisible
 even to header-key replay (emitted headers never rotate) while it flips test
 outcomes, so the asset gate demotes BEFORE replay and
@@ -2856,7 +2856,7 @@ cannot self-match. Related: kill by PID only (the `pkill` bracket trick is unrel
 
 Measured on an RTX 5090 / 24-core host while splitting the bindings `robot.so` into one core
 unit + 13 family units (SSOT: `docs/open-tasks/archive/multi_tu_arc_2026-10-09.md`; design note:
-`docs/compile_time_arc_2026-10.md`). The facts, in the order they bit us:
+`docs/design_history/compile_time_arc_2026-10.md`). The facts, in the order they bit us:
 
 1. **Whoever address-takes a kernel compiles it.** The header's aggregate
    `init_grid_kernel_attrs` registers EVERY kernel (incl. the bench-only `_single_timing` twins

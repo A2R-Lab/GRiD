@@ -2,36 +2,37 @@ How do I…?
 ==========
 
 Start with ``pip install grid-rbd`` (:doc:`installation
-<user_guide/getting_started/installation>` — a source checkout is the
+<user_guide/getting_started/installation>`; a source checkout is the
 development alternative), then choose the task below.
 
 .. list-table::
    :header-rows: 1
    :widths: 40 60
 
-   * - I want to…
+   * - Task
      - Start here
-   * - **Call GRiD from Python** (numpy / JAX / torch)
-     - ``grid_rbd.load_robot("robot.urdf", backend=...)`` — one call, no name
-       ceremony. Guided tour: :doc:`user_guide/tutorials/python_wrappers`;
-       API: :doc:`api_reference/grid_rbd`; agent-facing lifecycle notes:
+   * - Call GRiD from Python (numpy / JAX / torch)
+     - ``grid_rbd.load_robot("robot.urdf", backend=...)``: one call, no name
+       needed. Guided tour: :doc:`user_guide/tutorials/python_wrappers`;
+       API: :doc:`api_reference/grid_rbd`; GPU-resident lifecycle notes
+       (stay on device, CUDA graphs, zero-copy interop):
        ``bindings/examples/AGENT_INTEGRATION_GUIDE.md``.
-   * - **Generate CUDA for a new robot**
+   * - Generate CUDA for a new robot
      - ``grid-generate path/to/robot.urdf [-f]`` (ten sample URDFs in
-       ``config/robot_assets/``); walkthrough:
+       ``grid_assets/robots/``); walkthrough:
        :doc:`user_guide/tutorials/codegen`.
-   * - **Make a big (humanoid) robot build fit in RAM / finish faster**
-     - :doc:`user_guide/getting_started/fast_robot_setup` — subset the build
+   * - Make a big (humanoid) robot build fit in RAM or finish faster
+     - :doc:`user_guide/getting_started/fast_robot_setup`: subset the build
        with ``algorithm_list=`` and/or skip the mjx twins with
        ``enable_mujoco_kernels=False`` (also ``grid-generate
        --algorithm-list ... --no-mujoco-kernels``).
-   * - **Use my own top-level GLASS instead of the copy vendored in grid.cuh**
+   * - Use my own top-level GLASS instead of the copy vendored in grid.cuh
      - ``gen_all_code(..., vendor_glass=False)``: the header ``#include``\ s
        ``glass.cuh`` from your include path (``-I<GLASS root>``) and aliases
-       ``grid::glass`` to ``::glass`` — one GLASS per translation unit. The
+       ``grid::glass`` to ``::glass``, one GLASS per translation unit. The
        default (vendored, self-contained) header is byte-identical. All
        ``*_DYNAMIC_SHARED_MEM_BYTES<T[, TIER]>()`` sizers are ``constexpr``.
-   * - **Label the GLASS revision when generating from a source archive (no .git)**
+   * - Label the GLASS revision when generating from a source archive (no .git)
      - ``gen_all_code(..., glass_revision="<sha>")`` or
        ``GRID_GLASS_REVISION=<sha>``: the ``// Pinned commit:`` line carries
        the bare revision, so the header is byte-identical to a git checkout's;
@@ -39,55 +40,56 @@ development alternative), then choose the task below.
        ``gen.glass_revision_source`` reports ``git`` / ``git-verified`` /
        ``supplied-unverified`` / ``unknown``. Distribution artifacts record
        their packaged pin automatically and report ``bundled``.
-   * - **Embed the generated header in a library or interpreter (no exit() on CUDA errors)**
+   * - Embed the generated header in a library or interpreter (no exit() on CUDA errors)
      - ``init_robotModel_checked`` / ``init_joint_limits_checked`` /
        ``free_robotModel_checked`` (or ``robotModel_owner<T>``):
        :doc:`user_guide/concepts/library_safe_initialization`.
-   * - **Add a new algorithm to GRiD**
+   * - Add a new algorithm to GRiD
      - :doc:`user_guide/tutorials/adding_an_algorithm` (numpy oracle in
        ``RBDReference`` first, then the codegen emitter, then equivalence
        tests).
-   * - **Run / verify the test suites, or fix a red receipt-verify CI job**
-     - :doc:`user_guide/tutorials/cuda_validation` — the marker map, the
+   * - Run / verify the test suites, or fix a red receipt-verify CI job
+     - :doc:`user_guide/tutorials/cuda_validation`: the marker map, the
        split-suite driver, and the two-tier ``gpu-proof.json`` receipt policy
-       (a red verify job after touching fingerprinted tests is BY DESIGN; run
+       (a red verify job after touching fingerprinted tests is expected; run
        the everyday refresh and commit the receipt).
-   * - **Benchmark GRiD (or compare against Pinocchio / MJX / Warp)**
+   * - Benchmark GRiD (or compare against Pinocchio / MJX / Warp)
      - :doc:`user_guide/tutorials/benchmarks`.
-   * - **Debug a CUDA-vs-numpy mismatch or a weird kernel failure**
-     - the `agent debugging guide <https://github.com/A2R-Lab/GRiD/blob/main/docs/agent_debugging_guide.md>`_ — the accumulated bug-class bible
-       (shared-memory init, output-convention traps, reduction
+   * - Debug a CUDA-vs-numpy mismatch or an unexplained kernel failure
+     - the `debugging guide <https://github.com/A2R-Lab/GRiD/blob/main/docs/agent_debugging_guide.md>`_
+       (``docs/agent_debugging_guide.md``): the catalogue of known bug
+       classes (shared-memory init, output-convention errors, reduction
        nondeterminism, launch-config pitfalls, …).
-   * - **Get MuJoCo/mjx-convention inputs & outputs**
+   * - Get MuJoCo/mjx-convention inputs and outputs
      - ``handle.mujoco.<method>(...)`` (per-call, thread-safe) or
-       ``output_convention="mujoco"`` — values AND derivative/second-order
+       ``output_convention="mujoco"``: values and derivative/second-order
        surfaces, floating base; see the conventions section of
        :doc:`user_guide/tutorials/python_wrappers`.
-   * - **Run several pipelines on one GPU without them sharing scratch**
+   * - Run several pipelines on one GPU without them sharing scratch
      - ``handle.context()`` (numpy, jax and torch handles alike) opens an
-       isolated runtime context on the same artifact — own arena, tables,
-       streams, launch overrides — closed with that handle;
+       isolated runtime context on the same artifact (own arena, tables,
+       streams, launch overrides), closed with that handle;
        ``handle.device_profile`` says what it was fitted to. One pipeline per
        context. :doc:`user_guide/concepts/runtime_contexts`.
-   * - **Swap inertias / attach a tool at run time and keep autograd honest**
+   * - Swap inertias / attach a tool at run time and keep autograd consistent
      - ``set_inertia_params`` / ``attach_tool`` / ``set_joint_dynamics``
        mutate the context under an exclusive admission lock and bump
        ``handle.model_version``; a torch/JAX backward whose forward ran under
-       an older version raises — recompute the forward. Same page as above.
-   * - **Know what this release supports, what changed, and what it does not do**
+       an older version raises, so recompute the forward. Same page as above.
+   * - Know what this release supports, what changed, and what it does not do
      - :doc:`user_guide/getting_started/compatibility` (platforms, contexts,
        graphs, operands, native-interface stability, differentiation, build cost).
-   * - **Know what shapes / dtypes / devices a call accepts (and rejects)**
+   * - Know what shapes / dtypes / devices a call accepts (and rejects)
      - One rule set per operand class, enforced natively on every surface:
        :doc:`user_guide/concepts/operand_validation`.
-   * - **Understand why something recompiled (or refused to)**
+   * - Understand why something recompiled (or refused to)
      - The per-robot ``.so`` cache key: :doc:`user_guide/getting_started/fast_robot_setup`;
        the test suites' compile caches and receipt fingerprints:
        :doc:`user_guide/tutorials/cuda_validation`.
-   * - **See what a registration would build, or warm the cache out-of-band**
+   * - See what a registration would build, or warm the cache out-of-band
      - ``grid_rbd.build_plan`` / ``grid_rbd.precompile``:
        :doc:`user_guide/getting_started/fast_robot_setup`.
-   * - **Tune kernel launch configs for my GPU**
-     - ``config/autotune_robot.sh --help`` (writes
-       ``config/launch_configs/<robot>/<gpu>.json``, baked at codegen time,
+   * - Tune kernel launch configs for my GPU
+     - ``grid_assets/autotune_robot.sh --help`` (writes
+       ``grid_assets/launch_configs/<robot>/<gpu>.json``, baked at codegen time,
        overlay-able at runtime via ``apply_profile_overlay``).

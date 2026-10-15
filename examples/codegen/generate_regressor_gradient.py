@@ -24,7 +24,7 @@ There is deliberately NO Python-binding op for this yet (the output is large:
 today, and `test/cuda_equivalents/test_cuda_regressor_gradient.py` is the
 end-to-end usage reference (numpy-oracle comparison + the pi-identity gate).
 
-Requires: pip install robot_descriptions  (included in dev dependencies)
+Uses the vendored URDF under grid_assets/robots/ (no extra dependency)
 
 Run:
     python examples/codegen/generate_regressor_gradient.py --output /tmp/grid_dydx.cuh
@@ -34,12 +34,11 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from robot_descriptions import iiwa14_description
 
 from URDFParser import URDFParser
 from grid_codegen import GRiDCodeGenerator
 
-URDF_PATH = iiwa14_description.URDF_PATH
+URDF_PATH = str(Path(__file__).resolve().parents[2] / "grid_assets" / "robots" / "iiwa14.urdf")  # vendored copy
 
 
 def main():

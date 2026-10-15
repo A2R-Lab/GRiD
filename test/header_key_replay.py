@@ -114,7 +114,7 @@ def _direct_content(record: dict) -> tuple[str | None, str]:
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
     try:
-        from config import robot_urdf
+        from grid_assets import robot_urdf
         urdf = Path(robot_urdf(name))
         if not urdf.exists():
             return None, f"no URDF for robot {name!r}"

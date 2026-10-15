@@ -1,4 +1,4 @@
-"""Bake autotune_ffi sweep LOGS into config/launch_configs <profile>_bases blocks.
+"""Bake autotune_ffi sweep LOGS into grid_assets/launch_configs <profile>_bases blocks.
 
 The overnight collection pattern (see test/benchmarks/autotune_ffi.py) runs the
 sweeps --dry-run and captures stdout to one log per robot+surface leg; the
@@ -23,7 +23,7 @@ shared row get base_maxperf None for that base, which skips the defensive
 clamp (never wrong, just unchecked) — loudly noted in the output.
 
 Default is a DRY RUN printing the planned JSON merges; --apply writes.
-⚠ A bake edits config/launch_configs/** = a CODEGEN INPUT -> stales the cuda
+⚠ A bake edits grid_assets/launch_configs/** = a CODEGEN INPUT -> stales the cuda
 receipt domain per-robot. Sequencing per docs/open-tasks TRIAGE: bake only
 after cuda shards carry header-key records, and only on explicit say-so.
 
@@ -121,7 +121,7 @@ def main():
     ap.add_argument("--surfaces", nargs="+", default=None, choices=SURFACES,
                     help="bake only these surfaces")
     ap.add_argument("--apply", action="store_true",
-                    help="write config/launch_configs (default: dry-run print)")
+                    help="write grid_assets/launch_configs (default: dry-run print)")
     args = ap.parse_args()
 
     log_dir = Path(args.logs)

@@ -33,7 +33,7 @@ from pathlib import Path
 # Repo root is two levels up from test/diagnostics/.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
-from config import robot_urdf
+from grid_assets import robot_urdf
 
 URDF_DIR = Path.home() / ".cache/robot_descriptions"
 ROBOTS = [
@@ -43,7 +43,7 @@ ROBOTS = [
     ("g1_floating",    URDF_DIR / "unitree_ros/robots/g1_description/g1_29dof.urdf", True),
     # H2+ (Unitree, nv=75 fixed / 81 floating) is the large-robot scaling target
     # that retired the redundant h1_2. Vendored locally (GRiD-internal, not in
-    # robot_descriptions), so it loads from config/robot_assets/.
+    # robot_descriptions), so it loads from grid_assets/robots/.
     ("h2_plus_fixed",     robot_urdf("h2_plus"), False),
     ("h2_plus_floating",  robot_urdf("h2_plus"), True),
 ]

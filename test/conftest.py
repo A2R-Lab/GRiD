@@ -46,9 +46,11 @@ _GPU_PROOF_SOURCE_MARKERS = ("cuda_equivalence", "python_wrappers")
 # "too many resources requested for launch" are REAL even when capable, use different wording, and are
 # deliberately NOT matched here.)
 _ENV_GUARD_SKIP = re.compile(
-    r"nvcc not found|nvcc not on PATH|CUDA runtime unavailable|"
-    r"not in (the )?manifest|Could not resolve manifest|"
-    r"URDF (parse failed|fixture not present)|\.urdf not (found|vendored)",
+    # Keep in step with the harness's own wording (test/test_suite_floor.py pins the real strings).
+    r"nvcc (was )?not found|nvcc not on PATH|nvcc (is )?(unavailable|not available)|"
+    r"CUDA runtime (is )?unavailable|"
+    r"not (found )?in (the )?(robot )?manifest|Could not resolve manifest|"
+    r"URDF (parse failed|fixture not present|not present)|\.urdf not (found|vendored)",
     re.IGNORECASE,
 )
 

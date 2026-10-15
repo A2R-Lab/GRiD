@@ -52,14 +52,14 @@ _NVCC_DEFAULT_FLAGS = [
 
 
 def _resolve_launch_config_robot(urdf_path: str) -> str:
-    """Map a URDF filename stem to its config/launch_configs/<robot> key.
+    """Map a URDF filename stem to its grid_assets/launch_configs/<robot> key.
 
-    config/launch_configs/ is keyed by canonical robot id (iiwa14, go2, g1, h2_plus), but the
+    grid_assets/launch_configs/ is keyed by canonical robot id (iiwa14, go2, g1, h2_plus), but the
     URDF filename stem is often longer (iiwa14_primitive_collision, g1_29dof). Without
-    this, the binding looked up config/launch_configs/iiwa14_primitive_collision/ (a MISS) and
+    this, the binding looked up grid_assets/launch_configs/iiwa14_primitive_collision/ (a MISS) and
     fell back to the conservative (TIER_SHARED, MAX_PERF_LEVEL_THREADS) default for every
     algo — i.e. it never applied the autotuned per-algo {tier, threads}. Match the stem
-    exactly first, else by the longest config/launch_configs/<name> the stem starts with. Returns
+    exactly first, else by the longest grid_assets/launch_configs/<name> the stem starts with. Returns
     the bare stem when nothing matches (an un-tuned robot stays on the safe fallback)."""
     stem = Path(urdf_path).stem
     try:
@@ -158,7 +158,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # model.damping/friction). Injected into `options` (and thus the cache key) ONLY when
     # True, so a damped .so never collides with the historical no-op .so.
     use_joint_dynamics = bool(options.get("use_joint_dynamics", False))
-    # A1b launch-config bake: the config/launch_configs/<robot>/<gpu>.json dir is keyed
+    # A1b launch-config bake: the grid_assets/launch_configs/<robot>/<gpu>.json dir is keyed
     # by the CANONICAL robot id (e.g. "iiwa14", "go2", "g1"), which the URDF FILENAME
     # stem often EXCEEDS (iiwa14_primitive_collision, g1_29dof). Resolve the stem to its
     # launch_configs key (exact, else longest-prefix) so codegen bakes the autotuned
@@ -356,7 +356,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
                     else robot.get_total_leaf_nodes()),
         "floating_base": bool(robot.floating_base),
         # Canonical launch-config robot key (URDF stem -> tuned-JSON dir). Lets the
-        # handle locate config/launch_configs/<key>/<gpu>.json for the E6 profile overlay.
+        # handle locate grid_assets/launch_configs/<key>/<gpu>.json for the E6 profile overlay.
         "launch_config_robot": launch_config_robot,
         "launch_config_gpu": launch_config_gpu,   # the profile actually baked (W15)
         "joint_names": joint_names,

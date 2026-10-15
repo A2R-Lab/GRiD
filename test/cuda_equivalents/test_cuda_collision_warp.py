@@ -29,7 +29,7 @@ from test.cuda_equivalents.test_cuda_collision_config_free import _robot, _gen_h
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
-from config import robot_urdf  # noqa: E402
+from grid_assets import robot_urdf  # noqa: E402
 
 COLLISION_INCLUDE = REPO_ROOT / "grid_codegen" / "collision"
 RUNNER_SOURCE = Path(__file__).with_name("cuda_collision_warp_runner.cu")

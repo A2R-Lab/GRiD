@@ -23,7 +23,7 @@ from grid_codegen.algorithms._collision import parse_spherized_urdf, urdf_joint_
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
-from config import robot_urdf
+from grid_assets import robot_urdf
 
 
 def _max_uncovered_gap(points, spheres):

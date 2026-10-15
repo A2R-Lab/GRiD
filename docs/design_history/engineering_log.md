@@ -1,31 +1,100 @@
-# Changelog
+# GRiD engineering log
 
-This changelog tracks notable in-tree changes since the GLASS rollout; the
-dated entries under "Unreleased — v2.0" are the running engineering log, and the
-release sections above it summarize what each PyPI release of `grid-rbd` ships.
+This is the dated, in-tree engineering log (what landed when, with the wave codes and
+measurements), not the release notes; the release notes for each `grid-rbd` version are the
+root [`CHANGELOG.md`](../../CHANGELOG.md).
 
-## 0.5.1 — faster per-robot builds + receipt infrastructure (2026-10)
+## Dated engineering log (post-GLASS rollout)
 
-Second packaged release (first: 0.5.0, 2026-10-08). User-visible:
+### 2026-10-14 — audit batch 3: documentation voice (same branch, merge-only)
+- Every user-facing document (README, cover, the Sphinx site, the developer
+  READMEs, CONTRIBUTING, RELEASING) rewritten to the voice of the authors'
+  papers: plain declarative sentences, "we" for the project and the imperative
+  for instructions, claims stated once with their number, caveats as separate
+  sentences, one name per thing. Em-dashes in prose went from 688 to under 20
+  (the remainder sit in code blocks and quoted error strings), arrows in prose
+  from 119 to 0, bold lead-ins from 125 to 0, capitalised emphasis from 58 to 0,
+  and emoji, exclamation marks and filler words to 0. Section headings became
+  functional nouns. No fact, path, number, flag, code block or link changed.
+- The rule set is recorded on the contribution guidelines page ("Writing
+  style"); the test that scans the Python-wrappers page for the VJP table now
+  anchors on the rewritten sentences.
+- Two content fixes surfaced by the pass: the design-principles page said the
+  spilled workspace is pinned in L2 while the tier page says pinning is off by
+  default after measurement (now consistent), and three pages still named the
+  old `config/` script paths.
 
-- **Per-robot `robot.so` builds are 4–8x faster** (multi-unit build, per-unit
-  object cache kept forever, `GRID_RBD_BUILD_JOBS`): iiwa14 ~100 s (was 10 min),
-  go2-floating ~2 min (was 13), g1 pin-only ~6 min (was 48). A wrapper-only change
-  rebuilds only the touched units. See the 2026-10-09 entry and Fast Robot Setup.
-- **Compile-on-first-use:** `get_robot(name, urdf_path=...)` compiles and
-  registers on a miss with a one-line WARNING estimating the build; `GRID_RBD_QUIET=1`
-  silences it.
-- **Cache maintenance:** `python -m grid_rbd.gc_cache` (dry run; `--execute`).
-- **Opt-in** `GRID_RBD_SPLIT_COMPILE=N` (nvcc `--split-compile` on the heavy unit),
-  content-keyed; off by default.
-- `algorithm_list` closure fixes (`forward_dynamics_parameter_gradient` needs
-  `forward_dynamics`; the integrator gradients need `integrator`).
-- Reproducible sdist/wheel builds in CI (`SOURCE_DATE_EPOCH`).
-- Maintainer-side: CUDA test runners register only the kernels they launch, the
-  receipt scheduler measures process-tree RAM, two GPU shards run side by side
-  (2026-10-10 entry) — receipts are hours faster.
+### 2026-10-14 — audit batch 2: documentation truth (same branch, merge-only)
+- **One release notes file.** The root `CHANGELOG.md` is the release notes; this
+  file (formerly `docs/CHANGELOG.md`) is the dated engineering log under
+  `docs/design_history/`. `docs/PACKAGING.md` → `RELEASING.md` (describes the
+  receipt gate in `publish.yml`). The three engineering notes at the docs root
+  moved to `design_history/`; the durable "inner owns scratch placement" rule now
+  lives on the design-principles page.
+- **README is a router** (330 → 150 lines): pitch, status, the two entry points
+  mirroring the cover, a prominent pointer to the site, a repo map, one figure,
+  citation, contributors. Every detail section became a link to the page that
+  owns it. `CONTRIBUTING.md` points at the site's contribution guidelines.
+- **Site pages:** one receipt-entry-point story (run_validation.py launcher,
+  run_split_suite.py driver, run_gpu_proof.sh thin wrapper; tiered-scope and
+  "nightly job" text gone); fast_robot_setup's table is the single source for
+  build times; wrong invocations fixed (dropped bench flags, two env vars no code
+  reads, `use_thread_group=` and other helper signatures, "four tiers" → the real
+  nine-rung ladder, the non-existent `_host` surface, layer counts); codegen page
+  gained the profile table, both init paths (aggregate vs per-algorithm twins) with
+  their cost, and a "Compile time and footprint" section; env-knob list rebuilt
+  from `env_knobs.py` and guarded by `test/test_doc_env_knobs.py`; gitignored
+  paths and wave/phase codes removed from published pages.
+- **Developer READMEs** (bindings, examples, notebooks, test, benchmarks,
+  diagnostics, landing, launch configs) brought in line: PyPI-first, four example
+  tracks mapped onto the two entry points, 31 unbucketed test files bucketed,
+  stale cache dirs / branch names / `[dev]`-installs-Pinocchio claims fixed.
+- **Links:** every `a2r-lab.github.io` link → `a2r-lab.org`; paper link → A2R;
+  contributors pipeline repointed at this repository (every past contributor
+  kept; the unrendered Quarto file retired).
+- **Bloat:** wave/phase codes stripped from shipped pybind/public docstrings and
+  generated-header comments; the unreferenced benchmark archive and four dated
+  result dumps removed from the tree (git history keeps them); regenerated
+  benchmark reports gitignored.
+- NOT done (deliberate): the release figure set stays as generated by the audited
+  figure pipeline; the zero-expected-skips wave is sized in the follow-ups ledger
+  (item 14) and runs separately.
 
-## Unreleased — v2.0 — cuBLASDx removal + resource-tier system
+### 2026-10-14 — audit batch 1: fix what was broken (merge-only)
+From the 2026-10-13 skeptical audit (four read-only lanes, every claim re-verified):
+- **`config/` → `grid_assets/`** (`robots/`, `launch_configs/`): the repo-only asset
+  package no longer shadows a generic module name; every path reference, the
+  resource resolver, the fingerprint scope and the policies follow.
+- **Suite floor repaired:** `test/conftest.py::_ENV_GUARD_SKIP` matched "nvcc not
+  found" but none of the harness's real skip strings ("nvcc was not found", "CUDA
+  runtime is unavailable", "… not found in the robot manifest", …); widened and
+  pinned by `test/test_suite_floor.py`.
+- **Dev install fixed:** `install/requirements-dev.txt` pins `pin<4` + `cmeel-eigen`
+  + `cmeel-urdfdom<5` (bare `pin` resolved 4.x and broke `import pinocchio`), adds
+  `pyyaml` + `matplotlib` (CI used to add them by hand); `base_install.sh` initialises
+  submodules BEFORE the editable install; `developer_install.sh` installs the GPU
+  frameworks (`[all]`, `jax[cuda12]`, torch cu128; `SKIP_GPU_FRAMEWORKS=1`).
+- **CI:** one pytest-gpu-proof pin (read from requirements-dev), compile-free CUDA
+  sentinels added to the cpu-lane, the Pinocchio peer suites run on every PR, and
+  `publish.yml` refuses a tag without a fresh release-policy receipt. `make verify`
+  (still calling the deleted scope file) and `make test-cpu` (a different set from
+  CI) fixed.
+- **Receipt scope:** `test/__init__.py`, both policies and the expected-skips
+  baseline are fingerprinted; READMEs inside fingerprinted dirs are excluded.
+- **Dead code/config removed:** `ArenaRegion`/`SpillRung` (never instantiated, yet
+  documented as the live mechanism), `_grid_repo_root`, `cuda_harness.pytest_configure`,
+  `KERNEL_ARG_TOKENS`, `_POS`, `DEFAULT_AUTOTUNE_BATCH_ITERS`, `PTR_ALIAS`,
+  `[tool.black]`, dead `robot_curated`/`robot_nightly` markers, unused Sphinx
+  extensions, `grid_codegen/requirements.txt`, orphan pre-commit/flake8 files,
+  `prune_results.py`.
+- **One toolchain probe:** `grid_codegen/cuda_env.py` replaces four drifting
+  nvidia-smi detectors and two nvcc readers in the test/bench/example code (the
+  bindings' cache-key probes are deliberately untouched); the benchmark `_hash_tree`
+  now hashes paths like the harness's.
+- Examples default to the vendored `grid_assets/robots/*.urdf` (no
+  `robot_descriptions` needed); stale skip-message install hints fixed; rizon4
+  sha in `URDF_SOURCES.md` corrected; `prepare_reference_models.py` default target
+  fixed.
 
 ### 2026-10-13 — website: two entry points (merge-only)
 - The cover, docs home, Installation and the codegen tutorial now present GRiD's
@@ -361,8 +430,8 @@ threaded through the CUDA codegen and the Python reference:
 exact pre-rip content of any file.
 
 **Design docs:**
-- [docs/design_history/cublasdx_removal_design.rst](docs/design_history/cublasdx_removal_design.rst) — original cuBLASDx-removal rationale.
-- [docs/source/user_guide/concepts/resource_tier_system.rst](docs/source/user_guide/concepts/resource_tier_system.rst) — tier system shipped on top, plus the deferred LITE-48KB follow-up.
+- [docs/design_history/cublasdx_removal_design.rst](cublasdx_removal_design.rst) — original cuBLASDx-removal rationale.
+- [docs/source/user_guide/concepts/resource_tier_system.rst](../source/user_guide/concepts/resource_tier_system.rst) — tier system shipped on top, plus the deferred LITE-48KB follow-up.
 
 ### Why
 

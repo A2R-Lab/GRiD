@@ -35,7 +35,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "external"))  # peer submodules (RBDReference/URDFParser/GLASS)
 
-from config import robot_urdf  # noqa: E402
+from grid_assets import robot_urdf  # noqa: E402
 from grid_codegen.env_knobs import generation_env
 from grid_codegen import GRiDCodeGenerator  # noqa: E402
 from grid_codegen.algo_registry import ALGO_REGISTRY  # noqa: E402
@@ -117,22 +117,11 @@ def get_urdf_path(robot: str) -> str:
 # ---------------------------------------------------------------------------
 # CUDA arch detection
 # ---------------------------------------------------------------------------
+from grid_codegen.cuda_env import detect_cuda_arch as _probe_cuda_arch  # noqa: E402
+
+
 def detect_cuda_arch() -> str:
-    env_arch = os.environ.get("GRID_CUDA_ARCH")
-    if env_arch:
-        return env_arch.replace(".", "")
-    nvidia_smi = shutil.which("nvidia-smi")
-    if nvidia_smi:
-        result = subprocess.run(
-            [nvidia_smi, "--query-gpu=compute_cap", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True,
-        )
-        if result.returncode == 0:
-            for line in result.stdout.splitlines():
-                cc = line.strip()
-                if cc:
-                    return cc.replace(".", "")
-    return "86"
+    return _probe_cuda_arch(os.environ.get("GRID_CUDA_ARCH"))
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +143,10 @@ def _hash_tree(root: Path, suffixes: tuple[str, ...]) -> str:
         if "__pycache__" in path.parts:
             continue
         if path.suffix in suffixes:
+            # Same semantics as test/cuda_equivalents/cuda_harness._hash_tree:
+            # the relative path is part of the key, so a rename invalidates.
+            digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+            digest.update(b"\0")
             digest.update(path.read_bytes())
     return digest.hexdigest()
 
@@ -1041,7 +1034,6 @@ def _clip_grid_to_cap(thread_grid: tuple[int, ...], cap: int) -> tuple[int, ...]
         return fit
     # Degenerate: every grid point exceeds the cap — fall back to the cap itself.
     return (cap,)
-DEFAULT_AUTOTUNE_BATCH_ITERS: int = 50    # outer rep count per (algo, thread count) cell
 
 
 # ─── driver-teardown settle gate (2026-08-23 box-freeze root cause) ─────────

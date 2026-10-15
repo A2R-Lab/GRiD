@@ -56,6 +56,6 @@ entrywise failure (see the
 
 See Also
 --------
-* :doc:`inverse_dynamics` — inverse dynamics counterpart (RNEA).
-* :doc:`minv` — direct mass-matrix inverse (used by the FD variant).
-* :doc:`crba` — composite-rigid-body mass matrix.
+* :doc:`inverse_dynamics`: inverse dynamics counterpart (RNEA).
+* :doc:`minv`: direct mass-matrix inverse (used by the FD variant).
+* :doc:`crba`: composite-rigid-body mass matrix.

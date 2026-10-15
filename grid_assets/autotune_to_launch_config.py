@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Convert an ``autotune_best_<host>.json`` slice into a
-``config/launch_configs/<robot>/<gpu_key>.json`` override (the A1 launch-config schema).
+``grid_assets/launch_configs/<robot>/<gpu_key>.json`` override (the A1 launch-config schema).
 
 The autotune producers (``test/benchmarks/autotune_ffi.py`` and the tier-sweep
 tooling — ``per_algo_bench.py --mode autotune`` driven by
@@ -10,7 +10,7 @@ the canonical per-host artifact
 
     {"metadata": {hostname, gpu_name, cuda_arch}, "best": {robot: {base: {algo: {tier, threads, us}}}}}
 
-``config/launch_configs/<robot>/<gpu>.json`` (consumed by codegen to emit
+``grid_assets/launch_configs/<robot>/<gpu>.json`` (consumed by codegen to emit
 ``grid_launch_config.cuh``) wants the documented schema::
 
     {gpu, cuda_arch, gpu_name, autotune_N, source,
@@ -29,7 +29,7 @@ Usage::
         --gpu-name "NVIDIA GeForce RTX 5090" --autotune-N 256 \
         [--best test/benchmarks/results/autotune_best_<host>.json] \
         [--source "GRiD autotune sweep 2026-06-13"] \
-        [--out config/launch_configs/iiwa14/rtx5090_sm120.json]
+        [--out grid_assets/launch_configs/iiwa14/rtx5090_sm120.json]
 """
 
 from __future__ import annotations
@@ -90,7 +90,7 @@ def main() -> None:
                     help="`source` provenance string (default: "
                          "'GRiD autotune sweep <today>').")
     ap.add_argument("--out", type=Path, default=None,
-                    help="Output path (default: config/launch_configs/<robot>/<gpu_key>.json).")
+                    help="Output path (default: grid_assets/launch_configs/<robot>/<gpu_key>.json).")
     args = ap.parse_args()
 
     best_path = args.best or (
@@ -156,7 +156,7 @@ def main() -> None:
     source = args.source or f"GRiD autotune sweep {today}"
 
     out_path = args.out or (
-        REPO_ROOT / "config" / "launch_configs" / args.robot / f"{args.gpu_key}.json")
+        REPO_ROOT / "grid_assets" / "launch_configs" / args.robot / f"{args.gpu_key}.json")
 
     # Merge into any existing config so we PRESERVE ffi_bases / torch_bases /
     # pybind_bases (baked by autotune_ffi.py) and only update the host `bases`

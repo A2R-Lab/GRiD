@@ -1,9 +1,9 @@
 Glossary
 ========
 
-The terms of art this repo uses — several are overloaded, and two different
-things are both called a "tier". When a doc and this page disagree, fix the
-doc.
+The terms of art used in this repository. Several are overloaded, and two
+different things are both called a tier. When a page and this glossary
+disagree, the glossary is authoritative and the page is corrected.
 
 .. glossary::
 
@@ -13,13 +13,13 @@ doc.
       ``TIER_MINIMAL``) that move progressively more scratch to the global
       ``d_workspace``. Selected per algorithm per robot at codegen time
       (:doc:`concepts/resource_tier_system`), dispatched via the
-      ``RESOURCE_TIER`` template parameter. **This is what "tier" means
-      unqualified.**
+      ``RESOURCE_TIER`` template parameter. This is what "tier" means when
+      unqualified.
 
    precompile variants
-      The OTHER historical use of "tier": ``grid_rbd.precompile(...,
+      The other use of "tier": ``grid_rbd.precompile(...,
       tiers=...)`` builds several pre-compiled ``.so`` option-variants of one
-      robot. Unrelated to resource tiers — prefer calling these *variants*.
+      robot. They are unrelated to resource tiers; call them variants.
 
    arena
       A kernel's flat shared-memory scratch pool (``s_temp``), laid out at
@@ -32,9 +32,10 @@ doc.
       fixed order until the arena fits the target.
 
    ``_inner`` / ``_device`` / ``_kernel`` / host
-      The four emission layers per algorithm — placement-free computational
-      core; the ``__device__`` orchestrator owning scratch placement; the
-      ``__global__`` batch entry point; the H↔D-copying host wrapper. See
+      The four emission layers per algorithm: the placement-free
+      computational core; the ``__device__`` orchestrator owning scratch
+      placement; the ``__global__`` batch entry point; the host wrapper that
+      performs the host-device copies. See
       :doc:`concepts/codegen_architecture`.
 
    mjx / twin / pin
@@ -48,8 +49,8 @@ doc.
       outcomes so CPU-only CI can gate merges. A *shard* is one
       crash-isolated slice of the split suite with its own fingerprint; a
       *carried* shard is one whose files are unchanged since an ancestor
-      commit's green run and is reused rather than re-executed (everyday
-      policy only — a release receipt refuses carries).
+      commit's green run and is reused rather than re-executed. Carries are
+      everyday policy only; a release receipt refuses them.
 
    fingerprint
       A content hash binding GPU evidence to its inputs. The global receipt
@@ -65,13 +66,13 @@ doc.
 
    ffi_bases
       The per-algo ``{tier, threads}`` block of a robot's tuned launch config
-      (``config/launch_configs/<robot>/<gpu>.json``) used by the jax/torch
+      (``grid_assets/launch_configs/<robot>/<gpu>.json``) used by the jax/torch
       FFI launch path; ``pybind_bases`` / ``torch_bases`` are runtime
       overlays over the same bake.
 
    batch-to-land
-      Bench metric: wall time for a batch INCLUDING the device→host copy of
-      the result (what a consumer actually waits for), vs. kernel-only time.
+      Bench metric: wall time for a batch including the device-to-host copy
+      of the result (what a consumer waits for), versus kernel-only time.
 
    mimic joint
       A URDF joint slaved to another via ``<mimic>`` (``q_child = m·q_parent
@@ -81,5 +82,5 @@ doc.
 
    subset build / ``algorithm_list``
       Building only named algorithms (plus transitive deps) into a robot's
-      ``.so``. Un-built methods raise the clean "not built into this robot
+      ``.so``. Un-built methods raise the "not built into this robot
       .so — add to algorithm_list" error (C-ABI rc=3).

@@ -1,10 +1,10 @@
 Inspecting a robot model with URDFParser
 ========================================
 
-You rarely call the parser yourself: ``grid-generate`` and
-``grid_rbd.register_robot`` parse the URDF for you. Reach for it directly when
-you want to see what the generated code will assume, when you write or check a
-reference algorithm in RBDReference, or when a URDF fails to parse.
+``grid-generate`` and ``grid_rbd.register_robot`` parse the URDF themselves,
+so the parser is rarely called directly. Call it directly to see what the
+generated code will assume, to write or check a reference algorithm in
+RBDReference, or when a URDF fails to parse.
 
 Parse and look around
 ---------------------
@@ -13,7 +13,7 @@ Parse and look around
 
    from URDFParser import URDFParser
 
-   robot = URDFParser().parse("config/robot_assets/iiwa14.urdf", floating_base=False)
+   robot = URDFParser().parse("grid_assets/robots/iiwa14.urdf", floating_base=False)
 
    robot.get_num_pos(), robot.get_num_vel(), robot.get_num_bodies()
    [j.get_name() for j in robot.get_joints_ordered_by_id()]   # the input-vector order

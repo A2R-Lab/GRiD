@@ -31,7 +31,7 @@ from test.cuda_equivalents.test_cuda_collision_config_free import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
-from config import robot_urdf
+from grid_assets import robot_urdf
 
 NATIVE_RUNNER = Path(__file__).with_name("cuda_collision_native_runner.cu")
 SELFCC_RUNNER = Path(__file__).with_name("cuda_collision_native_selfcc_runner.cu")

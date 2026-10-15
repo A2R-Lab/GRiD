@@ -7,7 +7,7 @@ plus a body-frame offset — into the generated header, emitting batched
 One compiled robot then evaluates FK (and its Jacobian) at every baked target in a
 single launch. Targets are given as a list of {"anchor_jid": int, "offset": (x,y,z)}.
 
-Requires: pip install robot_descriptions  (dev dependency)
+Uses the vendored URDF under grid_assets/robots/ (no extra dependency)
 
 Run:
     python examples/codegen/generate_multi_target.py --output /tmp/grid_iiwa14_mt.cuh
@@ -17,12 +17,11 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from robot_descriptions import iiwa14_description
 
 from URDFParser import URDFParser
 from grid_codegen import GRiDCodeGenerator
 
-URDF_PATH = iiwa14_description.URDF_PATH
+URDF_PATH = str(Path(__file__).resolve().parents[2] / "grid_assets" / "robots" / "iiwa14.urdf")  # vendored copy
 
 
 def build_batch(robot):

@@ -27,7 +27,7 @@ def checkout_root():
 
 
 def resource_path(name):
-    roots = {'GLASS': ('external', 'GLASS'), 'launch_configs': ('config', 'launch_configs')}
+    roots = {'GLASS': ('external', 'GLASS'), 'launch_configs': ('grid_assets', 'launch_configs')}
     if name not in roots:
         raise ValueError(f'Unknown GRiD resource: {name}')
     root = checkout_root()

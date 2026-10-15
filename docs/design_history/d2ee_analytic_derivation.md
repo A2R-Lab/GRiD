@@ -1,3 +1,6 @@
+> **Retired design note (moved to `docs/design_history/`, 2026-10-14).** The derivation below is implemented as
+> `RBDReference.end_effector_pose_hessian_analytic` and mirrored by the CUDA codegen; kept for the math, not as a task.
+
 # d²(pose)/dv² analytic derivation — closed-form algorithm
 
 **Status (2026-05-31):** Math complete and validated FLEET-WIDE. The analytic

@@ -393,7 +393,6 @@ def single_call_printf_line(key: str) -> str:
 #
 # Step 3 is LIVE: gen_add_constants_helpers now composes its arena t_counts from
 # these closures (compose_arena_full / compose_arena_rungs). The pieces:
-#   - the `ArenaRegion` / `SpillRung` schema the per-algo folds will populate,
 #   - an `ArenaCtx` snapshot of the sizing primitives + inner-temp helper results,
 #   - a per-algo `arena_full_fn` closure that recomputes the FULL (least-spill /
 #     rung-0) arena t_count from the ArenaCtx, DECOUPLED from the imperative math,
@@ -408,26 +407,6 @@ def single_call_printf_line(key: str) -> str:
 # picker-dependent single-value override (grav_full_spill) inseparable from the
 # smem budget (see the note above `idsva_so_world_frame` in `_ARENA_FULL_FNS`).
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-@dataclass(frozen=True)
-class ArenaRegion:
-    """One named buffer band in an algo's shared-memory arena. The per-algo folds
-    (3.1+) populate these; the full arena is `sum(count_fn(ctx))` + the auto-injected
-    cross-cutting rt_xfixed region for s_temp-domain arenas (the §2 bug class fix)."""
-    name: str
-    count_fn: Callable[[ArenaCtx], int]
-    domain: str = "s_temp"          # "s_temp" | "XmatsHom"
-    spillable: bool = False         # can move to d_workspace at a spilled rung
-    cross_cutting: bool = False     # contributed by a shared helper (rt_xfixed)
-
-
-@dataclass(frozen=True)
-class SpillRung:
-    """One rung of an algo's spill ladder, least-spill first. `in_smem` names the
-    regions KEPT in smem at this rung (the rest route to d_workspace)."""
-    label: str
-    in_smem: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -633,8 +612,7 @@ def arena_ctx_from_codegen(gen, xi=None, xhom=None, rt=None) -> ArenaCtx:
 # Per-algo FULL (least-spill / rung-0) arena t_count closures, decoupled from the
 # imperative gen_add_constants_helpers math. Each mirrors the buffer list the kernel
 # slices; the parity test proves they agree on every matrix robot. The `+ c.rt`
-# terms encode the rt_xfixed reservation on the s_temp-domain arenas (§2); commit 3.1
-# refactors these into `ArenaRegion`s with domain-driven auto-injection.
+# terms encode the rt_xfixed reservation on the s_temp-domain arenas (§2).
 _ARENA_FULL_FNS: dict[str, Callable[[ArenaCtx], int]] = {
     # ── Core dynamics (s_temp domain) ──
     "inverse_dynamics":

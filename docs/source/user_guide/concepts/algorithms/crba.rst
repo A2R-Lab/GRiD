@@ -11,8 +11,8 @@ body inertias along the kinematic tree.
 
 CRBA is one of two GRiD paths for getting mass-matrix information:
 
-* **CRBA** produces the full :math:`M`, useful when downstream
-  algorithms need the dense matrix (e.g. operational-space inverse
+* CRBA produces the full :math:`M`, useful when downstream
+  algorithms need the dense matrix (for example operational-space inverse
   dynamics, Cholesky-based forward-dynamics solves).
 * :doc:`minv` produces :math:`M^{-1}`, normally without forming :math:`M`
   first. Mimic and spherical models instead use a dense CRBA-based inverse.
@@ -56,7 +56,7 @@ base are supported; per-robot caveats are listed on the
 
 See Also
 --------
-* :doc:`minv` — direct mass-matrix inverse (skip ``crba`` if you
-  only need :math:`M^{-1}` for forward dynamics).
-* :doc:`inverse_dynamics` — inverse dynamics (RNEA).
-* :doc:`aba` — recursive forward dynamics (no explicit mass matrix).
+* :doc:`minv`: direct mass-matrix inverse (``crba`` is not needed when
+  only :math:`M^{-1}` is required for forward dynamics).
+* :doc:`inverse_dynamics`: inverse dynamics (RNEA).
+* :doc:`aba`: recursive forward dynamics (no explicit mass matrix).

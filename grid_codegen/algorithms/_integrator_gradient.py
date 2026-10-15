@@ -1264,7 +1264,7 @@ def _integrator_du_extra_t_buffers(self, nq, n, fb, dqdd_in_smem, dab_in_smem, c
 
 
 def gen_integrator_du_arena_carve_struct(self):
-    """Emit the namespace-scope `integrator_du_arena<T>` carve struct (GATO ASK6):
+    """Emit the namespace-scope `integrator_du_arena<T>` carve struct:
     mirrors the integrator_with_gradient kernel's TIER_SHARED shared-arena layout
     (the with-x_kp1 superset shape) at the TIER_SHARED spill rung this robot's
     codegen picked — including which buffers left smem (s_D_qdd_stage / s_dAB)

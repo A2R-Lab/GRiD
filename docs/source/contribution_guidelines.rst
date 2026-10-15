@@ -56,6 +56,19 @@ documentation dependencies (``docs/requirements.txt``):
 
 Keep the strict build warning-free; the workflow treats warnings as errors.
 
+Writing style
+~~~~~~~~~~~~~
+
+Write documentation the way the GRiD, MPCGPU and GATO papers are written.
+Use plain declarative sentences of one idea each, "we" for what the project
+does and the imperative for instructions. State a claim once, with its number,
+and put caveats in their own sentences. Use one name per thing throughout.
+Avoid em-dashes, arrows in prose, capitalised emphasis, bold lead-ins, emoji,
+exclamation marks, rhetorical questions and filler such as "simply", "note
+that" or "importantly". Describe current behaviour as fact; dates, decision
+records and the history of a change belong in the changelog or in
+``docs/design_history/``.
+
 License
 -------
 

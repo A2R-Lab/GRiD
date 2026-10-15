@@ -40,7 +40,7 @@ jobs:
       - name: Install pytest-gpu-proof
         # pyyaml is required by `gpu-proof verify` when --policy is a .yaml file
         # (verify.py imports yaml); the plugin package itself does not depend on it.
-        run: pip install "pytest-gpu-proof==0.4.1" pyyaml  # pinned (audit W09) — keep in step with install/requirements-dev.txt
+        run: pip install "$(grep -o '^pytest-gpu-proof==[0-9.]*' install/requirements-dev.txt)" pyyaml  # the ONE pin lives in install/requirements-dev.txt
 
       - name: Verify receipt
         # The signer's public keys come from github.com/{user}.keys — no secrets.
@@ -67,7 +67,7 @@ jobs:
       - name: Install GRiD (CPU deps only)
         # Packaging unit tests import the build hooks outside pip's isolated
         # build environment, so their setuptools dependency must be explicit.
-        run: pip install -e . && pip install pytest matplotlib "pytest-gpu-proof==0.4.1" pyyaml "setuptools>=77"
+        run: pip install -e . && pip install pytest matplotlib pyyaml "setuptools>=77" "$(grep -o '^pytest-gpu-proof==[0-9.]*' install/requirements-dev.txt)"
 
       # The BROAD CPU set (audit W00, 2026-09-19): every test/test_*.py + the
       # benchmark-spec guards + the CPU-only bindings modules. The former six-
@@ -81,6 +81,8 @@ jobs:
           python -m pytest \
             test/test_*.py \
             test/benchmarks/test_*.py \
+            test/cuda_equivalents/test_pin_only_default.py \
+            test/cuda_equivalents/test_cuda_matmul_blockwrap_regression.py \
             bindings/tests/test_mujoco_view.py \
             bindings/tests/test_mujoco_transforms.py \
             bindings/tests/test_register_forwarding.py \

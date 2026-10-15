@@ -2,18 +2,18 @@
 # Generate the signed GPU-proof receipt for GRiD's CUDA + wrapper equivalence
 # suites. Run this on a machine with a real GPU and a quiet box.
 #
-# Receipt SCOPE is tiered so the receipt is never an all-or-nothing barrier —
-# the fingerprint + signature + commit-SHA proof are identical regardless of how
-# many tests the receipt attests; a smaller scope is a valid (narrower) receipt:
+# ONE entry point story: test/run_validation.py is the LAUNCHER (plan ->
+# --execute -> commit evidence -> --finalize; --full for a release receipt),
+# test/run_split_suite.py is the DRIVER it runs, and this script is a THIN
+# WRAPPER over that driver for ad-hoc runs. All three write gpu-proof.json.
 #
-#   SCOPE=smoke test/run_gpu_proof.sh     # ~2 robots, cached cells — minutes; proves the plumbing
-#   SCOPE=curated test/run_gpu_proof.sh   # representative robot set — tens of minutes
-#   SCOPE=full  test/run_gpu_proof.sh     # every gpu_proof test — hours cold, the nightly job (DEFAULT)
-#   PYTEST_ARGS="-k go2" test/run_gpu_proof.sh   # ad-hoc scope on top of SCOPE
-#
-# Main requires the reviewed EXACT node-ID scope in test/gpu-proof-tests.txt (policy).
-# Smoke/curated runs are diagnostics, not replacements for the main receipt.
-# Prefer test/run_validation.py for a locked, logged everyday refresh.
+# Main requires a receipt whose collection equals test/gpu-proof-tests.txt
+# EXACTLY (policy required_test_manifest). A narrowed run is a local
+# diagnostic that proves the plumbing, never a candidate receipt:
+#   SCOPE=smoke test/run_gpu_proof.sh            # -k "iiwa14 or (go2 and floating)"
+#   SCOPE=curated test/run_gpu_proof.sh          # -k "iiwa14 or go2 or g1 or h1_2"
+#   PYTEST_ARGS="-k go2" test/run_gpu_proof.sh   # ad-hoc -k on top of SCOPE
+#   (SCOPE=full, the default, is the whole gpu_proof set.)
 #
 # The receipt records outcomes for every test carrying the gpu_proof marker
 # (auto-applied to cuda_equivalence + python_wrappers by test/conftest.py) and

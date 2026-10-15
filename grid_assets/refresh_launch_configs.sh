@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Refresh the LIVE config/launch_configs/<robot>/<gpu>.json picks from a tier-sweep, WITHOUT
-# the day-long recompile. Pipeline (see config/launch_configs/README.md):
+# Refresh the LIVE grid_assets/launch_configs/<robot>/<gpu>.json picks from a tier-sweep, WITHOUT
+# the day-long recompile. Pipeline (see grid_assets/launch_configs/README.md):
 #
 #   sweep (cached, split) ── host bases ──> harvest ──> bake ──> [ffi] ──> diff
 #
@@ -14,7 +14,7 @@
 #            key, per-algo merge, preserves ffi_bases). GPU-free.
 #   stage 3 (--with-ffi, GPU/overnight): test/benchmarks/autotune_ffi.py -> `ffi_bases`.
 #            Big robots (g1/h2_plus) get a non-SO .so subset (SO ffi falls back to host).
-#   stage 4: print git diff of config/launch_configs/ (NEVER commits).
+#   stage 4: print git diff of grid_assets/launch_configs/ (NEVER commits).
 #
 # WHY NOT config/autotune_robot.sh: it builds a FULL monolithic per-tier binary, so g1/h2_plus
 # hit the ~hour SO recompile (only the SPLIT noSO/SO binaries are cached). The sweep above
@@ -103,5 +103,5 @@ if [ "$WITH_FFI" = "1" ]; then
 fi
 
 echo "########## DONE $(date) — review diffs, commit manually ##########"
-git -C "$REPO_ROOT" status -s config/launch_configs/
-git -C "$REPO_ROOT" diff --stat config/launch_configs/
+git -C "$REPO_ROOT" status -s grid_assets/launch_configs/
+git -C "$REPO_ROOT" diff --stat grid_assets/launch_configs/

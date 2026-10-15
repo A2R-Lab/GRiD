@@ -2,8 +2,9 @@ name: Automatically Add Contributors
 on:
   push:
     branches:
-    - floating-base
     - main
+permissions:
+  contents: write   # pushes the regenerated README contributor table
 jobs:
   update-contributors:
     runs-on: ubuntu-latest
@@ -13,13 +14,13 @@ jobs:
       with:
         fetch-depth: 0
     - name: Setup Python3.11
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: 3.11
 
     - name: Installing GitHub CLI
       run: |
-        sudo apt -y update && sudo apt -y upgrade
+        sudo apt-get -y update
         sudo apt -y install software-properties-common
         sudo apt install -y gh jq nodejs npm
     - name: Install python packages
@@ -52,7 +53,7 @@ jobs:
         git add -u
         
         # Commit and push if there are changes
-        git diff-index --quiet HEAD || git commit -m "Update readme and contributors.qmd with contributors"
+        git diff-index --quiet HEAD || git commit -m "Update README contributors table"
         git push
 
       env:

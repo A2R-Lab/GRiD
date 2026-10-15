@@ -4,7 +4,7 @@
 Reads a winners dataset (parse_n16_winners.py output: {robots: {robot: {base:
 {algo: {threads, tier, us, max}}}}}) and writes each robot's
 ``<profile>_bases_by_n[str(n)][base]`` block as ``{algo: {tier, threads}}`` in
-``config/launch_configs/<robot>/<gpu>.json``.
+``grid_assets/launch_configs/<robot>/<gpu>.json``.
 
 Entries are written even when the bucket's tier differs from the baked ffi
 tier — the runtime overlay (RobotHandle.apply_batch_overlay) SKIPS those, and
@@ -35,7 +35,7 @@ def main() -> None:
     src = winners.get("meta", {}).get("source", args.winners)
     key = args.profile + "_bases_by_n"
     for robot, bases in winners["robots"].items():
-        cfg_path = REPO / "config" / "launch_configs" / robot / (args.gpu + ".json")
+        cfg_path = REPO / "grid_assets" / "launch_configs" / robot / (args.gpu + ".json")
         if not cfg_path.exists():
             print(f"[skip] {robot}: no {cfg_path}")
             continue

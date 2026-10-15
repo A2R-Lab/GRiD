@@ -42,7 +42,7 @@ CELLS = [
 
 def _robot(name, floating):
     with contextlib.redirect_stdout(io.StringIO()):
-        return URDFParser().parse(str(REPO / "config" / "robot_assets" / f"{name}.urdf"), floating_base=floating)
+        return URDFParser().parse(str(REPO / "grid_assets" / "robots" / f"{name}.urdf"), floating_base=floating)
 
 
 def _q_for(robot, floating, seed=20260920):

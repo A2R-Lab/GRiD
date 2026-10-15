@@ -9,10 +9,11 @@ labelled blocks the compiled example prints on stdin.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import sys
 
 import numpy as np
-from robot_descriptions import iiwa14_description
 
 from URDFParser import URDFParser
 from RBDReference import RBDReference
@@ -51,7 +52,7 @@ def ref_id(ref: RBDReference, q, qd, qdd) -> np.ndarray:
 
 
 def main() -> int:
-    robot = URDFParser().parse(iiwa14_description.URDF_PATH, floating_base=False)
+    robot = URDFParser().parse(str(Path(__file__).resolve().parents[2] / "grid_assets" / "robots" / "iiwa14.urdf"), floating_base=False)
     ref = RBDReference(robot)
     n = robot.get_num_joints()
     q, qd, qdd = make_inputs(n)

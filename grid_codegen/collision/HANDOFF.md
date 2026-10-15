@@ -61,7 +61,7 @@ its position in that frame (welded-link spheres are pre-folded onto the movable 
 Checked-in examples: `collision/assets/go2_spherized.urdf` (all-primitive, full coverage) and
 `collision/assets/iiwa14_spherized.urdf` (historical partial arm model, missing link 6/7 meshes).
 Regenerate iiwa from its source URDF for current use: the two pinned collision meshes and
-their licenses are bundled under `config/robot_assets/drake/`. These use the **foam interchange format**, so a foam-produced
+their licenses are bundled under `grid_assets/robots/drake/`. These use the **foam interchange format**, so a foam-produced
 spherized URDF is drop-in interchangeable (`parse_spherized_urdf` reads either).
 
 ---
@@ -143,7 +143,7 @@ Minimal launches: `cuda_collision_config_free_runner.cu` (single-tier) and
 Measured `config_free` latency (iiwa14, RTX 5090, 2026-08-02; B=1024, iters=50, threads=128,
 5 reps per arm): **native capsule rows 0.0970 µs/config vs spherized rows 0.3127 µs/config —
 ~3.2× faster native** (raw output: `test/benchmarks/results/overnight_20260803/legB_collision_ab/`;
-A/B runner archived at `test/benchmarks/archive/collision_configfree_timing.cu`).
+A/B runner was removed from the tree 2026-10-14; see git history for `test/benchmarks/archive/collision_configfree_timing.cu`).
 
 The underlying SDFs (squared-gap convention, `<0` = collision) live in
 `collision/grid_collision_geometry.cuh` — hand-written, robot-agnostic, peer to the GLASS linalg

@@ -22,7 +22,7 @@ import pytest
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
 sys.path.insert(0, str(_REPO / "bindings"))
-from config import robot_urdf  # noqa: E402
+from grid_assets import robot_urdf  # noqa: E402
 
 _IIWA = robot_urdf("iiwa14")
 pytestmark = [pytest.mark.python_wrappers, pytest.mark.developer_only]

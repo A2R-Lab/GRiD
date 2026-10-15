@@ -17,7 +17,7 @@ sys.path.insert(0, str(REPO / "bindings"))
 os.chdir(REPO)
 # Each invocation uses a new interpreter. Do not delete another worker's caches.
 
-from config import robot_urdf  # noqa: E402
+from grid_assets import robot_urdf  # noqa: E402
 from URDFParser import URDFParser  # noqa: E402
 from grid_codegen import GRiDCodeGenerator  # noqa: E402
 

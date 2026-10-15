@@ -85,7 +85,7 @@ def _idsva_so_use_world_frame(self):
     alpha == 1 and n_int == NV, so the existing non-mimic world path is already
     exactly correct (no internal slab / fold needed). Mirrors how floating/mimic
     already route here. Byte-identical for low/mid-DOF cardinal fixed-base robots
-    (predicate false). See docs/idsva_so_inner_refactor_notes.md + the spherical
+    (predicate false). See docs/design_history/idsva_so_inner_refactor_notes.md + the spherical
     progress memo + docs/open-tasks/archive/perf_idsva_so_bigrobot.md (EXP-1 high-DOF route).
     """
     return (self.robot.floating_base
@@ -2901,7 +2901,7 @@ def gen_idsva_so_body_frame_kernel(self, use_qdd_input = False, single_call_timi
     # (+25 % / +50 % at N = 256 / 1024, -17 % below); __maxnreg__(64) = two blocks there (-12..-21 %
     # at N <= 256, -1 % at 1024), and at the wrappers' SHARED launch 64 regs x 256 threads = four
     # blocks (N = 1024: -18 % vs the old kernel at its best count; 320 threads = three blocks and
-    # +25 %, hence the re-autotuned 256-thread pick in config/launch_configs/iiwa14). 64 x 1024
+    # +25 %, hence the re-autotuned 256-thread pick in grid_assets/launch_configs/iiwa14). 64 x 1024
     # fits the register file, so every tier's max block still launches. __maxnreg__ and
     # __launch_bounds__ are mutually exclusive.
     self.gen_add_code_line("__maxnreg__(64)")
@@ -3152,7 +3152,7 @@ def gen_idsva_so_world_frame_inner(self):
         "// world-frame IDSVA-SO shared-memory layout.",
         "// Inner owns scratch placement: SCRATCH_IN_SMEM picks s_temp (shared) vs",
         "// d_workspace (global). Repointing s_temp here keeps every layout line below",
-        "// unchanged. See docs/idsva_so_inner_refactor_notes.md (inner-owns-placement).",
+        "// unchanged. See docs/design_history/idsva_so_inner_refactor_notes.md (inner-owns-placement).",
         "if constexpr (!SCRATCH_IN_SMEM) { s_temp = d_workspace; } else { (void)d_workspace; }",
     ])
     # XImats is loaded INSIDE the inner, AFTER the s_temp repoint — so its sincos

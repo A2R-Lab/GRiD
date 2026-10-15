@@ -661,7 +661,7 @@ def gen_collision_namespace(self, tiers):
     # The geometry header must precede the reopened namespace (it defines the SDFs + opens
     # grid_collision). Emitted at file scope after the grid namespace closes.
     self.gen_add_code_line("")
-    self.gen_add_code_line('#include "grid_collision_geometry.cuh"  // W3 Component E: SDF primitives (grid_collision::)')
+    self.gen_add_code_line('#include "grid_collision_geometry.cuh"  // SDF primitives (grid_collision::)')
     self.gen_add_func_doc("Collision namespace: baked sphere data + config_free composed over "
                           "grid::multi_target_position + the static SDF geometry header")
     # consumers (and the warp runner) pick the config_free signature by tier count at preprocess time
@@ -1227,7 +1227,7 @@ def _gen_collision_namespace_capsule(self, tiers):
     n_rows = fine["n"]
 
     self.gen_add_code_line("")
-    self.gen_add_code_line('#include "grid_collision_geometry.cuh"  // W3 Component E: SDF primitives (grid_collision::)')
+    self.gen_add_code_line('#include "grid_collision_geometry.cuh"  // SDF primitives (grid_collision::)')
     self.gen_add_func_doc("Collision namespace (NATIVE capsule rows): baked row data + config_free composed over "
                           "grid::multi_target_position + the static SDF geometry header")
     self.gen_add_code_line("namespace " + self.file_namespace + "_collision {", True)

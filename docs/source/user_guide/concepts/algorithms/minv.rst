@@ -60,9 +60,9 @@ excluded. The policy does not establish a universal entrywise error bound.
 
 See Also
 --------
-* :doc:`crba` — full mass matrix (use this if you need :math:`M`
-  itself, not just :math:`M^{-1}`).
-* :doc:`inverse_dynamics` — inverse dynamics (RNEA); the ``c`` term in
+* :doc:`crba`: full mass matrix (for callers that need :math:`M`
+  itself rather than :math:`M^{-1}`).
+* :doc:`inverse_dynamics`: inverse dynamics (RNEA); the ``c`` term in
   the FD composition.
-* :doc:`aba` — recursive forward dynamics (independent of
+* :doc:`aba`: recursive forward dynamics (independent of
   :math:`M^{-1}`).

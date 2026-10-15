@@ -48,7 +48,7 @@ from test.cuda_equivalents.test_cuda_f_ext_gradient_equivalence import _parse_ru
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
-from config import robot_urdf
+from grid_assets import robot_urdf
 
 _RUNNER = Path(__file__).with_name("cuda_f_ext_gradient_runner.cu")
 _SUBSET = ["inverse_dynamics", "minv", "f_ext_gradient"]  # no SO kernels -> no deep-spill compile wall

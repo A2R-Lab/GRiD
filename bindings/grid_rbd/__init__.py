@@ -272,7 +272,7 @@ def register_robot(
     _profile_overlay : str | None, optional
         INTERNAL (underscore = not part of the public API; may change without
         notice). Which launch-config profile block of
-        ``config/launch_configs/<robot>/<gpu>.json`` seeds per-algo
+        ``grid_assets/launch_configs/<robot>/<gpu>.json`` seeds per-algo
         threads/tier overlays on this handle: ``"pybind"`` (default),
         ``"torch"``/``None`` (what the torch/jax registrars pass — jax's baked
         defaults already ARE its tuned config). Runtime-only.
@@ -652,7 +652,7 @@ def warm_robot(
     # FFI path, so it bakes the "ffi" profile (ffi_bases) by default — see
     # _compile.generate_grid_cuh + GRiDCodeGenerator.load_launch_config. The per-algo
     # {tier,threads} that get baked are NOT derivable from urdf_bytes, so without these
-    # the cache would NOT invalidate when config/launch_configs/ changes (e.g. after re-running
+    # the cache would NOT invalidate when grid_assets/launch_configs/ changes (e.g. after re-running
     # autotune_ffi.py) or when the profile differs. Fold BOTH the profile and the
     # RESOLVED config values into the cache key so a re-autotune rebuilds the .so.
     code_options["launch_config_profile"] = "ffi"
@@ -859,7 +859,7 @@ def list_registered(cache_dir: str | Path | None = None) -> list[dict[str, Any]]
 
 
 def build_plan(name: str, urdf_path: str | None = None, **opts: Any) -> dict[str, Any]:
-    """Resolve a registration WITHOUT building it (audit W10): the effective
+    """Resolve a registration WITHOUT building it: the effective
     codegen options, the build identity (toolchain / GLASS content / env
     knobs), the stage-1 input key, and whether the cache already holds a
     sound artifact for it (``cached`` / ``content_key`` / ``stale_reasons``).

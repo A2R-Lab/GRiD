@@ -97,7 +97,7 @@ def _record_header_content_keys():
 
     def _urdf_sha(robot_name) -> str | None:
         try:
-            from config import robot_urdf
+            from grid_assets import robot_urdf
             return _hash(robot_urdf(robot_name))
         except Exception:
             return None

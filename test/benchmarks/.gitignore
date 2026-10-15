@@ -1,5 +1,6 @@
 results/
-# Per-run sweep reports (timestamped / machine-tagged variants). The
-# canonical curated reports (benchmark.md, benchmark_multi_version.md,
-# README.md) stay tracked.
+# Benchmark reports are generated locally (generate_report.py / run_multi_version.py)
+# and never tracked; README.md is the only curated file under test/benchmarks/.
+benchmark.md
+benchmark_multi_version.md
 benchmark_multi_version_sm*.md

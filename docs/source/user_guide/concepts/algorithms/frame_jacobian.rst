@@ -6,8 +6,8 @@ Frame Jacobian (general-frame geometric Jacobian)
 Overview
 --------
 The frame-Jacobian family computes the :math:`6 \times n_v` geometric
-Jacobian :math:`J` of an arbitrary target frame — typically an
-end-effector or any named joint frame — relating generalized velocity
+Jacobian :math:`J` of an arbitrary target frame (typically an
+end-effector or any named joint frame), relating generalized velocity
 :math:`\dot q` to the spatial velocity (twist) of that frame. Rows are
 ordered ``[linear(3); angular(3)]`` to match Pinocchio's
 ``getFrameJacobian`` / ``getJointJacobian``.
@@ -29,9 +29,9 @@ Reference frames
 of the three Pinocchio reference-frame conventions, selected by a
 ``reference_frame`` argument:
 
-* ``LOCAL`` (``0``) — twist in the frame's own body axes.
-* ``WORLD`` (``1``) — spatial Jacobian at the world origin.
-* ``LOCAL_WORLD_ALIGNED`` (``2``) — at the frame origin, with
+* ``LOCAL`` (``0``): twist in the frame's own body axes.
+* ``WORLD`` (``1``): spatial Jacobian at the world origin.
+* ``LOCAL_WORLD_ALIGNED`` (``2``): at the frame origin, with
   world-aligned axes (the default).
 
 Signature
@@ -70,7 +70,7 @@ The Python reference is ``RBDReference.frame_jacobian`` /
 CUDA codegen lives in
 `grid_codegen/algorithms/_frame_jacobian.py
 <https://github.com/A2R-Lab/GRiD/tree/main/grid_codegen>`__. It is an
-**opt-in, additive** family: the surfaces are only emitted when the
+opt-in, additive family: the surfaces are only emitted when the
 ``frame_jacobian`` key is explicitly selected (it pulls in the
 ``end_effector_pose`` world-transform machinery), so existing profiles' headers
 are byte-identical. The CUDA path emits the geometric Jacobian
@@ -78,14 +78,14 @@ are byte-identical. The CUDA path emits the geometric Jacobian
 ``frame_jacobian_device``, the Jacobian time-variation :math:`\dot J`
 via ``frame_jacobian_dot_device`` (opt-in ``frame_jacobian_dot`` key),
 and the OSC inertia :math:`\Lambda` via ``osc_inertia_device`` (opt-in
-``osc_inertia`` key). The :math:`\Lambda` device is **self-contained**: it
+``osc_inertia`` key). The :math:`\Lambda` device is self-contained: it
 composes :math:`M^{-1}` on-device via ``minv_inner`` (no external
-:math:`M^{-1}` feed). Mimic-joint robots ARE supported (the geometric-Jacobian
-column fold is alpha-weighted onto the shared velocity slot; :math:`\Lambda`
-routes the mimic :math:`M^{-1}` through ``crba_inner``).
+:math:`M^{-1}` feed). Mimic-joint robots are supported: the geometric-Jacobian
+column fold is alpha-weighted onto the shared velocity slot, and :math:`\Lambda`
+routes the mimic :math:`M^{-1}` through ``crba_inner``.
 
-**Full launchable surface (S1).** ``frame_jacobian`` now has the same surface
-set as the other benchmarkable kinematics algorithms: a batched ``__global__``
+``frame_jacobian`` has the same launchable surface set as the other
+benchmarkable kinematics algorithms: a batched ``__global__``
 ``frame_jacobian_kernel`` (plus a ``_single_timing`` variant) and a 3-mode
 ``__host__`` launcher ``frame_jacobian`` / ``frame_jacobian_single_timing`` /
 ``frame_jacobian_compute_only`` that reads/writes the ``gridData`` output buffer
@@ -97,7 +97,7 @@ host surface is validated end-to-end against the numpy oracle in
 ``test/cuda_equivalents/test_cuda_frame_jacobian_host.py`` (the device functions
 are covered by ``test_cuda_frame_jacobian.py``).
 
-``frame_jacobian_dot`` (opt-in ``frame_jacobian_dot`` key) now has the same
+``frame_jacobian_dot`` (opt-in ``frame_jacobian_dot`` key) has the same
 launchable set: ``frame_jacobian_dot_kernel`` (+ ``_single_timing``) and the
 3-mode host ``frame_jacobian_dot`` / ``_single_timing`` / ``_compute_only``,
 reading the packed ``[q; qd]`` input and writing
@@ -107,14 +107,14 @@ whole dynamic-smem arena; runtime target/frame selection has the same
 leaf-EE / ``LOCAL_WORLD_ALIGNED`` defaults. It is covered by the same host-surface test (validated for
 iiwa14-fixed + go2-floating).
 
-``osc_inertia`` (opt-in ``osc_inertia`` key) likewise gains
+``osc_inertia`` (opt-in ``osc_inertia`` key) has
 ``osc_inertia_kernel`` (+ ``_single_timing``) and the 3-mode host
 ``osc_inertia`` / ``_single_timing`` / ``_compute_only``, writing
-``hd_data->d_osc_inertia`` (6 × 6). It is **self-contained** (q-only input;
+``hd_data->d_osc_inertia`` (6 × 6). It is self-contained (q-only input;
 composes :math:`M^{-1}` on-device), keeps its q input + Λ output in static
 ``__shared__``, and carries ``__launch_bounds__`` so nvcc fits the heavy
 ``minv``/``J``/``invert`` register footprint to the tier thread cap (the
-un-annotated device smoke runner instead clamps threads manually). Same
+un-annotated device smoke runner instead clamps threads manually). It has the same
 host-surface test coverage (Λ checked at non-singular configs).
 
 Python handle calls
@@ -134,8 +134,8 @@ an undamped OSC inverse at a singular task configuration.
 
 See Also
 --------
-* :doc:`crba` — joint-space mass matrix :math:`M` (used to form
+* :doc:`crba`: joint-space mass matrix :math:`M` (used to form
   :math:`\Lambda`).
-* :doc:`minv` — direct :math:`M^{-1}` (the inverse used inside
+* :doc:`minv`: direct :math:`M^{-1}` (the inverse used inside
   :math:`J\,M^{-1}\,J^{\top}`).
-* :doc:`inverse_dynamics` — inverse dynamics (RNEA).
+* :doc:`inverse_dynamics`: inverse dynamics (RNEA).

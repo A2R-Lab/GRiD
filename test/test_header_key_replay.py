@@ -32,7 +32,7 @@ _CTOR = {"DEBUG_MODE": False, "gen_print_mat": False, "file_namespace": "grid",
 def _make_direct_record(tmp_path) -> dict:
     """Generate an id-only iiwa14 header the way the A4 recorder would see it
     and return the record the conftest wrapper would have emitted."""
-    from config import robot_urdf
+    from grid_assets import robot_urdf
     from URDFParser import URDFParser
     from grid_codegen.GRiDCodeGenerator import GRiDCodeGenerator
 
@@ -167,7 +167,7 @@ def test_collision_spec_record_replays(tmp_path):
     Guards the tuples->lists JSON round-trip staying byte-identical (if a
     future spec field breaks serializability, the recorder routes it to
     `opaque` and this test's record would go conservative instead of green)."""
-    from config import robot_urdf
+    from grid_assets import robot_urdf
     from URDFParser import URDFParser
     from grid_codegen.GRiDCodeGenerator import GRiDCodeGenerator
     from grid_codegen.algorithms._collision import build_self_cc_ranges

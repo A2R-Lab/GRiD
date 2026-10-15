@@ -33,7 +33,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
-from config import robot_urdf
+from grid_assets import robot_urdf
 
 # (robot, floating, runtime_transform) -- the matrix that actually exercises the spill ladders.
 # go2-floating is the cell §1t blew up on; iiwa14 is the fixed-base control; fr3 carries the mimic fold.

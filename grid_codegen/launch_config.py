@@ -1,4 +1,4 @@
-"""Launch-config bake: config/launch_configs JSON loading + the generated
+"""Launch-config bake: grid_assets/launch_configs JSON loading + the generated
 launch_cfg<ALGO> emission. H4 move from GRiDCodeGenerator.py (2026-08-27,
 verbatim). Module-level names are re-exported from GRiDCodeGenerator for
 the external importers (bindings, autotune_ffi, parity goldens)."""
@@ -10,7 +10,7 @@ from .algo_registry import ALGO_DESCRIPTORS, build_launch_config_algo_to_symbol,
 
 # ─── A1b launch-config bake (single source of truth) ─────────────────────────
 # The autotuned per-(robot,base,algo) {tier,threads} live in
-# config/launch_configs/<robot>/<DEFAULT_GPU>.json. At codegen time we read the
+# grid_assets/launch_configs/<robot>/<DEFAULT_GPU>.json. At codegen time we read the
 # matching entry and bake it into the generated header as host-side constants
 # (grid::launch_cfg<ALGO_*>). This is purely ADDITIVE host content — kernel
 # bodies are untouched (Gate-A). A missing robot / GPU / algo falls back to the
@@ -46,7 +46,7 @@ _GPU_SELECT_WARNED = set()
 
 
 def select_launch_config_gpu(robot_id, cuda_arch = None):
-    """Pick the config/launch_configs/<robot_id>/<gpu>.json profile for the
+    """Pick the grid_assets/launch_configs/<robot_id>/<gpu>.json profile for the
     DEVICE this build targets (audit W15, 2026-09-22). Profiles are named
     ``<gpu>_sm<arch>``; the one whose suffix matches ``cuda_arch`` wins. With
     no match (or no arch) the default profile (``LAUNCH_CONFIG_DEFAULT_GPU``)
@@ -78,7 +78,7 @@ def select_launch_config_gpu(robot_id, cuda_arch = None):
 def load_launch_config(robot_id, floating_base, gpu = LAUNCH_CONFIG_DEFAULT_GPU, profile = "host"):
     """Return {grid_symbol: {"tier": TIER_*, "threads": int}} for (robot_id, base).
 
-    Reads config/launch_configs/<robot_id>/<gpu>.json and picks the matching base
+    Reads grid_assets/launch_configs/<robot_id>/<gpu>.json and picks the matching base
     ("floating" or "fixed"). Returns {} (-> full fallback) when the file is
     absent / unreadable / lacks the base. Unknown algo keys / tiers are skipped
     individually (so a partially-populated config still bakes what it can).
@@ -160,7 +160,7 @@ def baked_launch_cfg(codegen):
 def gen_add_launch_config_helpers(self):
     """Emit the A1b baked launch-config table (single source of truth).
 
-    Reads config/launch_configs/<robot>/<DEFAULT_GPU>.json for this robot+base and
+    Reads grid_assets/launch_configs/<robot>/<DEFAULT_GPU>.json for this robot+base and
     emits per-algo `grid::launch_cfg<GRID_ALGO_*>` specializations carrying
     the autotuned {TIER, THREADS}. The primary template falls back to the
     conservative (GRID_DEFAULT_RESOURCE_TIER, MAX_PERF_LEVEL_THREADS) default,
@@ -186,7 +186,7 @@ def gen_add_launch_config_helpers(self):
     base_name = "floating" if self.robot.floating_base else "fixed"
     gpu_name = getattr(self, "launch_config_gpu", None) or LAUNCH_CONFIG_DEFAULT_GPU
     if cfg:
-        src = "config/launch_configs/" + str(robot_id) + "/" + gpu_name + ".json (" + base_name + ", profile=" + profile + ")"
+        src = "grid_assets/launch_configs/" + str(robot_id) + "/" + gpu_name + ".json (" + base_name + ", profile=" + profile + ")"
     else:
         src = "NONE found for robot=" + str(robot_id) + " base=" + base_name + " gpu=" + gpu_name + " profile=" + profile + " -> conservative fallback"
     self.gen_add_code_lines([

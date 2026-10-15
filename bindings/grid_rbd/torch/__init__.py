@@ -164,7 +164,7 @@ def _load_ops(so_path: Path, cache_key: str) -> str:
 
 class _CtxOps:
     """A view of ``torch.ops.<ns>`` whose every op appends the runtime-context id
-    (the schema's LAST argument, ``int ctx_id=0``) — W04-B B1. The id is read
+    (the schema's LAST argument, ``int ctx_id=0``). The id is read
     at call time so a handle made by RobotHandle.context() dispatches to its own
     context; ``None`` is never appended (the schema requires an int)."""
 
@@ -1283,7 +1283,7 @@ def register_robot(
     """Register a robot for the torch backend (same cache as the plain/JAX
     surfaces). Returns a :py:class:`TorchRobotHandle`.
 
-    ``dtype="float64"`` (Wave 2a) builds/loads the fp64 .so — the torch ops then
+    ``dtype="float64"`` builds/loads the fp64 .so — the torch ops then
     take and return float64 CUDA tensors (fp32 tensors are rejected by the op's
     dtype check, and vice versa for the default fp32 build).
 

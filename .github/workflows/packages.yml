@@ -5,7 +5,7 @@ on:
       - 'grid_codegen/**'
       - 'bindings/**'
       - 'external/**'
-      - 'config/launch_configs/**'
+      - 'grid_assets/launch_configs/**'
       - 'pyproject.toml'
       - 'setup.py'
       - '_build_resources.py'

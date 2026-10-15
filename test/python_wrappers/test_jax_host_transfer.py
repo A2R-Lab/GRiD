@@ -18,7 +18,7 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
-from config import robot_urdf  # noqa: E402
+from grid_assets import robot_urdf  # noqa: E402
 
 _grid_rbd = pytest.importorskip("grid_rbd", reason="grid-rbd not installed")
 jax = pytest.importorskip("jax", reason="jax not installed")

@@ -7,7 +7,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
-from config import robot_urdf
+from grid_assets import robot_urdf
 _GO2 = robot_urdf("go2")
 TOL = 2e-3
 

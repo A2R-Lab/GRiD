@@ -1004,7 +1004,7 @@ def _integrator_kernel_extra_t_buffers(self, nq, nv):
 
 
 def gen_integrator_arena_carve_struct(self):
-    """Emit the namespace-scope `integrator_arena<T>` carve struct (GATO ASK6):
+    """Emit the namespace-scope `integrator_arena<T>` carve struct:
     external callers allocate INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T, TIER_SHARED>()
     bytes and carve() the exact TIER_SHARED sub-buffer layout the integrator
     kernel uses."""

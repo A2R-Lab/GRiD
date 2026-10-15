@@ -1,48 +1,47 @@
-Codegen Architecture
+Codegen architecture
 ====================
 
 Every GRiD algorithm is emitted in three layers (``_host`` / ``_kernel`` /
-``_device``). Knowing the layering helps when you want to compose generated
-functions, call kernels from your own CUDA host code, or read the emitter
-source in ``grid_codegen/algorithms/``.
+``_device``). The layering matters when composing generated functions,
+calling kernels from your own CUDA host code, or reading the emitter source
+in ``grid_codegen/algorithms/``.
 
 .. note::
 
-   New here? Read :doc:`design_principles` first — it is the
-   shared mental model (smart inners / thin wrappers, *the inner owns its memory
-   placement*, the spill ladder, validation discipline, and the anti-patterns to
-   avoid). This page covers the *mechanics* of the three layers; that page covers
-   the *ethos* behind them.
+   :doc:`design_principles` is the shared model behind these layers: smart
+   inners and thin wrappers, the inner owning its memory placement, the spill
+   ladder, validation, and the anti-patterns. This page covers the mechanics
+   of the three layers.
 
 The three emission layers
 -------------------------
 
-For each algorithm ``X`` (e.g. ``inverse_dynamics``, ``forward_dynamics``,
-``crba``, ``fdsva_so``), the codegen emits:
+For each algorithm ``X`` (for example ``inverse_dynamics``,
+``forward_dynamics``, ``crba``, ``fdsva_so``), the codegen emits:
 
-* ``X_device`` — a ``__device__`` entry point. Scratch arguments are
+* ``X_device``, a ``__device__`` entry point. Scratch arguments are
   algorithm-specific: simple wrappers such as RNEA declare their helper
   storage internally, while composing orchestrators accept caller-supplied
   buffers and workspace. Placement belongs to the owning device routine;
   do not infer one algorithm's signature from another's. See
   :doc:`design_principles` and the generated header for the selected model.
 
-* ``X_kernel`` — a ``__global__`` entry point that handles **batch scheduling**
-  (``blockIdx.x`` loops over timesteps) and **global ↔ shared memory transfer**.
-  It allocates ``__shared__`` smem for inputs/outputs and the ``s_temp`` pool,
-  loads inputs, calls ``X_device``, and writes outputs back. Per-tier dispatch
-  ( ``RESOURCE_TIER`` template ) picks the spill flags; the kernel never decides
-  placement itself.
+* ``X_kernel``, a ``__global__`` entry point that handles batch scheduling
+  (``blockIdx.x`` loops over timesteps) and the transfer between global and
+  shared memory. It allocates ``__shared__`` smem for inputs, outputs and the
+  ``s_temp`` pool, loads inputs, calls ``X_device``, and writes outputs back.
+  Per-tier dispatch (the ``RESOURCE_TIER`` template) picks the spill flags;
+  the kernel never decides placement itself.
 
-* ``X`` (no suffix) — a **host function** that wraps ``X_kernel`` and handles
-  H↔D copies for inputs and outputs.
+* ``X`` (no suffix), a host function that wraps ``X_kernel`` and handles the
+  host-device copies for inputs and outputs.
 
-Inner helpers (``X_inner``, sub-step helpers like ``fdsva_so_contract``) still
-exist where useful, but they are **internal to ``X_device``** — not part of the
-external surface. Sub-algorithm composition routes through other algorithms'
-``_inner`` helpers when they are placement-free building blocks (e.g.
-``fdsva_so_device`` calls ``minv_inner`` and ``forward_dynamics_inner``
-to reuse one XImats load across all of them).
+Inner helpers (``X_inner``, sub-step helpers like ``fdsva_so_contract``)
+exist where useful, but they are internal to ``X_device`` and not part of
+the external surface. Sub-algorithm composition routes through other
+algorithms' ``_inner`` helpers when they are placement-free building blocks
+(for example ``fdsva_so_device`` calls ``minv_inner`` and
+``forward_dynamics_inner`` to reuse one XImats load across all of them).
 
 Scratch ownership
 -----------------
@@ -56,35 +55,35 @@ than relying on historical ``_full_inner`` names.
 Nested composition
 ------------------
 
-The split exists for **nested composition**. Higher-level algorithms call
+The split exists for nested composition. Higher-level algorithms call
 other algorithms' ``_inner`` (the placement-free math) directly to reuse one
 expensive ``XImats`` load.
 
 For example, second-order forward dynamics
 (`_fdsva_so.py <https://github.com/A2R-Lab/GRiD/blob/main/grid_codegen/algorithms/_fdsva_so.py>`_)
-needs both forward dynamics and direct inverse-mass-matrix outputs internally.
-``fdsva_so_device`` loads XImats once at the top, then calls the placement-free
-``_inner`` variants:
+needs both forward dynamics and direct inverse-mass-matrix outputs
+internally. ``fdsva_so_device`` loads XImats once at the top, then calls the
+placement-free ``_inner`` variants.
 
 The final ``-Minv`` contraction of ``fdsva_so_contract`` (``iL,Ljk->ijk`` over the four
 n³ tensors) is emitted register-tiled along ``i``: each thread produces ``R`` outputs
 that share every strided arena load, where ``R`` is the largest divisor of ``n`` that is
-at most 8 and leaves at least two tiles (35 → 7, 18 → 6, 7 → 1). The per-cell dot is
+at most 8 and leaves at least two tiles (35 gives 7, 18 gives 6, 7 gives 1). The per-cell dot is
 accumulated in exactly the untiled order, so the outputs are bit-identical to the
-one-output-per-thread loop; measured on g1-floating the kernel is 7–11% faster
-(2026-09-24). ``GRID_FDSVA_SO_MINV_TILE=1`` at generation time forces the untiled loop
-(an A/B knob; it is part of every header cache key).
+one-output-per-thread loop; measured on g1-floating the kernel is 7–11% faster.
+``GRID_FDSVA_SO_MINV_TILE=1`` at generation time forces the untiled loop,
+an A/B knob that is part of every header cache key.
 
 The world-frame second-order inner (``idsva_so_world_frame_inner``, the floating-base
-and mimic path) runs its triple ancestor walk with ONE pair of block barriers per body
+and mimic path) runs its triple ancestor walk with one pair of block barriers per body
 column: every ancestor-or-self velocity column ``(j, t)`` of body ``i`` is built into a
 per-pair scratch slab (``72 × WF_MAX_PAIRS`` floats, a codegen constant) in one parallel
 loop, and one flattened ``(pair, k, r)`` loop then performs every contraction. The write
 set was enumerated per topology to prove the cells written by different pairs are
 disjoint, except the symmetric ``dM_dq`` pair on a multi-column body (the floating root),
-whose sequential last writer (``vel_j > vel_k``) is made the sole writer — so the outputs
-are bit-identical to the former per-pair loop while the kernel's barrier count falls by
-an order of magnitude (go2 264 → 36; g1 712 → 70 per launch). Measured 2026-09-24:
+whose sequential last writer (``vel_j > vel_k``) is made the sole writer. The outputs
+are therefore bit-identical to the former per-pair loop while the kernel's barrier count
+falls by an order of magnitude (go2 from 264 to 36; g1 from 712 to 70 per launch). Measured:
 idsva_so −20% and fdsva_so −18% of compute on g1-floating, −13…−52% on go2.
 
 .. code-block:: text
@@ -98,15 +97,16 @@ idsva_so −20% and fdsva_so −18% of compute on g1-floating, −13…−52% on
      ├── idsva_so_{world,body}_inner()
      └── fdsva_so_inner()           # the rank-3 contraction step
 
-If the ``_inner`` building blocks were collapsed into their owning ``_device``,
-the compositional algorithms would pay the XImats load three times instead of
-once. The separation is a performance contract, not a stylistic preference.
+If the ``_inner`` building blocks were collapsed into their owning
+``_device``, the compositional algorithms would pay the XImats load three
+times instead of once. The separation is a performance contract, not a
+stylistic preference.
 
 Schematic layers (RNEA / inverse_dynamics)
 ------------------------------------------------------------
 
-The following sketches explain the layers; they are **not callable API
-declarations**. Exact signatures depend on generated options, including
+The following sketches explain the layers; they are not callable API
+declarations. Exact signatures depend on generated options, including
 external-force and acceleration inputs. Use the generated ``grid.cuh`` or
 the runnable walkthrough in ``examples/cuda/`` for integration.
 
@@ -142,7 +142,7 @@ the runnable walkthrough in ``examples/cuda/`` for integration.
 Orchestrator signature (fdsva_so / inverse_dynamics_gradient / forward_dynamics_gradient / integrator_gradient)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The orchestrators take the placement flags + a ``d_workspace`` pointer in
+The orchestrators take the placement flags and a ``d_workspace`` pointer in
 addition to the standard inputs:
 
 .. code-block:: cuda
@@ -170,93 +170,91 @@ users size their smem from ``*_DEVICE_INLINE_SMEM_BYTES<T, TIER>()`` and
 Thread-count assumptions
 ------------------------
 
-GRiD emits a ``MAX_PERF_LEVEL_THREADS`` constant per generated header, computed
-from the robot's DVA parallelism (rounded up to a warp, capped at 512) —
-for iiwa14 it is 352, for go2_fixed it is 288, and so on. The host
-wrappers default to launching with ``dim3(MAX_PERF_LEVEL_THREADS, 1, 1)``.
+GRiD emits a ``MAX_PERF_LEVEL_THREADS`` constant per generated header,
+computed from the robot's DVA parallelism (rounded up to a warp, capped at
+512); for iiwa14 it is 352 and for go2_fixed it is 288. The host wrappers
+default to launching with ``dim3(MAX_PERF_LEVEL_THREADS, 1, 1)``.
 
-``MAX_PERF_LEVEL_THREADS`` is **a hint, not an enforced floor**. Every emitted ``X_inner`` does block-cooperative
-compute on one timestep — threads within a block split work via
-*block-stride loops* (the ``gen_add_parallel_loop`` helper emits
-``for (int i = threadIdx.x + threadIdx.y*blockDim.x; i < max_val;
-i += blockDim.x*blockDim.y)``). Any block size that fits per-block
-covers the work correctly. Batching across timesteps is handled by
-the outer ``X_kernel`` via a *grid-stride loop* over ``blockIdx`` —
-each block processes one or more timesteps.
+``MAX_PERF_LEVEL_THREADS`` is a hint, not an enforced floor. Every emitted
+``X_inner`` does block-cooperative compute on one timestep: threads within a
+block split work via block-stride loops (the ``gen_add_parallel_loop``
+helper emits ``for (int i = threadIdx.x + threadIdx.y*blockDim.x; i < max_val;
+i += blockDim.x*blockDim.y)``). Any block size that fits per block covers
+the work correctly. Batching across timesteps is handled by the outer
+``X_kernel`` via a grid-stride loop over ``blockIdx``; each block processes
+one or more timesteps.
 
-CUDA-inline users can launch GRiD kernels with any block size that
-suits their outer kernel. cuBLASDx, whose call sites pinned a minimum block
-size, was removed in favour of GLASS primitives before the first packaged
-release (0.5.0). The historical design record lives in
-``docs/design_history/`` in the repository.
+CUDA-inline users can launch GRiD kernels with any block size that suits
+their outer kernel. cuBLASDx, whose call sites pinned a minimum block size,
+was removed in favour of GLASS primitives before the first packaged release
+(0.5.0). The design record lives in ``docs/design_history/`` in the
+repository.
 
-Design sweet spot: tens-to-hundreds of parallel computations
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Target batch sizes
+~~~~~~~~~~~~~~~~~~
 
-The one-timestep-per-block layout — block-cooperative compute inside,
-grid-stride over batch outside — is **tuned for batch sizes in the
-tens to hundreds**. Many batch robotics workloads (MPC shooting nodes,
-trajectory optimization horizons, behavioral cloning rollouts, real-time
-control with N robots) sit squarely in that range, which is the design
-target.
+The one-timestep-per-block layout, block-cooperative compute inside and
+grid-stride over the batch outside, is tuned for batch sizes in the tens to
+hundreds. Many batch robotics workloads (MPC shooting nodes, trajectory
+optimization horizons, behavioral cloning rollouts, real-time control with N
+robots) sit in that range, which is the design target.
 
-For very small batches (N=1-8) the per-block fixed overhead dominates,
-and a design that packed multiple timesteps per block could be faster;
-for very large batches (N=10k+) a design that splits one timestep
-across multiple blocks could expose more parallelism. Neither is what
-GRiD optimizes for. If your workload sits at one of those extremes, a
-codegen layered on a different parallelism map (or an entirely
-different library) will likely beat GRiD; for the tens-to-hundreds
-range, GRiD's layout is the right tool.
+For very small batches (N=1-8) the per-block fixed overhead dominates, and a
+design that packed multiple timesteps per block could be faster; for very
+large batches (N=10k+) a design that splits one timestep across multiple
+blocks could expose more parallelism. Neither is what GRiD optimizes for.
+For a workload at one of those extremes, a codegen layered on a different
+parallelism map (or a different library) will likely beat GRiD; for the
+tens-to-hundreds range, GRiD's layout is the right tool.
 
 The ``MAX_PERF_LEVEL_THREADS`` constant is what the codegen picks as the
-best block-cooperative thread count for *this robot* (DOF-aware,
-warp-rounded). External callers are free to override (see
+best block-cooperative thread count for this robot (DOF-aware,
+warp-rounded). External callers may override it (see
 :py:meth:`grid_rbd.RobotHandle.set_threads_per_block` or
-``grid_rbd_set_threads_per_block`` in the C ABI), but smaller block
-sizes will be slower at the same batch size (work-per-block stays
-constant; fewer threads cover it).
+``grid_rbd_set_threads_per_block`` in the C ABI), but smaller block sizes
+will be slower at the same batch size, because work per block stays
+constant and fewer threads cover it.
 
-Each ``X_kernel`` is emitted with ``__launch_bounds__(tier_max_threads<RESOURCE_TIER>())`` —
-tier-templated and load-bearing (it is what ``grid_rbd_kernel_max_threads`` introspects and
-what the baked-THREADS clamp validates against). Only the integrator family still uses
+Each ``X_kernel`` is emitted with ``__launch_bounds__(tier_max_threads<RESOURCE_TIER>())``.
+The bound is tier-templated and is what ``grid_rbd_kernel_max_threads`` introspects and
+what the baked-THREADS clamp validates against. Only the integrator family uses
 ``MAX_PERF_LEVEL_THREADS``.
 
-Per-algo metadata: the descriptor table
----------------------------------------
+Per-algorithm metadata: the descriptor table
+--------------------------------------------
 
-Each algorithm also carries a small amount of *irregular* per-algo metadata:
-which autotune launch-config key(s) it uses, the ``cudaFuncSetAttribute`` opt-in
-gate, the dynamic-shared-memory bytes-macro stem, whether it has an mjx
-(MUJOCO_OUTPUT) twin, and so on. This lives as one ``AlgoDescriptor`` row per
-algorithm in ``grid_codegen/algo_registry.py`` (the ``ALGO_DESCRIPTORS``
-tuple) — the **single source of truth** from which the generator derives:
+Each algorithm also carries a small amount of irregular per-algorithm
+metadata: which autotune launch-config key(s) it uses, the
+``cudaFuncSetAttribute`` opt-in gate, the dynamic-shared-memory bytes-macro
+stem, whether it has an mjx (MUJOCO_OUTPUT) twin, and so on. This lives as
+one ``AlgoDescriptor`` row per algorithm in ``grid_codegen/algo_registry.py``
+(the ``ALGO_DESCRIPTORS`` tuple), from which the generator derives:
 
 * the ``GridAlgo`` enum and the launch-config symbol map (``build_launch_config_algo_to_symbol``),
 * the ``KERNEL_ATTR_MANIFEST`` and the mjx (floating-twin) manifest heads.
 
-Previously these were several hand-maintained module-level dicts that had to be
-kept in lockstep by hand; the descriptor table removed that duplication. Adding
-an algorithm is now (metadata-wise) one row. ``test/test_algo_descriptor_parity.py``
-locks the table to the generated output so a mismatch fails CPU-only in CI. The
-per-algo arena/spill ``t_count`` math is now folded into the table too (the
-``ArenaRegion`` / ``SpillRung`` / ``ArenaCtx`` machinery in ``algo_registry.py``,
-composed by ``compose_arena_full`` / ``compose_arena_rungs``): every
-``select_shared_tier_3way`` site is driven from the composer, so arena sizes are no
-longer hand-written in ``GRiDCodeGenerator.py``. The arena's correctness is guarded
-independently by ``test/test_shared_arena_covers_carve.py``, which checks each
-kernel's launch-sizing macro against the regions the kernel actually carves. To
-change an algorithm's arena, edit its closure in ``algo_registry.py`` — do NOT
-hand-edit ``t_count`` expressions in the generator.
+Adding an algorithm is, metadata-wise, one row.
+``test/test_algo_descriptor_parity.py`` locks the table to the generated
+output so a mismatch fails CPU-only in CI. The per-algorithm arena/spill
+``t_count`` math is folded into the table as well (the ``ArenaCtx`` /
+``compose_arena_*`` machinery in ``algo_registry.py``, composed by
+``compose_arena_full`` / ``compose_arena_rungs``): every
+``select_shared_tier_3way`` site is driven from the composer, so arena sizes
+are not hand-written in ``GRiDCodeGenerator.py``. The arena's correctness is
+guarded independently by ``test/test_shared_arena_covers_carve.py``, which
+checks each kernel's launch-sizing macro against the regions the kernel
+carves. To change an algorithm's arena, edit its closure in
+``algo_registry.py``; do not hand-edit ``t_count`` expressions in the
+generator.
 
 The binding surface: generated from ``abi_specs.py``
 -----------------------------------------------------
 
 The descriptor table has a sibling: ``grid_codegen/abi_specs.py`` (the
-``ABI_SPECS`` rows) transcribes every C-ABI body of the Python binding —
-signature, packing, qdd/f_ext routing, launch template shape, output
-buffer/size, mjx-twin variance — and ``grid_codegen/wrapper_body_gen.py``
-EMITS six checked-in generated regions of
+``ABI_SPECS`` rows) transcribes every C-ABI body of the Python binding
+(signature, packing, qdd/f_ext routing, launch template shape, output
+buffer/size, mjx-twin variance), and ``grid_codegen/wrapper_body_gen.py``
+emits six checked-in generated regions of
 ``bindings/grid_rbd/wrapper_template.cu`` from those rows:
 
 1. the ``extern "C"`` algorithm bodies (30+ functions),
@@ -267,31 +265,31 @@ EMITS six checked-in generated regions of
 6. the torch op table.
 
 ``grid_codegen/wrapper_plant_gen.py`` emits the remaining two generated
-regions — the JAX plant tail and the torch plant tail — for eight
+regions, the JAX plant tail and the torch plant tail, for eight
 ``BEGIN/END GENERATED`` regions in all. The regions live between those
-markers **in the checked-in file** — never hand-edit inside them. To change a generated body, edit the
-spec row (or the emitter) and regenerate::
+markers in the checked-in file; never hand-edit inside them. To change a
+generated body, edit the spec row (or the emitter) and regenerate::
 
     .venv/bin/python -m grid_codegen.wrapper_body_gen          # rewrite
     .venv/bin/python -m grid_codegen.wrapper_body_gen --check  # CI drift gate
 
 ``test/test_wrapper_generated_block.py`` runs ``--check`` in CI, and
 ``test/test_abi_spec_crosscheck.py`` validates every spec field against the
-template text — so a hand-edit inside a marker region, or a stale block after
+template text, so a hand-edit inside a marker region, or a stale block after
 a table edit, fails a plain ``pytest -q``. Only ``tool_fext``,
 ``contact_fext`` (``wrapper_template.cu`` ~:902-967, outside the generated
 C-ABI region), ``fk_batched``, the four plant cost twins, and the
 plant/FFI/torch/pybind scaffolding outside the marker regions remain
-hand-written (bespoke by design).
+hand-written.
 
-The same table also drives the **numpy Runner's pybind surface**:
+The same table also drives the numpy Runner's pybind surface:
 ``grid_codegen/core_body_gen.py`` emits the generated region of
-``bindings/src/_core.cpp`` — the 61 spec-backed value/gradient/second-order
-methods plus their ``has_*_mujoco`` accessors — from each row's
+``bindings/src/_core.cpp``, the 61 spec-backed value/gradient/second-order
+methods plus their ``has_*_mujoco`` accessors, from each row's
 ``inputs``/``py_out_dims``/``py_rc3_msg``/``py_twin_guard`` fields
 (``-m grid_codegen.core_body_gen`` to regenerate, ``--check`` gated by
 ``test/test_core_generated_block.py``). Adding an algorithm's spec row
-therefore produces its wrapper C-ABI body, its mjx twin, AND its pybind
+therefore produces its wrapper C-ABI body, its mjx twin, and its pybind
 method in one regeneration. The pybind ``.def`` list (with its user-facing
 docstrings), the plant family, and the metadata/overlay surface stay
 hand-written.
@@ -299,6 +297,6 @@ hand-written.
 See also
 --------
 
-* :doc:`algorithms/index` — algorithm-level docs.
-* ``grid_codegen/README.md`` (repo root) — codegen-helper
-  reference for emitter authors.
+* :doc:`algorithms/index`: algorithm-level docs.
+* ``grid_codegen/README.md`` (repo root): codegen-helper reference for
+  emitter authors.

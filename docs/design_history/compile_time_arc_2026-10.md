@@ -1,3 +1,6 @@
+> **Retired design note (moved to `docs/design_history/`, 2026-10-14).** Everything here landed in
+> grid-rbd 0.5.1; the live rules are in `CLAUDE.md` and the bindings docs, the dated record in `engineering_log.md`.
+
 # Compile-time arc (2026-10-09/10): how the per-robot `robot.so` is built, and why
 
 Design note for contributors. User-facing knobs: `bindings/README.md`, Fast Robot Setup.
@@ -68,6 +71,10 @@ test runners, never a default.
   clean tree and an unmoved HEAD for the run; a grid.cuh byte change re-keys every CUDA
   equivalence header cache (one-time ~4.5 h of prewarms).
 
-## Open (receipt-infra arc, `docs/open-tasks/archive/receipt_infra_arc_2026-10-10.md`)
-CUDA equivalence runner still registers via the aggregate (R1); `compile_sched` peak ledger sees
-only the largest child (S1); heavy-first prewarm order (R3); two wrapper shards at a time (W1).
+## Follow-ups (receipt-infra arc, part 2 — ALL LANDED 2026-10-10)
+Listed as open when this note was written; see the 2026-10-10 entry of `engineering_log.md`:
+- **R1** the CUDA equivalence runner (and the smoke runners) register per algorithm through the
+  `init_grid_kernel_attr_<algo>_checked` twins instead of the aggregate (`test/test_runner_registration.py`);
+- **S1** `compile_sched` samples the whole process tree (ledger schema 2) instead of the largest child;
+- **R3** heavy-first launch order within a consumer shard;
+- **W1** two GPU shards side by side in the receipt launcher (`GRID_SPLIT_SHARD_JOBS=2`).

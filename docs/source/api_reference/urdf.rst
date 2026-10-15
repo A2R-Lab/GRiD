@@ -111,17 +111,17 @@ The parser is installed with GRiD's editable install. Standalone, it needs
 Robot API
 ---------
 
-The accessor families below take **XXX** as one of:
+The accessor families below take ``XXX`` as one of:
 
-* **joint**: a joint object (see the joint API below)
-* **link**: a link object (see the link API below)
-* **Xmat**: a sympy spatial transform with coordinates defined by its
+* ``joint``: a joint object (see the joint API below)
+* ``link``: a link object (see the link API below)
+* ``Xmat``: a sympy spatial transform with coordinates defined by its
   joint (a 4x4 homogeneous version and its first and second derivatives also
   exist, for example ``d2Xmat_hom``)
-* **Xmat_Func**: a function returning a numpy matrix for a value of the free
+* ``Xmat_Func``: a function returning a numpy matrix for a value of the free
   variable (again with homogeneous and derivative variants)
-* **Imat**: a numpy 6x6 spatial inertia matrix
-* **S**: a numpy motion subspace, shape ``(6,)`` for a scalar joint and
+* ``Imat``: a numpy 6x6 spatial inertia matrix
+* ``S``: a numpy motion subspace, shape ``(6,)`` for a scalar joint and
   multiple columns for a multi-DoF joint
 
 .. code:: python

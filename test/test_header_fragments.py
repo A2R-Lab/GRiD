@@ -23,7 +23,7 @@ from grid_codegen.helpers._code_generation_helpers import (
     FRAGMENT_SENTINEL,
     split_fragment_sentinels,
 )
-from config import robot_urdf
+from grid_assets import robot_urdf
 from URDFParser import URDFParser
 
 

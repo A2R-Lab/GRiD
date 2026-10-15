@@ -6,7 +6,7 @@ inverse_dynamics (RNEA / Recursive Newton-Euler Algorithm)
 Overview
 --------
 ``inverse_dynamics`` computes the inverse dynamics of a robot using the
-Recursive Newton-Euler Algorithm (RNEA) — given joint positions,
+Recursive Newton-Euler Algorithm (RNEA): given joint positions,
 velocities, and accelerations, it returns the joint torques required to
 produce them. GRiD also exposes the per-pass helpers
 (``inverse_dynamics_fpass`` / ``inverse_dynamics_bpass``) for downstream
@@ -65,11 +65,11 @@ The CUDA host entries are ``grid::inverse_dynamics`` and
 ``inverse_dynamics_compute_only``. RNEA is a short-running operation in the
 release collection, so dispatch and transfers can be substantial relative
 to compute time. The choice of C++ host call, NumPy, PyTorch or JAX surface
-is therefore part of the performance comparison, not just a syntax choice.
+is therefore part of the performance comparison, not only a syntax choice.
 
 See Also
 --------
-* :doc:`crba` — composite-rigid-body mass matrix.
-* :doc:`aba` — recursive forward dynamics counterpart.
-* :doc:`minv` — direct mass-matrix inverse (the FD composition partner).
-* :doc:`idsva` — second-order inverse dynamics (IDSVA-SO).
+* :doc:`crba`: composite-rigid-body mass matrix.
+* :doc:`aba`: recursive forward dynamics counterpart.
+* :doc:`minv`: direct mass-matrix inverse (the FD composition partner).
+* :doc:`idsva`: second-order inverse dynamics (IDSVA-SO).

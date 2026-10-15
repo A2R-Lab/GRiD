@@ -58,7 +58,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 # ─── skip preconditions ─────────────────────────────────────────────────────
 
 _grid_rbd = pytest.importorskip(
-    "grid_rbd", reason="grid-rbd not installed (pip install bindings/)"
+    "grid_rbd", reason="grid-rbd not installed (pip install -e . (repo root))"
 )
 
 if shutil.which("nvcc") is None:

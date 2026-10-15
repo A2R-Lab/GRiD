@@ -6,9 +6,9 @@ two-tier Python API: a slow one-time ``register_robot()`` step that
 generates and compiles a per-robot ``.so``, and fast subsequent
 algorithm calls on the returned handle.
 
-``register_robot`` accepts a ``backend=`` argument — ``"numpy"`` (the
-default, returning a ``RobotHandle``), ``"jax"`` (a ``JaxRobotHandle``),
-or ``"torch"`` (a ``TorchRobotHandle``) — and a ``urdf_string=`` argument
+``register_robot`` accepts a ``backend=`` argument, ``"numpy"`` (the
+default, returning a ``RobotHandle``), ``"jax"`` (a ``JaxRobotHandle``)
+or ``"torch"`` (a ``TorchRobotHandle``), and a ``urdf_string=`` argument
 to register from inline URDF text instead of a file on disk. All three
 backends share the same content-addressed ``.so`` cache.
 
@@ -16,9 +16,8 @@ Source: ``bindings/`` in the GRiD repo.
 
 .. seealso::
 
-   In a hurry? :doc:`../getting_started/fast_robot_setup` is the quick
-   canonical path — one-call ``load_robot``, cache anatomy, and warm-up
-   recipes.
+   :doc:`../getting_started/fast_robot_setup` is the short canonical
+   path: one-call ``load_robot``, cache anatomy and warm-up recipes.
 
 Install
 -------
@@ -30,9 +29,10 @@ Install
 To develop GRiD, use an editable install from a checkout instead
 (``pip install -e ".[all]"`` from the repository root, or
 ``bash install/base_install.sh``); it builds a small pybind11 extension
-(``grid_rbd._core``) at install time. ``nvcc`` is **not** required for either
-install — only for :py:func:`grid_rbd.register_robot`, which compiles a
-per-robot ``.so`` on first call. See :doc:`../getting_started/installation`.
+(``grid_rbd._core``) at install time. ``nvcc`` is not required for either
+install. It is required only by :py:func:`grid_rbd.register_robot`, which
+compiles a per-robot ``.so`` on first call. See
+:doc:`../getting_started/installation`.
 
 Register-then-run UX
 --------------------
@@ -42,8 +42,8 @@ Register-then-run UX
    import grid_rbd
 
    # One-time per (robot, options, GRiD version, CUDA arch).
-   # cold: about two minutes for iiwa14 on an RTX 5090 / 24-core host (parallel
-   # multi-unit build, see Fast Robot Setup); warm: seconds.
+   # cold: one nvcc build (the cold/warm table on Fast Robot Setup has the
+   # per-robot numbers); warm: seconds.
    # Cached under ~/.cache/grid-rbd/ by content key.
    handle = grid_rbd.register_robot(
        name="iiwa14",
@@ -69,13 +69,13 @@ Method surface
 
 Inputs are 2D arrays of the handle dtype (``float32`` unless the artifact was
 built with ``dtype="float64"``) with the batch on axis 0 and ``num_joints``
-(``NJ``, the configuration width ``nq``) on axis 1 — on a floating base that
+(``NJ``, the configuration width ``nq``) on axis 1. On a floating base that
 is ``NV + 1`` (the quaternion pad; a velocity or torque is passed at the same
 ``NJ`` width with the last slot zero). Outputs are batched on axis 0 with the
-shapes below: vectors are ``NJ``-wide, matrices, Jacobians and gradients are
+shapes below: vectors are ``NJ``-wide; matrices, Jacobians and gradients are
 ``NV``-wide (``num_vel``; on a fixed base ``NV == NJ``). ``gravity`` is the
-**signed gravitational acceleration**, default
-``-9.81`` (standard downward gravity) — the same convention as
+signed gravitational acceleration, default ``-9.81`` (standard downward
+gravity). This is the same convention as
 ``RBDReference.inverse_dynamics(..., GRAVITY=-9.81)`` and pinocchio, so
 pass the same value to both for cross-validation.
 
@@ -88,8 +88,8 @@ pass the same value to both for cross-validation.
      - Notes
    * - ``inverse_dynamics(q, qd, qdd=None)``
      - ``(B, NJ)``
-     - Inverse dynamics bias (RNEA); alias ``rnea``. ``qdd=None`` ⇒ bias
-       ``c = h − g``; a nonzero ``qdd`` adds the ``M·qdd`` term.
+     - Inverse dynamics bias (RNEA); alias ``rnea``. ``qdd=None`` gives the
+       bias ``c = h − g``; a nonzero ``qdd`` adds the ``M·qdd`` term.
    * - ``minv(q)``
      - ``(B, NV, NV)``
      - Direct mass-matrix inverse.
@@ -107,7 +107,7 @@ pass the same value to both for cross-validation.
      - ``[xyz, rpy]`` per EE.
    * - ``end_effector_pose_gradient(q)``
      - ``(B, 6*NUM_EES, NV)``
-     - EE pose Jacobian ``d(pose)/dv`` in **tangent space** (matches pinocchio).
+     - EE pose Jacobian ``d(pose)/dv`` in tangent space (matches pinocchio).
        Fixed-base ``NV == NJ``; floating-base ``NV = 6 + n_joints`` (spatial
        twist, ``[omega; v]``) rather than the older quaternion-derivative columns.
    * - ``end_effector_pose_hessian(q)``
@@ -156,14 +156,14 @@ pass the same value to both for cross-validation.
    * - ``inverse_dynamics_wrt_params(q, qd, params)`` /
        ``forward_dynamics_wrt_params(q, qd, u, params)``
      - ``(B, NJ)``
-     - jax/torch only: ID / FD as differentiable-in-π ops — autograd flows
+     - jax/torch only: ID / FD as differentiable-in-π ops; autograd flows
        the analytic ``∂c/∂π = Y`` / ``∂q̈/∂π = −M⁻¹Y`` to ``params``.
    * - ``forward_dynamics_parameter_gradient(q, qd, u)``
      - ``(B, NV, 10*NB)``
      - jax/torch only: the FD inertial-parameter gradient ``∂q̈/∂π = −M⁻¹Y``.
    * - ``attach_tool(joint, mass=..., ...)`` / ``detach_tool()`` /
        ``tool_fext(q, wrench)``
-     - varies / — / ``(B, 6*NB)``
+     - varies / none / ``(B, 6*NB)``
      - Runtime welded tool/payload (``enable_tool=True``): numpy computes
        the composed payload inertia + tool-tip frame and delegates to the
        runtime tables; ``tool_fext`` maps a world-aligned tool-tip wrench to
@@ -175,7 +175,7 @@ pass the same value to both for cross-validation.
        build.
    * - ``set_inertia_params(t)`` / ``set_transform_params(t)`` /
        ``set_joint_dynamics(damping=, friction=)``
-     - —
+     - none
      - Runtime-mutable model tables (flag-gated builds; no recompile).
    * - ``fk_batched(q)``
      - ``(B, 7)``
@@ -193,13 +193,13 @@ methods pass at float32 precision).
 Build cost on large floating-base robots
 ----------------------------------------
 
-On a floating-base, non-mimic robot GRiD emits **two** variants of each
+On a floating-base, non-mimic robot GRiD emits two variants of each
 kernel: the Pinocchio-convention ("pin") kernel and a MuJoCo-convention
 ("mjx") twin applying the ``G = blockdiag(R, I)`` output basis change.
-That convention change is cheap in principle but was expensive in generated
-code; the second-order mjx epilogues have since been block-parallelized, which
-cut them substantially. Current mjx SASS relative to pin (measured
-**go2-floating**, ``nv=18``):
+The convention change costs little in principle but was expensive in
+generated code; the second-order mjx epilogues are block-parallelized, which
+cut them substantially. Current mjx SASS relative to pin (measured on
+go2-floating, ``nv=18``):
 
 .. list-table::
    :header-rows: 1
@@ -207,16 +207,17 @@ cut them substantially. Current mjx SASS relative to pin (measured
    * - Kernel
      - mjx / pin
    * - ``idsva_so_world_frame``
-     - **2.42x** (was 5.5x rolled / 28x raw)
+     - 2.42x (previously 5.5x rolled / 28x raw)
    * - ``fdsva_so``
-     - **1.41x** (was 3.0x)
+     - 1.41x (previously 3.0x)
    * - ``inverse_dynamics_gradient``, ``forward_dynamics``, ``minv``, ``crba``
      - ~1.0x
 
-The second-order mjx twins are still the largest kernels in a humanoid build,
-so if you do not need the MuJoCo convention, pin-only is lighter to compile.
+The second-order mjx twins remain the largest kernels in a humanoid build,
+so a pin-only build is lighter to compile when the MuJoCo convention is not
+needed.
 
-If you do not need the MuJoCo output convention, build pin-only:
+To build pin-only:
 
 .. code-block:: python
 
@@ -225,19 +226,19 @@ If you do not need the MuJoCo output convention, build pin-only:
        enable_mujoco_kernels=False,
    )
 
-On g1-floating the mjx twins roughly double the build — the dated cold/warm
-table is on :doc:`../getting_started/fast_robot_setup`. Fixed-base and mimic robots (e.g. ``h1_2``)
-never get mjx twins, so the flag is a no-op there. It is mutually
-exclusive with ``output_convention="mujoco"``, and participates in the
-``.so`` cache key only when ``False``, so existing caches stay valid.
+On g1-floating the mjx twins roughly double the build; the dated cold/warm
+table is on :doc:`../getting_started/fast_robot_setup`. Fixed-base and mimic
+robots (e.g. ``h1_2``) never get mjx twins, so the flag is a no-op there. It
+is mutually exclusive with ``output_convention="mujoco"``, and participates
+in the ``.so`` cache key only when ``False``, so existing caches stay valid.
 The generator emits a warning naming this flag when it detects a large
 floating-base non-mimic robot.
 
 For test suites and codegen sessions, ``GRID_ENABLE_MUJOCO_KERNELS=0``
 makes pin-only the default for every ``gen_all_code`` call that does not
 pass the argument explicitly (an explicit argument always wins). It does
-**not** affect ``register_robot``/``precompile``, whose ``.so`` is cached
-under the option dict — an env var that changed the build without changing
+not affect ``register_robot``/``precompile``, whose ``.so`` is cached
+under the option dict: an env var that changed the build without changing
 the cache key would return a stale ``.so``.
 
 Cache layout
@@ -258,62 +259,78 @@ Cache layout
        ├── build_inputs.json      # the build identity this entry was built under
        └── robot.build.log        # per-unit rc / seconds / cache hits, then the link
 
-Two keys. The **stage-1 input key** = SHA-256 of ``urdf_bytes +
-canonical_json(options) + grid_rbd_version`` **plus** the codegen-source
-hash (every ``grid_codegen/``/``URDFParser`` file) and the *build identity*:
-CUDA arch, ``nvcc`` path + version, host C++ compiler, the content of the
-vendored GLASS headers, ``_compile.py``, the wrapper template, the torch/jax
-ABI tags and the generation-time env knobs — the one list in
-``grid_codegen/env_knobs.py`` (``GRID_CUDA_TARGET_SHARED_MEM_BYTES``,
-``GRID_CUDA_TARGET_LITE_SHARED_MEM_BYTES``, ``GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES``,
-``GRID_NO_LICM_BARRIER``, ``GRID_FDSVA_SO_MINV_TILE``, ``GRID_GLASS_REVISION``; the
-benchmark and equivalence header caches key the same list, and a test keeps it equal
-to the reads in the tree). The **stage-2 content key** = SHA-256 of exactly
-what ``nvcc`` compiled (generated bytes + flag drivers + toolchain); the
-``.so`` lives under it. A stage-1 pointer is honoured only when the entry's
-``build_inputs.json`` equals the current identity, so a toolkit upgrade or a
-dirty GLASS checkout can never return a stale ``.so``; a codegen edit whose
-emitted bytes are unchanged re-runs generation only (no ``nvcc``), and
-``force_rebuild`` is never needed for correctness. Below the content key sits
-the **per-unit object cache**: the ``.so`` is linked from one object per
-wrapper unit (core + one per algorithm family), each keyed by exactly its own
-compile inputs (unit text, ``grid.cuh``, ``wrapper_common.cuh``, flags,
-toolchain), so a content-key miss recompiles only the units whose inputs
-changed — a wrapper-template edit to one family costs that family's unit, a
-``grid.cuh`` change costs every unit. ``force_rebuild`` recompiles every unit
-and refreshes the object cache. Objects are kept forever, like ``store/``
-entries; ``GRID_RBD_OBJECT_CACHE_DAYS=N`` opts in to pruning objects not built
-or linked from in N days. CUDA arch and toolchain in
-the key mean a roaming home directory (e.g. NFS-mounted between a laptop and
-a desktop) safely keeps separate ``.so`` files per machine.
+The cache uses two keys. The stage-1 input key is the SHA-256 of
+``urdf_bytes + canonical_json(options) + grid_rbd_version`` plus the
+codegen-source hash (every ``grid_codegen/``/``URDFParser`` file) and the
+build identity: CUDA arch, ``nvcc`` path + version, host C++ compiler, the
+content of the vendored GLASS headers, ``_compile.py``, the wrapper template,
+the torch/jax ABI tags and the environment knobs. The knobs are the one list
+in ``grid_codegen/env_knobs.py``: the generation-time knobs
+``GRID_CUDA_TARGET_SHARED_MEM_BYTES``, ``GRID_CUDA_TARGET_LITE_SHARED_MEM_BYTES``,
+``GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES``, ``GRID_NO_LICM_BARRIER``,
+``GRID_FDSVA_SO_MINV_TILE``, ``GRID_GLASS_REVISION`` and
+``GRID_ENABLE_MUJOCO_KERNELS`` (``GENERATION_ENV_KNOBS``), plus the
+bindings-only build knobs ``GRID_RBD_CXX_STD``, ``GRID_RBD_SPLIT_COMPILE`` and
+``GRID_RBD_SPLIT_COMPILE_UNITS`` (``BINDINGS_ENV_KNOBS``, read by ``grid_rbd``
+only). The benchmark and equivalence header caches key the generation list,
+and a test keeps it equal to the reads in the tree.
+
+The stage-2 content key is the SHA-256 of exactly what ``nvcc`` compiled
+(generated bytes + flag drivers + toolchain); the ``.so`` lives under it. A
+stage-1 pointer is honoured only when the entry's ``build_inputs.json`` equals
+the current identity, so a toolkit upgrade or a dirty GLASS checkout can never
+return a stale ``.so``. A codegen edit whose emitted bytes are unchanged
+re-runs generation only (no ``nvcc``), and ``force_rebuild`` is never needed
+for correctness.
+
+Below the content key sits the per-unit object cache. The ``.so`` is linked
+from one object per wrapper unit (core + one per algorithm family), each keyed
+by exactly its own compile inputs (unit text, ``grid.cuh``,
+``wrapper_common.cuh``, flags, toolchain), so a content-key miss recompiles
+only the units whose inputs changed: a wrapper-template edit to one family
+costs that family's unit, and a ``grid.cuh`` change costs every unit.
+``force_rebuild`` recompiles every unit and refreshes the object cache.
+Objects are kept forever, like ``store/`` entries; ``GRID_RBD_OBJECT_CACHE_DAYS=N``
+opts in to pruning objects not built or linked from in N days. Because CUDA
+arch and toolchain are in the key, a roaming home directory (e.g. NFS-mounted
+between a laptop and a desktop) safely keeps separate ``.so`` files per
+machine.
 
 Override the cache root with ``$GRID_RBD_CACHE_DIR`` or
 ``cache_dir=...`` on ``register_robot``.
 
-**Garbage collection.** The store is content-addressed and never overwrites:
-re-registering a name after a codegen, bindings or toolchain change binds it
-to a new entry and leaves the old one behind, so a dev box accumulates entries
-no name points to. ``python -m grid_rbd.gc_cache`` (or ``grid_rbd.gc_cache()``)
-reports them — store entries no manifest name binds, dangling ``bykey``
-pointers, dead staging dirs — and ``--execute`` deletes them. Nothing a name
-still binds is touched, and the per-unit objects are kept unless you pass
-``--objects-days N``.
+Garbage collection
+~~~~~~~~~~~~~~~~~~
 
-**Compile on first use.** A first call pays the one-time build and says so: a
-one-line notice on stderr (a ``WARNING`` on the ``grid_rbd`` logger, so it
-shows with no logging setup) names the robot, the unit count and cores, the
-rough expectation (a minute or two for an arm or quadruped, about ten for a
-humanoid) and the cache location; a second line reports the elapsed time.
-``GRID_RBD_QUIET=1`` silences both. ``get_robot(name, urdf_path=...)`` makes
-a *miss* compile and register that URDF under ``name`` (``floating_base=`` and
-the other ``register_robot`` options are forwarded); a hit ignores the URDF.
-A name alone is never enough to build from — the URDF bytes are the identity.
+The store is content-addressed and never overwrites: re-registering a name
+after a codegen, bindings or toolchain change binds it to a new entry and
+leaves the old one behind, so a dev box accumulates entries no name points
+to. ``python -m grid_rbd.gc_cache`` (or ``grid_rbd.gc_cache()``) reports
+them (store entries no manifest name binds, dangling ``bykey`` pointers, dead
+staging dirs) and ``--execute`` deletes them. Nothing a name still binds is
+touched, and the per-unit objects are kept unless ``--objects-days N`` is
+passed.
+
+Compile on first use
+~~~~~~~~~~~~~~~~~~~~
+
+A first call pays the one-time build and says so: a one-line notice on stderr
+(a ``WARNING`` on the ``grid_rbd`` logger, so it shows with no logging setup)
+names the robot, the unit count and cores, the rough expectation it prints
+("typically 1–3 min for an arm or quadruped", "about 10 min for a humanoid";
+the measured numbers are in the cold/warm table on
+:doc:`../getting_started/fast_robot_setup`) and the cache location; a second
+line reports the elapsed time. ``GRID_RBD_QUIET=1`` silences both.
+``get_robot(name, urdf_path=...)`` makes a miss compile and register that
+URDF under ``name`` (``floating_base=`` and the other ``register_robot``
+options are forwarded); a hit ignores the URDF. A name alone is never enough
+to build from: the URDF bytes are the identity.
 
 Dimensions, layouts and differentiability
 -----------------------------------------
 
-**Dimension names.** Every handle exposes three read-only widths (the legacy
-names remain as aliases):
+Every handle exposes three read-only widths (the legacy names remain as
+aliases):
 
 .. list-table::
    :header-rows: 1
@@ -325,33 +342,33 @@ names remain as aliases):
    * - ``nq``
      - ``num_joints``
      - Configuration width: ``q`` is ``(B, nq)``. Fixed base: the joint
-       count. Floating base: ``7 + joints`` — ``[p(3), quat xyzw(4), joints]``.
+       count. Floating base: ``7 + joints``, ``[p(3), quat xyzw(4), joints]``.
    * - ``nv``
      - ``num_vel``
-     - Tangent width: matrix and gradient **outputs** are ``nv``-wide
+     - Tangent width: matrix and gradient outputs are ``nv``-wide
        (``minv`` is ``(B, nv*nv)``, ``*_gradient`` blocks are ``nv`` columns).
-       Floating base: ``6 + joints`` — ``[v_lin(3), omega(3), joints]`` in the
-       pinocchio LOCAL convention (``output_convention="mujoco"`` flips the
+       Floating base: ``6 + joints``, ``[v_lin(3), omega(3), joints]`` in the
+       pinocchio ``LOCAL`` convention (``output_convention="mujoco"`` flips the
        root block, see :doc:`../concepts/mjx_convention`).
    * - ``nb``
      - ``num_bodies``
      - Body count (base included on a floating base): ``f_ext`` is
        ``(B, 6*nb)``, one spatial force per body in the local body frame.
 
-**Velocity-space inputs and dynamics vector outputs are nv-wide.** ``qd``,
+Velocity-space inputs and dynamics vector outputs are nv-wide. ``qd``,
 ``qdd`` and ``u`` are passed at the tangent width ``nv`` on every surface
 (NumPy, JAX, PyTorch and the C ABI), and ``inverse_dynamics``,
 ``forward_dynamics``, ``aba``, ``nonlinear_effects`` and
 ``generalized_gravity`` return ``(B, nv)``. This is the Pinocchio and MuJoCo
 convention; on a scalar-joint fixed base ``nq == nv`` and nothing changes. An
-``nq``-wide padded array on a floating-base robot raises a clear
-``ValueError`` naming the tangent width rather than being sliced silently. The
-kernels' padded staging layout (:doc:`../concepts/input_output_abi`) is
-internal to the compiled wrapper.
+``nq``-wide padded array on a floating-base robot raises a ``ValueError``
+naming the tangent width rather than being sliced silently. The kernels'
+padded staging layout (:doc:`../concepts/input_output_abi`) is internal to
+the compiled wrapper.
 
-**What is differentiable.** ``jax`` and ``torch`` handles attach an analytic
-backward (a batched VJP through the ``*_gradient`` kernels) to exactly these
-methods; everything else is forward-only on every backend.
+``jax`` and ``torch`` handles attach an analytic backward (a batched VJP
+through the ``*_gradient`` kernels) to exactly the methods below; everything
+else is forward-only on every backend.
 
 .. list-table::
    :header-rows: 1
@@ -365,7 +382,7 @@ methods; everything else is forward-only on every backend.
      - ``f_ext`` is a residual, its cotangent is zero. ``∂qdd/∂u = M⁻¹``.
    * - ``inverse_dynamics``
      - ``q``, ``qd``
-     - ``qdd`` and ``f_ext`` are residuals (the derivative is taken AT the
+     - ``qdd`` and ``f_ext`` are residuals (the derivative is taken at the
        saved acceleration/force); their cotangents are zero.
    * - ``end_effector_pose``
      - ``q``
@@ -375,50 +392,49 @@ methods; everything else is forward-only on every backend.
        forward-only.
    * - ``integrator``
      - ``q``, ``qd``, ``u``
-     - **fixed-base only** (the SE(3)-chart VJP is not implemented); through
+     - fixed-base only (the SE(3)-chart VJP is not implemented); through
        the baked ``integrator_with_gradient`` kernel (the same fused step +
        Jacobian that ``integrator_gradient`` / ``plant_step_gradient`` return);
        ``dt``/steps are static.
    * - ``inverse_dynamics_wrt_params``
      - ``params``, ``q``, ``qd``
      - local parameter sensitivity (``∂τ/∂π`` via the regressor at
-       ``qdd = 0``) PLUS the ordinary ``q``/``qd`` cotangents; see below.
+       ``qdd = 0``) plus the ordinary ``q``/``qd`` cotangents; see below.
    * - ``forward_dynamics_wrt_params``
      - ``params``, ``q``, ``qd``, ``u``
-     - local parameter sensitivity (``∂qdd/∂π = -M⁻¹Y``) PLUS the ordinary
+     - local parameter sensitivity (``∂qdd/∂π = -M⁻¹Y``) plus the ordinary
        ``q``/``qd``/``u`` cotangents; see below.
 
-Each of these is a **reverse-mode VJP only**: there is no forward-mode
-(``jax.jvp`` / ``jax.jacfwd`` through them fails), no higher-order autograd
-(differentiating the backward again is not supported — use the explicit
-second-order kernels ``idsva_so`` / ``fdsva_so`` / ``end_effector_pose_hessian``,
-which are forward-only outputs), and ``jax.vmap`` composes only along the
-batch axis. The ``q`` cotangent on a floating base is the exact ambient
-pullback through the kernel's quaternion normalization (pinocchio handles)
-or the on-manifold pullback (``mjx`` handles); see *Gradient semantics* under
-the JAX section.
+Each of these is a reverse-mode VJP only. There is no forward-mode
+(``jax.jvp`` / ``jax.jacfwd`` through them fails) and no higher-order
+autograd (differentiating the backward again is not supported; use the
+explicit second-order kernels ``idsva_so`` / ``fdsva_so`` /
+``end_effector_pose_hessian``, which are forward-only outputs), and
+``jax.vmap`` composes only along the batch axis. The ``q`` cotangent on a
+floating base is the exact ambient pullback through the kernel's quaternion
+normalization (pinocchio handles) or the on-manifold pullback (``mjx``
+handles); see *Gradient semantics* under the PyTorch section.
 
-**``*_wrt_params`` are local sensitivities, not parameterized functions.**
-``inverse_dynamics_wrt_params(q, qd, params)`` returns the SAME torque the
-baked (or current runtime) inertial table gives, whatever ``params`` you pass;
-the operand exists so that the backward can supply ``∂τ/∂π`` through the
-regressor VJP. Use them as the linearization point for sysID / calibration
-(the gradient with respect to ``π`` at the current model), not as a function
-you can evaluate at a different ``π`` — to actually change the model, call
-``set_inertia_params`` (``runtime_inertia=True`` builds). Not offering a
-functional parameterized forward is a deliberate design decision, not
-something the current API pretends to be.
+``*_wrt_params`` are local sensitivities, not parameterized functions.
+``inverse_dynamics_wrt_params(q, qd, params)`` returns the same torque the
+baked (or current runtime) inertial table gives, whatever ``params`` is
+passed; the operand exists so that the backward can supply ``∂τ/∂π`` through
+the regressor VJP. Use them as the linearization point for sysID /
+calibration (the gradient with respect to ``π`` at the current model), not
+as a function evaluated at a different ``π``. To change the model, call
+``set_inertia_params`` (``runtime_inertia=True`` builds). The API does not
+offer a functional parameterized forward.
 
-**Runtime tables reach dynamics, not baked kinematics.** ``runtime_inertia``,
+Runtime tables reach dynamics, not baked kinematics. ``runtime_inertia``,
 ``runtime_transform`` and ``runtime_joint_dynamics`` rebuild the dynamics
 tables from a mutable device table once per launch, so ``inverse_dynamics``,
 ``forward_dynamics``, their gradients and the second-order kernels follow
 ``set_*_params`` with no recompile. The homogeneous-transform path used by
 ``end_effector_pose`` / ``end_effector_pose_gradient`` / ``_hessian`` /
-``frame_jacobian`` / ``fk_batched`` reads the BAKED joint origins: after
-``set_transform_params`` the kinematics still report the URDF geometry. That
-is a documented partial capability, not a bug you can work around from
-Python; consistent kinematic updates are a separate feature (register item).
+``frame_jacobian`` / ``fk_batched`` reads the baked joint origins: after
+``set_transform_params`` the kinematics still report the URDF geometry. This
+is a documented partial capability that cannot be worked around from Python;
+consistent kinematic updates are a separate feature (register item).
 
 End-effector target selection
 -----------------------------
@@ -435,24 +451,24 @@ fixed-joint target into the codegen:
        ee_joint_names=["iiwa_joint_7"],
    )
 
-A different ``ee_joint_names`` value lands in a separate cache entry —
+A different ``ee_joint_names`` value lands in a separate cache entry, so
 both targets can coexist in the cache.
 
 Contact frames and welded tools
 -------------------------------
 
-``register_robot(contact_frames=[...])`` takes a list of **fixed-joint
-names** and bakes the contact family into the build: the handle gains the
-``contact_fext`` method (per-contact-frame world-aligned wrenches →
+``register_robot(contact_frames=[...])`` takes a list of fixed-joint names
+and bakes the contact family into the build: the handle gains the
+``contact_fext`` method (per-contact-frame world-aligned wrenches to
 joint-local ``f_ext``) and a ``contact_frames`` property. The kwarg
 re-keys the ``.so`` cache, so contact and non-contact builds coexist. It
 is accepted by every backend's ``register_robot`` (NumPy, JAX, PyTorch)
-and composes with a subset ``algorithm_list`` — e.g.
+and composes with a subset ``algorithm_list``; e.g.
 ``algorithm_list=["inverse_dynamics", "forward_dynamics"]`` plus
 ``contact_frames=[...]`` builds only the dynamics cores and the contact
 family (the ``bindings/examples/multi_contact_fext.py`` recipe).
 
-The baked contact set also exposes its ORIGINS to CUDA/plant consumers:
+The baked contact set also exposes its origins to CUDA/plant consumers:
 ``grid::contact_frame_positions_device`` (the
 ``3*NUM_CONTACT_FRAMES`` world positions of the points ``f_ext_body`` takes
 the wrench about, registration order) and
@@ -462,16 +478,16 @@ frame, layout ``[3*NUM_VEL*f + 3*vi + row]``, floating tangent
 ``grid_plant::contact_frame_positions[_gradient](…, s_scratch, …)`` sized by
 ``CONTACT_FRAME_POSITIONS[_GRADIENT]_DYNAMIC_SHARED_MEM_COUNT``. They ride
 the multi-target emitters, so a dynamics-only ``algorithm_list`` still gets
-them. (No Python method yet — the device/plant layer is the consumer.)
-The same caller-scratch pair exists for the DEFAULT multi-target batch (the
+them. There is no Python method yet; the device/plant layer is the consumer.
+The same caller-scratch pair exists for the default multi-target batch (the
 ``multi_target_batch`` option / collision spheres):
 ``grid_plant::multi_target_position[_gradient](…, s_scratch, …)`` with
 ``s_scratch`` sized by the constexpr
-``MULTI_TARGET_POSITION[_GRADIENT]_DYNAMIC_SHARED_MEM_BYTES<T>()`` — the raw
-evaluator a consumer's own FK carve would otherwise have to compose.
+``MULTI_TARGET_POSITION[_GRADIENT]_DYNAMIC_SHARED_MEM_BYTES<T>()``. This is
+the raw evaluator a consumer's own FK carve would otherwise have to compose.
 
 ``register_robot(enable_tool=True)`` enables the runtime welded-tool
-surface — ``attach_tool`` / ``detach_tool`` / ``tool_fext`` — by turning
+surface (``attach_tool`` / ``detach_tool`` / ``tool_fext``) by turning
 on the runtime inertia table + runtime contact surface, all with no
 recompile at attach time. See
 ``bindings/examples/AGENT_INTEGRATION_GUIDE.md`` and
@@ -484,14 +500,15 @@ Host round trips (numpy): allocate once, reuse
 
 The numpy methods return a fresh array per call. For the large outputs
 (``idsva_so`` / ``fdsva_so``: ``4·NV³`` floats per batch item, 702 MB on g1
-at batch 1024) that costs a device→host copy into the context's page-locked
-mirror **plus** a host memcpy into the new array, and ~120 ms per call. The
-robotics pattern is to allocate once and reuse: ``handle.pinned_empty(shape)``
-returns a page-locked array in the compute dtype, and ``out=`` makes the
-generated host wrapper copy device→host straight into it — no host memcpy, at
-the PCIe rate. The returned tensors are views of ``out``. ``out`` may also be
-an ordinary C-contiguous array (then the copy is driver-staged, still without
-the extra memcpy); wrong shape/dtype/contiguity is refused with a clear error.
+at batch 1024) that costs a device-to-host copy into the context's
+page-locked mirror plus a host memcpy into the new array, and ~120 ms per
+call. The robotics pattern is to allocate once and reuse:
+``handle.pinned_empty(shape)`` returns a page-locked array in the compute
+dtype, and ``out=`` makes the generated host wrapper copy device-to-host
+straight into it, with no host memcpy, at the PCIe rate. The returned
+tensors are views of ``out``. ``out`` may also be an ordinary C-contiguous
+array (then the copy is driver-staged, still without the extra memcpy);
+wrong shape/dtype/contiguity is refused with a clear error.
 
 .. code-block:: python
 
@@ -500,14 +517,14 @@ the extra memcpy); wrong shape/dtype/contiguity is refused with a clear error.
    for q, qd, qdd in trajectory:                           # many
        d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq = h.idsva_so(q, qd, qdd, out=out)
 
-Measured 2026-10-01 (g1 ``idsva_so`` @1024): ~40 ms with a pinned ``out``
+Measured (g1 ``idsva_so`` @1024): ~40 ms with a pinned ``out``
 versus 120 ms through a fresh array; see the torch/JAX sections below for the
-same pattern on those surfaces. Page-locked memory is a limited resource — do
-not allocate it per call.
+same pattern on those surfaces. Page-locked memory is a limited resource, so
+do not allocate it per call.
 
 The first-order gradients take ``out=`` too. Their buffer is the flat
-``(B, 2·NV²)`` block the device writes — one column-major ``NV × 2NV`` matrix
-per item — and the returned ``(B, NV, 2NV)`` array is a *view* of it, so no
+``(B, 2·NV²)`` block the device writes, one column-major ``NV × 2NV`` matrix
+per item, and the returned ``(B, NV, 2NV)`` array is a view of it, so no
 array is allocated and nothing is re-laid-out on the host:
 
 .. code-block:: python
@@ -525,7 +542,7 @@ JAX FFI (``grid_rbd[jax]``)
 ---------------------------
 
 Install with ``pip install -e ".[jax]"`` to get the JAX bridge.
-The same per-robot ``.so`` is shared with the plain wrapper — no
+The same per-robot ``.so`` is shared with the plain wrapper, so there is no
 recompile on first ``grid_rbd.jax.register_robot``:
 
 .. code-block:: python
@@ -541,20 +558,20 @@ recompile on first ``grid_rbd.jax.register_robot``:
 
 Methods slot into the JAX FFI machinery as ``ffi_call`` targets
 running on JAX-supplied CUDA streams. Inputs may be numpy or
-``jax.Array`` — JAX moves data to device transparently before the
+``jax.Array``; JAX moves data to device transparently before the
 handler runs, and outputs stay device-resident.
 
-**Host round trips.** Keep outputs resident when the next consumer is on the
-GPU. When you do need numpy, ``grid_rbd.jax.to_host(outputs)`` moves an array
-or any pytree of arrays through XLA's ``pinned_host`` memory kind and returns
-zero-copy numpy views: on a 702 MB ``idsva_so`` output (g1, batch 1024) it
-takes 41 ms against 141 ms for ``jax.device_get`` (measured 2026-10-01). The
-pinned route costs about 20 µs per array, so by default (``pinned="auto"``)
-only arrays of at least 256 KiB take it and smaller ones go through
-``jax.device_get``; ``pinned=True`` / ``pinned=False`` force either route. It
-falls back to ``jax.device_get`` on devices without that memory kind. For device-side
-allocate-once reuse, ``jax.jit(..., donate_argnums=...)`` lets XLA write an
-output into a donated input buffer.
+Keep outputs resident when the next consumer is on the GPU. When numpy is
+needed, ``grid_rbd.jax.to_host(outputs)`` moves an array or any pytree of
+arrays through XLA's ``pinned_host`` memory kind and returns zero-copy numpy
+views: on a 702 MB ``idsva_so`` output (g1, batch 1024) it takes 41 ms
+against 141 ms for ``jax.device_get``. The pinned route costs about 20 µs
+per array, so by default (``pinned="auto"``) only arrays of at least 256 KiB
+take it and smaller ones go through ``jax.device_get``; ``pinned=True`` /
+``pinned=False`` force either route. It falls back to ``jax.device_get`` on
+devices without that memory kind. For device-side allocate-once reuse,
+``jax.jit(..., donate_argnums=...)`` lets XLA write an output into a donated
+input buffer.
 
 JAX surface: the core dynamics / kinematics / SO methods are bound via
 FFI and JIT-compatible (the SO methods ``idsva_so`` / ``fdsva_so`` follow
@@ -564,7 +581,7 @@ the plain wrapper's tuple-of-four convention), with autograd-aware
 centroidal / kinematics value ops (``generalized_gravity``,
 ``nonlinear_effects``, ``energy``, ``com``, ``ccrba``, ``dccrba``,
 ``cmm_time_variation``, ``coriolis_matrix``, ``frame_jacobian`` /
-``frame_jacobian_dot``, ``osc_inertia``, and the KE/PE regressors) are now
+``frame_jacobian_dot``, ``osc_inertia``, and the KE/PE regressors) are
 exposed on the jax and torch surfaces too (forward-only, no autograd).
 
 PyTorch backend (``backend="torch"``)
@@ -573,11 +590,11 @@ PyTorch backend (``backend="torch"``)
 ``register_robot(..., backend="torch")`` returns a ``TorchRobotHandle``
 whose methods return ``torch.Tensor``. The differentiable
 algorithms (``inverse_dynamics`` / ``forward_dynamics`` / ``aba`` /
-``end_effector_pose`` / ``integrator``) are autograd-aware — their backward
-passes are analytic, reusing the existing ``*_gradient`` kernels — while the
-remaining methods are forward-only ops. The ``.so`` is shared with the numpy/JAX surfaces; the
-torch op block is compiled in under ``-DGRID_RBD_WITH_TORCH`` when torch
-is present at register time.
+``end_effector_pose`` / ``integrator``) are autograd-aware: their backward
+passes are analytic, reusing the existing ``*_gradient`` kernels. The
+remaining methods are forward-only ops. The ``.so`` is shared with the
+numpy/JAX surfaces; the torch op block is compiled in under
+``-DGRID_RBD_WITH_TORCH`` when torch is present at register time.
 
 .. code-block:: python
 
@@ -592,52 +609,58 @@ is present at register time.
    qdd = h.forward_dynamics(q, qd, u)   # autograd-aware torch.Tensor
    qdd.sum().backward()                 # gradients flow to q, qd, u
 
-**What the gradients mean (both backends).**
+Gradient semantics
+~~~~~~~~~~~~~~~~~~
 
-* **Floating base, w.r.t. ``q``.** The analytic kernels differentiate in the
-  Pinocchio free-flyer *tangent* chart (``[v_lin local, ω local, joints]``,
-  nv-wide; that is what ``inverse_dynamics_gradient`` etc. return). The
-  public ``q`` is ``[pos(3), quat_xyzw(4), joints]`` (nq = nv+1), and
-  ``jax.grad`` / ``q.grad`` return the exact pullback to THAT layout: the
-  kernels evaluate ``R(p/|p|)``, so the value is ``f ∘ normalize`` on the
-  ambient quaternion and the gradient is its true ambient derivative
-  (central differences over any ``q`` component agree, including for a
-  non-unit quaternion; the radial direction is a null direction). Under
-  ``output_convention="mujoco"`` the twins use the mjx free-joint chart
-  (linear world, angular local, ``quat_wxyz``) and expect a UNIT quaternion
-  (they do not renormalize): the returned ``q`` cotangent is the on-manifold
-  pullback (zero radial component). Need the tangent-space gradient instead?
-  Contract your cotangent with the ``*_gradient`` Jacobian yourself.
-  Spherical joints have their own four-position/three-tangent quaternion
-  blocks. Their pullbacks use the model's per-joint coordinate offsets, not
-  a floating-root assumption. Old spherical artifacts without this layout
-  metadata must be re-registered before using framework autodiff.
-* **External forces.** ``f_ext`` is a non-differentiated input, but the
-  ``q``/``qd`` gradients are taken *at* the given force (a fixed body-local
-  wrench has q-dependent joint torques). ``f_ext`` must be ``(B, 6*num_bodies)``
-  in the body-local frame; on the jax surface ``(6*num_bodies,)`` and
-  ``(1, 6*num_bodies)`` broadcast forms are materialized to the batch, and any
-  other leading shape is rejected before the FFI call (the native handlers
-  reject a batch mismatch too).
+The gradients mean the same thing on both backends.
 
-**Shared runtime lifetime.** Backend handles referring to the same compiled
-artifact share its model and arena. Closing or collecting one handle does not
-reset the others. Framework-allocated arena buffers are retained by the shared
-native owner until the last Runner closes, and outstanding device work is
-completed before that buffer is released. A fresh runtime allocates lazily on
-its first operation or parameter update, so CUDA allocation errors can surface
+On a floating base, with respect to ``q``, the analytic kernels
+differentiate in the Pinocchio free-flyer tangent chart (``[v_lin local, ω
+local, joints]``, nv-wide; that is what ``inverse_dynamics_gradient`` etc.
+return). The public ``q`` is ``[pos(3), quat_xyzw(4), joints]`` (nq = nv+1),
+and ``jax.grad`` / ``q.grad`` return the exact pullback to that layout: the
+kernels evaluate ``R(p/|p|)``, so the value is ``f ∘ normalize`` on the
+ambient quaternion and the gradient is its true ambient derivative (central
+differences over any ``q`` component agree, including for a non-unit
+quaternion; the radial direction is a null direction). Under
+``output_convention="mujoco"`` the twins use the mjx free-joint chart
+(linear world, angular local, ``quat_wxyz``) and expect a unit quaternion
+(they do not renormalize): the returned ``q`` cotangent is the on-manifold
+pullback (zero radial component). To obtain the tangent-space gradient
+instead, contract the cotangent with the ``*_gradient`` Jacobian. Spherical
+joints have their own four-position/three-tangent quaternion blocks. Their
+pullbacks use the model's per-joint coordinate offsets, not a floating-root
+assumption. Old spherical artifacts without this layout metadata must be
+re-registered before using framework autodiff.
+
+``f_ext`` is a non-differentiated input, but the ``q``/``qd`` gradients are
+taken at the given force (a fixed body-local wrench has q-dependent joint
+torques). ``f_ext`` must be ``(B, 6*num_bodies)`` in the body-local frame;
+on the jax surface ``(6*num_bodies,)`` and ``(1, 6*num_bodies)`` broadcast
+forms are materialized to the batch, and any other leading shape is rejected
+before the FFI call (the native handlers reject a batch mismatch too).
+
+Shared runtime lifetime
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Backend handles referring to the same compiled artifact share its model and
+arena. Closing or collecting one handle does not reset the others.
+Framework-allocated arena buffers are retained by the shared native owner
+until the last Runner closes, and outstanding device work is completed
+before that buffer is released. A fresh runtime allocates lazily on its
+first operation or parameter update, so CUDA allocation errors can surface
 there rather than during registration. A framework view opened after a NumPy
 arena is already live reuses it; it does not replace the allocator or erase
 inertia, transform, or tool updates. Isolation is opt-in: ``handle.context()``
-(numpy, jax and torch handles alike) opens a **runtime context** of its own on
-the same artifact — its own arena, tables, streams and launch overrides — see
-the *Runtime contexts* concepts page. Concurrent operations on ONE context's
-scratch are still not independently safe (per-call leases are a later
-increment). Runtime-parameter mutations (``set_inertia_params``,
+(numpy, jax and torch handles alike) opens a runtime context of its own on
+the same artifact, with its own arena, tables, streams and launch overrides;
+see the *Runtime contexts* concepts page. Concurrent operations on one
+context's scratch are still not independently safe (per-call leases are a
+later increment). Runtime-parameter mutations (``set_inertia_params``,
 ``attach_tool`` …) are serialized against every in-flight call and bump
 ``handle.model_version``; a torch or JAX backward whose forward ran under an
 older version raises (``model mutated between forward and backward``) instead
-of differentiating the new model — recompute the forward after mutating.
+of differentiating the new model, so recompute the forward after mutating.
 
 For fixed-batch, low-launch-overhead replay (MPC / training),
 ``handle.capture(method, *example_inputs, **kwargs)`` returns a
@@ -655,15 +678,15 @@ concepts page):
    g = h.capture("forward_dynamics", q, qd, u)   # warmup + capture
    qdd = g(q_new, qd_new, u_new)                 # copy_ + replay
 
-**Host round trips: allocate once, reuse.** ``.cpu()`` on a large device
-output goes through a pageable staged copy (~3 GB/s here). Allocate
-page-locked mirrors ONCE with ``grid_rbd.torch.pinned_host_like(out)`` (a
-tensor or a tuple, e.g. ``g.static_out``) and fill them with
-``grid_rbd.torch.copy_to_host(host, out)`` or, for a captured graph,
-``g.replay_into(host)`` — a ``non_blocking`` copy at the PCIe rate followed
-by a stream sync. Measured 2026-10-01 on g1 ``idsva_so`` at batch 1024
-(702 MB): 39.5 ms vs 238 ms for ``.cpu()``. Inputs can take the same route:
-``torch.from_numpy(a).pin_memory().to("cuda", non_blocking=True)``.
+Host round trips on the torch surface follow the allocate-once pattern.
+``.cpu()`` on a large device output goes through a pageable staged copy
+(~3 GB/s here). Allocate page-locked mirrors once with
+``grid_rbd.torch.pinned_host_like(out)`` (a tensor or a tuple, e.g.
+``g.static_out``) and fill them with ``grid_rbd.torch.copy_to_host(host, out)``
+or, for a captured graph, ``g.replay_into(host)``: a ``non_blocking`` copy at
+the PCIe rate followed by a stream sync. Measured on g1 ``idsva_so`` at
+batch 1024 (702 MB): 39.5 ms vs 238 ms for ``.cpu()``. Inputs can take the
+same route: ``torch.from_numpy(a).pin_memory().to("cuda", non_blocking=True)``.
 
 .. code-block:: python
 
@@ -677,10 +700,10 @@ by a stream sync. Measured 2026-10-01 on g1 ``idsva_so`` at batch 1024
 
    The backward VJP contractions run torch's own CUDA kernels, so the
    installed torch build must support the GPU's compute capability. On an
-   RTX 5090 (sm_120) you need a torch **cu128** (or newer) build — a
-   cu124 wheel (max sm_90) cannot launch on sm_120. The ``grid`` /
-   ``grid_plant`` kernels themselves are always nvcc-built for the
-   detected arch and are unaffected.
+   RTX 5090 (sm_120) a torch cu128 (or newer) build is required; a cu124
+   wheel (max sm_90) cannot launch on sm_120. The ``grid`` / ``grid_plant``
+   kernels themselves are always nvcc-built for the detected arch and are
+   unaffected.
 
 ``grid_plant`` cost / barrier / plant-step methods
 --------------------------------------------------
@@ -740,5 +763,5 @@ their gradients); the default ``None`` reproduces the no-force path.
 See also
 --------
 
-* :doc:`benchmarks` — bench harness and what the methods cost.
-* :doc:`../concepts/algorithms/index` — algorithm-level docs.
+* :doc:`benchmarks`: bench harness and what the methods cost.
+* :doc:`../concepts/algorithms/index`: algorithm-level docs.

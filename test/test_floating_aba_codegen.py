@@ -14,7 +14,7 @@ import os
 
 import pytest
 
-from config import robot_urdf
+from grid_assets import robot_urdf
 from external.URDFParser.URDFParser import URDFParser
 from grid_codegen.GRiDCodeGenerator import GRiDCodeGenerator
 

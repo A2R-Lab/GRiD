@@ -15,7 +15,7 @@ The bundled iiwa14 URDF uses primitive collisions for the other links. This is
 the complete external mesh subset needed for its collision model, not a copy of
 Drake or its visual meshes. The package-relative directory layout preserves the
 original URDF's `package://drake/...` paths. No network or ROS_PACKAGE_PATH setting
-is needed to spherize `config/robot_assets/iiwa14.urdf` in this checkout.
+is needed to spherize `grid_assets/robots/iiwa14.urdf` in this checkout.
 
 The original iiwa_stack notices and Drake modifications/license notice are
 retained under `manipulation/models/iiwa_description/`; Drake's root license is
@@ -24,7 +24,7 @@ retained under `manipulation/models/iiwa_description/`; Drake's root license is
 Reproduce a complete model from the repository root:
 
 ```bash
-.venv/bin/python -m grid_codegen.spherize config/robot_assets/iiwa14.urdf \
+.venv/bin/python -m grid_codegen.spherize grid_assets/robots/iiwa14.urdf \
   --out /tmp/iiwa14_spheres.urdf --mesh-mode bounded-bulge --report
 ```
 

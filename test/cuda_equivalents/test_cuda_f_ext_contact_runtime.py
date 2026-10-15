@@ -23,7 +23,7 @@ from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
-from config import robot_urdf
+from grid_assets import robot_urdf
 RUNNER_SOURCE = Path(__file__).with_name("cuda_f_ext_contact_runtime_runner.cu")
 
 

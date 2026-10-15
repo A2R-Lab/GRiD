@@ -1,14 +1,14 @@
 """Central config / asset path helpers for GRiD.
 
-All robot URDFs live in ``config/robot_assets/`` and all baked launch-config
-overrides in ``config/launch_configs/``. Import these helpers instead of
-hard-coding the ``"config/robot_assets"`` string literal so that a future
+All robot URDFs live in ``grid_assets/robots/`` and all baked launch-config
+overrides in ``grid_assets/launch_configs/``. Import these helpers instead of
+hard-coding the ``"grid_assets/robots"`` string literal so that a future
 relocation of the assets is a one-file change (this module) rather than a
 sweep across every test / example / binding.
 
-    from config import robot_urdf, ROBOT_ASSETS_DIR, LAUNCH_CONFIGS_DIR
+    from grid_assets import robot_urdf, ROBOT_ASSETS_DIR, LAUNCH_CONFIGS_DIR
 
-    urdf = robot_urdf("iiwa14")     # -> <repo>/config/robot_assets/iiwa14.urdf
+    urdf = robot_urdf("iiwa14")     # -> <repo>/grid_assets/robots/iiwa14.urdf
 
 The paths are self-locating (relative to THIS file), so callers do not need to
 compute their own ``parents[N]`` repo-root depth to reach the assets — they
@@ -25,12 +25,12 @@ from pathlib import Path
 
 CONFIG_DIR = Path(__file__).resolve().parent
 REPO_ROOT = CONFIG_DIR.parent
-ROBOT_ASSETS_DIR = CONFIG_DIR / "robot_assets"
+ROBOT_ASSETS_DIR = CONFIG_DIR / "robots"
 LAUNCH_CONFIGS_DIR = CONFIG_DIR / "launch_configs"
 
 
 def robot_urdf(robot_id: str) -> Path:
-    """Path to ``config/robot_assets/<robot_id>.urdf``.
+    """Path to ``grid_assets/robots/<robot_id>.urdf``.
 
     Accepts a bare robot id (``"iiwa14"``) or a name already carrying the
     ``.urdf`` suffix. The returned path is NOT existence-checked — callers that

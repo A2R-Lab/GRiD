@@ -1,15 +1,15 @@
 Fast Robot Setup
 ================
 
-How to get a robot registered on your machine quickly and efficiently — and
-how to reuse compiled artifacts. The per-robot ``.so`` cache is content-keyed
+This page describes how to register a robot on a machine and how to reuse
+compiled artifacts. The per-robot ``.so`` cache is content-keyed
 and persistent, so compatible later loads avoid compilation. Loading and
 runtime initialization still take time; sub-second loading is not a guarantee.
-This page is the quick canonical
+This page is the short canonical
 path; the full API tour lives at :doc:`../tutorials/python_wrappers`.
 
-The three-line happy path
--------------------------
+The three-line path
+-------------------
 
 .. code-block:: python
 
@@ -17,26 +17,28 @@ The three-line happy path
    handle = grid_rbd.load_robot("path/to/robot.urdf")
    qdd = handle.forward_dynamics(q, qd, u)
 
-:py:func:`grid_rbd.load_robot` is the frictionless entry point — no name
-ceremony, no two-call dance. It derives a stable, **content-addressed name**
-from the URDF bytes (``{stem}_{fixed|floating}_{sha256(urdf)[:12]}``), so:
+:py:func:`grid_rbd.load_robot` is the single-call entry point: it needs no
+name and no separate registration call. It derives a stable, content-addressed
+name from the URDF bytes (``{stem}_{fixed|floating}_{sha256(urdf)[:12]}``), so:
 
-* the **first** call generates ``grid.cuh``, compiles the per-robot ``.so``
+* the first call generates ``grid.cuh``, compiles the per-robot ``.so``
   with ``nvcc``, and caches it;
 * later calls reuse compatible cached builds. Source, toolchain, GPU
   architecture, options or cache changes can require regeneration or
   recompilation even when the URDF bytes are unchanged.
 
-Pass ``name="my_arm"`` if you want a human-friendly handle instead, and
+Pass ``name="my_arm"`` for a human-friendly handle instead, and
 ``floating_base=True`` for free-base robots (the fixed and floating loads of
 one URDF get distinct, stable names and distinct cache entries). Any
 ``register_robot`` keyword (``ee_joint_names``, ``max_batch_size``,
 ``algorithm_list``, ``dtype``, …) passes straight through.
 
-The three entry points
-----------------------
+The three build calls
+---------------------
 
-All three drive the same persistent cache; pick by ceremony level.
+Three calls build a robot into the cache: ``load_robot``, ``register_robot``
+and ``precompile``. All three drive the same persistent cache, so the choice
+is one of ceremony level. ``get_robot`` (below) is the lookup, not a build.
 
 .. list-table::
    :header-rows: 1
@@ -46,11 +48,11 @@ All three drive the same persistent cache; pick by ceremony level.
      - Does
      - Use when
    * - ``load_robot(urdf_path, ...)``
-     - build-if-missing **and** return a handle; the name is auto-derived
+     - build-if-missing and return a handle; the name is auto-derived
        from the URDF bytes
-     - the frictionless default — "just give me this robot"
+     - the default for loading one robot without options
    * - ``register_robot(name, urdf_path, ...)``
-     - build-if-missing **and** return a handle, under a name you choose;
+     - build-if-missing and return a handle, under a name you choose;
        exposes the full option surface (``dtype``, ``algorithm_list``,
        ``runtime_inertia``, ``enable_mujoco_kernels``, …)
      - you want a stable human-friendly name, or non-default build options
@@ -58,132 +60,132 @@ All three drive the same persistent cache; pick by ceremony level.
      - build + populate the cache only (returns manifest entries, no
        handle); can prebuild several ``tiers`` (option variants) and warm
        several ``backends`` in one call
-     - warm the cache **out-of-band** (CI / Docker / a setup script) so
+     - warm the cache out-of-band (CI / Docker / a setup script) so
        interactive use never compiles
 
 Once a named robot is in the cache, ``get_robot(name)`` looks it up without
 touching the URDF. Since 0.5.1, ``get_robot(name, urdf_path=..., **register_opts)``
-compiles and registers that URDF on a *miss* (a hit ignores the URDF), so a
-script can be written as "get or build"; a first build announces itself with a
+compiles and registers that URDF on a miss (a hit ignores the URDF), so a
+script can be written as "get or build". A first build announces itself with a
 one-line ``WARNING`` estimating the build, silenced by ``GRID_RBD_QUIET=1``,
 and ``python -m grid_rbd.gc_cache`` reports (``--execute`` deletes) store
-entries no name binds any more — the *Compile on first use* and *Garbage
-collection* paragraphs of :doc:`../tutorials/python_wrappers` have the detail.
+entries no name binds any more; the *Compile on first use* and *Garbage
+collection* sections of :doc:`../tutorials/python_wrappers` have the detail.
 Without a URDF, ``get_robot(name)`` raises ``RobotNotRegisteredError`` if absent, and
 ``StaleRobotError`` when the registered build cannot be loaded by this
-``grid_rbd`` — built from another wrapper, torch/jax ABI or GPU arch, or before
+``grid_rbd`` (built from another wrapper, torch/jax ABI or GPU arch, or before
 the build-identity record existed; re-run ``register_robot`` / ``precompile``
 and a byte-identical build re-hits the store without ``nvcc``), and
 ``list_registered()`` shows everything in the manifest. Toolchain provenance
-(``nvcc``, host compiler, GLASS content) is NOT a load blocker: a shipped cache
+(``nvcc``, host compiler, GLASS content) is not a load blocker: a shipped cache
 loads on a box that never had the toolchain that built it.
 
-All of these are **idempotent**: a robot already in the cache is an instant
-no-op — re-registering never re-runs ``nvcc``.
+All of these are idempotent: a robot already in the cache is an instant
+no-op, and re-registering never re-runs ``nvcc``.
 
 Cache anatomy
 -------------
 
-The cache root is ``grid_rbd.default_cache_dir()`` — ``~/.cache/grid-rbd/``
+The cache root is ``grid_rbd.default_cache_dir()``, ``~/.cache/grid-rbd/``
 by default, overridden by ``$GRID_RBD_CACHE_DIR`` or ``cache_dir=`` on any
 entry point. Inside it, a ``manifest.json`` maps names to keys and each build
 lives under ``store/<cache_key>/`` (the generated ``grid.cuh``, the compiled
-``robot.so``, build metadata and log) — see the *Cache layout* section of
+``robot.so``, build metadata and log); see the *Cache layout* section of
 :doc:`../tutorials/python_wrappers` for the full tree.
 
-The store is **content-keyed** in two stages. A *stage-1 input key* is a
+The store is content-keyed in two stages. A stage-1 input key is a
 SHA-256 over the URDF bytes + the canonicalized option dict + the
-``grid-rbd`` version + the codegen source tree + the **build identity**: the
+``grid-rbd`` version + the codegen source tree + the build identity: the
 CUDA arch, the ``nvcc`` path and version, the host C++ compiler, the content
 of the GLASS headers the generator vendors, the compile-flag module, the
 torch/jax ABI tags and the generation-time environment knobs
 (``GRID_CUDA_TARGET_SHARED_MEM_BYTES`` and friends). ``bykey/<input_key>``
-points at a *stage-2 content key* — a SHA-256 of exactly what ``nvcc``
-compiled — under which the ``.so`` lives. Each entry keeps a readable
+points at a stage-2 content key, a SHA-256 of exactly what ``nvcc``
+compiled, under which the ``.so`` lives. Each entry keeps a readable
 ``build_inputs.json`` copy of its build identity, and a stage-1 pointer is
 honoured only when that record equals the current identity: a toolkit
 upgrade, a dirty GLASS checkout or a changed environment knob can never hand
 back a stale ``.so`` (the pointer is rejected, the sources are regenerated,
 and if the generated bytes are unchanged the same ``.so`` is reused without
-``nvcc``). Consequences worth knowing:
+``nvcc``). Consequences:
 
-* Re-registering with identical inputs is a pure lookup — no codegen, no
-  ``nvcc``, regardless of the name used.
+* Re-registering with identical inputs is a pure lookup, with no codegen and
+  no ``nvcc``, regardless of the name used.
 * An inline ``urdf_string=`` and the equivalent file dedupe to the same
   ``.so`` (the key hashes the bytes).
 * Different option choices (``ee_joint_names``, ``dtype``,
   ``algorithm_list``, ``floating_base``, …) land in separate entries that
-  coexist — nothing is clobbered.
+  coexist; nothing is clobbered.
 * CUDA arch in the key means a home directory shared between machines (e.g.
   NFS) safely keeps separate ``.so`` files per GPU; the ``nvcc`` / host
   compiler identity does the same for machines that differ in toolkit.
 * A codegen edit whose emitted bytes are unchanged (a comment, a refactor)
-  costs the CPU generation half only — never an ``nvcc`` rebuild.
-* Diagnosing an unexpected rebuild: compare the entry's ``build_inputs.json``
+  costs the CPU generation half only, never an ``nvcc`` rebuild.
+* To diagnose an unexpected rebuild, compare the entry's ``build_inputs.json``
   with ``grid_rbd._cache.build_identity(arch)``; the ``grid_rbd`` logger
   reports the rejected pointer's reasons at INFO level.
-* Long-lived processes: the GLASS content hash and the compiler versions are
+* In long-lived processes, the GLASS content hash and the compiler versions are
   memoized behind a ``(path, mtime_ns, size)`` snapshot of the headers and the
-  resolved compiler binaries, so an edit or a toolchain change AFTER an
+  resolved compiler binaries, so an edit or a toolchain change after an
   earlier registration in the same notebook is noticed on the next call. That
   snapshot is metadata: a same-size edit with a preserved timestamp, or a
-  toolchain swapped behind an identical path and stat, is not — call
+  toolchain swapped behind an identical path and stat, is not noticed; call
   ``grid_rbd._cache.refresh_build_identity()`` in those cases.
-* The cache dir is portable state: build offline once, then **ship or keep
-  the cache dir**, and every later run on a matching machine starts in well
+* The cache dir is portable state: build offline once, then ship or keep
+  the cache dir, and every later run on a matching machine starts in well
   under a second.
 
-Inspect before you build: ``build_plan``
-----------------------------------------
+Build inspection: ``build_plan``
+--------------------------------
 
 ``grid_rbd.build_plan(name, urdf_path, cuda_arch=..., **options)`` resolves a
 registration exactly as ``register_robot`` would and stops there: it returns
 the effective codegen options, the build identity (toolchain, GLASS content,
 environment knobs), the stage-1 input key, and whether the cache already
-holds a sound artifact (``cached`` / ``content_key`` / ``stale_reasons`` /
+holds a valid artifact (``cached`` / ``content_key`` / ``stale_reasons`` /
 ``would``). It generates nothing, runs no ``nvcc``, opens no ``.so`` and
-creates no CUDA context — only the URDF and a ``cuda_arch`` (or
+creates no CUDA context; only the URDF and a ``cuda_arch`` (or
 ``nvidia-smi`` to detect one) are needed. Use it to explain an unexpected
 rebuild, to pre-check a deployment's shipped cache, or to see on a build box
 what the build will key on.
 
 ``precompile(name, urdf, backends=["numpy"], cuda_arch=...)`` populates the
-cache the same way *without constructing a handle*: a machine with ``nvcc``
+cache the same way without constructing a handle: a machine with ``nvcc``
 but no usable GPU (a CI builder, a container image build) can produce the
 ``.so`` for the target arch. Only the ``jax`` / ``torch`` backends need the
 device at warm time (they register FFI targets against it).
 
-The baked launch profile is chosen for the **architecture you build for**:
-among ``config/launch_configs/<robot>/*.json`` the profile whose name ends
+The baked launch profile is chosen for the architecture being built for:
+among ``grid_assets/launch_configs/<robot>/*.json`` the profile whose name ends
 in ``_sm<arch>`` matching ``cuda_arch`` is used (several profiles for one
-architecture resolve to the default, else the first by name — GPU *models*
-sharing an architecture are not told apart yet); if none exists the default
-profile is baked with a one-time warning (correct, just not this GPU's
-measured optimum — ``config/autotune_robot.sh`` adds one). The choice rides
+architecture resolve to the default, else the first by name; GPU models
+sharing an architecture are not told apart yet). If none exists the default
+profile is baked with a one-time warning (correct, but not this GPU's
+measured optimum; ``grid_assets/autotune_robot.sh`` adds one). The choice rides
 the cache key and is recorded in ``meta.json`` as ``launch_config_gpu``.
 
-What to expect: cold vs. warm
------------------------------
+Cold and warm build times
+-------------------------
 
-**Multi-unit build (2026-10-09).** The per-robot ``.so`` is no longer one
-``nvcc`` translation unit: the wrapper is split into a core unit plus one unit
-per algorithm family (integrator gradients, plant step gradients, the
-second-order kernels, ...), compiled in parallel and host-linked. Wall time is
-bounded by the slowest family instead of the sum, and peak RAM by the number of
-parallel units instead of one giant unit. ``GRID_RBD_BUILD_JOBS=N`` caps the
-parallel units (default ``min(8, cores, available RAM / 3 GB)``; ``1`` is
-sequential and still peaks lower than the old single unit). Objects are kept in
-a per-unit cache (``~/.cache/grid-rbd/objects/``), so a wrapper change rebuilds
-only the units whose text changed. ``GRID_RBD_SPLIT_COMPILE=N`` (opt-in,
-default off) passes nvcc ``--split-compile N`` on the heaviest unit(s) for
-~3x faster compiles of that unit at ~3x its RAM; it is folded into the cache
-key.
+Since 0.5.1 the per-robot ``.so`` is no longer one ``nvcc`` translation unit:
+the wrapper is split into a core unit plus one unit per algorithm family
+(integrator gradients, plant step gradients, the second-order kernels, ...),
+compiled in parallel and host-linked. Wall time is bounded by the slowest
+family instead of the sum, and peak RAM by the number of parallel units
+instead of one giant unit. ``GRID_RBD_BUILD_JOBS=N`` caps the parallel units
+(default ``min(8, cores, available RAM / 3 GB)``; ``1`` is sequential and
+still peaks lower than the old single unit). Objects are kept in a per-unit
+cache (``~/.cache/grid-rbd/objects/``), so a wrapper change rebuilds only the
+units whose text changed. ``GRID_RBD_SPLIT_COMPILE=N`` (opt-in, default off)
+passes nvcc ``--split-compile N`` on the heaviest unit(s) for ~3x faster
+compiles of that unit at ~3x its RAM; it is folded into the cache key.
 
-Measured 2026-10-10 on an RTX 5090 / 24-core host, ``max_batch_size=1024``,
-pin-only, one build per process into an empty cache, 8 parallel units, box
-otherwise idle. "Build RAM" is the drop in system ``MemAvailable`` during the
-build (the sum over the parallel ``nvcc`` units; the old table's per-process RSS
-no longer measures a build). A warm start is a fresh process calling
+This table holds the build-time numbers for this site; other pages link here
+rather than repeating them. Measured for 0.5.1 on an RTX 5090
+/ 24-core host, ``max_batch_size=1024``, pin-only (no mjx twins), one build
+per process into an empty cache, 8 parallel units, box otherwise idle. "Build
+RAM" is the drop in system ``MemAvailable`` during the build (the sum over the
+parallel ``nvcc`` units). A warm start is a fresh process calling
 ``get_robot`` and one ``forward_dynamics``; "generation-only" (a codegen edit
 with byte-identical output) is unchanged at 1–3 s.
 
@@ -193,7 +195,7 @@ with byte-identical output) is unchanged at 1–3 s.
 
    * - Robot / build
      - Cold build
-     - was (one unit, 09-24)
+     - was (one unit, 0.5.0)
      - Build RAM
      - Warm start
      - Host RSS after one call
@@ -226,31 +228,31 @@ The mjx twins (``enable_mujoco_kernels=True`` on a floating base) still roughly
 double a build; they are not in this table (they were 27 min on go2 and 1 h 16
 min on g1 as one unit).
 
-Three things to take from the table. The multi-unit build made every cold
-build 2–9x faster (g1: 53 → 6 min), and ``algorithm_list`` still cuts the rest
-(g1: 6 min → 78 s, and 6.4 → 1.1 GB of host RAM to run). The mjx twins roughly
-double a floating-base build, so ``enable_mujoco_kernels=False`` is the default
-advice for humanoids. And the host RSS of a full build is dominated by per-algorithm workspaces sized by
-``max_batch_size`` and allocated at init, whether or not the process ever calls
-those algorithms — on a shared-memory device (Jetson) size ``max_batch_size``
-and ``algorithm_list`` to what you run.
+The multi-unit build made every cold build several times faster (the two
+columns; g1: from 53 to 6 min), and ``algorithm_list`` still cuts the rest
+(g1: from 6 min to 78 s, and from 6.4 to 1.1 GB of host RAM to run). The mjx
+twins roughly double a floating-base build, so ``enable_mujoco_kernels=False``
+is the default advice for humanoids. The host RSS of a full build is dominated
+by per-algorithm workspaces sized by ``max_batch_size`` and allocated at init,
+whether or not the process ever calls those algorithms; on a shared-memory
+device (Jetson) size ``max_batch_size`` and ``algorithm_list`` to what you run.
 
-The warm path is the whole point: pay the cold cost once — ideally
-out-of-band, see below — and interactive sessions, notebooks, tests, and
-deployed processes all start in a few seconds (about 0.9 s of that is loading
-the ``.so`` and initialising the device tables; the first call pays the lazy
-allocations; the second call runs at kernel speed).
+The warm path is the purpose of the cache. Pay the cold cost once, ideally
+out-of-band as described below, and interactive sessions, notebooks, tests,
+and deployed processes all start in a few seconds (about 0.9 s of that is
+loading the ``.so`` and initialising the device tables; the first call pays
+the lazy allocations; the second call runs at kernel speed).
 
 RAM-safe big-robot builds
 -------------------------
 
 Large floating-base robots are dominated by the MuJoCo-convention ("mjx")
-kernel twins that GRiD also emits on floating, non-mimic robots — the
+kernel twins that GRiD also emits on floating, non-mimic robots; the
 *Build cost on large floating-base robots* section of
-:doc:`../tutorials/python_wrappers` has the full story. Three levers keep
+:doc:`../tutorials/python_wrappers` has the detail. Three levers keep
 the build tractable:
 
-1. **Skip the mjx twins** if you do not need MuJoCo-convention outputs:
+1. Skip the mjx twins when MuJoCo-convention outputs are not needed:
 
    .. code-block:: python
 
@@ -261,9 +263,9 @@ the build tractable:
    ~6 min pin-only figure in the table above; fixed-base and mimic robots
    never get mjx twins, so the flag is a no-op there.
 
-2. **Build only the algorithms you need** with ``algorithm_list=`` — the
+2. Build only the algorithms needed, with ``algorithm_list=``. The
    named algorithms plus their auto-expanded dependencies are compiled,
-   dramatically cutting ``nvcc`` wall time, peak RAM, and ``.so`` size.
+   cutting ``nvcc`` wall time, peak RAM, and ``.so`` size.
    Un-built methods raise a clear "add to ``algorithm_list`` and rebuild"
    error, never a segfault. Via ``precompile`` tiers:
 
@@ -276,15 +278,15 @@ the build tractable:
                   "enable_mujoco_kernels": False}],
       )
 
-3. **Warm out-of-band.** Don't pay a minutes-long compile inside a notebook
-   or an interactive session — run ``precompile`` once from a script or CI
+3. Warm out-of-band. Do not pay a minutes-long compile inside a notebook
+   or an interactive session; run ``precompile`` once from a script or CI
    step (see the next two sections), and open the notebook against a warm
    cache.
 
 Warming the jax / torch backends
 --------------------------------
 
-One compiled ``.so`` is shared across the numpy, jax, and torch surfaces —
+One compiled ``.so`` is shared across the numpy, jax, and torch surfaces;
 ``backend=`` never forces a recompile. ``precompile`` can warm each
 surface's artifacts on that shared ``.so`` ahead of time:
 
@@ -293,35 +295,35 @@ surface's artifacts on that shared ``.so`` ahead of time:
    grid_rbd.precompile("iiwa14", "iiwa.urdf",
                        backends=("numpy", "jax", "torch"))
 
-Warm the surfaces you will actually use (each backend requires its extra
+Warm the surfaces that will be used (each backend requires its extra
 installed: ``pip install -e ".[jax]"`` / ``".[torch]"`` / ``".[all]"``).
-Note that the first ``import jax`` / ``import torch`` and the first
+The first ``import jax`` / ``import torch`` and the first
 ``jax.jit`` trace in a fresh process carry their own one-time framework
-costs — those belong to the framework, not to GRiD's cache.
+costs, which belong to the framework, not to GRiD's cache.
 
-For agents and CI: the non-interactive warm
--------------------------------------------
+Non-interactive warming for CI and scripts
+------------------------------------------
 
-The exact one-liner to warm a robot from a script, CI job, or agent shell
-(idempotent — safe to run every time):
+The one-liner to warm a robot from a script or CI job (idempotent, so it
+is safe to run every time):
 
 .. code-block:: shell
 
-   .venv/bin/python -c "import grid_rbd; grid_rbd.precompile('go2', 'config/robot_assets/go2.urdf', floating_base=True, backends=('numpy', 'jax'))"
+   .venv/bin/python -c "import grid_rbd; grid_rbd.precompile('go2', 'grid_assets/robots/go2.urdf', floating_base=True, backends=('numpy', 'jax'))"
 
 Run it once per robot before any interactive or latency-sensitive use; every
 subsequent ``load_robot`` / ``get_robot`` / ``jax.jit`` in any process is
 then an instant cache hit.
 
-GPU memory: GRiD lives inside the framework allocator's pool
-------------------------------------------------------------
+GPU memory and the framework allocator pool
+-------------------------------------------
 
-The jax and torch surfaces install a *device pool* automatically at
+The jax and torch surfaces install a device pool automatically at
 ``register_robot`` / ``get_robot``: GRiD's entire device arena is carved out
-of ONE slab allocated by the framework itself (jax: a buffer from XLA's
+of one slab allocated by the framework itself (jax: a buffer from XLA's
 memory pool; torch: a caching-allocator tensor) instead of raw
-``cudaMalloc``. XLA's default 75% preallocation can therefore stay ON — it no
-longer starves GRiD's allocations (the humanoid "launch failed" class).
+``cudaMalloc``. XLA's default 75% preallocation can therefore stay on; it
+does not starve GRiD's allocations (the humanoid "launch failed" class).
 ``handle.capabilities()`` reports the tuned launch state per method
 (including the armed small-batch switch as ``batch_threshold`` /
 ``threads_small``), and ``runner.device_pool_used()`` equals
@@ -332,9 +334,9 @@ is honored in both modes.
 See also
 --------
 
-* :doc:`../tutorials/python_wrappers` — the full ``grid-rbd`` API tour:
+* :doc:`../tutorials/python_wrappers`: the full ``grid-rbd`` API tour:
   method surface, cache layout, jax/torch backends, ``grid_plant``.
-* ``bindings/examples/AGENT_INTEGRATION_GUIDE.md`` — GPU-resident usage
-  patterns for agents (stay on device, CUDA graphs, zero-copy interop).
-* `examples/notebooks/ <https://github.com/A2R-Lab/GRiD/tree/main/examples/notebooks>`_ — the guided notebook track (start with
+* ``bindings/examples/AGENT_INTEGRATION_GUIDE.md``: GPU-resident usage
+  patterns (stay on device, CUDA graphs, zero-copy interop).
+* `examples/notebooks/ <https://github.com/A2R-Lab/GRiD/tree/main/examples/notebooks>`_: the guided notebook track (start with
   ``01_quickstart_iiwa14``).

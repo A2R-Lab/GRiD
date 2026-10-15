@@ -378,7 +378,7 @@ class BaseDelegateMixin:
 
     def apply_profile_overlay(self, profile: str) -> int:
         """Apply the tuned per-algo threads/tier overlay block ``profile`` from
-        ``config/launch_configs/<robot>/<gpu>.json`` to the shared underlying
+        ``grid_assets/launch_configs/<robot>/<gpu>.json`` to the shared underlying
         ``.so`` (all surfaces over it see the change). Returns the number of
         algos overlaid (0 = no config for this robot/GPU/profile)."""
         return self._base.apply_profile_overlay(profile)

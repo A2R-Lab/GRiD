@@ -2,12 +2,12 @@
 
 This validation-gated collector supplies the release figures. It
 does not reuse historical timing values or the old drivers' unmatched `with_mem`
-measurements. Collision work is deliberately excluded. Nothing here changes
+measurements. Collision work is excluded. Nothing here changes
 GPU/CPU clocks, deploys website data, or approves a performance claim.
 
-See [BUG_TRIAGE.md](BUG_TRIAGE.md) for the latest fixes and retests, and
-[SMOKE_STATUS.md](SMOKE_STATUS.md) for the original smoke audit. The original
-Pinocchio core blocker is fixed. The reviewed `fp32-fd-warnings` policy now
+[BUG_TRIAGE.md](BUG_TRIAGE.md) records the fixes and retests, and
+[SMOKE_STATUS.md](SMOKE_STATUS.md) the original smoke audit. The original
+Pinocchio core blocker is fixed. The reviewed `fp32-fd-warnings` policy
 allows the expanded FD table's bounded fp32 discrepancies to be timed and
 included with explicit accuracy warnings, not strict validation-pass labels.
 
@@ -20,8 +20,11 @@ workers, capped by batch size; secondary tables retain their original policy.
 The worker count is retained per cell. It is not CPU affinity or a BLAS limit.
 
 ```bash
-.venv/bin/python docs/release_pipeline.py --output docs/open-tasks/release-review
+.venv/bin/python docs/release_pipeline.py --output <scratch-dir>
 ```
+
+`--output` is a scratch directory of your choice (outside the tracked tree;
+the script refuses to overwrite an existing one).
 
 This CPU-only step verifies capture hashes and numerical statuses, rebuilds the
 report, and exports figures and tables under `website-preview/`. It requires
@@ -59,8 +62,8 @@ publication-ready measurements.
 ## Prepare now, collect later
 
 Preparation builds/loads each implementation and exercises both available API
-paths at B=16,32,64,128,256. It writes **no timing samples**, performs only a
-finite-output check (not oracle validation), and is explicitly rejected by the
+paths at B=16,32,64,128,256. It writes no timing samples, performs only a
+finite-output check (not oracle validation), and is rejected by the
 performance report exporter. It does not change GPU clocks or baseline math.
 
 ```bash
@@ -92,18 +95,18 @@ between preparation and collection.
 
 Omit `--smoke` to run B=16,32,64,128,256,1024, three isolated warmed repetitions,
 five warmups sustained for at least `--warm-seconds` (default 1.5 s) and 30
-timed samples per boundary. A displayed value is the median of the three **run
-means**, not a pooled single-call median. Run-mean ranges are retained in the
+timed samples per boundary. A displayed value is the median of the three run
+means, not a pooled single-call median. Run-mean ranges are retained in the
 tables; the homepage bars omit whiskers. Published core and wrapper captures
 use 300 timed samples, selected explicitly with `--iterations 300`. Adjust
 repetitions/iterations explicitly when needed.
 
-The warm-up is time-based on purpose: a handful of microsecond calls never
-leaves the idle clock on a GPU that cannot be clock-locked without root (this
+The warm-up is time-based because a handful of microsecond calls never
+leaves the idle clock on a GPU that cannot be clock-locked without root. This
 box idles far below its sustained boost; `timeGRiD_common.h` records the
-measured range), so every backend, CPU or GPU, is driven for the same wall time
-before its samples are taken. `nvidia-smi -lgc` by the operator remains the
-stronger control and is recorded in provenance when used.
+measured range. As such, every backend, CPU or GPU, is driven for the same wall
+time before its samples are taken. `nvidia-smi -lgc` by the operator remains
+the stronger control and is recorded in provenance when used.
 
 ```bash
 .venv/bin/python -m test.benchmarks.release.collect --stage core \
@@ -126,7 +129,7 @@ stronger control and is recorded in provenance when used.
 ```
 
 `--robots`, `--operations`, `--backends`, and `--batches` restrict work before
-compilation, not just plotting. `--smoke --batches 16 256` exercises both endpoints
+compilation, not only plotting. `--smoke --batches 16 256` exercises both endpoints
 without becoming release evidence. `--timeout` is per job, including build.
 Subprocesses run sequentially. Do not run other GPU experiments concurrently
 during a real capture. Idle-device status and thermal/clock stability still need
@@ -140,14 +143,14 @@ directory and choose which version to retain. Do not merge duplicate repeats.
 
 ## Measurement contract and implementation choices
 
-- **Core plot configuration:** GRiD CUDA compute-only, host-call and JAX
+- The core plot configuration comprises GRiD CUDA compute-only, host-call and JAX
   increments; separate Pinocchio codegen and standard API bars; MuJoCo CPU,
   MuJoCo Warp and MJX where supported. Pinocchio Hessians use its standard
   analytical fp64 path, never a codegen bar. BARD and Frax remain in the detailed
   tables. The wrapper plot compares CUDA Device, C++ Host, NumPy, PyTorch and
   JAX. C ABI measurements remain in the tables, not the homepage plot.
-- **`grid_cuda` — GRiD's own C++ host calls.** `kernel_bridge.cu` is compiled
-  per robot/operation against the SAME `grid.cuh` the wrapper `.so` was built
+- `grid_cuda` is GRiD's own C++ host calls. `kernel_bridge.cu` is compiled
+  per robot/operation against the same `grid.cuh` the wrapper `.so` was built
   from (same nvcc flags and arch; content-keyed on the header, the bridge, the
   flags and the compiler). Its `resident` boundary is the generated
   `<op>_compute_only` host function (inputs already in the gridData arena,
@@ -155,12 +158,12 @@ directory and choose which version to retain. Do not merge duplicate repeats.
   host function (H2D copies, kernel, D2H copy). The batch is one block per
   sample at the artifact's baked per-algorithm thread count (recorded). Both
   outputs, and the two boundaries against each other, must be bitwise equal to
-  the NumPy wrapper's result before any timing is kept. No Python in the loop.
-  Covers every operation except the end-effector derivatives, so the table
+  the NumPy wrapper's result before any timing is kept. No Python is in the loop.
+  It covers every operation except the end-effector derivatives, so the table
   figure carries a kernel-level GRiD bar next to each competitor and the
   speedup heatmaps can compare kernel launch against resident library calls.
 - Full-call wall time includes host inputs, necessary H2D copies, evaluation,
-  synchronization, and **all selected outputs copied to host**. Resident wall
+  synchronization, and all selected outputs copied to host. Resident wall
   time includes ordinary API dispatch and synchronization. Input generation,
   oracle conversion, code generation/JIT, setup, and warmups are excluded.
 - Gray hatched caps are full-call minus resident wall time from the same job.
@@ -181,16 +184,16 @@ directory and choose which version to retain. Do not merge duplicate repeats.
   are not timed. Pinocchio runs on a persistent C++ pool (`release_pool.h`)
   with an independent model/data/codegen context per thread; the batch is
   split into contiguous slices, slice 0 on the calling thread. Every cell is
-  timed at each candidate thread count — 1, `max(1, B//16)` and the
-  `--cpu-threads` ceiling (default eight) — and the BEST run mean is the
+  timed at each candidate thread count (1, `max(1, B//16)` and the
+  `--cpu-threads` ceiling, default eight) and the best run mean is the
   reported full-call time; every variant and the selected count are kept in
   the capture and the report's `threads` column. BLAS/OpenMP threads are
-  pinned to one. This is still **not** a claim of the optimal possible CPU
+  pinned to one. This is still not a claim of the optimal possible CPU
   threading implementation, but no Python executor is inside the timed call.
 - Full Jacobians are validated as two blocks (d/dq and d/dv) so the gross-error
   backstop cannot hide a wrong velocity block under a large position block.
 - Bias (`nonlinear_effects`) and gravity are each library's inverse dynamics at
-  zero acceleration (and zero velocity) in ITS convention; the oracle transport
+  zero acceleration (and zero velocity) in its own convention; the oracle transport
   carries the pin-frame correction ("qacc = 0" is not frame-invariant on a
   floating base). `crba` is the dense mass matrix (MJX `crb` + `full_m`,
   MuJoCo `mj_crb` + `mj_fullM`, BARD `crba`, Frax `mass_matrix`, Pinocchio
@@ -236,14 +239,14 @@ checks its native/codegen bridge against the reference adapter, not an independe
 library. FK coordinate derivatives in the oracle use finite differences; those
 are validation-only and never timed as an analytical comparator.
 
-The strict gate remains entrywise `atol=1e-3, rtol=2e-4`. This is **not** a uniform
+The strict gate remains entrywise `atol=1e-3, rtol=2e-4`. This is not a uniform
 0.02% accuracy guarantee. The default `--accuracy-policy strict` still blocks a
 cell that exceeds it. Following review, `--accuracy-policy fp32-fd-warnings`
 retains such cells as `accuracy_warning` for fp32 Minv, FD, grad FD and FDSVA only,
 equally for all backends. A gross-error backstop requires every output block's
 relative L2 error to be at most `1e-3` (0.1%); this is not an entrywise bound.
 Shape/nonfinite failures, fp64 discrepancies and other operations still block.
-Policy **v2** applies that same rule to bounded host/resident and repeatability
+Policy v2 applies that same rule to bounded host/resident and repeatability
 differences, reflecting the diagnosed stock-MJX reduction-order variation.
 Host and resident outputs are independently checked against the oracle before
 and after timing; their variations are recorded separately. A close pair of
@@ -303,7 +306,7 @@ minutes and approximately 10 GB of host RAM. Its content-keyed library cache is
 under the ignored `test/benchmarks/results/release-build-cache/`; JIT libraries
 are keyed on the code generators and their settings (`pin_codegen_init.h`,
 `timePinocchio.cpp`, the util headers, compiler flags, gcc and the Pinocchio
-version — the `codegen_cache_key` in adapter metadata), URDF and base mode,
+version: the `codegen_cache_key` in adapter metadata), URDF and base mode,
 with distinct operation library names, protected by a build lock, and hashed
 in the capture; a change to the dispatch code in `pin_bridge.cpp` rebuilds the
 bridge only. The CUDA host-call harnesses (`kernel-<key>.so`, one per robot and

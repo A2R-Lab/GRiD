@@ -25,7 +25,7 @@ required_fingerprint_paths:
   - external/GLASS
   - external/RBDReference
   - external/URDFParser
-  - config
+  - grid_assets
   - pyproject.toml
   - setup.py
   - _build_resources.py
@@ -43,6 +43,16 @@ required_fingerprint_paths:
   - test/header_key_replay.py
   - test/receipt_integrity.py
   - test/gpu-proof-tests.txt
+  - test/__init__.py
+  - test/gpu-proof-policy.yaml
+  - test/gpu-proof-policy-release.yaml
+  - test/gpu-proof-expected-skips.txt
   - test/run_validation.py
 required_fingerprint_extra_paths: []
-required_fingerprint_excluded_paths: [gpu-proof.json]
+required_fingerprint_excluded_paths:
+  - gpu-proof.json
+  - grid_assets/robots/URDF_SOURCES.md
+  - grid_assets/robots/drake/README.md
+  - grid_assets/launch_configs/README.md
+  - grid_codegen/README.md
+  - grid_codegen/collision/HANDOFF.md

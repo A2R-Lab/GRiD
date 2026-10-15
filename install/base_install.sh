@@ -10,5 +10,7 @@ if [[ ! -d "${VENV_DIR}" ]]; then
 fi
 
 "${VENV_DIR}/bin/python" -m pip install --upgrade pip
-"${VENV_DIR}/bin/python" -m pip install -e "${REPO_ROOT}"
+# Peers first: the editable finder maps the packages present at install time,
+# so a non-recursive clone must populate external/ BEFORE `pip install -e`.
 git -C "${REPO_ROOT}" submodule update --init --recursive
+"${VENV_DIR}/bin/python" -m pip install -e "${REPO_ROOT}"

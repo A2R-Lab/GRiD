@@ -236,7 +236,7 @@ def gen_multi_target_position(self, batch, suffix="", emit_num_const=True):
     # the public multi_target_batch path. The collision path keeps emitting it here (its
     # suffixed per-tier constants have no early emission and no gridData dependency).
     self.gen_add_code_lines([
-        "// W1b batched multi-target world positions (opt-in via multi_target_batch); " + NUM + " = " + str(n)]
+        "// batched multi-target world positions (opt-in via multi_target_batch); " + NUM + " = " + str(n)]
         + (["const int " + NUM + " = " + str(n) + ";"] if emit_num_const else []) + [
         # Tier-aware smem arena: at TIER_SHARED the FK scratch (s_Xworld) is in smem; at
         # TIER_LITE/MINIMAL it spills to the device fn's d_workspace, shrinking the arena to
@@ -432,7 +432,7 @@ def gen_multi_target_position_gradient(self, batch, suffix=""):
     scratch = self.gen_multi_target_position_gradient_inner_temp_mem_size(batch)  # Xworld|Jv|Jw|ro
     total_t = XHom_size + scratch
     self.gen_add_code_lines([
-        "// W2a batched multi-target world-position GRADIENT (opt-in via multi_target_batch)",
+        "// batched multi-target world-position GRADIENT (opt-in via multi_target_batch)",
         # Tier-aware smem arena: TIER_SHARED keeps the Jacobian scratch in smem; TIER_LITE/MINIMAL
         # spills it to the device fn's d_workspace, shrinking the arena to s_XmatsHom + linalg.
         _tier2_bytes_line(POSG + "_DYNAMIC_SHARED_MEM_BYTES", total_t, XHom_size),

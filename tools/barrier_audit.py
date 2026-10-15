@@ -44,7 +44,6 @@ NOISE = re.compile(r"^\s*(//.*|/\*.*\*/|T\s*\*\s*\w+\s*=.*;|const\s+T\s*\*\s*\w+
 INT_DEF = re.compile(r"\bint\s+(\w+)\s*=\s*([^;]+);")
 ACCESS = re.compile(r"(&?)\b([A-Za-z_]\w*)\s*\[([^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*)\]")
 ASSIGN = re.compile(r"(\b[A-Za-z_]\w*)\s*\[([^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*)\]\s*(\+=|-=|\*=|/=|=)(?!=)")
-PTR_ALIAS = re.compile(r"\bT\s*\*\s*(\w+)\s*=\s*&?\s*(\w+)\b")
 CALL = re.compile(r"\b(\w+)\s*(?:<[^()]*>)?\s*\(")
 IGNORE_CALLS = {"for", "if", "while", "static_cast", "dot_prod", "crm", "crf", "icrf", "crm_mul", "icrf_mul",
                 "sqrt", "fabs", "min", "max", "fmaxf", "fminf", "__syncthreads", "constexpr", "sizeof", "switch"}

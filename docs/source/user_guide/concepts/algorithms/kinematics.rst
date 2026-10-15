@@ -30,7 +30,7 @@ For a floating base the six base columns are the spatial twist components,
 in Pinocchio order (local linear velocity, then local angular velocity).
 For a fixed base with independent scalar joints, ``NV`` equals the joint count;
 use ``h.num_vel`` for spherical or mimic models. Inputs are ``(B, h.nq)``.
-Note that these are derivatives of the pose *coordinates* (position and RPY
+These are derivatives of the pose coordinates (position and RPY
 angles); they are not the same object as Pinocchio's spatial frame Jacobian,
 which is available separately as :doc:`frame_jacobian`.
 RPY coordinates have chart singularities; their derivatives should not be
@@ -84,7 +84,7 @@ Load a model with the operations you need before calling the examples above::
    import grid_rbd
 
    h = grid_rbd.load_robot(
-       "config/robot_assets/iiwa14.urdf",
+       "grid_assets/robots/iiwa14.urdf",
        algorithm_list=["end_effector_pose", "end_effector_pose_gradient",
                        "end_effector_pose_hessian"],
    )
@@ -97,8 +97,8 @@ for registration, available-operation inspection and framework backends.
 
 See Also
 --------
-* :doc:`frame_jacobian` — the geometric (spatial) Jacobian of an arbitrary
+* :doc:`frame_jacobian`: the geometric (spatial) Jacobian of an arbitrary
   frame, its time derivative and the operational-space inertia.
-* :doc:`integrators_and_plant` — the end-effector position cost built on the
+* :doc:`integrators_and_plant`: the end-effector position cost built on the
   pose and its Jacobian.
-* :doc:`../../tutorials/cuda_support_status` — per-robot coverage.
+* :doc:`../../tutorials/cuda_support_status`: per-robot coverage.

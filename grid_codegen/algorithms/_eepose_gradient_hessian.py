@@ -1118,7 +1118,7 @@ def gen_end_effector_pose_hessian_inner_temp_mem_size(self, fixed_target_name = 
     """Size (in T elements) of the analytic d2ee inner's s_temp.
 
     The closed-form per-chain second-order Taylor algorithm (see
-    docs/d2ee_analytic_derivation.md) needs:
+    docs/design_history/d2ee_analytic_derivation.md) needs:
 
       [0 .. 16*NUM_XWORLD)             s_Xworld     world transform of every joint
                                                     (+ fixed kinematic targets when
@@ -1230,7 +1230,7 @@ def _eepose_hessian_chain_metadata(self, all_ees, anchor_override=None):
 
 def gen_end_effector_pose_hessian_inner(self, fixed_target_name = ""):
     """Analytic d^2(pose)/dv^2 of the end-effector pose via per-chain second-
-    order Taylor expansion (see docs/d2ee_analytic_derivation.md).
+    order Taylor expansion (see docs/design_history/d2ee_analytic_derivation.md).
 
     Replaces the previous FD-on-d/dv-Jacobian implementation (2*nv + 1 gradient
     calls) with a single closed-form pass. Mirrors

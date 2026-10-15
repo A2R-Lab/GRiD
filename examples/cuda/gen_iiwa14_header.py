@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from robot_descriptions import iiwa14_description
 
 from URDFParser import URDFParser
 from grid_codegen import GRiDCodeGenerator
@@ -25,7 +24,7 @@ def main() -> None:
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    robot = URDFParser().parse(iiwa14_description.URDF_PATH, floating_base=False)
+    robot = URDFParser().parse(str(Path(__file__).resolve().parents[2] / "grid_assets" / "robots" / "iiwa14.urdf"), floating_base=False)
     # The one line that matters: restrict codegen to inverse_dynamics.
     GRiDCodeGenerator(robot, FILE_NAMESPACE="grid").gen_all_code(
         algorithm_list=["inverse_dynamics"], output_path=str(out)

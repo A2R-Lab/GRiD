@@ -1,7 +1,7 @@
 Tutorials
 =========
 
-Two audiences share this section. Pick your track.
+This section has two tracks: using GRiD and contributing to GRiD.
 
 Using GRiD
 ----------

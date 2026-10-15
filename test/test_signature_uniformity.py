@@ -18,7 +18,7 @@ import re
 import pytest
 
 from grid_codegen import GRiDCodeGenerator
-from config import robot_urdf
+from grid_assets import robot_urdf
 from URDFParser import URDFParser
 
 

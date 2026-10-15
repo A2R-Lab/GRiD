@@ -332,7 +332,7 @@ class RobotHandle:
     @property
     def dtype(self) -> str:
         """Compute precision of this handle's .so: ``"float32"`` (default) or
-        ``"float64"`` (Phase 8 true fp64 tier). Inputs are cast to / outputs are
+        ``"float64"`` (true fp64 tier). Inputs are cast to / outputs are
         returned in this numpy dtype."""
         return self._dtype
 
@@ -485,7 +485,7 @@ class RobotHandle:
           dlopen'd .so (ground truth), for methods that have a twin.
         - ``out_shape``: trailing per-batch-item output dims (ints).
         - ``tier``/``threads``: the tuned launch config baked for this robot/
-          GPU (``None`` without a config/launch_configs entry).
+          GPU (``None`` without a grid_assets/launch_configs entry).
         - ``max_threads``: the compiled kernel's real ``__launch_bounds__``
           ceiling via :py:meth:`kernel_max_threads` (``None`` where the probe
           does not apply).
@@ -2397,7 +2397,7 @@ class RobotHandle:
 
     @property
     def model_version(self) -> int:
-        """This handle's context MODEL VERSION (W04-B B2): starts at 1 and
+        """This handle's context MODEL VERSION: starts at 1 and
         increments on every runtime-parameter mutation — :py:meth:`set_inertia_params`,
         :py:meth:`set_transform_params`, :py:meth:`set_joint_dynamics`, hence
         :py:meth:`attach_tool` / :py:meth:`detach_tool`. Launch overrides

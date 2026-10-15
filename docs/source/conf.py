@@ -40,9 +40,6 @@ extensions = [
 autosectionlabel_prefix_document = True
 autosectionlabel_maxdepth = 2
 
-#myst parser
-myst_enable_extensions = ["colon_fence", "dollarmath"]
-myst_heading_anchors = 4
 
 # Configure autodoc
 autodoc_default_options = {

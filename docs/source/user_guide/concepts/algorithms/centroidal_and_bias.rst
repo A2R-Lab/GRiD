@@ -10,16 +10,16 @@ special cases or by-products of the recursive algorithms. GRiD exposes them as
 first-class operations rather than asking users to assemble them from RNEA
 calls:
 
-* the **bias** (nonlinear effects) ``c(q, qd) = C(q, qd)·qd + g(q)`` and the
-  **generalized gravity** ``g(q)``, both evaluated by RNEA with zero
+* the bias (nonlinear effects) ``c(q, qd) = C(q, qd)·qd + g(q)`` and the
+  generalized gravity ``g(q)``, both evaluated by RNEA with zero
   acceleration (and zero velocity for gravity);
-* the **Coriolis matrix** ``C(q, qd)`` itself, with
+* the Coriolis matrix ``C(q, qd)`` itself, with
   ``C·qd + g = nonlinear_effects``;
-* the **centroidal** quantities: centre of mass and its Jacobian, the
+* the centroidal quantities: centre of mass and its Jacobian, the
   centroidal momentum matrix ``A(q)`` with the momentum ``h = A·qd``, the
   tensor ``∂A/∂q`` and the time variation ``Ȧ``;
-* the **energies** (kinetic, potential, mechanical) and their
-  inertial-parameter **regressors**, plus the inverse-dynamics regressor
+* the energies (kinetic, potential, mechanical) and their
+  inertial-parameter regressors, plus the inverse-dynamics regressor
   ``Y(q, qd, qdd)`` with ``tau = Y·π``.
 
 Signature
@@ -85,7 +85,7 @@ invariant while the matrix columns are reframed.
 
 In the release benchmarks the bias and gravity vectors are where GRiD's
 advantage over Pinocchio's code-generated C++ is smallest: they are the
-cheapest operations, so the host↔device copies are a large share of the GPU
+cheapest operations, so the host-device copies are a large share of the GPU
 time. The centroidal momentum matrix is one operation where Pinocchio's
 standard API beats GRiD's host call on the floating-base robots at every
 measured batch size. That timing alone does not isolate the cause to output
@@ -93,7 +93,7 @@ size or transfer cost.
 
 See Also
 --------
-* :doc:`inverse_dynamics` — the recursion these quantities come from.
-* :doc:`integrators_and_plant` — the centre-of-mass and momentum tracking
+* :doc:`inverse_dynamics`: the recursion these quantities come from.
+* :doc:`integrators_and_plant`: the centre-of-mass and momentum tracking
   costs that consume ``com`` and ``ccrba``.
-* :doc:`../mjx_convention` — the MuJoCo-convention views.
+* :doc:`../mjx_convention`: the MuJoCo-convention views.

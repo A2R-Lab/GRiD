@@ -19,7 +19,7 @@ format so ``test/benchmarks/gpu_resident_timing.py`` can drive both with the sam
 
 Run:  python bindings/examples/jax_gpu_resident_go2.py [--urdf PATH] [--batch 256] [--steps 50]
 Needs: pip install -e .[jax]   ·   nvcc on PATH   ·   go2 URDF (auto-resolved via
-       robot_descriptions if installed)
+       the vendored grid_assets/robots/go2.urdf)
 """
 from __future__ import annotations
 
@@ -28,10 +28,7 @@ import sys
 import time
 from pathlib import Path
 
-_DEFAULT_URDF = (
-    Path.home()
-    / ".cache/robot_descriptions/unitree_ros/robots/go2_description/urdf/go2_description.urdf"
-)
+_DEFAULT_URDF = Path(__file__).resolve().parents[2] / "grid_assets" / "robots" / "go2.urdf"  # vendored copy
 
 
 def _resolve_urdf(arg: str) -> Path:

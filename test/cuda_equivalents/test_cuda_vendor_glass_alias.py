@@ -31,7 +31,7 @@ from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 REPO = Path(__file__).resolve().parents[2]
 GLASS_ROOT = REPO / "external" / "GLASS"
 RUNNER = Path(__file__).with_name("cuda_safe_init_runner.cu")
-URDF = REPO / "config" / "robot_assets" / "iiwa14.urdf"
+URDF = REPO / "grid_assets" / "robots" / "iiwa14.urdf"
 
 
 def _gen(out, **kw):

@@ -5837,7 +5837,7 @@ static ffi::Error grid_rbd_jax_pack_qqdu(GridCtx *ctx, cudaStream_t stream, int 
                                    ffi::Buffer<GRID_FFI_T>& qd,
                                    ffi::Buffer<GRID_FFI_T>& u) {
     GRID_RBD_CTX_LOCALS(ctx);
-    GRID_RBD_FFI_VALIDATE_ROWS(qd, "qd", grid::NUM_VEL, batch);   // W03: q's batch sizes every copy
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "qd", grid::NUM_VEL, batch);   // q's batch sizes every copy
     GRID_RBD_FFI_VALIDATE_ROWS(u, "u", grid::NUM_VEL, batch);
     const size_t q_bytes = nj * sizeof(T);
     const size_t v_bytes = grid::NUM_VEL * sizeof(T);
@@ -6559,7 +6559,7 @@ static inline void grid_torch_pack(GridCtx *ctx, cudaStream_t stream, int batch,
                                    const torch::Tensor* qd,
                                    const torch::Tensor* u) {
     GRID_RBD_CTX_LOCALS(ctx);
-    if (q)  grid_torch_check_rows(*q,  batch, "q");     // W03: q's batch sizes every copy
+    if (q)  grid_torch_check_rows(*q,  batch, "q");     // q's batch sizes every copy
     if (qd) grid_torch_check_rows(*qd, batch, "qd");
     if (u)  grid_torch_check_rows(*u,  batch, "u");
     const size_t q_bytes = nj * sizeof(T), v_bytes = nv * sizeof(T);

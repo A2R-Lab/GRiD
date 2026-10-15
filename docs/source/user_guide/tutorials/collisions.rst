@@ -40,15 +40,15 @@ Two device entry points share the same baked sphere batch (``NUM_COLLISION_SPHER
 ``sphere_anchor`` / ``sphere_offset`` / ``sphere_radius`` in ``namespace grid_collision``,
 ``_broad``-suffixed twins for the broad tier of a two-tier model):
 
-* ``grid_collision::config_free<T>(s_q, d_robotModel, env, ...)`` — the block-cooperative check
+* ``grid_collision::config_free<T>(s_q, d_robotModel, env, ...)``: the block-cooperative check
   from joint positions: it runs the batched sphere extractor, then checks self pairs and the
   environment thread-per-range / thread-per-sphere and returns one block-uniform verdict. With a
   two-tier model the broad tier runs first and the fine tier only for the links it flags; the
   verdict equals a fine-only check.
 * ``grid_collision::warp::config_free<T>(s_Xworld, env, w_scratch)`` and
-  ``grid_collision::warp::collision_distance<T>(s_Xworld, env, s_dist, s_normal, w_scratch)`` — the
+  ``grid_collision::warp::collision_distance<T>(s_Xworld, env, s_dist, s_normal, w_scratch)``: the
   same verdict / per-sphere clearance for a caller that already holds the joint world transforms
-  (column-major 4x4 per movable joint, e.g. from ``ee_pose_inner_warp``), evaluated by ONE warp
+  (column-major 4x4 per movable joint, e.g. from ``ee_pose_inner_warp``), evaluated by one warp
   with lanes striding the spheres (``w_scratch`` = ``grid_collision::warp::W_SCRATCH_FLOATS``
   floats per warp). This is the entry point for multi-warp solvers that need a verdict inside one
   warp of a block (one IK candidate per warp); sphere positions are formed in ``float`` even for
@@ -84,13 +84,13 @@ Generate an interchangeable sphere URDF without compiling CUDA::
 bounded-bulge mode uses one fixed mesh policy: 2.5 mm voxels and a 10 mm bulge
 budget relative to the voxel approximation. Coarse candidate centres fall
 back to the full lattice for thin geometry. Primitive geometry retains its
-analytic sphere cover. The input is the URDF's **collision** geometry, not
+analytic sphere cover. The input is the URDF's collision geometry, not
 its visual meshes. Unresolved assets and incomplete fits are errors.
 
 For ``package://`` meshes, the importer checks paths relative to the URDF and
 explicit ``ROS_PACKAGE_PATH`` roots (either a package directory or its parent).
 It never downloads assets. Drake's collision meshes for iiwa14 links 6 and 7
-are bundled under ``config/robot_assets/drake`` with their upstream licenses,
+are bundled under ``grid_assets/robots/drake`` with their upstream licenses,
 revision and hashes; the bundled URDF resolves them without environment setup.
 The historical iiwa14 sphere asset omits those meshes and is not a complete
 replacement for the source collision model.
@@ -105,8 +105,8 @@ To evaluate an existing model against the original collision geometry::
 
 The per-link report gives sphere count, voxel-estimated maximum/p99 bulge,
 and the uncovered fraction of 2,000 seeded mesh-surface samples. Bulge uses
-400 samples per sphere. These are reproducible diagnostics, **not a proof
-of continuous mesh coverage or a certified bulge bound**. Primitive meshes
+400 samples per sphere. These are reproducible diagnostics, not a proof
+of continuous mesh coverage or a certified bulge bound. Primitive meshes
 used for this report are tessellated. Inspect the report alongside the model.
 
 ``--spherized-urdf`` rejects missing collision links, non-sphere geometry,
