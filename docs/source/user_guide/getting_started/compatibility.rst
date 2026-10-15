@@ -4,21 +4,21 @@ Compatibility and known limitations
 Platforms and toolchain
 -----------------------
 
-* **One artifact per GPU architecture.** A robot ``.so`` is compiled for the
+* There is one artifact per GPU architecture. A robot ``.so`` is compiled for the
   ``sm_XX`` of the GPU that registers it (or ``cuda_arch=``); loading it on a
   different architecture is refused at context creation with a clear error.
   The model, the API and the generated code carry over between machines; the
   binary does not.
-* **Tested deployment platform:** Linux x86_64 with CUDA 12+ (the release
+* The tested deployment platform is Linux x86_64 with CUDA 12+ (the release
   receipt was produced on an RTX 5090). Jetson-class devices are supported by
-  design (single-block kernels, resource tiers, runtime memory fitting) but are
-  not certified by this receipt.
-* **Host compiler:** C++17 for the code generator, benchmarks and a numpy-only
-  build. With the ``[torch]`` extra the wrapper follows torch's ATen
-  requirement — ``-std=c++20`` from torch 2.14 on — so a torch-enabled build
+  the design (single-block kernels, resource tiers, runtime memory fitting) but
+  are not certified by this receipt.
+* The host compiler standard is C++17 for the code generator, benchmarks and a
+  numpy-only build. With the ``[torch]`` extra the wrapper follows torch's ATen
+  requirement (``-std=c++20`` from torch 2.14 on), so a torch-enabled build
   needs an nvcc and host compiler accepting C++20. ``GRID_RBD_CXX_STD`` forces
   the standard.
-* **Backends:** the ``[jax]`` / ``[torch]`` extras pin the CPU packages; install
+* The ``[jax]`` / ``[torch]`` extras pin the CPU packages; install
   the CUDA wheel yourself (``pip install "jax[cuda12]"`` or ``"jax[cuda13]"``, a
   ``cu1xx`` torch). A CPU-only jax is refused at handle construction with that
   hint. See :doc:`installation` for the PyPI install and its extras.
@@ -26,13 +26,13 @@ Platforms and toolchain
 Runtime contexts
 ----------------
 
-Every native call resolves a **runtime context** by id; ``handle.context()``
+Every native call resolves a runtime context by id; ``handle.context()``
 opens an isolated one (own arena, tables, streams, launch overrides) and a
 handle is the one owner of its context. Runtime-parameter mutations give the
 context a new ``model_version``, and torch/JAX backwards refuse a forward that
-ran under a different version. **Limitation:** concurrent asynchronous calls on
-ONE context share its scratch buffers — one ordered pipeline per context, so
-use a context per pipeline; execution is not fully asynchronous. Ownership,
+ran under a different version. Concurrent asynchronous calls on one context
+share its scratch buffers, so each context carries one ordered pipeline; use a
+context per pipeline, as execution is not fully asynchronous. Ownership,
 ``workspace_slots``, versioning and the synchronisation points are specified in
 :doc:`../concepts/runtime_contexts`.
 
@@ -52,8 +52,8 @@ Operands
 One rule set per operand class is enforced natively on all three surfaces
 (``1 <= B <= max_batch``, exact last dim, every operand carrying the leading
 batch). Configuration inputs have width ``nq``; velocities, accelerations and
-generalized forces have width ``nv`` — floating and spherical quaternions make
-these widths different. What each surface coerces, refuses or elides is
+generalized forces have width ``nv``, and floating and spherical quaternions
+make these widths different. What each surface coerces, refuses or elides is
 specified in :doc:`../concepts/operand_validation`; layouts are in
 :doc:`../concepts/input_output_abi`.
 
@@ -64,7 +64,7 @@ Native interface stability
   (``init_gridData_checked`` gained an optional trailing allocator-pool
   argument; the pool-less allocator spellings remain).
 * The per-robot wrapper ``.so``'s ``extern "C" grid_rbd_*`` symbols are
-  **private to the package**: they are consumed only by the pybind core of the
+  private to the package: they are consumed only by the pybind core of the
   same content-keyed build and gained a leading ``ctx_id`` in 0.5.0, the first
   packaged release. Do
   not link against them directly.

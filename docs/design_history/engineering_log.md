@@ -6,6 +6,24 @@ root [`CHANGELOG.md`](../../CHANGELOG.md).
 
 ## Dated engineering log (post-GLASS rollout)
 
+### 2026-10-14 — audit batch 3: documentation voice (same branch, merge-only)
+- Every user-facing document (README, cover, the Sphinx site, the developer
+  READMEs, CONTRIBUTING, RELEASING) rewritten to the voice of the authors'
+  papers: plain declarative sentences, "we" for the project and the imperative
+  for instructions, claims stated once with their number, caveats as separate
+  sentences, one name per thing. Em-dashes in prose went from 688 to under 20
+  (the remainder sit in code blocks and quoted error strings), arrows in prose
+  from 119 to 0, bold lead-ins from 125 to 0, capitalised emphasis from 58 to 0,
+  and emoji, exclamation marks and filler words to 0. Section headings became
+  functional nouns. No fact, path, number, flag, code block or link changed.
+- The rule set is recorded on the contribution guidelines page ("Writing
+  style"); the test that scans the Python-wrappers page for the VJP table now
+  anchors on the rewritten sentences.
+- Two content fixes surfaced by the pass: the design-principles page said the
+  spilled workspace is pinned in L2 while the tier page says pinning is off by
+  default after measurement (now consistent), and three pages still named the
+  old `config/` script paths.
+
 ### 2026-10-14 — audit batch 2: documentation truth (same branch, merge-only)
 - **One release notes file.** The root `CHANGELOG.md` is the release notes; this
   file (formerly `docs/CHANGELOG.md`) is the dated engineering log under

@@ -5,7 +5,7 @@ This page summarizes the generated CUDA paths that are currently exercised by
 the GRiD developer test suite. For the commands that run these checks, see
 :doc:`cuda_validation`.
 
-Development testing currently targets **sm_120 (RTX 5090)** for correctness
+Development testing currently targets sm_120 (RTX 5090) for correctness
 and performance validation. Earlier compute capabilities (sm_8x) remain
 supported but are not the active development target.
 
@@ -50,9 +50,9 @@ Fixed-base CUDA coverage includes the core dynamics and kinematics paths:
 
 Second-order fixed-base diagnostics are still developer-only. The current
 green zero-sample set includes ``iiwa14``, ``go2``, ``gen3``, ``fr3``,
-``fetch``, and ``rizon4`` (healed 2026-09-15: the upstream flexiv xacro
-emitted each link's origin/mass/inertia triple bare, so the local
-``grid_assets/robots/rizon4.urdf`` now wraps them in proper ``<inertial>``
+``fetch``, and ``rizon4`` (the upstream flexiv xacro emits each link's
+origin/mass/inertia triple bare, so the local
+``grid_assets/robots/rizon4.urdf`` wraps them in proper ``<inertial>``
 elements).
 
 Floating-Base Robots
@@ -69,7 +69,7 @@ Floating-base CUDA coverage includes:
 * The centroidal family ``com`` / ``ccrba`` / ``energy`` and the centroidal
   derivatives ``dccrba`` / ``cmm_time_variation``. The two derivatives also
   emit on big floating-base robots (e.g. ``g1`` / ``h1_2``-floating) via the
-  sweep-pool spill path, so their prior big-floating gap is eliminated.
+  sweep-pool spill path.
 
 Floating end-effector Hessian generation uses target-aware spill tiers when
 needed:
@@ -108,7 +108,7 @@ Known Caveats
   gradient in fp64 requests about 187 KiB of shared memory even at the
   minimal tier, exceeding the RTX 5090's per-block limit. An fp64
   diagnostic with global scratch is not a supported production launch.
-* Floating IDSVA-SO/FDSVA-SO CUDA generation is now enabled (dispatcher
+* Floating IDSVA-SO/FDSVA-SO CUDA generation is enabled (the dispatcher
   picks ``idsva_so_world_frame`` for floating-base). FDSVA-SO on
   ``g1_floating`` requires the selective-spill tier under sm_120's
   ~100 KiB per-block dynamic shared-memory cap; the tier selector picks
@@ -120,23 +120,23 @@ Known Caveats
 * Performance tier choices can depend on register pressure and occupancy; use
   ptxas output and timing kernels on the target GPU before saving local
   baselines. Tiers are named ``TIER_SHARED`` (default) / ``TIER_LITE`` /
-  ``TIER_MINIMAL`` (the old ``TIER_PERF`` alias has been removed — use
+  ``TIER_MINIMAL`` (``TIER_PERF`` is not an accepted alias; use
   ``TIER_SHARED``). See :doc:`../concepts/resource_tier_system`.
-* Robots with **mimic joints**: non-gradient algorithms are supported, and
-  **every** gradient now emits a correct mimic-reduced result on both bases —
+* Robots with mimic joints: non-gradient algorithms are supported, and
+  every gradient emits a correct mimic-reduced result on both bases:
   ``inverse_dynamics_gradient`` / ``forward_dynamics_gradient``,
   ``end_effector_pose_gradient`` / ``end_effector_pose_hessian``, the second-order
   ``idsva_so`` / ``fdsva_so``, the external-force gradients (``f_ext_gradient``),
-  and the integrator gradients. No mimic gradient raises ``NotImplementedError``
-  anymore. The centroidal kinematics family
+  and the integrator gradients. No mimic gradient raises ``NotImplementedError``.
+  The centroidal kinematics family
   (``com`` / ``ccrba`` / ``energy``) and the centroidal derivatives
-  (``dccrba`` / ``cmm_time_variation``) are now mimic-reduced as well: the
+  (``dccrba`` / ``cmm_time_variation``) are mimic-reduced as well: the
   per-body world Jacobian and per-unit motion columns carry the mimic
-  multiplier (α), so all five emit + validate against the mimic-aware
+  multiplier (α), so all five emit and validate against the mimic-aware
   RBDReference oracle on fixed-base mimic robots.
-* External-force **gradients**: ``f_ext_gradient``
+* External-force gradients: ``f_ext_gradient``
   (∂τ/∂f_ext = −Jᵀ, ∂q̈/∂f_ext = M⁻¹Jᵀ) and the fixed-base ``f_ext_gradient_dq``
-  (−∂Jᵀ/∂q), both with CUDA equivalence tests, and both now fold correctly to the
+  (−∂Jᵀ/∂q), both with CUDA equivalence tests, and both fold to the
   reduced coordinates on mimic robots as well.
 
 
@@ -150,22 +150,22 @@ Algorithm catalog
 - Analytical Gradients of Inverse Dynamics from `Carpentier <https://hal.archives-ouvertes.fr/hal-01790971>`__
 - Analytical Gradient of Forward Dynamics from `Carpentier <https://hal.archives-ouvertes.fr/hal-01790971>`__
 - End-effector pose, pose gradient (Jacobian), and pose Hessian
-- General-frame geometric Jacobian for an arbitrary target frame in any of the three Pinocchio reference frames (``LOCAL``, ``WORLD``, ``LOCAL_WORLD_ALIGNED``). The numpy reference additionally provides the Jacobian time-variation J̇ and the operational-space (OSC) inertia Λ = (J·M⁻¹·Jᵀ)⁻¹ — all validated against Pinocchio's ``getFrameJacobian``/``getJointJacobian``, ``computeJointJacobiansTimeVariation``, and ``(J·M⁻¹·Jᵀ)⁻¹``. CUDA codegen emits all three as opt-in keys — J (``frame_jacobian``), J̇ (``frame_jacobian_dot``), and Λ (``osc_inertia``) — each validated on-device against the numpy reference across the three frames (Λ is self-contained: it composes M⁻¹ on-device). All three additionally have the full launchable surface (batched ``*_kernel`` + 3-mode host writing the ``gridData`` ``d_frame_jacobian`` / ``d_frame_jacobian_dot`` / ``d_osc_inertia`` buffers), so they are benchmarkable + bindable; the launchable surface bakes the leaf-EE target + ``LOCAL_WORLD_ALIGNED`` frame, while the ``*_device`` functions stay the arbitrary-target/-frame entry points
-- Second-Order Inverse Dynamics (IDSVA-SO) from `Singh, Russell, & Wensing <https://arxiv.org/abs/2302.06001>`__ — the dispatcher selects body-frame for fixed-base and world-frame for floating-base models. See :doc:`../../release_measurements` for measured performance.
+- General-frame geometric Jacobian for an arbitrary target frame in any of the three Pinocchio reference frames (``LOCAL``, ``WORLD``, ``LOCAL_WORLD_ALIGNED``). The numpy reference also provides the Jacobian time-variation J̇ and the operational-space (OSC) inertia Λ = (J·M⁻¹·Jᵀ)⁻¹; all are validated against Pinocchio's ``getFrameJacobian``/``getJointJacobian``, ``computeJointJacobiansTimeVariation``, and ``(J·M⁻¹·Jᵀ)⁻¹``. CUDA codegen emits all three as opt-in keys, J (``frame_jacobian``), J̇ (``frame_jacobian_dot``), and Λ (``osc_inertia``), each validated on-device against the numpy reference across the three frames (Λ is self-contained: it composes M⁻¹ on-device). All three also have the full launchable surface (batched ``*_kernel`` + 3-mode host writing the ``gridData`` ``d_frame_jacobian`` / ``d_frame_jacobian_dot`` / ``d_osc_inertia`` buffers), so they are benchmarkable and bindable; the launchable surface bakes the leaf-EE target + ``LOCAL_WORLD_ALIGNED`` frame, while the ``*_device`` functions stay the arbitrary-target/-frame entry points
+- Second-Order Inverse Dynamics (IDSVA-SO) from `Singh, Russell, & Wensing <https://arxiv.org/abs/2302.06001>`__; the dispatcher selects body-frame for fixed-base and world-frame for floating-base models. See :doc:`../../release_measurements` for measured performance.
 - Second-Order Forward Dynamics (FDSVA-SO) from `Singh, Russell, & Wensing <https://arxiv.org/abs/2302.06001>`__ on both fixed and floating bases
-- A **time-integrator** family: the discrete step ``x_{k+1}`` plus its gradient ``∂x_{k+1}/∂(x,u)`` and a fused value-and-gradient variant
-- Optional per-body **external forces** (``f_ext``), threaded through RNEA, forward dynamics, ABA, and the inverse-/forward-dynamics gradients. Opt-in (a ``nullptr``/empty default reproduces the no-force path exactly), supplied in the body-local frame (``6*NUM_BODIES``, body-major) and subtracted from the per-body force.
-- **External-force gradients**: ``∂tau/∂f_ext = -Jᵀ`` and ``∂q̈/∂f_ext = M⁻¹Jᵀ``, plus the fixed-base ``∂(inverse_dynamics_gradient)/∂f_ext = -∂Jᵀ/∂q``
-- A trajectory-optimization-oriented **``grid_plant`` layer** (emitted as a sibling ``grid_plant`` namespace): a ``plant_step`` integrator wrapper, quadratic state/input costs, an end-effector position cost (with Gauss-Newton Hessian), and joint position/velocity/torque log-barriers.
-- The **Coriolis matrix** ``C(q,q̇)`` (with ``C·q̇ + g(q) = nonlinear_effects``)
-- **Inertial-parameter energy regressors**: kinetic ``y_KE`` and potential ``y_PE`` (each length ``10·NB``, with ``KE = y_KE·π`` and ``PE = y_PE·π``)
-- The **centroidal derivatives**: ``dccrba`` (the ∂A/∂q tensor, 6×NV×NV) and ``cmm_time_variation`` (the centroidal-momentum-matrix time variation Ȧ)
-- **Runtime arbitrary multi-EE pose / pose-gradient** (``end_effector_pose_runtime`` + ``_gradient``): the end-effector target joint id and a per-target offset become runtime arguments instead of codegen-baked, so one compiled robot serves any leaf/target frame.
-- **Runtime-mutable inertial parameters** (flag-gated): a ``set_inertia_params`` device entry mutates an on-device parameter table (sysID / domain randomization) with no recompile; the baked default path is byte-identical.
-- The **joint-torque inertial-parameter regressor** (``inverse_dynamics_regressor``): the classic ``Y(q, q̇, q̈)`` with ``tau = Y·π``
-- The **analytic regressor gradient** (``inverse_dynamics_regressor_gradient``): ∂Y/∂q and ∂Y/∂q̇, satisfying the contraction identity ``dY_dx[c]·π == ∂τ/∂x[:,c]``
-- The **forward-dynamics parameter gradient** (``forward_dynamics_parameter_gradient``): ``∂q̈/∂π = −M⁻¹Y``
-- **Contact-frame wrench mapping** (``f_ext_contact``): maps a contact-frame wrench to the joint-local ``f_ext`` layout, with the ``∂/∂f_c`` and ``∂/∂q`` derivatives
-- **Runtime multi-target positions** (``multi_target_position`` / ``multi_target_position_gradient``): batched runtime-target position queries and their gradients
-- The **integrator Hessian** (``integrator_hessian``): the second-order sensitivity of the discrete integrator step
-- The **collision family**: two-tier ``config_free`` collision checking over spherized collision geometry
+- A time-integrator family: the discrete step ``x_{k+1}`` plus its gradient ``∂x_{k+1}/∂(x,u)`` and a fused value-and-gradient variant
+- Optional per-body external forces (``f_ext``), threaded through RNEA, forward dynamics, ABA, and the inverse-/forward-dynamics gradients. Opt-in (a ``nullptr``/empty default reproduces the no-force path exactly), supplied in the body-local frame (``6*NUM_BODIES``, body-major) and subtracted from the per-body force.
+- External-force gradients: ``∂tau/∂f_ext = -Jᵀ`` and ``∂q̈/∂f_ext = M⁻¹Jᵀ``, plus the fixed-base ``∂(inverse_dynamics_gradient)/∂f_ext = -∂Jᵀ/∂q``
+- A trajectory-optimization-oriented ``grid_plant`` layer (emitted as a sibling ``grid_plant`` namespace): a ``plant_step`` integrator wrapper, quadratic state/input costs, an end-effector position cost (with Gauss-Newton Hessian), and joint position/velocity/torque log-barriers.
+- The Coriolis matrix ``C(q,q̇)`` (with ``C·q̇ + g(q) = nonlinear_effects``)
+- Inertial-parameter energy regressors: kinetic ``y_KE`` and potential ``y_PE`` (each length ``10·NB``, with ``KE = y_KE·π`` and ``PE = y_PE·π``)
+- The centroidal derivatives: ``dccrba`` (the ∂A/∂q tensor, 6×NV×NV) and ``cmm_time_variation`` (the centroidal-momentum-matrix time variation Ȧ)
+- Runtime arbitrary multi-EE pose / pose-gradient (``end_effector_pose_runtime`` + ``_gradient``): the end-effector target joint id and a per-target offset become runtime arguments instead of codegen-baked, so one compiled robot serves any leaf/target frame.
+- Runtime-mutable inertial parameters (flag-gated): a ``set_inertia_params`` device entry mutates an on-device parameter table (sysID / domain randomization) with no recompile; the baked default path is byte-identical.
+- The joint-torque inertial-parameter regressor (``inverse_dynamics_regressor``): the classic ``Y(q, q̇, q̈)`` with ``tau = Y·π``
+- The analytic regressor gradient (``inverse_dynamics_regressor_gradient``): ∂Y/∂q and ∂Y/∂q̇, satisfying the contraction identity ``dY_dx[c]·π == ∂τ/∂x[:,c]``
+- The forward-dynamics parameter gradient (``forward_dynamics_parameter_gradient``): ``∂q̈/∂π = −M⁻¹Y``
+- Contact-frame wrench mapping (``f_ext_contact``): maps a contact-frame wrench to the joint-local ``f_ext`` layout, with the ``∂/∂f_c`` and ``∂/∂q`` derivatives
+- Runtime multi-target positions (``multi_target_position`` / ``multi_target_position_gradient``): batched runtime-target position queries and their gradients
+- The integrator Hessian (``integrator_hessian``): the second-order sensitivity of the discrete integrator step
+- The collision family: two-tier ``config_free`` collision checking over spherized collision geometry

@@ -150,8 +150,8 @@ import re as _re
 def _tutorial_vjp_rows():
     """Parse the 'What is differentiable' list-table: {method: (inputs, notes)}."""
     doc = TUTORIAL.read_text()
-    start = doc.index("**What is differentiable.**")
-    end = doc.index("Each of these is a **reverse-mode VJP only**")
+    start = doc.index("handles attach an analytic backward")
+    end = doc.index("Each of these is a reverse-mode VJP only")
     block = doc[start:end]
     rows = {}
     for m in _re.finditer(r"\* - (.+?)\n\s+- (.+?)\n\s+- (.+?)(?=\n\s+\* - |\Z)", block, _re.S):

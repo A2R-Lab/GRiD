@@ -1,12 +1,12 @@
 GRiD documentation
 ==================
 
-`GRiD <https://github.com/A2R-Lab/GRiD>`_ turns a URDF into optimized,
-per-robot CUDA C++ for dynamics, kinematics, and collisions, with **analytical
-derivatives and Hessians** for supported numerical operations and a
-trajectory-optimization plant layer. Numerical Python interfaces include a numpy handle, a
-``jax.jit``-able FFI surface, or ``torch.autograd``-aware ops, all backed by
-one content-addressed ``.so`` cache. It is the dynamics layer underneath
+`GRiD <https://github.com/A2R-Lab/GRiD>`_ generates optimized, robot-specific
+CUDA C++ from a URDF: dynamics, kinematics and collisions, their analytical
+derivatives and Hessians, and a plant layer for trajectory optimization. The
+Python interfaces are a numpy handle, a ``jax.jit``-able FFI surface and
+``torch.autograd``-aware ops, all backed by one content-addressed ``.so``
+cache. GRiD is the dynamics layer underneath
 `GATO <http://a2r-lab.org/GATO/>`_, `MPCGPU <https://a2r-lab.org/publication/mpcgpu/>`_,
 `HJCD-IK <https://a2r-lab.org/publication/hjcdik/>`_ and other A2R Lab GPU
 solvers, built on `GLASS <http://a2r-lab.org/GLASS/>`_ (block-local linear
@@ -16,14 +16,14 @@ Pinocchio-validated numpy oracle every kernel is tested against) and
 
 Collision routines use the generated CUDA interface; see
 :doc:`the collision workflow <user_guide/tutorials/collisions>` for geometry
-coverage and integration. Start with the installation guide and examples below,
-or visit the `project homepage <../>`_ for an overview.
+coverage and integration. Start with the installation guide and the examples
+below, or visit the `project homepage <../>`_ for an overview.
 
-**One block per problem, batched.** Every algorithm runs as a single CUDA
-block per sample with in-block parallelism, so a batch of 16 or 4096 states
-is the same kernel design on a Jetson or an RTX 5090 — no multi-block
-reductions, no cooperative groups, bit-deterministic and thread-count
-invariant. Artifacts are built per target architecture (``sm_XX``); the
+Every algorithm runs as a single CUDA block per sample with in-block
+parallelism, so a batch of 16 or of 4096 states uses the same kernel design on
+a Jetson or on an RTX 5090. There are no multi-block reductions and no
+cooperative groups; results are bit-deterministic and independent of the
+thread count. Artifacts are built per target architecture (``sm_XX``): the
 model, the API and the generated code carry over, the binary does not.
 
 .. grid:: 1 2 4 4
@@ -33,31 +33,31 @@ model, the API and the generated code carry over, the binary does not.
       :link: user_guide/tutorials/python_wrappers
       :link-type: doc
 
-      ``load_robot(urdf)`` → a handle with 20+ batched methods; inputs and
-      outputs are host arrays, batched on axis 0.
+      ``load_robot(urdf)`` returns a handle with more than 20 batched
+      methods; inputs and outputs are host arrays batched on axis 0.
 
    .. grid-item-card:: JAX
       :link: jax-ffi-quickstart
       :link-type: ref
 
-      ``backend="jax"`` → device-in / device-out FFI targets that compose
+      ``backend="jax"`` gives device-in, device-out FFI targets that compose
       under ``jit``, ``vmap`` and ``scan``; ``jax.grad`` runs the analytical
-      gradient kernels, never finite differences.
+      gradient kernels rather than finite differences.
 
    .. grid-item-card:: torch
       :link: user_guide/tutorials/python_wrappers
       :link-type: doc
 
-      ``backend="torch"`` → autograd-aware ops on the current CUDA stream,
-      plus CUDA-graph capture for fixed-batch replay.
+      ``backend="torch"`` gives autograd-aware ops on the current CUDA
+      stream, plus CUDA-graph capture for fixed-batch replay.
 
    .. grid-item-card:: header-only CUDA
       :link: user_guide/tutorials/codegen
       :link-type: doc
 
-      ``grid-generate robot.urdf`` → one self-contained ``grid.cuh`` to
-      ``#include`` in your own kernels; only ``nvcc`` needed, no Python at
-      runtime. The power-user entry point.
+      ``grid-generate robot.urdf`` writes one self-contained ``grid.cuh``
+      to ``#include`` in your own kernels. Only ``nvcc`` is needed and no
+      Python runs at runtime.
 
 Complete, copy-paste examples for the Python surfaces are in the
 :ref:`quickstart <landing-quickstart>` below; the header-only path is on
@@ -66,22 +66,22 @@ Complete, copy-paste examples for the Python surfaces are in the
 What you get per robot
 ----------------------
 
-* **Dynamics**: inverse dynamics (RNEA), forward dynamics (Minv-based and
+* Dynamics: inverse dynamics (RNEA), forward dynamics (Minv-based and
   ABA), the joint-space inertia matrix (CRBA) and its inverse, gravity,
   non-linear effects, the Coriolis matrix, external body wrenches and tool
   loads.
-* **Derivatives**: analytical gradients of inverse and forward dynamics
-  (IDSVA / FDSVA), their **second-order** tensors, inverse-dynamics and
+* Derivatives: analytical gradients of inverse and forward dynamics
+  (IDSVA / FDSVA), their second-order tensors, inverse-dynamics and
   forward-dynamics gradients with respect to the inertial parameters, and
   end-effector pose Jacobians and Hessians.
-* **Kinematics and centroidal quantities**: end-effector poses (baked or
+* Kinematics and centroidal quantities: end-effector poses (baked or
   runtime targets), frame Jacobians and their time derivatives, centroidal
   momentum matrix, its time variation and the operational-space inertia.
-* **Plant layer**: integrators with gradients, quadratic and barrier costs
+* Plant layer: integrators with gradients, quadratic and barrier costs
   with gradients and Hessians, ready for a trajectory optimizer.
-* **Collisions**: self- and environment-collision checks with covering-sphere
+* Collisions: self- and environment-collision checks with covering-sphere
   or native-primitive representations and coarse-to-fine evaluation in CUDA.
-* **Conventions**: Pinocchio by default; MuJoCo/mjx-convention twins of
+* Conventions: Pinocchio by default; MuJoCo/mjx-convention twins of
   values and derivatives on floating-base robots (``handle.mujoco.<op>``).
 
 The test suites compare generated CUDA with CPU references and record GPU
@@ -93,9 +93,10 @@ Performance and release measurements
 ------------------------------------------------------------
 
 The :doc:`release measurements <release_measurements>` page holds one audited
-collection — three robots, fifteen operations, batches 16 to 1024, GRiD through
-every surface beside Pinocchio, MJX, MuJoCo Warp, MuJoCo CPU, BARD and Frax —
-with the protocol, every cell's validation status and the cases GRiD loses.
+collection: three robots, fifteen operations and batch sizes 16 to 1024, with
+GRiD through every surface beside Pinocchio, MJX, MuJoCo Warp, MuJoCo CPU, BARD
+and Frax. It states the protocol, every cell's validation status and the cases
+GRiD loses.
 The :doc:`benchmarks page <user_guide/tutorials/benchmarks>` retains dated
 development experiments and harness guidance; those results are not release
 evidence.
@@ -104,26 +105,27 @@ Portable by construction
 ------------------------
 
 The generated code adapts to the device it runs on rather than to the one it
-was tuned on: a per-algorithm **resource tier** chooses how much of the
-working set lives in shared memory (``SHARED`` for peak performance,
-``LITE`` and ``MINIMAL`` rungs that spill scratch to global memory so the
-largest humanoids still fit a 48 KB budget), launch configurations are
-autotuned per robot and architecture, and a **runtime context** carries the device arena, streams
-and model tables — several isolated pipelines can share one GPU, one handle
-can swap inertial parameters at run time, and autograd refuses to
-differentiate a model that changed under it. GRiD targets a single GPU, from
-embedded Jetson-class devices to desktop cards, one artifact per
-architecture; the tested deployment platform of this release is Linux x86_64
-(see :doc:`compatibility and known limitations <user_guide/getting_started/compatibility>`).
+was tuned on. A per-algorithm resource tier chooses how much of the working set
+lives in shared memory: ``SHARED`` for peak performance, and ``LITE`` and
+``MINIMAL`` rungs that spill scratch to global memory so the largest humanoids
+still fit a 48 KB budget. Launch configurations are autotuned per robot and
+architecture. A runtime context carries the device arena, the streams and the
+model tables, so several isolated pipelines can share one GPU, one handle can
+swap inertial parameters at run time, and autograd refuses to differentiate a
+model that changed under it. GRiD targets a single GPU, from embedded
+Jetson-class devices to desktop cards, with one artifact per architecture. The
+tested deployment platform of this release is Linux x86_64; see
+:doc:`compatibility and known limitations <user_guide/getting_started/compatibility>`.
 
 .. _landing-quickstart:
 
 Quickstart
 ----------
 
-Install from PyPI (the extras pin the CPU jax / torch packages, so add the
-CUDA wheels yourself); a recursive clone with an editable install is the
-developer path — see :doc:`installation <user_guide/getting_started/installation>`:
+Install from PyPI. The extras select the jax and torch packages but not their
+CUDA builds, so add the CUDA wheels yourself. A recursive clone with an
+editable install is the developer path; see
+:doc:`installation <user_guide/getting_started/installation>`.
 
 .. code-block:: shell
 
@@ -134,14 +136,15 @@ developer path — see :doc:`installation <user_guide/getting_started/installati
    bash install/base_install.sh && source .venv/bin/activate
    pip install -e ".[jax,torch]" "jax[cuda12]"
 
-Each example below runs as written from a repository checkout (the URDFs live
-under ``grid_assets/robots/``). The **first** ``load_robot`` of a robot
-generates and compiles its ``.so`` — about 100 s for the 7-DoF iiwa14 on an
-RTX 5090 and about 6 min for the g1 humanoid built pin-only (without the mjx
-kernel twins) since 0.5.1; the cold/warm table and the RAM-safe subset builds
-are on :doc:`fast robot setup <user_guide/getting_started/fast_robot_setup>`.
-Every later load is seconds: the artifact is cached by content key and rebuilt
-only when the URDF, the options, the GRiD version or the toolchain change.
+Each example below runs as written from a repository checkout; the URDFs live
+under ``grid_assets/robots/``. The first ``load_robot`` of a robot generates and
+compiles its ``.so``: about 100 s for the 7-DoF iiwa14 on an RTX 5090 and about
+6 min for the g1 humanoid built without the mjx kernel twins. The cold and warm
+build table and the RAM-safe subset builds are on
+:doc:`fast robot setup <user_guide/getting_started/fast_robot_setup>`. Every
+later load takes seconds, because the artifact is cached by content key and
+rebuilt only when the URDF, the options, the GRiD version or the toolchain
+change.
 
 .. tab-set::
 
@@ -201,8 +204,8 @@ Go deeper
       :link: how_do_i
       :link-type: doc
 
-      The task router: calling, generating, testing, benchmarking,
-      debugging — one table.
+      One table that routes every task: calling, generating, testing,
+      benchmarking and debugging.
 
    .. grid-item-card:: Concepts
       :link: user_guide/concepts/index
@@ -225,8 +228,8 @@ Go deeper
       :link: user_guide/tutorials/benchmarks
       :link-type: doc
 
-      Competitive and historical sweeps, the with-memory story, and how to
-      re-measure on your hardware.
+      Competitive and historical sweeps, the with-memory comparison, and
+      how to re-measure on your hardware.
 
    .. grid-item-card:: Validation and CI
       :link: user_guide/tutorials/cuda_validation

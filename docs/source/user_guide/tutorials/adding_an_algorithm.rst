@@ -1,26 +1,25 @@
 Adding a New Algorithm
 ======================
 
-This is a practical, end-to-end guide for adding a new rigid-body
-dynamics algorithm to GRiD. It walks through the canonical pattern using
-``fdsva_so`` (second-order forward dynamics) as the worked example.
-Pair it with the conceptual docs:
+This guide covers adding a new rigid-body dynamics algorithm to GRiD, end
+to end. It walks through the canonical pattern using ``fdsva_so``
+(second-order forward dynamics) as the worked example. Pair it with the
+conceptual docs:
 
-* :doc:`../concepts/design_principles` — *why* the codegen looks the way
+* :doc:`../concepts/design_principles`: why the codegen looks the way
   it does (smart inners, thin wrappers, inner-owns-placement, the spill
   ladder).
-* :doc:`../concepts/codegen_architecture` — the four emission layers
+* :doc:`../concepts/codegen_architecture`: the four emission layers
   (``_inner`` / ``_device`` / ``_kernel`` / host) and their composition
   contract.
-* :doc:`../concepts/resource_tier_system` — per-tier dispatch and
+* :doc:`../concepts/resource_tier_system`: per-tier dispatch and
   selective spill.
 
-If you internalize those three documents and follow the recipe below,
-your new algorithm will plug into the existing tier-spill / equivalence /
-bench infrastructure with no special-casing required.
+An algorithm that follows the recipe below plugs into the existing
+tier-spill / equivalence / bench infrastructure with no special-casing.
 
-The shape of the work
----------------------
+Generator functions
+-------------------
 
 Every algorithm ``X`` ships as one Python file at
 ``grid_codegen/algorithms/_X.py`` exposing a set of ``gen_*``
@@ -47,7 +46,7 @@ emitter functions. The functions are:
        (``SCRATCH_IN_SMEM`` and any surgical sub-flags).
    * - ``gen_X_device``
      - Emits the canonical ``__device__ X_device(...)``. Caller-supplied
-       buffers + the placement flags. **Owns scratch placement** via the
+       buffers + the placement flags. Owns scratch placement via the
        top-of-body ``if constexpr (!SCRATCH_IN_SMEM) { s_temp = d_workspace; }``
        repoint. Calls any sub-step ``_inner`` helpers; for composing
        algorithms also calls other algorithms' ``_inner``.
@@ -58,32 +57,31 @@ emitter functions. The functions are:
        calls ``X_device``, saves outputs.
    * - ``gen_X_host``
      - Emits the host launcher ``__host__ X(...)``: wraps ``X_kernel``
-       with H↔D copies for inputs and outputs.
+       with H2D/D2H copies for inputs and outputs.
    * - ``gen_X``
      - Runs all of the above generators in the right order. The
        top-level driver ``GRiDCodeGenerator.gen_all_code`` calls this
        for every registered algorithm.
 
-Plus, you'll add one ``AlgoDescriptor`` row to ``algo_registry.py`` — the
-descriptor table is the single source of truth for per-algo metadata, and
-that one row drives the ``GridAlgo`` enum, the launch-config symbol map, and
-the ``KERNEL_ATTR_MANIFEST`` / mjx manifest heads (previously these were
-scattered hand-maintained dicts). If the algorithm gets a Python binding you
-ALSO add one ``AbiSpec`` row to ``grid_codegen/abi_specs.py`` and regenerate
-the wrapper's generated regions (``.venv/bin/python -m
-grid_codegen.wrapper_body_gen``) — the C-ABI bodies, the kernel_max_threads
-branch table, and the mjx twins are all EMITTED from that table between
-``BEGIN/END GENERATED`` markers in ``wrapper_template.cu``; never hand-edit
-inside them (the ``--check`` drift gate in
-``test/test_wrapper_generated_block.py`` fails CI if you do). The arena/tier
-math lives in ``grid_codegen/_constants_arena.py`` (the 2026-08-27 monolith
-split moved it out of ``GRiDCodeGenerator.py``). See
-:doc:`../concepts/codegen_architecture` for both tables.
+Each algorithm also adds one ``AlgoDescriptor`` row to ``algo_registry.py``.
+The descriptor table holds the per-algo metadata, and that one row drives
+the ``GridAlgo`` enum, the launch-config symbol map, and the
+``KERNEL_ATTR_MANIFEST`` / mjx manifest heads. If the algorithm gets a
+Python binding, also add one ``AbiSpec`` row to ``grid_codegen/abi_specs.py``
+and regenerate the wrapper's generated regions (``.venv/bin/python -m
+grid_codegen.wrapper_body_gen``): the C-ABI bodies, the kernel_max_threads
+branch table, and the mjx twins are all emitted from that table between
+``BEGIN/END GENERATED`` markers in ``wrapper_template.cu``. Do not hand-edit
+inside them; the ``--check`` drift gate in
+``test/test_wrapper_generated_block.py`` fails CI on such edits. The arena/tier
+math lives in ``grid_codegen/_constants_arena.py``, not in
+``GRiDCodeGenerator.py``. See :doc:`../concepts/codegen_architecture` for
+both tables.
 
 Step-by-step recipe (worked example: ``fdsva_so``)
 --------------------------------------------------
 
-#. **Pick the canonical references**
+#. Pick the canonical references.
 
    The Python reference for the algorithm should already live in our
    ``RBDReference`` submodule (or get added there first; see the
@@ -92,9 +90,9 @@ Step-by-step recipe (worked example: ``fdsva_so``)
    d2tau_dvdq, dM_dq)``. The CUDA equivalence test compares the
    generated GPU output against this reference numerically.
 
-#. **Lay out the inner's scratch budget**
+#. Lay out the inner's scratch budget.
 
-   Decide what intermediate values you need and how big each is. For
+   Decide which intermediate values are needed and how big each is. For
    ``fdsva_so``, the rank-3 contraction sub-step needs a ``4·nv³``
    working buffer. Write the size-getter:
 
@@ -108,7 +106,7 @@ Step-by-step recipe (worked example: ``fdsva_so``)
    smem footprints (or take the ``max`` for arenas that get reused
    across phases) to size the outer scratch arena.
 
-#. **Write the inner**
+#. Write the inner.
 
    ``gen_fdsva_so_contract`` (the rank-3 contraction sub-step) emits a
    block-cooperative loop over the ``nv²`` output positions, using
@@ -144,16 +142,16 @@ Step-by-step recipe (worked example: ``fdsva_so``)
      ``if constexpr`` repoint.
    - Use the existing block-cooperative GLASS primitives
      (``glass::gemv``, ``glass::gemm``, ``glass::invertMatrix_dense``,
-     ``glass::cholDecomp_InPlace``, ``glass::trsm``) rather than rolling
-     your own. The codegen helpers (``grid_linalg_gemm`` etc.) wrap
+     ``glass::cholDecomp_InPlace``, ``glass::trsm``) rather than
+     hand-written loops. The codegen helpers (``grid_linalg_gemm`` etc.) wrap
      them with a consistent signature.
 
-#. **Write the orchestrator** (``gen_X_device``)
+#. Write the orchestrator (``gen_X_device``).
 
    For a composing algorithm like ``fdsva_so`` that builds on
    ``minv``, ``forward_dynamics``, and the IDSVA-SO sub-inners,
-   the device wrapper does ONE ``XImats`` load and then calls each
-   sub-algorithm's placement-free ``_inner`` with the SAME ``s_temp``:
+   the device wrapper does one ``XImats`` load and then calls each
+   sub-algorithm's placement-free ``_inner`` with the same ``s_temp``:
 
    .. code:: python
 
@@ -172,11 +170,11 @@ Step-by-step recipe (worked example: ``fdsva_so``)
       # ... IDSVA-SO sub-inners ...
       self.gen_fdsva_so_contract_function_call()
 
-   The XImats load is paid ONCE here; every sub-inner gets it for free.
-   That's the entire reason the ``_inner`` / ``_device`` split exists —
-   see :doc:`../concepts/codegen_architecture`.
+   The XImats load is paid once here; every sub-inner gets it for free.
+   That is the reason the ``_inner`` / ``_device`` split exists; see
+   :doc:`../concepts/codegen_architecture`.
 
-#. **Write the kernel** (``gen_X_kernel``)
+#. Write the kernel (``gen_X_kernel``).
 
    The kernel is mechanical: allocate ``__shared__`` smem from the
    per-tier ``*_DYNAMIC_SHARED_MEM_BYTES`` macro, run a grid-stride
@@ -196,14 +194,14 @@ Step-by-step recipe (worked example: ``fdsva_so``)
           }
       }
 
-   The kernel **never** repoints ``s_temp`` itself — the device owns
+   The kernel never repoints ``s_temp`` itself; the device owns
    that. The kernel's only job is to size the arena, load/save IO, and
    pass the per-tier placement flags as template arguments.
 
-#. **Register the tier picks**
+#. Register the tier picks.
 
    Tell ``GRiDCodeGenerator.py`` how to choose a spill rung per tier
-   for THIS robot:
+   for this robot:
 
    .. code:: python
 
@@ -217,9 +215,9 @@ Step-by-step recipe (worked example: ``fdsva_so``)
 
    ``select_shared_tier_3way`` picks the lowest-byte rung that fits the
    per-tier target. ``SHARED`` falls through to the most-spilled rung if
-   nothing fits — that's the whole point: big robots spill at SHARED too.
+   nothing fits, so big robots spill at ``SHARED`` too.
 
-#. **Add the host wrapper + descriptor-table row**
+#. Add the host wrapper and the descriptor-table row.
 
    ``gen_X_host`` mirrors any other host wrapper. Add one
    ``AlgoDescriptor`` row (and its ``ALGO_REGISTRY`` entry) in
@@ -227,12 +225,12 @@ Step-by-step recipe (worked example: ``fdsva_so``)
    algorithm's irregular metadata (autotune keys, ``gate_attr``,
    ``bytes_macro`` overrides) and drives the ``GridAlgo`` enum, the
    launch-config symbol map, and the kernel-attr / mjx manifests from a
-   single source, while the registry wires the algorithm into the bench,
+   one place, while the registry wires the algorithm into the bench,
    equivalence runner, and per-algo TUs. The
    ``test/test_algo_descriptor_parity.py`` net locks the table to the
    generated output.
 
-#. **Add a CUDA equivalence test**
+#. Add a CUDA equivalence test.
 
    For a small robot (start with iiwa14), regenerate the header and
    run:
@@ -245,9 +243,9 @@ Step-by-step recipe (worked example: ``fdsva_so``)
         test/cuda_equivalents/test_cuda_executable_equivalence.py \
         -k iiwa14-fixed
 
-   The runner compares your kernel's output against ``RBDReference.X``
+   The runner compares the kernel's output against ``RBDReference.X``
    (the Python truth) for several sample states. Match it to
-   ``rtol = 2e-4`` for float32 at SHARED.
+   ``rtol = 2e-4`` for float32 at ``SHARED``.
 
    Also exercise a forced-spill tier to validate the spill path:
 
@@ -255,17 +253,17 @@ Step-by-step recipe (worked example: ``fdsva_so``)
 
       GRID_CUDA_TARGET_SHARED_MEM_BYTES=30000 pytest ...
 
-   SHARED validates the math; a forced deep spill validates that the
-   spilled rung is byte-identical (only the pointer moves) — otherwise
-   that rung is shipped untested and will bite later.
+   ``SHARED`` validates the math; a forced deep spill validates that the
+   spilled rung is byte-identical (only the pointer moves). Otherwise
+   that rung ships untested.
 
-#. **Cross-check shape conventions**
+#. Cross-check shape conventions.
 
    GRiD outputs are typically column-major (Fortran-order) on
    ``s_temp`` / ``s_M`` / ``s_d2eePos`` etc. The CUDA equivalence
    runner has shape-aware comparators in
-   ``test/cuda_equivalents/test_cuda_executable_equivalence.py``; if
-   your algorithm has a non-standard output shape, add it there. The
+   ``test/cuda_equivalents/test_cuda_executable_equivalence.py``; an
+   algorithm with a non-standard output shape adds it there. The
    pre-existing ``end_effector_pose_hessian`` shape is ``6 * NUM_VEL² * NUM_EE``
    per timestep (row-major in the EE / column / row axes), for
    example.
@@ -273,71 +271,71 @@ Step-by-step recipe (worked example: ``fdsva_so``)
 Common pitfalls
 ---------------
 
-* **Caller-side ``s_temp`` repoint or alias.** Placement is the inner's
+* A caller-side ``s_temp`` repoint or alias. Placement is the inner's
   job. A kernel that reassigns ``s_temp`` from outside is the bug class
-  the inner-owns-placement design was built to prevent. (See the
-  anti-patterns list at the bottom of :doc:`../concepts/design_principles`.)
-* **Null ``s_temp`` to a load helper.** In whole-arena spill rungs the
+  the inner-owns-placement design prevents (see the anti-patterns list
+  at the bottom of :doc:`../concepts/design_principles`).
+* A null ``s_temp`` passed to a load helper. In whole-arena spill rungs the
   smem ``s_temp`` slot is ``nullptr``; the ``XImats`` / ``XmatsHom``
   load helper dereferences it for sincos scratch. Always repoint
-  ``s_temp`` to ``d_workspace`` BEFORE the first helper call.
-* **Single-valued SHARED-pick macro as a per-rung flag.** Macros like
-  ``GRID_X_USES_SPILL`` equal the *SHARED* pick. Using one as the inner's
+  ``s_temp`` to ``d_workspace`` before the first helper call.
+* A single-valued ``SHARED``-pick macro used as a per-rung flag. Macros like
+  ``GRID_X_USES_SPILL`` equal the ``SHARED`` pick. Using one as the inner's
   template arg under ``if constexpr (RESOURCE_TIER == ...)`` gives the
-  non-SHARED tier the wrong flag → it tries to write the full band into a
-  selective-sized arena → smem OOB on big robots. Pass the actual
-  per-rung value as a literal.
-* **Single-thread Gauss-Jordan inverse.** This was a real performance
+  non-``SHARED`` tier the wrong flag, so it tries to write the full band
+  into a selective-sized arena and overruns shared memory on big robots.
+  Pass the actual per-rung value as a literal.
+* A single-thread Gauss-Jordan inverse. This was a real performance
   hotspot in ``aba`` / ``minv`` floating-base root invert. Use
-  ``glass::invertMatrix_dense`` (block-cooperative). If your algorithm
-  needs an inverse / factor, reach for GLASS first.
-* **Spill rung 0..N−1 only relocates code — must be numerically
-  identical to the unspilled path.** The only difference is where a
-  pointer points. If your spilled tier produces different numbers,
-  you've got a real bug.
-* **Hardcoded assumptions about block size.** Use the
-  ``gen_add_parallel_loop`` helper, which emits a block-stride loop —
-  any block size that fits is correct. Don't assume ``blockDim.x ==
+  ``glass::invertMatrix_dense`` (block-cooperative). An algorithm that
+  needs an inverse / factor should reach for GLASS first.
+* A spill rung that changes numerics. Spill rung 0..N−1 only relocates
+  code and must be numerically identical to the unspilled path; the only
+  difference is where a pointer points. A spilled tier that produces
+  different numbers has a bug.
+* Hardcoded assumptions about block size. Use the
+  ``gen_add_parallel_loop`` helper, which emits a block-stride loop;
+  any block size that fits is correct. Do not assume ``blockDim.x ==
   MAX_PERF_LEVEL_THREADS``.
 
-Code-generation helpers (cheat sheet)
--------------------------------------
+Code-generation helpers
+-----------------------
 
 Most useful helpers (in ``grid_codegen/helpers/``):
 
-* ``gen_add_code_line(line)`` / ``gen_add_code_lines([...])`` — emit
+* ``gen_add_code_line(line)`` / ``gen_add_code_lines([...])``: emit
   text into the current function.
-* ``gen_add_parallel_loop(var_name, max_val, block_level=False)`` — emit a
+* ``gen_add_parallel_loop(var_name, max_val, block_level=False)``: emit a
   block-stride ``for (i = tid; i < max_val; i += blockDim...)``
   (``block_level=True`` strides over ``blockIdx`` instead).
-* ``gen_add_sync()`` — emit ``__syncthreads()``.
-* ``gen_add_serial_ops()`` — wrap the next block
-  in an ``if (threadIdx.x == 0 && threadIdx.y == 0)`` (use sparingly —
-  this is the bottleneck class to avoid; see *Single-thread Gauss-
+* ``gen_add_sync()``: emit ``__syncthreads()``.
+* ``gen_add_serial_ops()``: wrap the next block
+  in an ``if (threadIdx.x == 0 && threadIdx.y == 0)`` (use sparingly;
+  this is the bottleneck class to avoid, see *Single-thread Gauss-
   Jordan inverse* above).
-* ``gen_add_func_doc(func_desc, notes=[], params=[], return_val=None)`` —
+* ``gen_add_func_doc(func_desc, notes=[], params=[], return_val=None)``:
   emit a Doxygen-style header.
 * ``gen_kernel_load_inputs(name, amount, name2=None, amount2=1, name3=None,
   amount3=1, stride=None, stride2=None, stride3=None)`` and
   ``gen_kernel_save_result(store_to_name, amount, load_from_name=None,
-  stride=None, sync=True)`` — boilerplate for global ↔ shared memory
+  stride=None, sync=True)``: boilerplate for global/shared memory
   transfer in the kernel; batched kernels pass ``stride`` to address
   timestep ``k``'s slot, single-call kernels omit it.
 * Sub-algorithm calls take keyword overrides, e.g.
   ``gen_minv_inner_function_call(updated_var_names=None,
   f_in_smem_expr="true")`` and
   ``gen_fdsva_so_contract_function_call(updated_var_names=None,
-  scratch_in_smem_expr="true")`` — ``updated_var_names`` renames the
+  scratch_in_smem_expr="true")``; ``updated_var_names`` renames the
   default ``s_*`` operands when the caller's buffers differ.
-* ``grid_linalg_gemm<T, M, N, K>`` / ``grid_linalg_gemv<T, M, N>`` —
+* ``grid_linalg_gemm<T, M, N, K>`` / ``grid_linalg_gemv<T, M, N>``:
   thin wrappers around ``glass::gemm`` / ``glass::gemv``. Always
-  prefer these over rolling your own loops.
+  prefer these over hand-written loops.
 
 The signatures above are the ones in ``grid_codegen/helpers/`` and
 ``grid_codegen/algorithms/`` today; there is no thread-group argument.
 
-When you're done
-----------------
+Submitting the algorithm
+------------------------
 
 Open a PR against GRiD (the generator lives in ``grid_codegen/`` in this
 repository) with:
@@ -347,17 +345,16 @@ repository) with:
 #. Any top-level ``GRiDCodeGenerator.py`` / ``_constants_arena.py`` edits
    (imports, tier selection).
 #. The ``abi_specs.py`` row + regenerated wrapper regions (if the algorithm
-   is bound to Python) — ``python -m grid_codegen.wrapper_body_gen --check``
+   is bound to Python); ``python -m grid_codegen.wrapper_body_gen --check``
    must pass.
 #. A CUDA equivalence test that exercises iiwa14 fixed and floating at
-   SHARED and at a forced spilled tier.
-#. A bench entry in ``run.py`` if you want the algorithm timed in the
+   ``SHARED`` and at a forced spilled tier.
+#. A bench entry in ``run.py`` to have the algorithm timed in the
    standard sweep.
 #. Documentation updates (algorithm description in
    ``docs/source/user_guide/concepts/algorithms/``).
 
-The reviewers will mostly look at: does the inner own its placement?
-Does the kernel size match the per-tier macro? Does the CUDA test pass
-at SHARED *and* at a forced spilled tier? If all three are green, the
-algorithm is on the spill ladder for free and tier-aware composing
-kernels can build on it directly.
+Reviewers check three things: the inner owns its placement, the kernel size
+matches the per-tier macro, and the CUDA test passes at ``SHARED`` and at a
+forced spilled tier. When all three hold, the algorithm is on the spill
+ladder and tier-aware composing kernels can build on it directly.

@@ -5,14 +5,14 @@ GRiD's code generator (``grid_codegen/`` in this repository) produces a
 robot-specific ``grid.cuh`` header; generating the header does not compile or
 run CUDA. The ``grid-generate`` CLI ships in the ``grid-rbd`` wheel, so
 ``pip install grid-rbd`` (:doc:`installation <../getting_started/installation>`)
-is enough; only a source checkout additionally needs its Git submodules
+is enough; only a source checkout also needs its Git submodules
 populated.
 
 Generate a header
 -----------------
 
 From the repository root (the sample URDFs under ``grid_assets/robots/`` are
-in the checkout, not the wheel — substitute your own URDF path):
+in the checkout, not the wheel; substitute your own URDF path):
 
 .. code-block:: shell
 
@@ -80,7 +80,7 @@ expanded with its dependencies before emission. The profiles, from
      - ``inverse_dynamics``, ``minv``, ``f_ext_gradient``
 
 Fewer kernels in the header means a smaller header, a faster ``nvcc`` and
-less RAM — see *Compile time and footprint* below.
+less RAM; see *Compile time and footprint* below.
 
 Generate from Python
 --------------------
@@ -117,7 +117,7 @@ Use the generated code
 Include it in your kernel
 -------------------------
 
-This is the power-user entry point: the header is self-contained (GLASS
+This is the entry point for CUDA applications: the header is self-contained (GLASS
 device-side linear algebra is vendored in by default), so a kernel that
 ``#include``\ s it needs only ``nvcc``. Every algorithm has a ``_device``
 routine that runs inside your block on shared-memory operands, which is how
@@ -168,7 +168,7 @@ offers two spellings of that:
    gpuErrchk(grid::init_grid_kernel_attr_inverse_dynamics_checked<float>());
    // one init_grid_kernel_attr_<algo>_checked<T>() per algorithm you launch
 
-``init_grid<T>()`` is fine — and the shortest path — when the header was
+``init_grid<T>()`` is the shortest path when the header was
 generated with a trimmed ``--algorithm-list``, because then "every kernel"
 is the handful you asked for. With a full-profile header it is what makes a
 small ``.cu`` file take minutes to compile: a translation unit compiles every
@@ -188,13 +188,13 @@ Compile time and footprint
 Three levers decide how long ``nvcc`` takes on a generated header and how
 much RAM it needs:
 
-* **Emit less** — ``--algorithm-list`` / ``algorithm_list=`` with the
+* Emit less: ``--algorithm-list`` / ``algorithm_list=`` with the
   profiles above (and ``--no-mujoco-kernels`` on a floating base, where the
   MuJoCo-convention twins roughly double a build). The header only contains
   what you name plus dependencies.
-* **Register less** — with a full header, the per-algorithm init twins above
+* Register less: with a full header, the per-algorithm init twins above
   compile only the kernels you launch.
-* **Fit the device** — the :doc:`resource tiers <../concepts/resource_tier_system>`
+* Fit the device: the :doc:`resource tiers <../concepts/resource_tier_system>`
   trade shared memory for global workspace per kernel; the tier you
   instantiate is the one that gets compiled.
 

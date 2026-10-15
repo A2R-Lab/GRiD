@@ -7,8 +7,8 @@ floating-base configurations.
 The 14 rows are the first-order set (`inverse_dynamics`, `minv`, `forward_dynamics`,
 `aba`, `crba`, `inverse_dynamics_gradient`, `forward_dynamics_gradient`,
 `end_effector_pose`, `end_effector_pose_gradient`, `end_effector_pose_hessian`)
-plus the second-order set — 4 algorithms, 3 rows per cell (`idsva_so`
-— the dispatched winner, `idsva_so_body_frame`, `idsva_so_world_frame`,
+plus the second-order set of 4 algorithms, 3 rows per cell (`idsva_so`,
+the dispatched winner; `idsva_so_body_frame`; `idsva_so_world_frame`;
 `fdsva_so`). The two IDSVA-SO variants are mathematically equivalent and ship
 side-by-side so the table shows the body-vs-world crossover; `idsva_so` itself
 is the codegen-time dispatcher (body-frame for fixed-base, world-frame for
@@ -19,7 +19,7 @@ measurements page).
 
 ## Quick Start
 
-All commands use the project virtualenv.  Create it once if it doesn't exist:
+All commands use the project virtualenv.  Create it once if it does not exist:
 
 ```bash
 bash install/developer_install.sh
@@ -27,8 +27,8 @@ bash install/developer_install.sh
 
 That script creates `.venv`, installs GRiD editable with every backend
 (`jax[cuda12]`, a cu128 torch wheel), the Pinocchio oracle from
-`install/requirements-dev.txt` (`pin<4` via cmeel — note that the `[dev]`
-extra alone is `[all]` + pytest and does NOT bring Pinocchio), `frax`, and
+`install/requirements-dev.txt` (`pin<4` via cmeel; the `[dev]`
+extra alone is `[all]` + pytest and does not bring Pinocchio), `frax`, and
 builds CppADCodeGen from source into `/usr/local` so the codegen-accelerated
 Pinocchio paths (inverse_dynamics / minv / aba / forward_dynamics / crba /
 inverse_dynamics_gradient / forward_dynamics_gradient) populate; without
@@ -59,7 +59,7 @@ Then run benchmarks:
 
 Results are saved to `test/benchmarks/results/` (gitignored); the report
 `test/benchmarks/benchmark.md` is generated locally by `generate_report.py`
-(its default output) and is not tracked either — the curated numbers that ship
+(its default output) and is not tracked either. The curated numbers that ship
 come from the release pipeline under `release/`.
 
 ---
@@ -83,7 +83,7 @@ path.
 ### Pinocchio (CPU)
 
 Pinocchio comes from `install/requirements-dev.txt` (`pin<4`, `cmeel-eigen`,
-`cmeel-urdfdom<5`), which `install/developer_install.sh` installs. It is NOT
+`cmeel-urdfdom<5`), which `install/developer_install.sh` installs. It is not
 part of the `[dev]` extra (`[dev]` = `[all]` + pytest); on a hand-rolled venv
 run `pip install -r install/requirements-dev.txt` yourself.
 
@@ -93,11 +93,14 @@ Verify:
 .venv/bin/python -c "import pinocchio; print(pinocchio.__version__)"
 ```
 
-**CppADCodeGen (recommended for an apples-to-apples comparison):** The codegen-
+#### CppADCodeGen
+
+CppADCodeGen is recommended for an apples-to-apples comparison. The codegen-
 accelerated algorithms (inverse_dynamics, minv, aba, forward_dynamics, crba,
 inverse_dynamics_gradient, forward_dynamics_gradient) require CppADCodeGen
-headers.  The benchmark runner detects availability automatically — if not found,
-those algorithms are silently reported as null and the direct-API algorithms
+headers.  The benchmark runner detects availability automatically; if the
+headers are not found, those algorithms are silently reported as null and the
+direct-API algorithms
 (end_effector_pose, end_effector_pose_gradient, idsva_so_body_frame, idsva_so_world_frame) still run.
 The dispatched `IDSVA_SO` row mirrors whichever variant the codegen picked.
 FDSVA_SO has no Pinocchio equivalent and is GRiD-only.
@@ -106,11 +109,11 @@ Two install routes work; the runner (`baselines/pinocchio/run.py::has_cppadcg`)
 finds either via `pkg-config --exists cppadcg` or `cppad/cg.hpp` under the
 venv's `cmeel.prefix`:
 
-- **What `install/developer_install.sh` does** (default; skip with
-  `SKIP_CPPADCG_INSTALL=1`): `apt-get install libcppad-dev cmake`, then clones
-  CppADCodeGen into `.cache/CppADCodeGen` and `cmake`/`make install`s it to
+- The default route is what `install/developer_install.sh` does (skip with
+  `SKIP_CPPADCG_INSTALL=1`): `apt-get install libcppad-dev cmake`, then clone
+  CppADCodeGen into `.cache/CppADCodeGen` and `cmake`/`make install` it to
   `/usr/local`.
-- **pip, into the same venv as Pinocchio**:
+- The pip route installs into the same venv as Pinocchio:
 
   ```bash
   .venv/bin/pip install cmeel-cppadcodegen
@@ -130,7 +133,7 @@ rm -rf .grid_build_cache/cuda/pinocchio_benchmarks
 The `external/RBDReference/` suite uses Pinocchio's C++ implementation
 as the golden oracle for RBDReference + CUDA equivalence tests
 (particularly for second-order derivatives, where Python Pinocchio's
-SO API isn't directly comparable). This binding is built automatically
+SO API is not directly comparable). This binding is built automatically
 by `install/developer_install.sh` and on first import of the suite via
 `setuptools`.
 
@@ -147,22 +150,23 @@ pkg-config --modversion pinocchio
 .venv/bin/python -c "import pybind11; print(pybind11.__version__)"
 ```
 
-If `pkg-config pinocchio` doesn't resolve, the binding's `setup.py` falls back
+If `pkg-config pinocchio` does not resolve, the binding's `setup.py` falls back
 to the cmeel prefix in the same venv.
 
-**Verify the binding builds + runs:**
+To verify that the binding builds and runs:
 
 ```bash
 # Builds pin_so_ext on first run (~30s); subsequent runs are cache hits.
 .venv/bin/pytest external/RBDReference/tests/test_second_order_pinocchio_equivalence.py -k iiwa14 -x
 ```
 
-If you hit build errors, the most common fixes are:
-- `pkg-config: command not found` → install pkg-config
-- `Pinocchio.hpp: No such file` → `pkg-config --cflags pinocchio` is empty
-  → install `libpinocchio-dev` or activate the cmeel venv
-- `python.h: No such file` → install `python3-dev` (matching the venv's
-  Python version)
+The most common build errors and their fixes:
+
+| Error | Fix |
+|---|---|
+| `pkg-config: command not found` | install pkg-config |
+| `Pinocchio.hpp: No such file` | `pkg-config --cflags pinocchio` is empty; install `libpinocchio-dev` or activate the cmeel venv |
+| `python.h: No such file` | install `python3-dev` (matching the venv's Python version) |
 
 ### MJX (GPU via JAX)
 
@@ -179,10 +183,10 @@ Verify:
 .venv/bin/python -c "import mujoco.mjx; import jax; print(jax.devices())"
 ```
 
-MJX is **not** run by default — pass `--baselines mjx` explicitly.  MJX is also skipped on
+MJX is not run by default; pass `--baselines mjx` explicitly.  MJX is also skipped on
 Jetson/unified-memory platforms since JAX/XLA is not optimized for that architecture.
 
-### CPU Frequency Locking (Linux — optional but recommended for Pinocchio)
+### CPU frequency locking (Linux; optional, recommended for Pinocchio)
 
 Locking the CPU to the performance governor removes frequency-scaling noise from
 Pinocchio timings.  The benchmark runner attempts this automatically via `sudo`:
@@ -195,7 +199,7 @@ echo "$USER ALL=(ALL) NOPASSWD: /usr/bin/cpupower" | sudo tee /etc/sudoers.d/cpu
 sudo bash test/benchmarks/setCPU.sh
 ```
 
-If unavailable, the benchmark still runs — timing may be noisier.
+If unavailable, the benchmark still runs, with noisier timing.
 On macOS / Windows, CPU freq locking is not supported and a warning is printed.
 
 ---
@@ -206,25 +210,25 @@ On macOS / Windows, CPU freq locking is not supported and a warning is printed.
 
 | Label | Measures |
 |-------|----------|
-| **with-memory** | Full round-trip: `cudaMemcpy` host→device + kernel + `cudaMemcpy` device→host |
-| **compute-only** | Kernel only (data already on GPU) |
+| with-memory | Full round-trip: `cudaMemcpy` host to device + kernel + `cudaMemcpy` device to host |
+| compute-only | Kernel only (data already on GPU) |
 
-On **Jetson** (unified memory), `cudaMemcpy` is a no-op: with-memory ≈ compute-only.
+On Jetson (unified memory), `cudaMemcpy` is a no-op: with-memory ≈ compute-only.
 Compare on compute-only numbers in the Jetson appendices.
 
 ### Single vs. Batch
 
 | Label | Measures |
 |-------|----------|
-| **single (1)** | One state, kernel loops internally for `TEST_ITERS` reps — minimizes launch overhead |
-| **batch (N)** | Host loop launches N parallel states on the GPU |
+| single (1) | One state, kernel loops internally for `TEST_ITERS` reps; minimizes launch overhead |
+| batch (N) | Host loop launches N parallel states on the GPU |
 
 ### codegen vs. direct (Pinocchio)
 
 | Label | Measures |
 |-------|----------|
-| **codegen** | CppAD-generated C code compiled to a shared library — fastest Pinocchio path |
-| **direct** | Direct Pinocchio C++ API — used for algorithms without codegen support |
+| codegen | CppAD-generated C code compiled to a shared library; the fastest Pinocchio path |
+| direct | Direct Pinocchio C++ API; used for algorithms without codegen support |
 
 ### MJX Algorithm Coverage
 
@@ -232,11 +236,11 @@ MJX exposes a subset of algorithms via `mujoco.mjx`:
 
 | Algorithm | MJX Function | Notes |
 |-----------|-------------|-------|
-| **inverse_dynamics** | `mjx.inverse()` | RNEA |
-| **forward_dynamics** | `mjx.forward()` | Full forward dynamics |
-| **end_effector_pose** | `mjx.kinematics()` | Forward kinematics |
-| **inverse_dynamics_gradient** | `jax.jacobian(mjx.inverse)` | AD through RNEA |
-| minv, crba, aba, forward_dynamics_gradient, idsva_so_body_frame, idsva_so_world_frame, fdsva_so | — | Not available in MJX |
+| inverse_dynamics | `mjx.inverse()` | RNEA |
+| forward_dynamics | `mjx.forward()` | Full forward dynamics |
+| end_effector_pose | `mjx.kinematics()` | Forward kinematics |
+| inverse_dynamics_gradient | `jax.jacobian(mjx.inverse)` | AD through RNEA |
+| minv, crba, aba, forward_dynamics_gradient, idsva_so_body_frame, idsva_so_world_frame, fdsva_so | none | Not available in MJX |
 
 MJX uses `jax.vmap` for batching and `jax.block_until_ready()` to ensure GPU completion
 before stopping the timer. The first two calls (JIT compilation + GPU warm-up) are discarded.
@@ -244,8 +248,8 @@ before stopping the timer. The first two calls (JIT compilation + GPU warm-up) a
 ### ABA vs. FD (GRiD forward dynamics)
 
 GRiD has two forward dynamics implementations:
-- **forward_dynamics**: Minv + RNEA composition (`forward_dynamics`)
-- **aba**: Articulated Body Algorithm (`aba`) — independent implementation
+- `forward_dynamics`: the Minv + RNEA composition.
+- `aba`: the Articulated Body Algorithm, an independent implementation.
 
 Both are benchmarked and shown separately.
 
@@ -258,7 +262,7 @@ The G1 humanoid has two distinct EE use cases:
 | Label | Frame (GRiD) | Frame (Pinocchio/MJX) | Use case |
 |-------|-------------|----------------------|----------|
 | `g1` (arm) | `right_hand_palm_joint` | `right_rubber_hand` | Manipulation |
-| `g1-foot` | — (no fixed ankle joint) | `right_ankle_roll_link` | Locomotion |
+| `g1-foot` | none (no fixed ankle joint) | `right_ankle_roll_link` | Locomotion |
 
 Both appear as separate rows in EE kinematics sections of the generated `benchmark.md`.
 
@@ -267,15 +271,15 @@ Both appear as separate rows in EE kinematics sections of the generated `benchma
 ## Reproducing the Multi-Version Comparison
 
 Side-by-side benchmark of two GRiD versions vs three external GPU/CPU
-references: **pre-GLASS** (git ref `d2c0d18`, the last commit before the GLASS
-work), **glass** (HEAD with pure-SIMT GLASS), **pinocchio** (CPU codegen),
-**mjx** (MuJoCo MJX on JAX-GPU), and **frax** (Frax on JAX-GPU,
+references: pre-GLASS (git ref `d2c0d18`, the last commit before the GLASS
+work), glass (HEAD with pure-SIMT GLASS), pinocchio (CPU codegen),
+mjx (MuJoCo MJX on JAX-GPU), and frax (Frax on JAX-GPU,
 https://github.com/danielpmorton/frax). The orchestrator manages a separate
 git worktree for the pre-GLASS column. MJX exposes
 inverse_dynamics/forward_dynamics/end_effector_pose/inverse_dynamics_gradient;
 Frax exposes inverse_dynamics/forward_dynamics/crba/minv; the others render `—`.
 
-**Prereqs on a fresh machine:**
+### Prerequisites on a fresh machine
 
 ```bash
 # 1. Clone with submodules (the pre-GLASS worktree is created by the harness, see below).
@@ -297,14 +301,14 @@ nvcc --version
 .venv/bin/python -c "import frax; print('frax OK')"
 ```
 
-The **pre-GLASS column needs no manual checkout**: `run_multi_version.py`
+The pre-GLASS column needs no manual checkout: `run_multi_version.py`
 (`setup_pre_glass_worktree`) runs `git worktree add --detach <path> d2c0d18`
 from this checkout, initialises that worktree's submodules, and reuses it on
 later runs (warning if its HEAD drifted). The path is
 `$GRID_PRE_GLASS_WORKTREE` / `--worktree-path` (default
 `../GRiD-A2R-pre-glass`); `--skip-setup` assumes it already exists.
 
-**Run the sweep:**
+### Running the sweep
 
 ```bash
 # Where the d2c0d18 worktree gets created (defaults to ../GRiD-A2R-pre-glass).
@@ -328,23 +332,26 @@ export GRID_PRE_GLASS_WORKTREE=../GRiD-A2R-pre-glass
     --single-call-iters 50000 --batch-iters 500
 ```
 
-**Stability flags reference:**
+### Stability flags
 
 | Flag | Default | When to bump |
 |---|---|---|
-| `--single-call-iters N` | 10000 (GRiD/Pin) | Single-call timings show high variance — bump to 50k+ for sub-µs algos |
-| `--batch-iters N` | 100 (GRiD/Pin), 500 (MJX/Frax) | Batch medians noisy — bump 5–10× |
-| `--pin-num-threads N` | auto (physical cores) | Sets Pinocchio's internal CPU_THREADS_GLOBAL. Auto-detect picks physical cores (NOT logical/SMT siblings — they hurt for batched-same-function workloads). Override if auto-detection is wrong (`PIN_PHYSICAL_CORES` env var also works). |
+| `--single-call-iters N` | 10000 (GRiD/Pin) | Single-call timings show high variance; bump to 50k+ for sub-µs algos |
+| `--batch-iters N` | 100 (GRiD/Pin), 500 (MJX/Frax) | Batch medians noisy; bump 5–10× |
+| `--pin-num-threads N` | auto (physical cores) | Sets Pinocchio's internal CPU_THREADS_GLOBAL. Auto-detect picks physical cores (not logical/SMT siblings, which hurt for batched-same-function workloads). Override if auto-detection is wrong (`PIN_PHYSICAL_CORES` env var also works). |
 | `--no-rdc` | off | ptxas hangs on floating-base; first thing to try |
 | `--no-licm-barrier` | off | ptxas still hangs after `--no-rdc`; strongest hammer |
 | `--fixed-only` | off | Skip every floating-base combo (shortcut for `--bases fixed`). Run fixed first to get clean data, then revisit floating with the slow compile. |
 | `--skip iiwa14_floating` | none | Exclude specific robot/base combos that are broken on your machine |
 
-**Pinocchio parallelism details:** the Pinocchio runner uses two layers of parallelism — outer subprocess fan-out (one per algo, for parallel cppadcg JIT compile) and inner thread pool (`CPU_THREADS_GLOBAL` worker threads splitting the batch loop across timesteps). To avoid CPU oversubscription, the outer fan-out is `max(1, physical_cores / internal_threads)`. With the default `internal_threads = physical_cores`, that's 1 subprocess at a time (each gets all cores). Override via `PIN_MAX_WORKERS` env var if you want more parallelism (e.g. when JIT compile dominates and batch run is fast).
+### Pinocchio parallelism
 
-The orchestrator:
+The Pinocchio runner uses two layers of parallelism: an outer subprocess fan-out (one per algo, for parallel cppadcg JIT compile) and an inner thread pool (`CPU_THREADS_GLOBAL` worker threads splitting the batch loop across timesteps). To avoid CPU oversubscription, the outer fan-out is `max(1, physical_cores / internal_threads)`. With the default `internal_threads = physical_cores`, that is 1 subprocess at a time (each gets all cores). Override via the `PIN_MAX_WORKERS` env var for more parallelism (e.g. when JIT compile dominates and the batch run is fast).
+
+### Orchestrator steps
+
 1. Creates a worktree at `$GRID_PRE_GLASS_WORKTREE` checked out to `d2c0d18`
-   with the pinned submodule SHAs (idempotent — reuses if it already exists).
+   with the pinned submodule SHAs (idempotent; reuses it if it already exists).
 2. Runs each requested column for each robot/base (pre-glass is fixed-base only).
 3. Writes per-column JSONs into `test/benchmarks/results/comparison/` with names
    like `iiwa14_fixed_grid_pre_glass.json`, `iiwa14_fixed_grid_glass.json`, etc.
@@ -352,35 +359,39 @@ The orchestrator:
    `test/benchmarks/benchmark_multi_version.md` with four columns + speedup
    ratios.
 
-**Reading the report:**
+### Reading the report
 
-- **glass/pre** column: N=256 compute-only ratio. `> 1.00×` = HEAD is faster
-  than the pre-GLASS baseline; `< 1.00×` = HEAD regressed on that algo.
-- Floating-base rows show `—` in the pre_glass column (harness doesn't support
-  it at `d2c0d18`).
+- The glass/pre column is the N=256 compute-only ratio. `> 1.00×` means HEAD is
+  faster than the pre-GLASS baseline; `< 1.00×` means HEAD regressed on that algo.
+- Floating-base rows show `—` in the pre_glass column (the harness does not
+  support it at `d2c0d18`).
 
-**Caches:** each version uses its own `.grid_build_cache/cuda/` directory
+### Caches
+
+Each version uses its own `.grid_build_cache/cuda/` directory
 under its respective worktree (the pre-GLASS harness still writes its own
-cache location under *its* worktree), so codegen + binary caches don't
+cache location under its worktree), so codegen + binary caches do not
 collide. Pass `--no-recompile` to reuse cached binaries on rerun.
 
-**ccache (strongly recommended — large iteration speedup):** both the GRiD
-nvcc compile and the Pinocchio g++ compile transparently route through
-`ccache` if it's on `$PATH`. Install with `sudo apt install ccache` (or
+### ccache
+
+ccache gives a large iteration speedup and is strongly recommended. Both the
+GRiD nvcc compile and the Pinocchio g++ compile transparently route through
+`ccache` if it is on `$PATH`. Install with `sudo apt install ccache` (or
 `brew install ccache`).
 
 The first compile populates the cache; subsequent compiles with the same
 preprocessed source + flags are cache hits and skip the heavy ptxas /
-Eigen-template work entirely — typically going from tens of seconds to
-under a second per compile. Most useful when:
+Eigen-template work entirely, typically going from tens of seconds to
+under a second per compile. It is most useful when:
 
-- Clearing `.grid_build_cache/cuda/` (or just its `pinocchio_benchmarks/`)
-  when the underlying `.cu` / `.cpp` source hasn't changed.
+- Clearing `.grid_build_cache/cuda/` (or only its `pinocchio_benchmarks/`)
+  when the underlying `.cu` / `.cpp` source has not changed.
 - Iterating on the harness Python code without touching codegen output.
 
 Disable per-binary with `GRID_NO_CCACHE=1` (GRiD) or `PIN_NO_CCACHE=1`
 (Pinocchio). Inspect cache stats with `ccache -s`; clear with `ccache -C`.
-Default cache size is 5 GB — bump if you're caching many builds:
+The default cache size is 5 GB; bump it when caching many builds:
 `ccache -M 20G`.
 
 ---
@@ -391,8 +402,8 @@ Default cache size is 5 GB — bump if you're caching many builds:
    ```bash
    python test/benchmarks/run_benchmarks.py
    ```
-2. Review `test/benchmarks/benchmark.md` — generated locally by
-   `generate_report.py`, not tracked (gitignored, like `results/`).
+2. Review `test/benchmarks/benchmark.md`, generated locally by
+   `generate_report.py` and not tracked (gitignored, like `results/`).
 3. Numbers that should ship go through the validation-gated release
    collector (`release/README.md`), not through this report; a new
    (robot, GPU) launch config is contributed via
@@ -404,15 +415,15 @@ Default cache size is 5 GB — bump if you're caching many builds:
 
 Tuning and analysis tools beside the runners:
 
-- `autotune_tier_matrix.py` — per-tier forced-probe matrix sweep; writes the launch config's `matrix` block
-- `bake_by_n_bucket.py` — batch-switch bake (`ffi_bases_by_n`); `autotune_bake_from_logs.py` — re-bake surface overlays from sweep logs
-- `collect_kernel_limits.py` — kernel limit collection (min_smem join for the matrix tool)
-- `gpu_resident_timing.py` — GPU-resident/no-transfer timing
-- `analyze_competitive.py` / `plot_benchmarks.py` / `run_competitive_gpu_baselines.sh` — competitive pipeline
-- `run_tier_sweep_phased.sh` / `overnight_batch.sh` — sweep drivers
-- `release/` — the validation-gated release collector (see `release/README.md`)
-- `test_*.py` — CPU gates over the pickers/specs/timing contracts and the release collector; these run in the CPU lane (`make test-cpu`)
-- `BENCHMARK_METHODOLOGY.md` — how the numbers are taken
+- `autotune_tier_matrix.py`: per-tier forced-probe matrix sweep; writes the launch config's `matrix` block
+- `bake_by_n_bucket.py`: batch-switch bake (`ffi_bases_by_n`); `autotune_bake_from_logs.py`: re-bake surface overlays from sweep logs
+- `collect_kernel_limits.py`: kernel limit collection (min_smem join for the matrix tool)
+- `gpu_resident_timing.py`: GPU-resident/no-transfer timing
+- `analyze_competitive.py` / `plot_benchmarks.py` / `run_competitive_gpu_baselines.sh`: competitive pipeline
+- `run_tier_sweep_phased.sh` / `overnight_batch.sh`: sweep drivers
+- `release/`: the validation-gated release collector (see `release/README.md`)
+- `test_*.py`: CPU gates over the pickers/specs/timing contracts and the release collector; these run in the CPU lane (`make test-cpu`)
+- `BENCHMARK_METHODOLOGY.md`: how the numbers are taken
 
 
 ```

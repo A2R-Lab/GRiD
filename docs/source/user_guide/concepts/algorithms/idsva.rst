@@ -5,7 +5,7 @@ IDSVA / IDSVA-SO (Inverse Dynamics, Second-Order)
 
 Overview
 --------
-GRiD implements the **second-order** inverse dynamics algorithm (IDSVA-SO)
+GRiD implements the second-order inverse dynamics algorithm (IDSVA-SO)
 from Singh, Russell, & Wensing (`arXiv:2302.06001
 <https://arxiv.org/abs/2302.06001>`_), which produces the rank-3 tensors
 :math:`\partial^2 \tau / \partial q^2`, :math:`\partial^2 \tau / \partial \dot q^2`,
@@ -13,12 +13,12 @@ the mixed :math:`\partial^2 \tau / \partial q \partial \dot q`, and the
 mass-matrix gradient :math:`\partial M / \partial q`.
 
 Two mathematically equivalent variants are implemented; they differ only
-in **reference frame**, and the codegen picks between them per robot
+in reference frame, and the codegen picks between them per robot
 configuration:
 
-* ``idsva_so_body_frame`` — body-frame propagation, body-frame inertia,
+* ``idsva_so_body_frame``: body-frame propagation, body-frame inertia,
   body-frame motion subspace. Multi-pass forward/backward sweeps.
-* ``idsva_so_world_frame`` — world-frame propagation, world-frame motion
+* ``idsva_so_world_frame``: world-frame propagation, world-frame motion
   subspace, gravity baked into the main sweep. Single-pass reference
   (closer to the textbook spatial-vector-algebra derivation).
 
@@ -27,8 +27,8 @@ Dispatcher
 Both variants are correct on either base type. The choice is a pure
 performance optimization, baked in at codegen time:
 
-* **Fixed-base** → ``idsva_so_body_frame``.
-* **Floating-base** → ``idsva_so_world_frame``.
+* Fixed-base robots dispatch to ``idsva_so_body_frame``.
+* Floating-base robots dispatch to ``idsva_so_world_frame``.
 
 In Python, both variants stay publicly callable; the meta dispatcher
 ``rbd.idsva_so(q, qd, qdd)`` forwards based on ``robot.floating_base``.
@@ -69,7 +69,7 @@ does not establish a universal speed ranking between variants.
 
 See Also
 --------
-* :doc:`fdsva_so` — second-order forward dynamics
+* :doc:`fdsva_so`: second-order forward dynamics
 * :doc:`inverse_dynamics`
 * :doc:`crba`
 * :doc:`aba`

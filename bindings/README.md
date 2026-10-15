@@ -1,7 +1,9 @@
 # grid-rbd
 
 Python wrappers for GPU-accelerated rigid body dynamics on top of
-[GRiD](https://github.com/A2R-Lab/GRiD). Two-tier UX:
+[GRiD](https://github.com/A2R-Lab/GRiD). The wrappers have two tiers: a
+one-time registration that builds the robot, and batched calls that run many
+times.
 
 ```python
 import grid_rbd
@@ -22,72 +24,68 @@ qdd = handle.forward_dynamics(q, qd, u)
 M   = handle.crba(q)
 ```
 
-Full reference (gravity convention, cache layout, EE-target selection,
-JAX FFI, etc.) lives in the
+The full reference (gravity convention, cache layout, EE-target selection,
+JAX FFI) lives in the
 [main docs](https://a2r-lab.org/GRiD/).
 
-## Status — 0.5.1 (on PyPI as `grid-rbd`)
+## Status: 0.5.1 (on PyPI as `grid-rbd`)
 
-The full method surface — core dynamics/kinematics, analytical gradients, the
-second-order derivatives, the centroidal / energy / general-frame value ops
-(`com`, `ccrba`, `dccrba`, `cmm_time_variation`, `coriolis_matrix`, `energy`,
-`generalized_gravity`, `nonlinear_effects`, the KE/PE regressors,
-`frame_jacobian`/`_dot`, `osc_inertia`, and the runtime-target EE pose /
-gradient), the inertial-parameter (π) regressor family
-(`inverse_dynamics_regressor`, the differentiable
-`inverse_dynamics_wrt_params` / `forward_dynamics_wrt_params`, and
-`forward_dynamics_parameter_gradient` = ∂q̈/∂π), runtime welded tools
-(`attach_tool` / `tool_fext`), and multi-contact wrench mapping
-(`contact_fext` / `register_robot(contact_frames=...)`) — is bound and
-validated against
+The full method surface is bound and validated against
 [`RBDReference`](https://github.com/A2R-Lab/RBDReference) at float32 precision,
-with operation-specific backend coverage. In particular, `*_wrt_params` and
+with operation-specific backend coverage. The surface comprises the core
+dynamics/kinematics, analytical gradients, the second-order derivatives, the
+centroidal / energy / general-frame value ops (`com`, `ccrba`, `dccrba`,
+`cmm_time_variation`, `coriolis_matrix`, `energy`, `generalized_gravity`,
+`nonlinear_effects`, the KE/PE regressors, `frame_jacobian`/`_dot`,
+`osc_inertia`, and the runtime-target EE pose / gradient), the
+inertial-parameter (π) regressor family (`inverse_dynamics_regressor`, the
+differentiable `inverse_dynamics_wrt_params` / `forward_dynamics_wrt_params`,
+and `forward_dynamics_parameter_gradient` = ∂q̈/∂π), runtime welded tools
+(`attach_tool` / `tool_fext`), and multi-contact wrench mapping
+(`contact_fext` / `register_robot(contact_frames=...)`). `*_wrt_params` and
 `forward_dynamics_parameter_gradient` are JAX/PyTorch interfaces, not NumPy
 handle methods. See the [backend inventory](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/backend_coverage.html).
-The per-method table (shapes, arguments,
-conventions) lives in the
+The per-method table (shapes, arguments, conventions) lives in the
 [Python wrappers docs](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/python_wrappers.html)
 (`docs/source/user_guide/tutorials/python_wrappers.rst` in-repo).
 
 Shape legend: `NJ = num_joints (== num_pos == nq)`, `NV = num_vel (tangent /
-velocity space)`, `NB = num_bodies`. Every handle also exposes the unambiguous
-read-only aliases `h.nq` / `h.nv` / `h.nb`. `q` is `NJ`-wide; `qd`, `qdd`, `u`,
+velocity space)`, `NB = num_bodies`. Every handle also exposes the read-only
+aliases `h.nq` / `h.nv` / `h.nb`. `q` is `NJ`-wide; `qd`, `qdd`, `u`,
 the value outputs (`c`, `qdd`) and every matrix/Jacobian axis are `NV`-wide
 (tangent space, Pinocchio / MuJoCo convention) on every surface. For a
-**fixed base without spherical joints, `NV == NJ`**; each independent spherical
+fixed base without spherical joints, `NV == NJ`; each independent spherical
 joint adds one quaternion coordinate beyond its three tangent coordinates.
 The per-method differentiability table (VJP inputs, fixed-base
 restrictions, output representations) lives in the Python wrappers docs and is
 cross-checked against the ABI specification by a CPU test.
 
-> **Breaking change (v0.5) — floating-base only.** `crba`/`minv` now return
-> `(B, NV, NV)` and `inverse_dynamics_gradient`/`forward_dynamics_gradient` return
-> `(B, NV, 2*NV)` instead of the previous `NJ`-sized shapes. The CUDA kernels have
-> always written these as `NV`-dimensioned (`NUM_VEL*NUM_VEL`); the old binding
-> over-sized the copy-out to `NUM_JOINTS*NUM_JOINTS`, which (a) appended garbage
-> padding rows/cols and (b) **corrupted every matrix after the first for
-> `batch > 1`** via a per-timestep stride mismatch (324 written vs 361 read). The
-> new shapes match `RBDReference` / pinocchio's `nv`-space mass matrix and
-> Jacobians and fix the binding-side `batch > 1` corruption. Fixed-base robots
-> are unaffected (`NV == NJ`). The JAX-FFI and torch backends
-> completed the same migration — all three surfaces expose the corrected
-> `NV`-sized floating shapes.
->
-> Previously-noted floating-base CRBA batch issue — **RESOLVED**. The floating-base
-> CRBA kernel used to return inconsistent mass matrices across `batch > 1` slots for
-> an identical-`q` batch (a warp-scheduling-order shared-parent `atomicAdd` in the
-> composite-inertia fold). Fixed in codegen by a deterministic parent-major
-> fixed-order reduction (`grid_codegen/algorithms/_crba.py`, ~L571). Verified
-> 2026-07-24 on go2-floating: a 64-wide identical-`q` batch returns bit-identical `M`
-> across all slots (`max |M[b]−M[0]| = 0`) and is bit-identical run-to-run.
+### Floating-base shapes since v0.5
+
+On floating-base robots, `crba`/`minv` return `(B, NV, NV)` and
+`inverse_dynamics_gradient`/`forward_dynamics_gradient` return `(B, NV, 2*NV)`
+instead of the `NJ`-sized shapes of earlier releases. The CUDA kernels have
+always written these as `NV`-dimensioned (`NUM_VEL*NUM_VEL`); the old binding
+over-sized the copy-out to `NUM_JOINTS*NUM_JOINTS`, which appended garbage
+padding rows/cols and corrupted every matrix after the first for `batch > 1`
+through a per-timestep stride mismatch (324 written vs 361 read). The new
+shapes match `RBDReference` / pinocchio's `nv`-space mass matrix and Jacobians
+and remove the binding-side `batch > 1` corruption. Fixed-base robots are
+unaffected (`NV == NJ`). The JAX-FFI and torch backends expose the same
+corrected `NV`-sized floating shapes.
+
+The floating-base CRBA kernel folds composite inertias in a deterministic
+parent-major fixed order (`grid_codegen/algorithms/_crba.py`, ~L571), so an
+identical-`q` batch returns the same mass matrix in every slot. On go2-floating
+a 64-wide identical-`q` batch returns bit-identical `M` across all slots
+(`max |M[b]−M[0]| = 0`) and is bit-identical run-to-run.
 
 ## JAX FFI (`grid_rbd[jax]`)
 
-The `[jax]` extra (see [Install](#install))
-enables the JAX-side bridge, which shares the same per-robot `.so` cache.
-Methods are exposed via `jax.ffi.ffi_call` and run device-resident on
-JAX-supplied CUDA streams — no host round-trip — so they slot directly into
-`jax.jit` graphs:
+The `[jax]` extra (see [Install](#install)) enables the JAX-side bridge, which
+shares the same per-robot `.so` cache. Methods are exposed via
+`jax.ffi.ffi_call` and run device-resident on JAX-supplied CUDA streams with no
+host round-trip, so they slot directly into `jax.jit` graphs:
 
 ```python
 import grid_rbd.jax as grid_jax, jax
@@ -104,12 +102,12 @@ for the JAX surface details (autograd-aware methods, `f_ext` parity, the
 
 ## PyTorch backend (`backend="torch"`)
 
-The `[torch]` extra (see [Install](#install))
-enables the torch backend. `register_robot(..., backend="torch")` returns a
-`TorchRobotHandle` whose methods return `torch.Tensor`; `inverse_dynamics` /
-`forward_dynamics` / `aba` / `integrator` are autograd-aware (analytic backward
-passes), and CUDA-Graphs capture is available via `h.capture(...)`. The `.so`
-is shared with the numpy/JAX surfaces (same content-addressed cache):
+The `[torch]` extra (see [Install](#install)) enables the torch backend.
+`register_robot(..., backend="torch")` returns a `TorchRobotHandle` whose
+methods return `torch.Tensor`; `inverse_dynamics` / `forward_dynamics` / `aba`
+/ `integrator` are autograd-aware (analytic backward passes), and CUDA-Graphs
+capture is available via `h.capture(...)`. The `.so` is shared with the
+numpy/JAX surfaces (same content-addressed cache):
 
 ```python
 import grid_rbd, torch
@@ -124,14 +122,13 @@ qdd = h.forward_dynamics(q, qd, u)   # autograd-aware torch.Tensor
 qdd.sum().backward()                 # gradients flow to q, qd, u
 ```
 
-> **GPU/torch compatibility:** the backward VJP contractions run torch's
-> own CUDA kernels, so the installed torch build must support the GPU's
-> compute capability. On an RTX 5090 (sm_120) you need a torch **cu128**
-> (or newer) build — a cu124 wheel (max sm_90) cannot launch on sm_120.
-> The `grid` / `grid_plant` kernels themselves are always nvcc-built for
-> the detected arch and are unaffected.
+The backward VJP contractions run torch's own CUDA kernels, so the installed
+torch build must support the GPU's compute capability. On an RTX 5090 (sm_120)
+a torch cu128 (or newer) build is required; a cu124 wheel (max sm_90) cannot
+launch on sm_120. The `grid` / `grid_plant` kernels themselves are always
+nvcc-built for the detected arch and are unaffected.
 
-## Everything else — see the docs
+## Further reference
 
 The full reference for the rest of the surface lives in the
 [Python wrappers docs](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/python_wrappers.html)
@@ -164,7 +161,7 @@ The full reference for the rest of the surface lives in the
 x86-64 wheels and an sdist, CPython 3.10–3.12) together with the code
 generator and the `grid-generate` / `grid-spherize` CLIs. Each GPU backend is
 an opt-in extra on top of the numpy base; pick the row for the wrapper surface
-you want:
+you need:
 
 ```bash
 pip install grid-rbd            # base: numpy backend only
@@ -174,8 +171,8 @@ pip install "grid-rbd[all]"     # jax + torch (both backends)
 ```
 
 To develop GRiD (or to use the checkout's vendored robots under
-`grid_assets/robots/`), install editable from a checkout instead — same extras,
-plus `[dev]` for the bindings' own test suite:
+`grid_assets/robots/`), install editable from a checkout instead, with the same
+extras plus `[dev]` for the bindings' own test suite:
 
 ```bash
 cd path/to/GRiD
@@ -186,34 +183,33 @@ pip install -e ".[dev]"     # all backends + pytest (run the bindings' tests)
 | Extra | Pulls in | Unlocks |
 |---|---|---|
 | *(base)* | numpy, platformdirs | numpy handle (`register_robot(..., backend="numpy")`) + `grid_plant` |
-| `[jax]` | + jax | JAX FFI surface — `import grid_rbd.jax` (device-resident, `jax.jit`-able) |
-| `[torch]` | + torch | torch backend — `register_robot(..., backend="torch")`, autograd + CUDA-Graphs |
+| `[jax]` | + jax | JAX FFI surface: `import grid_rbd.jax` (device-resident, `jax.jit`-able) |
+| `[torch]` | + torch | torch backend: `register_robot(..., backend="torch")`, autograd + CUDA-Graphs |
 | `[all]` | jax + torch | both backend surfaces (recursive self-extra; no dev/bench weight) |
 | `[dev]` | jax + torch + pytest | run the bindings' own test suite (which exercises both backends; the real-MuJoCo cross-check is optional/skipped if `mujoco` is absent) |
 
-Notes:
+Three points on the extras:
 
-* **`nvcc` is needed at `register_robot()` / `precompile()` time, not at
-  `pip install` time** — pip only stages Python deps; the per-robot `.so` is
+* `nvcc` is needed at `register_robot()` / `precompile()` time, not at
+  `pip install` time. pip only stages Python deps; the per-robot `.so` is
   built (and cached) on first use.
-* **The GPU wheels are the user's choice**, mirroring `jax` vs `jax[cuda]`: we
+* The GPU wheels are the user's choice, mirroring `jax` vs `jax[cuda]`: we
   pin only the minimum API version, never a CUDA-variant. For `[jax]`, install
   `jax[cuda12]` for your platform; for `[torch]`, a torch CUDA wheel matching
   the GPU arch (see the compatibility note in the PyTorch section above).
 * `[dev]` is `[all]` + pytest, nothing more. The Pinocchio oracle (`pin<4`
-  via cmeel) comes **only** from `install/requirements-dev.txt`, which
+  via cmeel) comes only from `install/requirements-dev.txt`, which
   `install/developer_install.sh` installs; that script also installs
   `jax[cuda12]`, a cu128 torch wheel and `frax`, and builds CppADCodeGen for
-  the Pinocchio benchmark column. mjx and BARD are installed by no script —
-  add them by hand when you want those benchmark columns
-  (`test/benchmarks/README.md`).
+  the Pinocchio benchmark column. No script installs mjx or BARD; add them by
+  hand for those benchmark columns (`test/benchmarks/README.md`).
 
 ### Precompile (AOT cache-warming)
 
 `register_robot()` compiles the per-robot `.so` on first use; subsequent runs
-are instant cache hits. To do that build offline — e.g. in a Docker image build
-or CI step, so production never pays the one-time nvcc cost — call
-`grid_rbd.precompile()`:
+are instant cache hits. To do that build offline, for example in a Docker
+image build or CI step so that production never pays the one-time nvcc cost,
+call `grid_rbd.precompile()`:
 
 ```python
 import grid_rbd
@@ -230,21 +226,22 @@ grid_rbd.precompile(
 ```
 
 A tier already in the cache is a no-op (no nvcc); a missing tier compiles once.
-The `numpy` backend is warmed WITHOUT constructing a handle (no dlopen, no CUDA
-context), so a build box with `nvcc` but no usable GPU can populate the cache —
-pass `cuda_arch=` (e.g. `120`) since there is no `nvidia-smi` to ask; only the
-`jax` / `torch` backends need the device at warm time. To see what a
-registration would key on and whether the cache already holds it, without
-building anything, call `grid_rbd.build_plan(name, urdf_path, cuda_arch=...)`.
-Build the cache offline, ship/keep the cache dir, and every later
-`register_robot` / `get_robot` / `jax.jit` starts in well under a second.
+The `numpy` backend is warmed without constructing a handle (no dlopen, no CUDA
+context), so a build box with `nvcc` but no usable GPU can populate the cache.
+Pass `cuda_arch=` (e.g. `120`) on such a box, since there is no `nvidia-smi` to
+ask; only the `jax` / `torch` backends need the device at warm time. To see
+what a registration would key on and whether the cache already holds it,
+without building anything, call `grid_rbd.build_plan(name, urdf_path,
+cuda_arch=...)`. Build the cache offline, ship or keep the cache dir, and
+every later `register_robot` / `get_robot` / `jax.jit` starts in well under a
+second.
 
 Registration failures (a failed device allocation, a bad toolkit) raise a Python
 exception naming the failed operation; the generated initializers never
 `exit()` or reset the CUDA context inside the interpreter (they use the
-library-safe `*_checked` path — see the *Library-safe initialization* page). On a
-successful build the `build.log` path is reported too (not just on failure), so
-you can inspect nvcc/ptxas output for warnings.
+library-safe `*_checked` path; see the *Library-safe initialization* page). On a
+successful build the `build.log` path is reported too (not only on failure), so
+nvcc/ptxas output can be inspected for warnings.
 
 A first use announces itself: a one-line `WARNING` on the `grid_rbd` logger
 (printed to stderr with no logging setup) says which robot is being compiled,
@@ -261,7 +258,7 @@ unit per algorithm family, compiled with `nvcc -c` in parallel and host-linked
 into `robot.so` (wall time ≈ the slowest family, not the sum; a humanoid unit
 peaks at ~2.5 GB). `GRID_RBD_BUILD_JOBS=N` caps the parallel units (default
 `min(8, cores, MemAvailable / 3 GB)`; `1` = sequential, still a smaller peak
-than the old single unit). Per-unit objects are cached under
+than a single unit). Per-unit objects are cached under
 `<cache_dir>/objects/` keyed by their exact compile inputs, so a later build
 whose `grid.cuh` is unchanged recompiles only the units whose text changed;
 `force_rebuild=True` recompiles every unit. Objects are kept forever, like the

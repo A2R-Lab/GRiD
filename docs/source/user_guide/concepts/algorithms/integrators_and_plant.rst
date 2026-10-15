@@ -76,11 +76,12 @@ See :doc:`../../tutorials/python_wrappers` for backend coverage.
 
 .. note::
 
-   **Planned after this release.** Step Hessians for the multi-stage schemes,
-   multi-stage gradients on spherical joints, MuJoCo-convention multi-stage and
-   constant-acceleration integration, and the momentum cost on the largest
-   humanoids (its fused ``dccrba`` evaluation runs through the spill tiers).
-   Each of these currently raises a clear error rather than silently degrading.
+   The following are planned after this release: step Hessians for the
+   multi-stage schemes, multi-stage gradients on spherical joints,
+   MuJoCo-convention multi-stage and constant-acceleration integration, and
+   the momentum cost on the largest humanoids (its fused ``dccrba``
+   evaluation runs through the spill tiers). Each of these currently raises
+   an error rather than silently degrading.
 
 Weights are diagonal, supplied as vectors: state ``x_des`` and ``Q`` have
 shape ``(B, NX)``, input ``u_des`` and ``R`` have ``(B, NV)``, and tracking
@@ -143,10 +144,10 @@ plant layer.
 
 See Also
 --------
-* :doc:`aba` — the forward-dynamics paths the integrator steps.
-* :doc:`fdsva_so` — the second-order forward dynamics behind
+* :doc:`aba`: the forward-dynamics paths the integrator steps.
+* :doc:`fdsva_so`: the second-order forward dynamics behind
   ``plant_step_hessian``.
-* :doc:`kinematics` and :doc:`centroidal_and_bias` — the quantities behind
+* :doc:`kinematics` and :doc:`centroidal_and_bias`: the quantities behind
   the end-effector, centre-of-mass and momentum costs.
-* :doc:`../../tutorials/python_wrappers` — the JAX and PyTorch handles, where
+* :doc:`../../tutorials/python_wrappers`: the JAX and PyTorch handles, where
   these operations plug into autodiff.

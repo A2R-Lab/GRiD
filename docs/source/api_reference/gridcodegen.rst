@@ -15,7 +15,7 @@ call ``gen_all_code(...)``. Common options are:
 * ``output_path``: destination header (default ``FILE_NAMESPACE + ".cuh"``,
   i.e. ``grid.cuh`` for the default namespace).
 * ``codegen_profile`` / ``algorithm_list``: select algorithms to emit by
-  name or by profile — the profile names are tabulated on the
+  name or by profile; the profile names are tabulated on the
   :doc:`generation tutorial <../user_guide/tutorials/codegen>`.
 * ``enable_mujoco_kernels``: include or omit MuJoCo-convention twins.
 * ``runtime_inertia``, ``runtime_transform`` and ``runtime_joint_dynamics``:

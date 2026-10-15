@@ -15,7 +15,7 @@ The two fixtures are fixed-base iiwa14 (NQ=NV=7) and floating-base Go2
 builds the dynamics inputs and the plant state at their public widths. It uses
 the default Pinocchio convention. Zero joint angles are
 illustrative, not a guaranteed collision-free or joint-limit-safe posture.
-This initializer is **not** general to spherical joints or other conventions;
+This initializer is not general to spherical joints or other conventions;
 use the model's coordinate maps for those cases.
 
 .. literalinclude:: ../../../examples/model_inputs.py

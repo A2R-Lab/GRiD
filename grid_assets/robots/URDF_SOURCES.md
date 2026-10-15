@@ -1,7 +1,7 @@
-# Vendored URDFs — provenance & sources
+# Vendored URDFs: provenance and sources
 
-Sourced by copy from the `robot_descriptions` package cache
-(`~/.cache/robot_descriptions/...`) on 2026-05-29. Vendoring these here
+These files were copied from the `robot_descriptions` package cache
+(`~/.cache/robot_descriptions/...`) on 2026-05-29. Vendoring them here
 lets the test/equivalence/bench pipelines run without the multi-GB
 `robot_descriptions` dependency.
 
@@ -20,10 +20,10 @@ lets the test/equivalence/bench pipelines run without the multi-GB
 
 ## Local modifications
 
-- **rizon4** (2026-09-15): the upstream flexiv xacro emits each link's
-  `<origin>/<mass>/<inertia>` triple BARE (not wrapped in `<inertial>`), so
+- rizon4: the upstream flexiv xacro emits each link's
+  `<origin>/<mass>/<inertia>` triple bare (not wrapped in `<inertial>`), so
   every link parsed massless and the dynamics suites skipped rizon4 with a
   degenerate-inertia gate. The local copy wraps the 8 triples in proper
-  `<inertial>` elements — values are flexiv's own (rounded; cross-checked
+  `<inertial>` elements; the values are flexiv's own (rounded; cross-checked
   against `mujoco_menagerie/flexiv_rizon4`'s precise inertials). The sha
   column above still names the unmodified upstream file.

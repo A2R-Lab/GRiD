@@ -1014,9 +1014,9 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   `grid_assets/launch_configs/<robot>/<gpu>.json` into `grid_launch_config.cuh` so the host launchers (and every
   python/jax/torch binding) default to it — fixing the FFI thread-default pathology at the C++ root. If a
   `(robot, GPU)` pair has no entry, GRiD falls back to a conservative (slow) default. To generate one:
-  `bash config/autotune_robot.sh <robot> [fixed floating]` (RAM-safe serial build; single-call timing OFF —
+  `bash grid_assets/autotune_robot.sh <robot> [fixed floating]` (RAM-safe serial build; single-call timing OFF —
   it needs the `-rdc` shim; tunes on batch N=256). It auto-detects the GPU key `<model>_sm<arch>` (override
-  with `GPU_KEY=`), writes the override JSON via `config/autotune_to_launch_config.py`, then you re-codegen +
+  with `GPU_KEY=`), writes the override JSON via `grid_assets/autotune_to_launch_config.py`, then you re-codegen +
   rebuild to pick it up, and optionally PR the JSON (`grid_assets/launch_configs/README.md`) to crowdsource the matrix.
   Run it on a QUIET GPU (timing must be isolated). Full workflow:
   `docs/source/user_guide/tutorials/benchmarks.rst` ("Autotune launch config for your robot / GPU").

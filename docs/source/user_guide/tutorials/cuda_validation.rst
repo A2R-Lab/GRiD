@@ -2,21 +2,21 @@ CUDA Validation And Performance Reporting
 =========================================
 
 This page summarizes the developer CUDA validation flow for generated GRiD
-headers. The checks are intentionally staged so long GPU runs provide useful
-progress and can be resumed with cached generated artifacts.
+headers. The checks are staged so long GPU runs provide useful progress and
+can be resumed with cached generated artifacts.
 
-There is one entry point story. ``test/run_validation.py`` is the
-**launcher**: plan, then ``--execute``, then commit the generated evidence,
-then ``--finalize`` (add ``--full`` for a release receipt). Underneath it,
-``test/run_split_suite.py`` is the crash-isolated **driver** that shards and
-runs the suites, and ``test/run_gpu_proof.sh`` is a thin wrapper over that
-driver for ad-hoc runs. All three write the same ``gpu-proof.json``.
+``test/run_validation.py`` is the launcher: plan, then ``--execute``, then
+commit the generated evidence, then ``--finalize`` (add ``--full`` for a
+release receipt). Underneath it, ``test/run_split_suite.py`` is the
+crash-isolated driver that shards and runs the suites, and
+``test/run_gpu_proof.sh`` is a thin wrapper over that driver for ad-hoc
+runs. All three write the same ``gpu-proof.json``.
 
 The launcher
 ------------
 
 Plan without collecting tests or starting any compilation (the ``--out``
-directory holds the run's logs and shards; it is yours to choose)::
+directory holds the run's logs and shards; any directory works)::
 
    .venv/bin/python test/run_validation.py --out validation-runs/next
 
@@ -57,7 +57,7 @@ The driver and the thin wrapper
 
 The launcher above runs the GPU pass through the crash-isolated split driver,
 which partitions the ``cuda_equivalence`` and ``python_wrappers`` suites into
-bounded shards (one module's abort can't eat the rest) and is
+bounded shards (one module's abort does not take the rest down) and is
 pausable/resumable. ``test/run_gpu_proof.sh`` drives the same driver without
 the launcher's lock, logs and provenance checks:
 
@@ -86,14 +86,14 @@ For a quick targeted check, plain pytest still works:
    .venv/bin/python -m pytest -m cuda_equivalence -q   # CUDA vs numpy oracle
    .venv/bin/python -m pytest -m python_wrappers -q    # jax/torch handles
 
-(The retired ``run_staged_cuda_checks.py`` stage runner predates the split
-driver; its stages map onto the shard partition + ``--changed-only``.)
+The ``run_staged_cuda_checks.py`` stage runner is retired; its stages map
+onto the shard partition and ``--changed-only``.
 
 GPU-Proof Signed Receipts
 -------------------------
 
 Because the CUDA equivalence suite needs a real GPU (and a full cold run is
-hours), GRiD records correctness in a *signed receipt* so a merge can be gated
+hours), GRiD records correctness in a signed receipt so a merge can be gated
 CPU-only, without re-running GPU tests in CI. This uses the ``pytest-gpu-proof``
 plugin, installed from PyPI at the exact version pinned in
 ``install/requirements-dev.txt`` (CI installs the same pin):
@@ -103,7 +103,7 @@ plugin, installed from PyPI at the exact version pinned in
    .venv/bin/python -m pip install -r install/requirements-dev.txt   # brings in pytest-gpu-proof
 
 Generate the receipt on a quiet GPU box with the launcher (``--execute``).
-The receipt's scope is not negotiable: main accepts only a receipt whose
+The receipt's scope is fixed: main accepts only a receipt whose
 collection equals ``test/gpu-proof-tests.txt`` exactly (the policies'
 ``required_test_manifest``). A narrowed run of the wrapper
 (``PYTEST_ARGS="-k go2" test/run_gpu_proof.sh``) is a local diagnostic that
@@ -112,63 +112,63 @@ exercises the plumbing, never a candidate receipt.
 The ``gpu_proof`` marker is auto-applied to every ``cuda_equivalence`` and
 ``python_wrappers`` item by ``test/conftest.py`` (no per-test annotation), so
 receipt membership tracks the existing marker taxonomy. Running the script signs
-``gpu-proof.json`` in place with your local SSH key and refuses a dirty tree
+``gpu-proof.json`` in place with the local SSH key and refuses a dirty tree
 (``allow_dirty:false`` in ``test/gpu-proof-policy.yaml``): the fingerprint
 hashes the tracked generator, bindings, configuration and GPU-test sources and
 pins the peer submodules (GLASS, RBDReference, URDFParser) by gitlink, so a
-clean tree is what makes the receipt's commit SHA an honest pin of the code
-under test.
+clean tree makes the receipt's commit SHA a faithful pin of the code under
+test.
 
 CI (``.github/workflows/verify-gpu-proof.yml``) verifies whatever receipt is
-committed — signature (via ``github.com/{signer}.keys``), fingerprint, commit
-SHA, freshness, exact test manifest — with no GPU and no secrets, and **fails
-when the receipt is missing or stale**: main always carries current evidence. A
+committed (signature via ``github.com/{signer}.keys``, fingerprint, commit
+SHA, freshness, exact test manifest) with no GPU and no secrets, and fails
+when the receipt is missing or stale: main always carries current evidence. A
 second always-on CPU lane runs the no-GPU tests (descriptor parity, kernel-attr
 manifest, plant launch hygiene).
 
-The two-tier receipt policy (when CI goes red, and the fix)
------------------------------------------------------------
+The two-tier receipt policy
+---------------------------
 
-The committed ``gpu-proof.json`` goes stale — and CI's verify-receipt job goes
-RED — the moment a push touches a fingerprinted path: the generator
-(``grid_codegen/``), the bindings, the peer submodule pins, ``config/``, the
+The committed ``gpu-proof.json`` goes stale, and CI's verify-receipt job
+fails, the moment a push touches a fingerprinted path: the generator
+(``grid_codegen/``), the bindings, the peer submodule pins, ``grid_assets/``, the
 packaging files, the GPU suites (``test/cuda_equivalents/``,
 ``test/python_wrappers/``) and the receipt harness itself (the exact list is
 ``tool.gpu_proof.fingerprint_paths`` in ``pyproject.toml``; documentation and
-the website are deliberately outside it). **That red is by design**; the fix
-is a refresh, not a revert:
+the website are outside it). The remedy is a refresh of the receipt, not a
+revert:
 
-- **Everyday** (``test/gpu-proof-policy.yaml``, ``allow_carried: true``):
-  ``SPLIT=1 SPLIT_REFRESH=1 test/run_gpu_proof.sh`` re-runs ONLY the shards
-  whose narrow fingerprints changed vs the committed receipt and CARRIES the
-  rest; commit the refreshed receipt and CI goes green — minutes-to-hours,
-  not a full pass. A carried shard attests "these tests, whose files are
-  unchanged, passed at an ancestor commit ≤30 days old"; cross-cutting
-  codegen/bindings changes are NOT re-proven by carry.
+- The everyday policy (``test/gpu-proof-policy.yaml``, ``allow_carried: true``):
+  ``SPLIT=1 SPLIT_REFRESH=1 test/run_gpu_proof.sh`` re-runs only the shards
+  whose narrow fingerprints changed vs the committed receipt and carries the
+  rest; commit the refreshed receipt and CI goes green in minutes to hours
+  rather than a full pass. A carried shard attests "these tests, whose files
+  are unchanged, passed at an ancestor commit ≤30 days old"; cross-cutting
+  codegen/bindings changes are not re-proven by carry.
   ``GRID_SPLIT_REFRESH_DRY=1`` previews the stale/carried plan (clean tree
   required).
-- **Release** (``test/gpu-proof-policy-release.yaml``,
-  ``allow_carried: false``): refuses carried shards outright — a release
-  receipt requires ONE fresh full ``SPLIT=1`` pass at the release tip.
+- The release policy (``test/gpu-proof-policy-release.yaml``,
+  ``allow_carried: false``): refuses carried shards outright; a release
+  receipt requires one fresh full ``SPLIT=1`` pass at the release tip.
   Verify with ``--policy test/gpu-proof-policy-release.yaml``.
 
-Maintainer internals: stale shard NAMES are recycled into the fresh partition
+Maintainer internals: stale shard names are recycled into the fresh partition
 automatically (the carry contract has no "superseded" state); a deleted test
-module forces a full pass; and both compile caches are CONTENT-keyed
+module forces a full pass; and both compile caches are content-keyed
 (header/source bytes), so byte-identical codegen edits cost seconds of
-regeneration, never an nvcc rebuild. Two newer carry gates: the per-shard
-**header-key replay** (``test/header_key_replay.py``, records in
+regeneration, never an nvcc rebuild. Two further carry gates: the per-shard
+header-key replay (``test/header_key_replay.py``, records in
 ``test/gpu-proof-header-keys.json``) byte-precisely re-checks that each
 carried shard's generated headers regenerate identically; and the
-**robot-asset gate** (``codegen_neutrality.changed_robot_assets``) demotes
-the covering shards when an oracle-side robot asset changes. Related lesson:
-every emission-shaping env var must be folded into the header cache key —
-``GRID_ENABLE_MUJOCO_KERNELS`` once changed emission without changing the
-key and served stale headers.
+robot-asset gate (``codegen_neutrality.changed_robot_assets``) demotes
+the covering shards when an oracle-side robot asset changes. Every
+emission-shaping env var is folded into the header cache key, so that a
+variable such as ``GRID_ENABLE_MUJOCO_KERNELS`` cannot change emission
+without changing the key and serving stale headers.
 
-How the equivalence tests are designed (the two reference layers —
+How the equivalence tests are designed (the two reference layers,
 ``RBDReference`` against Pinocchio, then generated CUDA against
-``RBDReference`` — and the test-design principles) is written up in
+``RBDReference``, and the test-design principles) is written up in
 ``test/TESTING_STRATEGY.md``; a bucket map of everything in ``test/``'s root
 is ``test/README.md``. What makes the receipt trustworthy is the policy
 described on this page: signature, fingerprint, commit SHA and the exact
@@ -265,7 +265,7 @@ Useful environment variables for fallback testing:
 
 * ``GRID_CUDA_TARGET_SHARED_MEM_BYTES=10000`` forces low-target fallback paths.
 * ``GRID_CUDA_ENABLE_L2_PERSISTING=1`` opts back in to the persisting-L2 hint.
-  The generated default is now ``0``: a controlled A/B measured the pin never
+  The generated default is ``0``: a controlled A/B measured the pin never
   helping and hurting by up to 23%. The harness forwards the env var to the
   compile as ``-DGRID_CUDA_ENABLE_L2_PERSISTING=<n>``.
 
@@ -338,7 +338,7 @@ Linear Algebra Backend
 Generated headers include a GRiD-owned linear algebra backend adapter
 that vendors the SIMT subset of `GLASS
 <https://github.com/A2R-Lab/GLASS>`_ (``L1/dot``, ``L2/gemv``,
-``L3/gemm``) at codegen time. Generated headers are self-contained — no
+``L3/gemm``) at codegen time. Generated headers are self-contained, with no
 external SDK dependencies. The cuBLASDx-backed ``glass-nvidia`` path was
 removed before the first PyPI release (0.5.0); the historical design record is
 kept in ``docs/design_history/`` in the repository.
@@ -362,7 +362,7 @@ or run one GRiD benchmark slice directly:
    .venv/bin/python test/benchmarks/baselines/grid/run.py \
      --robot g1 --base floating
 
-Use ``test/benchmarks/perf_regression_report.py`` when you want a non-failing
+Use ``test/benchmarks/perf_regression_report.py`` for a non-failing
 delta report around a timing command or a local JSON baseline. The reporter
 records:
 

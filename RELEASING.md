@@ -1,7 +1,7 @@
 # Releasing `grid-rbd`
 
 Maintainer playbook: what the package contains, the gates before a release, and how the
-tag → TestPyPI → PyPI workflow (`.github/workflows/publish.yml`) runs.
+tag, TestPyPI and PyPI workflow (`.github/workflows/publish.yml`) runs.
 
 `grid-rbd` is one distribution with NumPy, JAX and PyTorch adapters. Extras
 select framework dependencies; they do not install the CUDA Toolkit or driver.
@@ -71,7 +71,7 @@ gates and focused GPU/sanitizer checks, then commit all correctness inputs. Coor
 other projects' quiet timing before starting `test/run_validation.py --full`. After
 recording, commit only the generated evidence and use `--finalize` to verify its
 signature, complete scope and release policy on the clean descendant. No carried
-shards, policy bypass or tolerance relaxation: a release receipt is ONE fresh full
+shards, policy bypass or tolerance relaxation: a release receipt is one fresh full
 pass at the release tip, verified under `test/gpu-proof-policy-release.yaml`.
 
 Inspect final package provenance and verify the exact frozen artifacts before the
@@ -86,23 +86,23 @@ TestPyPI is a distribution rehearsal, not a replacement for numerical evidence.
 publishing (OIDC), so no token is stored anywhere, and nothing in it runs on an
 ordinary push. Its jobs, in order:
 
-1. **`receipt`** (tags `v*` only; skipped on a `workflow_dispatch` rehearsal) — checks
+1. `receipt` (tags `v*` only; skipped on a `workflow_dispatch` rehearsal) checks
    out the tagged commit with submodules, installs the pinned `pytest-gpu-proof` from
    `install/requirements-dev.txt`, and runs
    `gpu-proof verify --receipt gpu-proof.json --repo . --policy test/gpu-proof-policy-release.yaml --expected-skips test/gpu-proof-expected-skips.txt`.
    A tag whose committed receipt is not a fresh release-policy receipt at that exact
    commit (carried shards, stale fingerprints, missing scope) fails here and nothing is
    built.
-2. **`build`** (CPython 3.10 / 3.11 / 3.12) — refuses a tag that does not equal
+2. `build` (CPython 3.10 / 3.11 / 3.12) refuses a tag that does not equal
    `v<pyproject version>`; builds the sdist and the wheel from that sdist under
    `SOURCE_DATE_EPOCH` (reproducible artifacts), `auditwheel repair`s, `twine check`s,
    installs the wheel into a fresh venv outside the checkout with no GPU or build tools
    and runs `tools/check_installed_package.py`; uploads one sdist (the 3.12 job's) plus
    every wheel and their `SHA256SUMS-cp*.txt` as the `release-cp*` artifacts.
-3. **`testpypi`** — gated by the protected `testpypi` GitHub environment (a required
-   reviewer approves by hand); uploads the artifacts to TestPyPI (`skip-existing`).
-4. **`pypi`** (tags only) — gated by the protected `pypi` environment (second manual
-   approval); uploads the same artifacts to PyPI.
+3. `testpypi` is gated by the protected `testpypi` GitHub environment (a required
+   reviewer approves by hand); it uploads the artifacts to TestPyPI (`skip-existing`).
+4. `pypi` (tags only) is gated by the protected `pypi` environment (second manual
+   approval); it uploads the same artifacts to PyPI.
 
 One-time set-up:
 

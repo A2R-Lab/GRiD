@@ -67,7 +67,7 @@ Source installation (development)
 The repository vendors its peer products (``GLASS``, ``RBDReference``,
 ``URDFParser``) as git submodules under ``external/``. Clone with
 ``--recursive`` so those populate (if you already cloned without it, run
-``git submodule update --init --recursive``), then run the install script — a
+``git submodule update --init --recursive``), then run the install script: a
 single ``pip install -e .`` installs the codegen toolkit and the ``grid_rbd``
 wrapper together and registers the CLIs in a local ``.venv``:
 
@@ -106,7 +106,7 @@ build deps needed by the Pinocchio pybind11 extension via ``apt-get``:
 ``libcppad-dev``.
 The ``pin`` wheel ships its own ``pinocchio.pc`` inside the venv via
 ``cmeel``, and ``install/developer_install.sh`` computes the right
-``PKG_CONFIG_PATH`` automatically for the extension build — no manual
+``PKG_CONFIG_PATH`` automatically for the extension build, so no manual
 configuration is required.
 
 You can also install manually, with the extras of your choice:
@@ -154,7 +154,7 @@ What each activity needs:
      - the ``[jax]`` / ``[torch]`` extra **plus a CUDA build of that framework
        matching your GPU arch** (the extras pin the CPU packages only; the
        CUDA wheel is your choice, e.g. ``pip install "jax[cuda12]"`` or
-       ``"jax[cuda13]"``, and a ``cu1xx`` torch wheel — see the
+       ``"jax[cuda13]"``, and a ``cu1xx`` torch wheel; see the
        `bindings README <https://github.com/A2R-Lab/GRiD/blob/main/bindings/README.md>`_).
        A missing framework, or a CPU-only jax, is reported at
        ``register_robot`` time, not deep inside a call.
@@ -175,7 +175,7 @@ Containers
 ~~~~~~~~~~
 
 GRiD does not ship an official Docker image. The recipes below are starting
-points that are **not tested in CI** — pick a CUDA ``-devel`` base matching
+points that are not tested in CI. Pick a CUDA ``-devel`` base matching
 your toolkit and target compute capability (``nvcc`` and the CUDA headers must
 be in the image; the GPU driver comes from the host). Robot CUDA is compiled
 at ``register_robot`` time, so warm the cache in the image build with
@@ -230,7 +230,7 @@ Install CUDA Dependencies
 Download and Install CUDA
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Note: the commands below are for Ubuntu 24.04 (``ubuntu2404``) —
+The commands below are for Ubuntu 24.04 (``ubuntu2404``);
 substitute your release in the repo URL, and see
 https://developer.nvidia.com/cuda-downloads for other distros. NVIDIA's
 repos now use the ``cuda-keyring`` package (the old ``apt-key`` method

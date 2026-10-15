@@ -1,11 +1,12 @@
 Operand validation
 ==================
 
-What each surface checks before a kernel runs, and where. The rules are per
-**operand class**, not per method: every input of every algorithm belongs to
-one of the classes below (a CPU test, ``test/test_operand_validation_table.py``,
-asserts this against the ABI table so a new algorithm cannot add an unlisted
-operand), and each surface applies the class rule at one place.
+This page lists what each surface checks before a kernel runs, and where.
+The rules are per operand class, not per method: every input of every
+algorithm belongs to one of the classes below, and each surface applies the
+class rule at one place. A CPU test, ``test/test_operand_validation_table.py``,
+asserts the classification against the ABI table so that a new algorithm
+cannot add an unlisted operand.
 
 The rule set
 ------------
@@ -47,7 +48,7 @@ The rule set
    * - ``tool operand``
      - ``wrench`` ``(6,)`` and ``rc`` ``(3,)`` per call
      - ``wrench``, ``rc``
-     - —
+     - none
    * - ``runtime offset``
      - 16 numbers (a 4x4 column-major SE(3) transform) or none; the target
        joint index must be in ``[0, num_joints)``
@@ -56,12 +57,12 @@ The rule set
    * - ``scalar``
      - Python floats / ints (``gravity``, ``dt``, ``it``, ``mu``); the
        integrator kind is validated by name on every surface
-     - —
+     - none
      - finiteness, ``dt > 0``
 
-A wrong ``num_joints`` vs ``num_vel`` width on a **floating base** (an
-``nv``-wide ``qd`` / ``u``, the mjx and Pinocchio habit) is refused by name on
-the numpy and JAX surfaces (``num_vel`` footgun message) and by the generic
+A wrong ``num_joints`` versus ``num_vel`` width on a floating base (an
+``nv``-wide ``qd`` / ``u``, the mjx and Pinocchio habit) is refused by name
+on the numpy and JAX surfaces (the ``num_vel`` message) and by the generic
 last-dimension rule on torch.
 
 Where each surface enforces the rules
@@ -79,7 +80,7 @@ Where each surface enforces the rules
      - ``np.ascontiguousarray(x, dtype)`` in the handle, and the pybind
        ``py::array_t<c_style | forcecast>`` boundary (a non-contiguous or
        differently typed array is copied and cast, never rejected)
-     - ``check_array_2d`` in the pybind core for **every** array: 2D, last
+     - ``check_array_2d`` in the pybind core for every array: 2D, last
        dim, same batch, ``batch >= 1``; ``batch > max_batch`` is the C ABI's
        rc 2
      - ``ValueError`` (shape), ``RuntimeError`` (``max_batch``, rc codes)
@@ -102,12 +103,12 @@ Where each surface enforces the rules
      - ``ValueError`` (Python), ``XlaRuntimeError`` (native)
 
 The native checks are the contract; the Python checks exist to give the
-friendlier message first. One asymmetry: an **empty batch** is refused on
+friendlier message first. One asymmetry: an empty batch is refused on
 numpy and torch (``batch must be >= 1``), but on JAX it returns an empty
-result — XLA elides a zero-sized custom call, so no handler runs. The
+result, because XLA elides a zero-sized custom call and no handler runs. The
 malformed-input test module (``test/python_wrappers/test_operand_validation.py``)
 drives the configuration and force classes through all three surfaces,
 including the native JAX handler with the Python checks bypassed, plus the
 plant, tool and runtime-offset classes on the surfaces that carry them; the
-CPU table test proves the classification is complete, not that every class is
-exercised on every surface.
+CPU table test proves the classification is complete, not that every class
+is exercised on every surface.

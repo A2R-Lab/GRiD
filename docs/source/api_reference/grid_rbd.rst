@@ -1,7 +1,7 @@
 grid_rbd (Python bindings)
 ==========================
 
-The ``grid-rbd`` package is the surface most users actually call: it turns a
+The ``grid-rbd`` package is the surface most users call: it turns a
 URDF into a cached per-robot ``.so`` and hands back a batched handle on the
 numpy, JAX, or PyTorch backend.
 
