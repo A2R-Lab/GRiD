@@ -28,6 +28,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: C++",
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Physics",
@@ -123,6 +124,7 @@ markers = [
     "python_wrappers: grid-rbd Python wrapper coverage; requires CUDA + grid-rbd installed.",
     "notebooks: Executable example notebooks (run via nbval-lax); requires CUDA + grid-rbd installed.",
     "gpu_proof: Test outcomes recorded in the signed pytest-gpu-proof receipt (auto-applied to cuda_equivalence + python_wrappers by test/conftest.py).",
+    "fp64_alpha: fp64 (double precision) alpha-tier tests; outside the signed receipt; run with make test-fp64.",
 ]
 
 [tool.gpu_proof]
@@ -148,6 +150,8 @@ fingerprint_paths = [
     # 2026-10-14 audit: executed by every GPU import / consulted by the verifier.
     "test/__init__.py", "test/gpu-proof-policy.yaml", "test/gpu-proof-policy-release.yaml",
     "test/gpu-proof-expected-skips.txt",
+    # 2026-10-15: the driver reads the receipts-by-architecture table.
+    "test/gpu-proof-receipts.yaml",
 ]
 # Documentation that lives inside fingerprinted directories must not stale evidence
 # (docs are outside the receipt by design); keep this list == the release policy's.

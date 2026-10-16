@@ -162,10 +162,11 @@ def _record_header_content_keys():
     orig_flagship = getattr(cuda_harness, "_generate_grid_header", None)
 
     def flagship_wrapper(project_model, resolved_model, build_dir, config,
-                         codegen_algorithm_list=None):
+                         codegen_algorithm_list=None, **kwargs):
+        # kwargs carries the fp64 alpha lane's dtype= (never recorded today).
         header_path, header_key = orig_flagship(
             project_model, resolved_model, build_dir, config,
-            codegen_algorithm_list=codegen_algorithm_list)
+            codegen_algorithm_list=codegen_algorithm_list, **kwargs)
         try:
             emit({"kind": "flagship",
                   "robot": project_model.spec.robot_id,

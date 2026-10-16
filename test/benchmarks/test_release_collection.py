@@ -31,7 +31,11 @@ def test_capability_gaps_are_not_library_claims():
     assert p.capability("mjx","idsva_so","iiwa14").startswith("excluded_method:")
     assert p.capability("frax","inverse_dynamics","g1") is None and p.capability("frax","end_effector_pose_gradient","go2") is None
     assert p.capability("frax","inverse_dynamics_gradient","iiwa14") is None
-    assert p.capability("frax","inverse_dynamics_gradient","g1").startswith("adapter_pending:")
+    # floating-base Frax gradients collect through the Euler-coordinate transport (frax_floating.py)
+    assert all(p.capability("frax",op,r) is None for op in ("inverse_dynamics_gradient","forward_dynamics_gradient") for r in ("go2","g1"))
+    assert p.capability("frax","idsva_so","g1").startswith("excluded_method:")
+    assert p.capability("bard","end_effector_pose_gradient","go2") is None
+    assert p.capability("bard","end_effector_pose_hessian","go2").startswith("excluded_method:")
     assert p.capability("curobo","inverse_dynamics","iiwa14") is None
     assert p.capability("curobo","inverse_dynamics","go2").startswith("adapter_pending:")
     assert p.capability("curobo","inverse_dynamics_gradient","iiwa14").startswith("adapter_pending:")
@@ -40,6 +44,7 @@ def test_capability_gaps_are_not_library_claims():
     assert p.capability("pinocchio","end_effector_pose_hessian","iiwa14").startswith("adapter_pending:")
     assert all(p.capability("grid_cuda",op,"g1") is None for op in p.CORE)
     assert p.capability("grid_cuda","minv","g1") is None and p.capability("grid_cuda","end_effector_pose_hessian","g1").startswith("adapter_pending:")
+    assert p.capability("grid_cuda","end_effector_pose_gradient","g1") is None
     assert p.capability("grid_native","idsva_so","g1").startswith("adapter_pending:")
     assert p.capability("pinocchio_plain","ccrba","g1") is None and p.capability("pinocchio","ccrba","g1").startswith("adapter_pending:")
     assert p.capability("mjx","crba","go2") is None and p.capability("mujoco_warp","crba","go2") is None
@@ -78,6 +83,39 @@ def test_accuracy_checks_shapes_blocks_finiteness_and_near_zero():
                 ([np.nan],[0]), ([np.inf],[np.inf]), ([.1],[0])]:
         assert not p.agreement(a,b)["passed"]
     assert not p.agreement([1.00001],[1],rtol=0,atol=0)["passed"]
+
+
+def test_validation_subset_restricts_every_block_to_the_mask():
+    value = (np.arange(8.).reshape(4, 2), np.arange(4.))
+    sub = p.validation_subset(value, np.array([True, False, True, False]))
+    assert [x.shape for x in sub] == [(2, 2), (2,)]
+    assert np.array_equal(sub[0], [[0, 1], [4, 5]]) and np.array_equal(sub[1], [0, 2])
+    assert p.validation_subset(value, None) is value
+    with pytest.raises(ValueError):
+        p.validation_subset(value, np.array([True, False]))
+    with pytest.raises(ValueError):
+        p.validation_subset((np.float64(1.0),), np.array([True]))
+
+
+def test_frax_chart_condition_excludes_only_the_euler_pitch_singularity():
+    from test.benchmarks.release import frax_floating as ff
+    pin = pytest.importorskip("pinocchio")
+    nv = 7
+    def q_pin(pitch, roll=0.0, yaw=0.0):
+        # pin free flyer: [p, quat_xyzw, joints]; quaternion of Rx(roll) Ry(pitch) Rz(yaw)
+        R = ff.rotation_from_euler_xyz(np.array([roll, pitch, yaw]))
+        return np.concatenate((np.zeros(3), pin.Quaternion(R).coeffs(), np.zeros(nv - 6)))
+    flat = ff.FloatingFrame(q_pin(0.0), nv)
+    tilted = ff.FloatingFrame(q_pin(np.radians(60), 0.3, -0.2), nv)
+    near = ff.FloatingFrame(q_pin(np.radians(89), 0.3, -0.2), nv)
+    assert flat.chart_condition == pytest.approx(1.0)
+    assert tilted.chart_condition == pytest.approx(2.0, rel=1e-9)
+    assert near.chart_condition == pytest.approx(1 / np.cos(np.radians(89)), rel=1e-9)
+    assert tilted.chart_condition <= ff.CHART_CONDITION_MAX < near.chart_condition
+    # The transport itself is exact at the excluded sample: the rule is about
+    # Frax's fp32 arithmetic in that chart, not about the mapping.
+    v = np.linspace(-1, 1, nv)
+    assert np.allclose(near.G @ near.qdot_frax(v), v, rtol=0, atol=1e-9)
 
 
 def test_explicit_fp32_fd_warning_policy_preserves_hard_failures():

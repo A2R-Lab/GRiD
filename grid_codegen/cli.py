@@ -34,7 +34,9 @@ def fileExists(FILE_PATH):
 
 def validateFile(FILE_PATH, NO_ARG_OPTION=False):
     if not fileExists(FILE_PATH):
-        print("[!Error] file not found: %s" % FILE_PATH)
+        print("[!Error] URDF file not found: %s" % FILE_PATH)
+        print("         Check the path (a relative path is resolved against the current "
+              "directory) and run grid-generate again.")
         printUsage(NO_ARG_OPTION)
         sys.exit(1)
 
@@ -88,7 +90,8 @@ def parseInputs(NO_ARG_OPTION=False):
             validateFile("grid.cuh", NO_ARG_OPTION)
             print("Using generated grid.cuh")
             return None
-        print("[!Error] No URDF filepath specified")
+        print("[!Error] No URDF path given. Pass the robot's URDF file as the first "
+              "argument, for example: grid-generate robot.urdf")
         printUsage(NO_ARG_OPTION)
         sys.exit(1)
 
@@ -101,7 +104,12 @@ def parseInputs(NO_ARG_OPTION=False):
     if args.spherized_urdf and args.collision_native:
         parser.error('--spherized-urdf and --collision-native select different geometry models')
     args.collision = args.collision or args.collision_native or bool(args.spherized_urdf)
-    args.collision_res = [float(x) for x in str(args.collision_res).split(",") if x.strip()]
+    try:
+        args.collision_res = [float(x) for x in str(args.collision_res).split(",") if x.strip()]
+    except ValueError:
+        print("[!Error] --collision-res expects a sphere spacing in meters, or a comma-separated "
+              "list such as 0.10,0.05 for a broad-to-fine cascade; got %r." % args.collision_res)
+        sys.exit(1)
     if args.floating_base:
         args.debug = False
     if args.algorithm_list is not None:
@@ -128,9 +136,21 @@ def parseInputs(NO_ARG_OPTION=False):
 
 def validateRobot(robot, NO_ARG_OPTION=False):
     if robot is None:
-        print("[!Error] URDF parsing failed. Please make sure you input a valid URDF file.")
+        print("[!Error] URDF parsing failed: the parser returned no robot model. "
+              "Check that the file is a valid URDF (one <robot> root with <link> and "
+              "<joint> elements) and run grid-generate again.")
         printUsage(NO_ARG_OPTION)
         sys.exit(1)
+
+
+def reportParseError(exc):
+    """A rejected URDF: say why and what to change, then exit 1 (same code as the
+    other input errors; the parser's typed exception carries the file and reason)."""
+    print("[!Error] URDF parsing failed: %s" % exc)
+    print("         Fix the model file and run grid-generate again (a floating root link "
+          "needs -f; a joint type the parser does not model must be rewritten as one "
+          "of the supported types it lists).")
+    sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -139,15 +159,56 @@ def validateRobot(robot, NO_ARG_OPTION=False):
 
 def main():
     """Entry point for the ``grid-generate`` CLI command."""
-    from URDFParser import URDFParser
+    from URDFParser import URDFParser, URDFParseError
     from grid_codegen import GRiDCodeGenerator
+    from grid_codegen._algo_profiles import normalize_codegen_algorithms
 
     args = parseInputs()
     parser = URDFParser()
-    robot = parser.parse(args.urdf_path, floating_base=args.floating_base)
+    try:
+        robot = parser.parse(args.urdf_path, floating_base=args.floating_base)
+    except URDFParseError as exc:
+        reportParseError(exc)
 
     validateRobot(robot)
 
+    collision_spec = None
+    try:
+        collision_spec = _collision_spec(args, robot)
+    except ValueError as exc:
+        print("[!Error] Collision geometry could not be built: %s" % exc)
+        print("         Make every <collision> mesh resolvable (set ROS_PACKAGE_PATH for "
+              "package:// URIs, or keep the asset next to the URDF), or pass "
+              "--spherized-urdf with a sphere model you already have.")
+        sys.exit(1)
+
+    codegen = GRiDCodeGenerator(robot, args.debug, True, FILE_NAMESPACE=args.namespace)
+    if args.algorithm_list is not None:
+        # The same check gen_all_code runs, done first so a typo exits with a
+        # message instead of a traceback from inside the generator.
+        try:
+            normalize_codegen_algorithms(codegen, algorithm_list=args.algorithm_list)
+        except ValueError as exc:
+            print("[!Error] --algorithm-list was not understood: %s" % exc)
+            print("         Use canonical algorithm names such as inverse_dynamics, minv, "
+                  "forward_dynamics, end_effector_pose, or a profile such as all, dynamics, "
+                  "kinematics, second-order (comma-separated).")
+            sys.exit(1)
+    include_homogenous_transforms = not args.floating_base
+    codegen.gen_all_code(
+        include_homogenous_transforms=include_homogenous_transforms,
+        fixed_target_name=args.fixed_target_names,
+        collision_spec=collision_spec,
+        algorithm_list=args.algorithm_list,
+        enable_mujoco_kernels=(False if args.no_mujoco_kernels else None),
+        output_path=args.output,
+    )
+    print("New code generated and saved to %s!" % args.output)
+
+
+def _collision_spec(args, robot):
+    """Resolve the -c / --collision-native / --spherized-urdf geometry into the
+    collision_spec gen_all_code takes (None when no collision flag is set)."""
     collision_spec = None
     if args.spherized_urdf:
         from grid_codegen.algorithms._collision import resolve_spherized_urdf, build_sphere_tiers
@@ -167,18 +228,7 @@ def main():
                 "%s:%d" % (t["name"], len(t["anchor"])) for t in collision_spec["tiers"]))
         else:
             print("      collision spheres = " + str(len(collision_spec["anchor"])))
-
-    codegen = GRiDCodeGenerator(robot, args.debug, True, FILE_NAMESPACE=args.namespace)
-    include_homogenous_transforms = not args.floating_base
-    codegen.gen_all_code(
-        include_homogenous_transforms=include_homogenous_transforms,
-        fixed_target_name=args.fixed_target_names,
-        collision_spec=collision_spec,
-        algorithm_list=args.algorithm_list,
-        enable_mujoco_kernels=(False if args.no_mujoco_kernels else None),
-        output_path=args.output,
-    )
-    print("New code generated and saved to %s!" % args.output)
+    return collision_spec
 
 
 if __name__ == "__main__":

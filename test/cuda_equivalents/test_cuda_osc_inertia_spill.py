@@ -9,13 +9,17 @@ arena by 6*nv*nv (h2_plus ~228KB -> ~74KB, PERF-launchable). All other robots fi
 osc_inertia is INHERENTLY non-deterministic (the block-cooperative 6x6 GLASS invert_matrix
 + the atomic J*Minv*J^T contraction reorder float32 adds; the 6x6 inversion amplifies the
 ~1e-7 epsilon to ~1e-5 run-to-run). So this validates the spill-F rung against the
-pinocchio/RBDReference ORACLE (deterministic) at the same float32 tolerance the standard
-osc_inertia test uses (5e-3) -- NOT bit-identity vs the full rung. The host wrapper path is
+pinocchio/RBDReference ORACLE (deterministic) with the same two-tier Lambda check the
+standard osc_inertia test uses (check_osc_inertia: backward error at any conditioning,
+entrywise 5e-3 below cond 1e5) -- NOT bit-identity vs the full rung. The host wrapper path is
 used (it allocates + L2-pins d_workspace through gridData and threads it kernel->device); a
 forced-low GRID_CUDA_TARGET_SHARED_MEM_BYTES + an osc-only codegen subset selects the spill-F
 rung without pulling the SO kernels into the header.
 
-Override robots with GRID_CUDA_OSC_SPILL_ROBOTS="g1:floating,iiwa14:fixed".
+Every manifest robot on both bases by default (widened 2026-10-15: the full
+osc_inertia rung is the production pick for all 18 cells at the 98304-byte
+target, largest arena h1_2-floating at 89504 bytes). Narrow with
+GRID_CUDA_OSC_SPILL_ROBOTS="g1:floating,iiwa14:fixed".
 """
 
 from __future__ import annotations
@@ -35,13 +39,21 @@ from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec
 from RBDReference.equivalents.reference_backend import build_project_adapter
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch, _build_cuda_samples
+from test.cuda_equivalents.test_cuda_frame_jacobian import (
+    check_osc_inertia,
+    osc_inertia_summary,
+)
 
 _RUNNER = Path(__file__).with_name("cuda_frame_jacobian_host_runner.cu")
 _REF_FRAME = "LOCAL_WORLD_ALIGNED"  # the osc_inertia kernel bakes leaf[0] + LWA
 
 
+_ALL_ROBOTS = ("iiwa14", "go2", "g1", "h1_2", "fr3", "rizon4", "gen3", "fetch", "baxter")
+_DEFAULT_ROBOTS = ",".join(f"{r}:{b}" for b in ("fixed", "floating") for r in _ALL_ROBOTS)
+
+
 def _robot_modes():
-    raw = os.environ.get("GRID_CUDA_OSC_SPILL_ROBOTS", "g1:floating,iiwa14:fixed")
+    raw = os.environ.get("GRID_CUDA_OSC_SPILL_ROBOTS", _DEFAULT_ROBOTS)
     out = []
     for tok in raw.split(","):
         tok = tok.strip()
@@ -141,21 +153,17 @@ def test_cuda_osc_inertia_spill_matches_reference(tmp_path, robot_id, base_mode)
     spill_exe = _compile(spill_dir, arch)
 
     samples = _build_cuda_samples(pm, random_count=4, include_corner_samples=False)
-    checked = 0
+    lambda_records = []
     for sample in samples:
         q = np.asarray(sample.q, np.float64)
         qd = np.asarray(sample.qd, np.float64)
-        # skip rank-deficient task matrices (the 6x6 inverse is ill-defined for both
-        # the oracle and the device at those configs).
+        # Every sample is checked: backward error at any cond(J Minv J^T),
+        # entrywise as well below cond 1e5 (check_osc_inertia).
         J = np.asarray(pm.frame_jacobian(q, leaf_name, _REF_FRAME), dtype=np.float64)
         task = J @ np.asarray(pm.minv(q), dtype=np.float64) @ J.T
-        if np.linalg.cond(task) >= 1e8:
-            continue
-        L_ref = np.asarray(pm.osc_inertia(q, leaf_name, _REF_FRAME), dtype=np.float64)
-        L_cuda = _run_lambda(spill_exe, q, qd)
-        scale = float(np.max(np.abs(L_ref))) or 1.0
-        np.testing.assert_allclose(
-            L_cuda, L_ref, rtol=5e-3, atol=max(5e-3, 5e-3 * scale),
-            err_msg=f"{robot_id}-{base_mode} @ {sample.name}: osc_inertia spill-F Lambda vs oracle")
-        checked += 1
-    assert checked > 0, "no well-conditioned samples were checked"
+        lambda_records.append(check_osc_inertia(
+            _run_lambda(spill_exe, q, qd), task,
+            lambda: pm.osc_inertia(q, leaf_name, _REF_FRAME),
+            f"{robot_id}-{base_mode} @ {sample.name}: osc_inertia spill-F vs oracle"))
+    assert lambda_records, "no samples were checked"
+    print(osc_inertia_summary(f"{robot_id}-{base_mode} (spill-F)", lambda_records))

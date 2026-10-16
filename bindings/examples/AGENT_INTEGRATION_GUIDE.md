@@ -88,6 +88,9 @@ a few GB of RAM each). A first build announces itself with a one-line `WARNING`
 on the `grid_rbd` logger (robot, unit count, rough duration, cache path);
 `GRID_RBD_QUIET=1` silences it. `GRID_RBD_BUILD_JOBS=N` caps the parallel
 units; `GRID_RBD_SPLIT_COMPILE=N` (opt-in) trades RAM for a faster heavy unit;
+`GRID_RBD_CUDA_ARCHS=86,89,90,120` (opt-in) builds one fat `.so` for several GPUs,
+keyed apart from the single-arch build and carrying the launch configs of its
+`cuda_arch` (see the build knobs in `bindings/README.md`);
 `python -m grid_rbd.gc_cache` lists (`--execute` deletes) store entries no name
 binds any more.
 Ship the cache dir (`grid_rbd.default_cache_dir()`, default `~/.cache/grid-rbd/` or
@@ -365,7 +368,7 @@ apply per-algo small-batch thread overrides from the config's `ffi_bases_by_n` b
 | `RobotNotRegisteredError` from `get_robot` | the cache is not warm and no `urdf_path=` was given; pass `urdf_path=` (compile on miss), run `register_robot` / `precompile` first, or ship the cache dir |
 | `StaleRobotError` from `get_robot` | the manifest names a build this `grid_rbd` cannot load (older wrapper / torch-jax ABI / GPU arch, or a pre-2026-09-22 entry with no build record); re-run `register_robot` / `precompile`; byte-identical sources re-hit the store without `nvcc` |
 | "symbol missing" / "not built into this `.so`" | you used `algorithm_list=` and called a method outside the subset; add it and rebuild. Same on all three surfaces |
-| torch "no kernel image available for sm_120" | the backward VJP runs torch's own CUDA kernels, so the installed torch wheel must support the GPU arch (e.g. RTX 5090 / sm_120 needs a cu128+ build; cu124 maxes at sm_90). The GRiD kernels themselves are always nvcc-built for the detected arch |
+| torch "no kernel image available for sm_120" | the backward VJP runs torch's own CUDA kernels, so the installed torch wheel must support the GPU arch (e.g. RTX 5090 / sm_120 needs a cu128+ build; cu124 maxes at sm_90). The receipt ran a cu128 wheel on a CUDA 13.2 toolkit; other torch wheels are untested. The GRiD kernels themselves are always nvcc-built for the detected arch |
 | torch `capture()` during stream capture | `capture()` runs a mandatory off-graph warmup for one-time device setup (the >48 KB dynamic-smem opt-in) before recording; do not call methods cold inside your own `torch.cuda.graph` context |
 | big-robot SO builds are heavy (10s of GB RAM, minutes) | use `algorithm_list=` to build only what you need, and prebuild offline |
 

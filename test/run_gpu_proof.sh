@@ -5,7 +5,27 @@
 # ONE entry point story: test/run_validation.py is the LAUNCHER (plan ->
 # --execute -> commit evidence -> --finalize; --full for a release receipt),
 # test/run_split_suite.py is the DRIVER it runs, and this script is a THIN
-# WRAPPER over that driver for ad-hoc runs. All three write gpu-proof.json.
+# WRAPPER over that driver for ad-hoc runs. All three write gpu-proof.json
+# on the primary architecture.
+#
+# Receipts by architecture. test/gpu-proof-receipts.yaml maps the compute
+# capability of the GPU in this box to a receipt path. The primary row
+# (sm_120, the RTX 5090) records gpu-proof.json at the repo root: the one
+# receipt CI verifies and the one that defines test/gpu-proof-tests.txt.
+# Secondary rows (sm_87 Jetson Orin, sm_72 Jetson Xavier) record under
+# receipts/ (receipts/gpu-proof-sm87.json) and document those architectures;
+# a run on a secondary architecture never writes gpu-proof.json. The driver
+# resolves the row first (`run_split_suite.py --print-receipt-target`) and a
+# GPU without a row stops here with a message to add one. To record on a
+# Jetson: install the dev requirements, then on a clean tree run
+#   SPLIT=1 test/run_gpu_proof.sh
+# and commit receipts/gpu-proof-sm87.json together with its header-key
+# ledger (receipts/gpu-proof-sm87-header-keys.json). SPLIT_REFRESH=1 on a
+# secondary architecture refreshes that architecture's own receipt; a carry
+# or refresh from a receipt recorded on another architecture is refused.
+# `make verify-all` verifies every receipt on disk, and
+# `test/receipt_integrity.py --table` prints their compatibility-page rows.
+# The launcher test/run_validation.py is primary-only.
 #
 # Main requires a receipt whose collection equals test/gpu-proof-tests.txt
 # EXACTLY (policy required_test_manifest). A narrowed run is a local
@@ -38,7 +58,9 @@
 #      carried shards only under a policy with allow_carried: true)
 #   SPLIT=1 SPLIT_REFRESH=1 test/run_gpu_proof.sh
 #     (the EVERYDAY workflow when CI's verify-receipt goes red: re-run ONLY the
-#      shards whose fingerprints changed vs the COMMITTED gpu-proof.json and
+#      shards whose fingerprints changed vs the COMMITTED receipt of this
+#      architecture (gpu-proof.json on the primary; the table's path on a
+#      secondary) and
 #      carry the rest — soundness-gated by codegen_neutrality's covering
 #      matrix + robot-asset gate + per-shard header-key replay. Requires a
 #      CLEAN tree. GRID_SPLIT_REFRESH_DRY=1 previews the stale/carried plan.)
@@ -52,7 +74,8 @@
 # disagrees with CI):
 #   gpu-proof verify --receipt gpu-proof.json --policy test/gpu-proof-policy.yaml \
 #     --expected-skips test/gpu-proof-expected-skips.txt
-# (release: --policy test/gpu-proof-policy-release.yaml refuses carried shards).
+# (release: --policy test/gpu-proof-policy-release.yaml refuses carried shards;
+#  a secondary receipt: its path and its expected-skips file from the table).
 set -euo pipefail
 
 # All knobs are ENV VARS (SCOPE/SPLIT/PYTEST_ARGS/...), not flags. Guard the
@@ -60,7 +83,7 @@ set -euo pipefail
 # multi-hour GPU pass (N2.4 ergonomics, 2026-09-08).
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    -h|--help) sed -n '2,56p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,78p' "$0"; exit 0 ;;
     *) echo "ERROR: unknown arg '$1' — this script is configured via env vars (SCOPE=, SPLIT=, PYTEST_ARGS=, ...); see --help" >&2; exit 2 ;;
   esac
 done
@@ -89,6 +112,17 @@ fi
 
 PYTHON="${PYTHON:-.venv/bin/python}"
 
+# Which receipt this box records (test/gpu-proof-receipts.yaml, keyed on the
+# detected compute capability): "gpu-proof.json" on the primary architecture,
+# a path under receipts/ on a secondary one. An architecture without a row
+# stops here, before any GPU work.
+RECEIPT_TARGET="$("$PYTHON" test/run_split_suite.py --print-receipt-target)" || exit 2
+IFS=$'\t' read -r RECEIPT_ROLE RECEIPT_ARCH RECEIPT_PATH RECEIPT_LABEL <<< "$RECEIPT_TARGET"
+if [[ "$RECEIPT_ROLE" != "primary" ]]; then
+    echo "[run_gpu_proof] secondary architecture sm_${RECEIPT_ARCH} (${RECEIPT_LABEL}): receipt ${RECEIPT_PATH}; gpu-proof.json is not written"
+    mkdir -p "$(dirname "$RECEIPT_PATH")"
+fi
+
 K_ARGS=()
 if [[ -n "$SCOPE_K" ]]; then K_ARGS=(-k "$SCOPE_K"); fi
 
@@ -115,7 +149,8 @@ if [[ "${SPLIT:-0}" = "1" ]]; then
     # receipt (everyday policy accepts carried shards; the RELEASE policy
     # test/gpu-proof-policy-release.yaml refuses them, so releases still take
     # one fresh full pass). Requires SCOPE=full (a narrowed refresh would
-    # attest less than the shards it replaces).
+    # attest less than the shards it replaces). SPLIT_REFRESH=1 means the
+    # committed receipt of this architecture ($RECEIPT_PATH).
     REFRESH_ARGS=()
     if [[ -n "${SPLIT_REFRESH:-}" ]]; then
         if [[ -n "${SPLIT_CARRY_FROM:-}" ]]; then
@@ -127,7 +162,7 @@ if [[ "${SPLIT:-0}" = "1" ]]; then
             exit 2
         fi
         REFRESH_SRC="$SPLIT_REFRESH"
-        [[ "$REFRESH_SRC" == "1" ]] && REFRESH_SRC="gpu-proof.json"
+        [[ "$REFRESH_SRC" == "1" ]] && REFRESH_SRC="$RECEIPT_PATH"
         REFRESH_ARGS=(--refresh-from "$REFRESH_SRC")
     fi
     CUDA_K_ARGS=()
@@ -149,14 +184,16 @@ if [[ "${SPLIT:-0}" = "1" ]]; then
         exit 1
     fi
 
-    # The driver already merged + re-signed; publish to the repo-root path CI
-    # reads. A refresh with NOTHING stale merges nothing (the committed
-    # receipt already covers the tree) — that is success, not a missing file.
+    # The driver already merged + re-signed; publish to this architecture's
+    # path (the repo-root gpu-proof.json CI reads on the primary, a path
+    # under receipts/ on a secondary). A refresh with NOTHING stale merges
+    # nothing (the committed receipt already covers the tree) — that is
+    # success, not a missing file.
     if [[ -f "$OUT_DIR/gpu-proof.json" ]]; then
-        cp "$OUT_DIR/gpu-proof.json" gpu-proof.json
-        echo "[run_gpu_proof] SPLIT receipt written to gpu-proof.json (shards in $OUT_DIR)"
+        cp "$OUT_DIR/gpu-proof.json" "$RECEIPT_PATH"
+        echo "[run_gpu_proof] SPLIT receipt written to $RECEIPT_PATH (shards in $OUT_DIR)"
     else
-        echo "[run_gpu_proof] nothing stale — committed gpu-proof.json already covers this tree"
+        echo "[run_gpu_proof] nothing stale — committed $RECEIPT_PATH already covers this tree"
     fi
     exit 0
 fi
@@ -167,5 +204,5 @@ exec "$PYTHON" -m pytest \
     -m gpu_proof \
     "${K_ARGS[@]}" \
     --gpu-proof-enable \
-    --gpu-proof-out=gpu-proof.json \
+    --gpu-proof-out="$RECEIPT_PATH" \
     ${PYTEST_ARGS:-}

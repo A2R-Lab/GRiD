@@ -429,7 +429,7 @@ def test_scheduler_stop_resolves_pending(tmp_path):
     assert sched.results["never"].rc == -1
 
 
-def test_prewarm_plan_iiwa14_live():
+def test_prewarm_plan_iiwa14_live(monkeypatch):
     """Integration (CPU, no nvcc): the plan for iiwa14 flagship ids builds via
     the test module's own machinery — selection filtering applies, atoms map to
     jobs, and job names are filesystem-safe."""
@@ -441,13 +441,17 @@ def test_prewarm_plan_iiwa14_live():
     plan = pw.build_plan(ids)
     assert plan["dropped"] == []
     names = set(plan["jobs"])
-    # fixed crba + fixed ee-hessian always in selection; floating ee-hessian is
-    # NOT in the default floating flagship selection (benign always-skip) so it
-    # must NOT be pre-warmed; floating crba is.
+    # Both bases validate every cell by default since 2026-10-15, so the floating
+    # ee-hessian is pre-warmed like the fixed one.
     assert "prewarm_iiwa14_fixed_crba" in names
     assert "prewarm_iiwa14_fixed_end_effector_pose_hessian" in names
     assert "prewarm_iiwa14_floating_crba" in names
-    assert "prewarm_iiwa14_floating_end_effector_pose_hessian" not in names
+    assert "prewarm_iiwa14_floating_end_effector_pose_hessian" in names
+    # The narrowing override still drops the unselected floating cells.
+    monkeypatch.setenv("GRID_CUDA_FLOATING_ALGORITHMS", "crba")
+    narrowed = set(pw.build_plan(ids)["jobs"])
+    assert "prewarm_iiwa14_floating_crba" in narrowed
+    assert "prewarm_iiwa14_floating_end_effector_pose_hessian" not in narrowed
     for name, job in plan["jobs"].items():
         assert name == name.strip() and "/" not in name and " " not in name
         assert job["cells"]
@@ -884,6 +888,7 @@ def test_plan_refresh_uses_the_real_plan_carry(tmp_path, monkeypatch):
     so a clean shard carries, a touched test file stales exactly that shard,
     and a dirty recording tree stales everything."""
     import subprocess
+    pytest.importorskip("pytest_gpu_proof")  # needs CPython 3.11 or newer
     from pytest_gpu_proof.fingerprint import compute_fingerprint
     from pytest_gpu_proof.merge import plan_carry
 

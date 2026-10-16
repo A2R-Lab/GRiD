@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import traceback
 import numpy as np
-from .protocol import agreement, digest, timed, write_json, source_fingerprints, leaves, WARM_SECONDS
+from .protocol import agreement, digest, timed, write_json, source_fingerprints, leaves, validation_subset, WARM_SECONDS
 from .protocol import ACCURACY_POLICIES, ACCURACY_POLICY_VERSION, accuracy_status, cell_accuracy_status
 
 
@@ -58,14 +58,24 @@ def main():
                                    cpu_threads=min(args.cpu_threads, max(1,max(args.batches)//16)))
         capture["adapter"] = adapter.metadata
         blocks = (lambda v: gradient_blocks(v, fixture.nv)) if args.operation.endswith("_gradient") else (lambda v: v)
+        scope_mask = None
         def check(actual, expected, **kw):
-            return agreement(blocks(actual), blocks(expected), **kw)
+            return agreement(validation_subset(blocks(actual), scope_mask),
+                             validation_subset(blocks(expected), scope_mask), **kw)
         bridged = args.backend in {"grid_native", "grid_cuda"}
         for batch in args.batches:
             cell = {"batch": batch, "status": "error", "comparison_eligible": False}
             try:
                 adapter.prepare(batch)
                 cell["adapter"] = dict(adapter.metadata)
+                # A backend whose coordinate chart is ill-conditioned at some
+                # fixture samples validates on the rest and says so in the cell.
+                scope_mask, scope = (adapter.validation_scope(batch)
+                                     if hasattr(adapter, "validation_scope") else (None, None))
+                if scope is not None:
+                    cell["validation_scope"] = scope
+                    if not np.any(scope_mask):
+                        raise ValueError("No fixture sample is validatable under the backend's chart-conditioning rule")
                 if args.prepare_only:
                     if args.backend == "grid_native":
                         adapter.native_library()

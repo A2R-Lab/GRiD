@@ -12,6 +12,7 @@
 #include "grid.cuh"
 #include <cuda_runtime.h>
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 // C4 EE binding aliases (codegen emits these in grid.cuh whenever kinematics are
@@ -313,6 +314,27 @@ static inline dim3 grid_rbd_grid_for(const GridCtx *ctx, int batch) {
 #ifndef GRID_RBD_ARCH
 #define GRID_RBD_ARCH 0
 #endif
+// Multi-arch build (GRID_RBD_CUDA_ARCHS, 2026-10-15): every embedded arch as a
+// colon-separated token such as 86:120 (nvcc splits a -D value on commas), absent
+// on a single-arch build. The context check accepts any embedded arch; the launch
+// configs stay those of GRID_RBD_ARCH.
+#define GRID_RBD_STRINGIFY_(x) #x
+#define GRID_RBD_STRINGIFY(x) GRID_RBD_STRINGIFY_(x)
+static inline bool grid_rbd_device_cc_in_artifact(int device_cc) {
+#ifdef GRID_RBD_ARCHS
+    const char *s = GRID_RBD_STRINGIFY(GRID_RBD_ARCHS);
+    while (*s) {
+        char *end = nullptr;
+        const long a = strtol(s, &end, 10);
+        if (end == s) break;
+        if ((int)a == device_cc) return true;
+        s = (*end == ':') ? end + 1 : end;
+    }
+    return false;
+#else
+    return device_cc == GRID_RBD_ARCH;
+#endif
+}
 
 // ─── shared input-packing helper ─────────────────────────────────────────────
 //

@@ -1,6 +1,7 @@
 """CPU-only checks for documented interfaces and runnable input examples."""
 import ast
 import csv
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -73,6 +74,38 @@ def test_runtime_tool_transform_normalization_cpu_only():
     np.testing.assert_array_equal(normalize(None, 1)[0].reshape(4, 4), np.eye(4))
     with pytest.raises(ValueError, match="length"):
         normalize([[0, 0, 0], [0, 0, 1]], 3)
+
+
+def test_fused_control_step_example_registers_per_algorithm():
+    example = ROOT / "examples/cuda/fused_control_step"
+    source = (example / "fused_control_step.cu").read_text()
+    assert "grid::init_grid_kernel_attr_inverse_dynamics_checked" in source
+    assert "grid::init_grid<" not in source  # the aggregate compiles every kernel in the header
+    assert "grid::inverse_dynamics_device<T>" in source
+    # The --json record is a contract with the release-measurement collector.
+    for key in ("example", "batch", "fused_us", "layered_us", "repeats", "arch"):
+        assert f'\\"{key}\\"' in source, key
+    script = example / "build_and_time.sh"
+    assert os.access(script, os.X_OK)
+    for flag in ("--batch", "--repeats", "--json", "GRID_CUDA_ARCH"):
+        assert flag in script.read_text(), flag
+    page = (ROOT / "docs/source/user_guide/tutorials/fused_cuda_control_step.rst").read_text()
+    assert "examples/cuda/fused_control_step" in page
+
+
+def test_jax_ik_example_uses_only_jax_and_grid_rbd():
+    path = ROOT / "examples/jax/ik_gradient_descent.py"
+    tree = ast.parse(path.read_text())
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    assert {"jax", "grid_rbd"} <= imported
+    assert imported <= {"jax", "grid_rbd", "argparse", "sys", "pathlib", "__future__"}, imported
+    page = (ROOT / "docs/source/user_guide/tutorials/jax_ik_gradient_descent.rst").read_text()
+    assert "examples/jax/ik_gradient_descent.py" in page
 
 
 def test_reference_integrator_constant_acceleration():

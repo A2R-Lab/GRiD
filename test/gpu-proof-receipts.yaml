@@ -1,0 +1,39 @@
+# Receipts by CUDA architecture.
+#
+# One receipt is recorded per GPU architecture. The primary receipt,
+# gpu-proof.json at the repository root, is the one CI verifies and the one
+# that defines the collection manifest (test/gpu-proof-tests.txt). Secondary
+# receipts document other architectures (the Jetson wave) and live under
+# receipts/; recording on a secondary architecture never writes
+# gpu-proof.json.
+#
+# The driver (test/run_split_suite.py, through test/run_gpu_proof.sh) detects
+# the compute capability of the GPU it runs on (120 for sm_120, 87 for sm_87)
+# and writes the receipt to the path of the matching row. A GPU whose
+# architecture has no row is refused before any GPU work; add a row here.
+#
+# Keys per row: arch (compute capability as an integer), label (the machine,
+# for summaries), receipt (repository-relative path; secondary paths must be
+# under receipts/). Optional: expected_skips, the skip baseline this
+# architecture is verified against (defaults to
+# test/gpu-proof-expected-skips.txt, shared with the primary); header_keys,
+# the per-shard header-key ledger the refresh carry gate reads and writes
+# (defaults to test/gpu-proof-header-keys.json for the primary and to
+# <receipt stem>-header-keys.json next to a secondary receipt).
+#
+# `make verify-all` verifies every receipt listed here that exists on disk;
+# `test/receipt_integrity.py --table` prints their rows for the compatibility
+# page. The pytest-gpu-proof verifier never reads this file.
+
+primary:
+  arch: 120
+  label: RTX 5090
+  receipt: gpu-proof.json
+
+secondary:
+  - arch: 87
+    label: Jetson Orin
+    receipt: receipts/gpu-proof-sm87.json
+  - arch: 72
+    label: Jetson Xavier
+    receipt: receipts/gpu-proof-sm72.json

@@ -9,10 +9,12 @@ import subprocess
 import numpy as np
 from .protocol import digest, ROOT, CORE, VECTOR_OPS, Q_ONLY_OPS, Q_QD_OPS, PREALLOC
 
-# Operation codes of kernel_bridge.cu (= the collector's OPS order).
+# Operation codes of kernel_bridge.cu: 0..12 are the collector's OPS order
+# (pin_adapter.OPS); 13 is the end-effector pose gradient, bridge only.
 KERNEL_OPS = {op: i for i, op in enumerate(("inverse_dynamics", "inverse_dynamics_gradient", "idsva_so", "minv",
     "forward_dynamics", "forward_dynamics_gradient", "fdsva_so", "end_effector_pose",
-    "crba", "nonlinear_effects", "generalized_gravity", "ccrba", "coriolis_matrix"))}
+    "crba", "nonlinear_effects", "generalized_gravity", "ccrba", "coriolis_matrix",
+    "end_effector_pose_gradient"))}
 assert tuple(KERNEL_OPS)[:3] == CORE
 
 
@@ -93,9 +95,11 @@ class GridAdapter:
             if operation not in KERNEL_OPS:
                 raise ValueError("CUDA host-call timing bridge does not cover " + operation)
             self.kernel = self.kernel_library()
-            self.kernel_ctx = self.kernel.grid_kernel_create()
+            # The bridge registers only this operation's kernels (per-algorithm
+            # init_grid_kernel_attr_<op>_checked, never the aggregate init_grid).
+            self.kernel_ctx = self.kernel.grid_kernel_create(KERNEL_OPS[operation])
             if not self.kernel_ctx:
-                raise RuntimeError("kernel bridge could not initialise the artifact's gridData/robotModel")
+                raise RuntimeError("kernel bridge could not initialise the artifact's streams, kernel attributes, gridData or robotModel")
             if (self.kernel.grid_kernel_num_joints(), self.kernel.grid_kernel_num_vel()) != (fixture.nq, fixture.nv):
                 raise RuntimeError("kernel bridge model dimensions differ from the fixture")
             self.metadata["threads_override"] = int(self.h.threads_per_block)
@@ -217,7 +221,9 @@ class GridAdapter:
         meta = self.h.meta
         arch = int(meta["cuda_arch"])
         glass = ROOT / "external" / "GLASS"
-        flags = [f for f in _compile._NVCC_DEFAULT_FLAGS] + [
+        # The wrapper's flags compile units with -c and host-link them; this one-file
+        # bridge is compiled and linked in one nvcc call, so it names --shared itself.
+        flags = [f for f in _compile._NVCC_DEFAULT_FLAGS] + ["--shared",
             f"-gencode=arch=compute_{arch},code=sm_{arch}", f"-DGRID_RBD_ARCH={arch}",
             f"-DGRID_KERNEL_MAX_BATCH={int(meta['max_batch'])}", f"-DGRID_KERNEL_NUM_EES={int(meta.get('num_ees', 1))}",
             f"-I{store}", f"-I{glass}", f"-I{glass / 'src'}",
@@ -232,6 +238,7 @@ class GridAdapter:
         bridge = ctypes.CDLL(str(lib))
         fp = ctypes.POINTER(ctypes.c_float)
         dp = ctypes.POINTER(ctypes.c_double)
+        bridge.grid_kernel_create.argtypes = [ctypes.c_int]
         bridge.grid_kernel_create.restype = ctypes.c_void_p
         bridge.grid_kernel_close.argtypes = [ctypes.c_void_p]
         bridge.grid_kernel_run.argtypes = [ctypes.c_void_p, ctypes.c_int, fp, fp, fp, ctypes.c_int, ctypes.c_int, ctypes.c_float, fp]

@@ -237,18 +237,27 @@ def test_frame_jacobian_dot(robot):
         assert _max_err(Jd[i], ref_Jd) < 5e-2
 
 
+# osc_inertia is Lambda = (J Minv J^T)^-1 at the baked leaf frame, which exists
+# only when the 6x6 task matrix has full rank. go2 is de-collected from this one
+# test (2026-10-15): on a fixed base every go2 leaf chain is a 3-DoF leg, so the
+# task matrix has rank 3 at every configuration and no sample or leaf choice can
+# make it well-conditioned. The other surfaces keep both robots.
+_OSC_INERTIA_ROBOTS = [r for r in _ROBOTS if r[0] != "go2"]
+
+
+@pytest.mark.parametrize("robot", _OSC_INERTIA_ROBOTS, indirect=True,
+                         ids=[r[0] for r in _OSC_INERTIA_ROBOTS])
 def test_osc_inertia(robot):
     handle, ref, s = robot
     fn = _leaf_frame_name(ref)
     L = handle.osc_inertia(s["q"])
     assert L.shape == (_B, 6, 6)
     # Lambda = (J Minv J^T)^-1 only exists when the task matrix is full-rank.
-    # A branched robot whose leaf chain has < 6 DoF (e.g. go2's 3-DoF leg) gives
-    # a rank-deficient task matrix → the 6x6 inverse blows up identically-but-
-    # differently in float32 GRiD vs float64 oracle. Gate on conditioning
-    # (mirrors the S1 host test's cond < 1e8 guard); only well-conditioned
-    # samples carry a meaningful comparison. float32 round-trip through the 6x6
-    # inverse is looser than the value surfaces (5e-3, per the S1 gate).
+    # Gate on conditioning (mirrors the S1 host test's cond < 1e8 guard); only
+    # well-conditioned samples carry a meaningful comparison. float32 round-trip
+    # through the 6x6 inverse is looser than the value surfaces (5e-3, per the S1
+    # gate). A serial arm with a 6-DoF or longer chain gives a full-rank task
+    # matrix at a generic configuration, so at least one sample must pass the gate.
     checked = 0
     for i, q in enumerate(s["q"]):
         q64 = q.astype(np.float64)
@@ -262,5 +271,7 @@ def test_osc_inertia(robot):
         # Lambda entries can be O(1e2), so a flat 5e-3 absolute tol is too tight.
         scale = float(np.max(np.abs(L_ref)))
         assert _max_err(L[i], L_ref) < max(5e-3, 5e-3 * scale)
-    if checked == 0:
-        pytest.skip("no well-conditioned task-inertia sample (leaf chain rank-deficient)")
+    assert checked > 0, (
+        "no well-conditioned task-inertia sample: the leaf chain of this robot is "
+        "rank-deficient, so it belongs outside _OSC_INERTIA_ROBOTS"
+    )

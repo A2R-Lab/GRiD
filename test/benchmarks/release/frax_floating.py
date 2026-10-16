@@ -21,13 +21,76 @@ the velocity map ``v_pin = G(theta) qdot_frax`` with
     nle_frax   = G^T (nle_pin + M_pin Gdot qdot_frax)     (Frax's bias is at qddot_frax = 0, i.e. a_pin = Gdot qdot)
     J_frax     = J_pin G                                  (a pose Jacobian w.r.t. qdot_frax instead of the pin tangent)
 
-``Gdot qdot`` is evaluated by complex step on theta, exact to rounding; every
-transport runs in float64 outside the timed window. Nothing here touches Frax's
-own arithmetic -- the timed call is Frax's unmodified function on Frax's native
-coordinates.
+``Gdot qdot = sum_k thetadot_k (dG/dtheta_k) qdot`` uses the closed-form
+``dG/dtheta_k`` (``dR/da = [x]_x R``, ``dR/db = Rx [y]_x Ry Rz``, ``dR/dc = R [z]_x``
+and the matching columns of ``dE``); every transport runs in float64 outside the
+timed window. Nothing here touches Frax's own arithmetic -- the timed call is
+Frax's unmodified function on Frax's native coordinates.
+
+Gradients. A configuration perturbation ``delta`` of ``q_frax`` moves the pin
+configuration along the same map, ``delta_pin = G(theta) delta`` (the local
+translation ``R^T delta_p`` and the local rotation ``R^T E delta_theta``), so the
+oracle's tangent-space derivatives ``dtau/dq_pin`` compose with ``G`` exactly as
+the velocities do. Frax's autodiff gradient holds ``qdot_frax`` and
+``qddot_frax`` fixed while ``theta`` moves, which drags ``v_pin = G qdot`` and
+``a_pin = G qddot + Gdot qdot`` along. Writing ``dG_k = dG/dtheta_k`` and
+``Gdot = sum_k qdot_{3+k} dG_k``:
+
+    Kv[:, 3+k] = dG_k qdot                                (d v_pin / d theta_k)
+    Kq[:, 3+k] = dG_k qddot + d(Gdot qdot)/d theta_k      (d a_pin / d theta_k)
+    Ka         = Gdot + [0 | dG_k qdot | 0]               (d a_pin / d qdot_frax, extra columns 3:6)
+    P[:, 3+k]  = dG_k^T tau_pin                           (the output prefactor's own derivative)
+
+    dtau_frax/dq_frax  = P + G^T (dtau/dq_pin G + dtau/dv_pin Kv + M Kq)
+    dtau_frax/dqd_frax = G^T (dtau/dv_pin G + M Ka)
+
+For forward dynamics ``qddot_frax = G^{-1} (a_pin(q, v_pin, tau_pin) - Gdot qdot)``
+with ``tau_pin = G^{-T} tau_frax`` held fixed in Frax coordinates, so
+``d tau_pin / d theta_k = -G^{-T} dG_k^T tau_pin`` and
+``d G^{-1} / d theta_k = -G^{-1} dG_k G^{-1}``:
+
+    dqdd_frax/dq_frax [:, 3+k] += -G^{-1} dG_k qddot_frax
+                                + G^{-1} (da/dv_pin dG_k qdot - Minv G^{-T} dG_k^T tau_pin - d(Gdot qdot)/d theta_k)
+    dqdd_frax/dq_frax          += G^{-1} da/dq_pin G
+    dqdd_frax/dqd_frax          = G^{-1} (da/dv_pin G - Ka)
+
+``d(Gdot qdot)/d theta_k`` is a complex step on the closed-form ``Gdot qdot``.
+Second derivatives are not transported: the Euler-to-tangent map's Hessian would
+enter the comparison and the cell would no longer be like-for-like with the
+analytical second-order kernels.
+
+Chart conditioning. The intrinsic XYZ Euler chart is singular at pitch +-pi/2:
+``E(theta)`` loses rank there, so ``G`` and every transported quantity scale
+like ``1/cos(pitch)`` and the mass matrix Frax factorises, ``M_frax = G^T M G``,
+has condition number of order ``1/cos^2(pitch)`` times the tangent-space one
+(1e6 at a few degrees from the singularity). Frax's fp32 Cholesky solve of that
+matrix on the GPU then carries 1e-3 to 1e-2 relative error, against 1e-4 on the
+rest of the fixture; the transport itself reproduces the oracle to 1e-12 in
+float64 at the same samples. ``chart_condition`` is ``1/|cos(pitch)|``, and the
+samples above ``CHART_CONDITION_MAX`` are left out of the validation of Frax's
+floating-base cells (never out of the timing); the collector records the count.
 """
+
 from __future__ import annotations
 import numpy as np
+
+_EX, _EY, _EZ = np.eye(3)
+
+# Validation scope for Frax's floating-base cells: samples closer than about
+# 5.7 degrees to the Euler pitch singularity (chart condition above 10) are not
+# validated. Chosen from the 2026-10-16 captures: the retained samples sit in the
+# fp32 class (relative L2 below 3e-4 on go2 and G1 at every batch) and about one
+# sample in a hundred of the fixture is excluded.
+CHART_CONDITION_MAX = 10.0
+
+
+def chart_condition(theta):
+    """1/|cos(pitch)|: the growth factor of the Euler chart's velocity map."""
+    return 1.0 / max(abs(float(np.cos(theta[1]))), np.finfo(float).tiny)
+
+
+def _skew(v):
+    return np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
 
 
 def _rot_x(a):
@@ -68,8 +131,7 @@ def rotation_from_euler_xyz(theta):
 def euler_rate_map(theta):
     """E(theta): omega_world = E thetadot for the intrinsic XYZ chain."""
     rx = _rot_x(theta[0])
-    return np.stack([np.array([1, 0, 0]), rx @ np.array([0, 1, 0]),
-                     rx @ _rot_y(theta[1]) @ np.array([0, 0, 1])], axis=1)
+    return np.stack([_EX, rx @ _EY, rx @ _rot_y(theta[1]) @ _EZ], axis=1)
 
 
 def velocity_map(theta, nv):
@@ -89,11 +151,42 @@ def velocity_map_inverse(theta, nv):
     return Gi
 
 
-def gdot_times_qdot(theta, qdot, nv, step=1e-20):
-    """(d/dt G(theta(t))) qdot = Im[G(theta + i h thetadot)] / h  qdot."""
-    thetadot = qdot[3:6]
-    Gc = velocity_map(theta.astype(complex) + 1j * step * thetadot, nv)
-    return (Gc.imag / step) @ qdot
+def velocity_map_jacobian(theta, nv):
+    """dG/dtheta as an array (3, nv, nv), closed form and complex-step safe."""
+    rx, ry, rz = _rot_x(theta[0]), _rot_y(theta[1]), _rot_z(theta[2])
+    R = rx @ ry @ rz
+    dR = (_skew(_EX) @ R, rx @ _skew(_EY) @ ry @ rz, R @ _skew(_EZ))
+    E = euler_rate_map(theta)
+    zero = np.zeros(3)
+    dE = (np.stack([zero, _skew(_EX) @ rx @ _EY, _skew(_EX) @ rx @ ry @ _EZ], axis=1),
+          np.stack([zero, zero, rx @ _skew(_EY) @ ry @ _EZ], axis=1),
+          np.zeros((3, 3)))
+    out = np.zeros((3, nv, nv), dtype=np.result_type(theta, float))
+    for k in range(3):
+        out[k, 0:3, 0:3] = dR[k].T
+        out[k, 3:6, 3:6] = dR[k].T @ E + R.T @ dE[k]
+    return out
+
+
+def gdot_matrix(theta, qdot, nv):
+    """Gdot = sum_k thetadot_k dG/dtheta_k for thetadot = qdot[3:6]."""
+    dG = velocity_map_jacobian(theta, nv)
+    return np.tensordot(np.asarray(qdot)[3:6], dG, axes=(0, 0))
+
+
+def gdot_times_qdot(theta, qdot, nv):
+    """(d/dt G(theta(t))) qdot, closed form (complex-step safe in theta)."""
+    return gdot_matrix(theta, qdot, nv) @ np.asarray(qdot)
+
+
+def gdot_times_qdot_jacobian(theta, qdot, nv, step=1e-20):
+    """d(Gdot qdot)/d theta as (nv, 3), by complex step on the closed form."""
+    out = np.zeros((nv, 3))
+    for k in range(3):
+        shifted = np.asarray(theta, dtype=complex).copy()
+        shifted[k] += 1j * step
+        out[:, k] = gdot_times_qdot(shifted, np.asarray(qdot, np.float64), nv).imag / step
+    return out
 
 
 class FloatingFrame:
@@ -105,9 +198,11 @@ class FloatingFrame:
         self.p = q_pin[0:3]
         self.R = rotation_from_quat_xyzw(q_pin[3:7])
         self.theta = euler_xyz_from_rotation(self.R)
+        self.chart_condition = chart_condition(self.theta)
         self.joints = q_pin[7:]
         self.G = velocity_map(self.theta, nv)
         self.Ginv = velocity_map_inverse(self.theta, nv)
+        self.dG = velocity_map_jacobian(self.theta, nv)
 
     def q_frax(self):
         return np.concatenate((self.p, self.theta, self.joints))
@@ -136,6 +231,51 @@ class FloatingFrame:
     def pose_jacobian_frax(self, J_pin):
         return np.asarray(J_pin, np.float64) @ self.G
 
+    # ── gradient transports (first order only; see the module docstring) ──
+    def _coupling(self, qd, qdd):
+        """(Kv, Kq, Ka, dGd): the theta- and qdot-dependence of v_pin and a_pin at
+        fixed Frax inputs; dGd[:, k] = d(Gdot qdot)/d theta_k."""
+        nv = self.nv
+        Kv, Kq = np.zeros((nv, nv)), np.zeros((nv, nv))
+        Ka = gdot_matrix(self.theta, qd, nv)
+        dGd = gdot_times_qdot_jacobian(self.theta, qd, nv)
+        for k in range(3):
+            Kv[:, 3 + k] = self.dG[k] @ qd
+            Kq[:, 3 + k] = self.dG[k] @ qdd + dGd[:, k]
+            Ka[:, 3 + k] += self.dG[k] @ qd
+        return Kv, Kq, Ka, dGd
+
+    def id_gradient_frax(self, dtau_dq, dtau_dv, M_pin, tau_pin, v_pin, a_pin):
+        """(dtau_frax/dq_frax, dtau_frax/dqd_frax) from the oracle's tangent-space
+        RNEA derivatives, with qdot_frax and qddot_frax held fixed."""
+        nv = self.nv
+        dtau_dq, dtau_dv, M = (np.asarray(x, np.float64) for x in (dtau_dq, dtau_dv, M_pin))
+        tau_pin = np.asarray(tau_pin, np.float64)
+        qd, qdd = self.qdot_frax(v_pin), self.qddot_frax(v_pin, a_pin)
+        Kv, Kq, Ka, _ = self._coupling(qd, qdd)
+        P = np.zeros((nv, nv))
+        for k in range(3):
+            P[:, 3 + k] = self.dG[k].T @ tau_pin
+        dq = P + self.G.T @ (dtau_dq @ self.G + dtau_dv @ Kv + M @ Kq)
+        dv = self.G.T @ (dtau_dv @ self.G + M @ Ka)
+        return dq, dv
+
+    def fd_gradient_frax(self, da_dq, da_dv, Minv_pin, a_pin, v_pin, tau_pin):
+        """(dqdd_frax/dq_frax, dqdd_frax/dqd_frax) from the oracle's tangent-space
+        forward-dynamics derivatives, with qdot_frax and tau_frax held fixed."""
+        nv = self.nv
+        da_dq, da_dv, Minv = (np.asarray(x, np.float64) for x in (da_dq, da_dv, Minv_pin))
+        tau_pin = np.asarray(tau_pin, np.float64)
+        qd, qdd = self.qdot_frax(v_pin), self.qddot_frax(v_pin, a_pin)
+        Kv, _, Ka, dGd = self._coupling(qd, qdd)
+        dq = self.Ginv @ da_dq @ self.G
+        for k in range(3):
+            dtau_k = -self.Ginv.T @ self.dG[k].T @ tau_pin
+            dq[:, 3 + k] += self.Ginv @ (-self.dG[k] @ qdd + da_dv @ Kv[:, 3 + k]
+                                         + Minv @ dtau_k - dGd[:, k])
+        dv = self.Ginv @ (da_dv @ self.G - Ka)
+        return dq, dv
+
 
 def self_check(rng=np.random.default_rng(0), nv=9):
     """Round-trip and derivative identities, independent of Frax (CPU, fast)."""
@@ -144,7 +284,12 @@ def self_check(rng=np.random.default_rng(0), nv=9):
     f = FloatingFrame(q, nv)
     assert np.allclose(rotation_from_euler_xyz(f.theta), f.R, atol=1e-12)
     assert np.allclose(f.G @ f.Ginv, np.eye(nv), atol=1e-12)
-    # Finite-difference check of Gdot qdot against the complex step.
+    # Closed-form dG/dtheta against a complex step of G.
+    for k in range(3):
+        shifted = f.theta.astype(complex)
+        shifted[k] += 1e-20j
+        assert np.allclose(velocity_map(shifted, nv).imag / 1e-20, f.dG[k], atol=1e-12)
+    # Finite-difference check of Gdot qdot against the closed form.
     qd = rng.normal(size=nv)
     h = 1e-6
     fd = (velocity_map(f.theta + h*qd[3:6], nv) - velocity_map(f.theta - h*qd[3:6], nv)) / (2*h) @ qd

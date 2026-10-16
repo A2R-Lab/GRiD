@@ -9,8 +9,10 @@ oracle's own `inverse_dynamics_gradient`.
 CUDA layout (matches the oracle's (nv, nv, 10NB) C-order per partial):
     h_dY_dx[(dq? 0 : nv*nv*10NB) + c*(nv*10NB) + row*10NB + 10*i + k]
 
-Covering set: iiwa14 (fixed cardinal, sparse id_du staging band), fr3 (mimic ->
-dense staging fold), go2 (floating -> dense-per-jid staging band).
+Covering set: every manifest robot on both bases (widened 2026-10-15): iiwa14
+fixed (cardinal, sparse id_du staging band), fr3 / h1_2 (mimic -> dense staging
+fold), the floating cells (dense-per-jid staging band). Narrow with
+GRID_CUDA_REGRESSOR_GRADIENT_ROBOTS="iiwa14:fixed,fr3:fixed,go2:floating".
 """
 
 import contextlib
@@ -37,13 +39,14 @@ from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spe
 from RBDReference.equivalents.reference_backend import build_project_adapter
 from RBDReference.tests.tolerances import get_tolerance
 
-from test.cuda_equivalents.test_cuda_regressor import _project_pi, _robot_spec
+from test.cuda_equivalents.test_cuda_regressor import _cases, _project_pi, _robot_spec
 
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_regressor_gradient_runner.cu")
 
-# (robot_id, base_mode): sparse fixed band, mimic dense fold, floating band.
-_CASES = [("iiwa14", "fixed"), ("fr3", "fixed"), ("go2", "floating")]
+# (robot_id, base_mode): every manifest robot on both bases (sparse fixed band,
+# mimic dense fold, floating band). Narrow with GRID_CUDA_REGRESSOR_GRADIENT_ROBOTS.
+_CASES = _cases("GRID_CUDA_REGRESSOR_GRADIENT_ROBOTS")
 
 
 def _generate_header(project_model, build_dir: Path) -> Path:

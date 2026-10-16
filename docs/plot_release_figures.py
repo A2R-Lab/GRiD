@@ -7,7 +7,6 @@ Input: a directory written by ``python -m test.benchmarks.release.report`` (its
   stacked_core        RNEA, grad RNEA, Hessian RNEA — GRiD (JAX API) as CUDA compute-only
                       call plus transfer/API increments; GPU baselines as resident +
                       full-call increment and CPU API modes as separate full calls
-  stacked_all         the same for every operation that has at least one competitor
   speedup_core        the homepage summary: RNEA, grad RNEA and Hessian RNEA against every
                       baseline, one column per library — CPU libraries against GRiD's CUDA
                       host call with the copies, GPU libraries at the resident boundary
@@ -22,6 +21,10 @@ Input: a directory written by ``python -m test.benchmarks.release.report`` (its
   table.csv, decomposition.csv   copies of the report tables
   manifest.json       report identity (table.json hash, commits, capture order,
                       accepted source drift, status counts) and output hashes
+
+Every figure is written as SVG (the page links) and PNG (the cover page's
+thumbnails and the README). The set is exactly what the pages show; a figure
+no page references is not produced.
 
 Website figures omit draft banners in previews as well as publication.
 Homepage figures also omit overall titles; their context lives on the page.
@@ -43,8 +46,7 @@ ASSETS = ROOT / "docs/source/_static/release"
 sys.path.insert(0, str(ROOT))
 
 from test.benchmarks.release.report import (  # noqa: E402
-    LABELS, SHORT_OP, _ratio_heatmap, banner, cell_marks, plot_stacked_comparison,
-    plot_grid_composition)
+    LABELS, SHORT_OP, _ratio_heatmap, banner, cell_marks, plot_stacked_comparison)
 from test.benchmarks.release.protocol import CORE, EXTRA, ROBOTS, WRAPPER_OPS, jax_pinned_route  # noqa: E402
 
 PINOCCHIO = ("pinocchio", "pinocchio_plain")
@@ -260,9 +262,6 @@ def main():
     outputs = []
     stacked_core = plot_stacked_comparison(rows, out, purpose, "grid_jax", CORE, "stacked_core", show_title=False, homepage_style=True)
     outputs += [stacked_core, out / "stacked_core.png"]
-    stacked_all = plot_stacked_comparison(rows, out, purpose, "grid_jax", CORE + EXTRA, "stacked_all")
-    outputs += [stacked_all, out / "stacked_all.png"]
-    outputs += [plot_grid_composition(rows, out, purpose), out / "grid_composition.png"]
     outputs += [speedup_core(rows, out, purpose), out / "speedup_core.png"]
     outputs += [api_boundaries(rows, out), out / "wrappers.png"]
     outputs.append(speedup_grid(rows, out, "speedup_pinocchio", purpose,

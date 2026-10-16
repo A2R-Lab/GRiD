@@ -13,7 +13,7 @@ LOCAL_WORLD_ALIGNED reference frame, so this test cross-checks ONLY that
 (target, LWA) pair against the RBDReference numpy oracle (which matches pinocchio
 to ~1e-14). float32 device -> float32-scale tolerance.
 
-Robots: iiwa14-fixed + go2-floating (override with
+Robots: every manifest robot on both bases (widened 2026-10-15; narrow with
 GRID_CUDA_FRAME_JAC_HOST_ROBOTS="iiwa14:fixed,go2:floating").
 """
 
@@ -35,6 +35,10 @@ from test.cuda_equivalents.cuda_harness import (
     _parse_runner_output,
     _run_runner,
 )
+from test.cuda_equivalents.test_cuda_frame_jacobian import (
+    check_osc_inertia,
+    osc_inertia_summary,
+)
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec
 from RBDReference.equivalents.reference_backend import build_project_adapter
@@ -43,6 +47,8 @@ from RBDReference.equivalents.reference_backend import build_project_adapter
 RUNNER_SOURCE = Path(__file__).with_name("cuda_frame_jacobian_host_runner.cu")
 _ALGO_KEYS = ["frame_jacobian", "frame_jacobian_dot", "osc_inertia"]
 _REF_FRAME = "LOCAL_WORLD_ALIGNED"  # the host's baked default reference frame
+_ALL_ROBOTS = ("iiwa14", "go2", "g1", "h1_2", "fr3", "rizon4", "gen3", "fetch", "baxter")
+_DEFAULT_ROBOTS = ",".join(f"{r}:{b}" for b in ("fixed", "floating") for r in _ALL_ROBOTS)
 
 
 def _robot_modes():
@@ -50,8 +56,9 @@ def _robot_modes():
     # reduced v-slot, so the frame Jacobian + its Jdot fold the mimic body's column
     # alpha-weighted into the shared column (frame_jacobian_dot_device's fjc_alpha /
     # fjd_alpha path). Covers the analytic-CUDA-vs-analytic-oracle mimic transcription.
-    raw = os.environ.get("GRID_CUDA_FRAME_JAC_HOST_ROBOTS",
-                         "iiwa14:fixed,go2:floating,fr3:fixed,fr3:floating")
+    # h1_2 is the big mimic; the rest of the manifest is non-mimic (every robot on
+    # both bases since 2026-10-15).
+    raw = os.environ.get("GRID_CUDA_FRAME_JAC_HOST_ROBOTS", _DEFAULT_ROBOTS)
     out = []
     for tok in raw.split(","):
         tok = tok.strip()
@@ -147,6 +154,7 @@ def test_cuda_frame_jacobian_host_matches_reference(tmp_path, robot_id, base_mod
         )
 
     rel_errs = []
+    lambda_records = []
     for sample in samples:
         q = np.asarray(sample.q, np.float64)
         qd = np.asarray(sample.qd, np.float64)
@@ -169,12 +177,13 @@ def test_cuda_frame_jacobian_host_matches_reference(tmp_path, robot_id, base_mod
                   rtol=2e-3, atol=2e-3)
 
         if "LAM" in out:
-            task = (J_ref @ np.asarray(project_model.minv(q), dtype=np.float64) @ J_ref.T)
-            if np.linalg.cond(task) < 1e8:
-                L_ref = np.asarray(
-                    project_model.osc_inertia(q, leaf_name, _REF_FRAME),
-                    dtype=np.float64)
-                close(out["LAM"].reshape(6, 6, order="F"), L_ref, f"Lambda {tag}",
-                      rtol=5e-3, atol=5e-3)
+            # Every sample, singular corners included: backward error at any
+            # cond, entrywise as well below cond 1e5 (check_osc_inertia).
+            minv_ref = np.asarray(project_model.minv(q), dtype=np.float64)
+            lambda_records.append(check_osc_inertia(
+                out["LAM"].reshape(6, 6, order="F"), J_ref @ minv_ref @ J_ref.T,
+                lambda: project_model.osc_inertia(q, leaf_name, _REF_FRAME),
+                tag))
     print(f"[frame_jacobian host] {robot_id}-{base_mode} max rel err (J, LWA): "
           f"{max(rel_errs):.2e}")
+    print(osc_inertia_summary(f"{robot_id}-{base_mode} (host)", lambda_records))

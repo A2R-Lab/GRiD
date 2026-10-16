@@ -44,18 +44,50 @@ wheels on a CPU runner; do not advertise an untested interpreter/toolkit/
 framework combination. There are no Windows,
 macOS, Jetson or precompiled robot wheels in this release path.
 
+The release figures under `docs/source/_static/release` are regenerated only from a
+reviewed capture by `docs/plot_release_figures.py <report> --approve`, followed by
+`docs/export_release_tables.py --approve`; they are never edited by hand. `manifest.json`
+lists every file there with its hash and `docs/check_site.py` refuses a site whose assets
+differ from it.
+
 ## Installed-artifact gates
+
+The fresh-install check is required before freezing. On the lab box, from the
+candidate checkout, run
+
+```sh
+make release-check          # bash tools/release_fresh_install.sh [--work DIR] [--keep] [--python PATH]
+```
+
+It builds the sdist and the wheel from that sdist as above, installs the
+repaired wheel into a throwaway virtual environment under a work directory
+outside the checkout (no editable install; the checkout is asserted absent
+from `sys.path`), runs gates 1 to 3 below, then exercises both README entry
+points from outside the checkout: `load_robot` on iiwa14 with
+`forward_dynamics` checked against the bundled RBDReference oracle, and
+`grid-generate` on that URDF followed by `nvcc` on
+`examples/cuda/inverse_dynamics_kernel_example.cu` and
+`examples/cuda/validate.py`. It prints the Python, nvcc, jax and torch
+versions and the wheel name and SHA-256 it used, and ends with one line,
+`release fresh install: PASS` or `release fresh install: FAIL`. Keep the work
+directory's `SHA256SUMS.txt` and `release_fresh_install.log` with the release
+evidence (gate 5). The script takes minutes and downloads `jax[cuda12]` and a
+torch CUDA wheel into the venv. Set `GRID_RBD_BUILD_JOBS=1` to keep one `nvcc`
+process at a time when the box is shared.
 
 1. Create a fresh virtual environment, install the wheel, then run from outside
    the checkout with the GPU hidden:
    `python -I /path/to/GRiD/tools/check_installed_package.py --work /tmp/package-check`.
    This verifies imports, all provenance hashes, launch profiles and actual
    generation without Git, nvcc or GPU calls. It must not use an editable install.
+   `release-check` runs this step.
 2. In the tested GPU/framework environment, install the wheel and run the same
    checker with `--gpu`. It registers a small robot and checks NumPy against
    the bundled CPU oracle, all three backend values, and JAX/PyTorch autograd.
+   `release-check` runs this step.
 3. Run again in a new process with `--gpu --reload` and the same work directory.
    Generation and compilation are forbidden, so a cache miss fails the gate.
+   `release-check` runs this step.
 4. For a wheel overlay on an existing framework environment, use
    `--package-root /absolute/unpacked-wheel-directory`. All GRiD/peer imports
    are checked to originate there. This complements, not replaces, the clean
@@ -67,12 +99,28 @@ macOS, Jetson or precompiled robot wheels in this release path.
 ## Freeze and publish
 
 Set the agreed version in `pyproject.toml` before freezing. Run the CPU/docs/artifact
-gates and focused GPU/sanitizer checks, then commit all correctness inputs. Coordinate
+gates, `make release-check`, and focused GPU/sanitizer checks, then commit all
+correctness inputs. Coordinate
 other projects' quiet timing before starting `test/run_validation.py --full`. After
 recording, commit only the generated evidence and use `--finalize` to verify its
 signature, complete scope and release policy on the clean descendant. No carried
 shards, policy bypass or tolerance relaxation: a release receipt is one fresh full
 pass at the release tip, verified under `test/gpu-proof-policy-release.yaml`.
+
+One receipt per architecture. The primary receipt, `gpu-proof.json`, is recorded
+on the RTX 5090 (sm_120); it gates CI, defines the collection manifest and is the
+only receipt the release workflow verifies. Secondary receipts document other
+architectures and live under `receipts/` (`receipts/gpu-proof-sm87.json` for the
+Jetson Orin); `test/gpu-proof-receipts.yaml` maps each compute capability to its
+receipt path, its header-key ledger and, when it needs one, its own expected-skips
+baseline. To record a secondary receipt, install the dev requirements on the
+Jetson and run `SPLIT=1 test/run_gpu_proof.sh` on a clean checkout of the release
+tip; the driver detects the architecture, writes that row's path and never
+touches `gpu-proof.json`. Commit the receipt with its header-key ledger.
+`make verify-all` verifies every receipt on disk, one line per architecture, and
+`test/receipt_integrity.py --table` prints their rows for the compatibility page.
+A release does not wait for secondary receipts; they are documentation of the
+other architectures, recorded when those machines are available.
 
 Inspect final package provenance and verify the exact frozen artifacts before the
 TestPyPI rehearsal and the production upload. Package ownership, publisher setup,

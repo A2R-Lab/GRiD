@@ -68,12 +68,13 @@
     <div class="grid">
       <div class="card"><h3>Python wrappers</h3><p><code>load_robot(urdf)</code> generates, compiles and caches the robot's CUDA and exposes it as batched NumPy, JAX or PyTorch calls. No CUDA code is required.</p>
       <pre><code>pip install grid-rbd            # code generator + NumPy backend + grid-generate CLI
-pip install "grid-rbd[jax]"     # or "grid-rbd[torch]", "grid-rbd[all]"</code></pre></div>
+pip install "grid-rbd[jax]"     # or "grid-rbd[torch]", "grid-rbd[all]"</code></pre>
+      <p class="note">Deep tutorial: <a href="docs/user_guide/tutorials/jax_ik_gradient_descent.html">gradient descent through GRiD with plain JAX</a>.</p></div>
       <div class="card"><h3>Header-only CUDA</h3><p>Generate one self-contained <code>grid.cuh</code> and <code>#include</code> it in your own kernels, for example to fuse dynamics, derivatives and collisions into an MPC, RL or controls kernel. This path needs only the generator and <code>nvcc</code>: no per-robot <code>.so</code> and no Python at runtime.</p>
       <pre><code>pip install grid-rbd
 grid-generate robot.urdf -o grid.cuh        # -f floating base, --algorithm-list to trim
 nvcc -arch=sm_90 -std=c++17 my_kernel.cu    # the header vendors its GLASS linear algebra</code></pre>
-      <p class="note">Minimal kernel and build script: <a href="https://github.com/A2R-Lab/GRiD/tree/main/examples/cuda">examples/cuda/</a>.</p></div>
+      <p class="note">Minimal kernel and build script: <a href="https://github.com/A2R-Lab/GRiD/tree/main/examples/cuda">examples/cuda/</a>. Deep tutorial: <a href="docs/user_guide/tutorials/fused_cuda_control_step.html">fuse dynamics into your own kernel</a>.</p></div>
     </div>
     <p>To develop GRiD, or to use the sample URDFs, work from a source checkout of <code>main</code> instead:</p>
     <pre><code>git clone --recursive https://github.com/A2R-Lab/GRiD.git
@@ -95,7 +96,7 @@ print(qdd.shape)  # (8, 7)
 robot.close()</code></pre>
     <p class="note">The first load generates and compiles the robot's CUDA, which takes minutes; later loads reuse the cache. Installation itself needs no GPU or compiler.</p>
     <div class="links start-links"><a class="button" href="docs/user_guide/getting_started/installation.html">Installation</a><a class="button" href="docs/user_guide/tutorials/codegen.html">Header-only CUDA</a><a class="button" href="docs/user_guide/tutorials/python_wrappers.html">Python examples</a><a class="button" href="docs/user_guide/tutorials/codegen.html">CUDA integration</a><a class="button" href="docs/user_guide/tutorials/collisions.html">Collision codegen</a></div>
-    <details><summary>Platform and interface scope</summary><p>Current validation targets Linux x86_64 with NVIDIA CUDA. Generated code can be rebuilt for different GPU architectures; compiled robot binaries are architecture-specific. This dataset does not cover Jetson. Use the PyPI install above (or the source checkout for development).</p><p>See <a href="docs/user_guide/getting_started/compatibility.html">compatibility and known limitations</a> for joint types, operation coverage, runtime contexts, differentiation, and graph-capture restrictions.</p></details>
+    <details><summary>Platform and interface scope</summary><p>Validation ran on Linux x86-64 (Ubuntu 24.04) with CUDA toolkit 13.2, driver 615.71.09 and one RTX 5090 (sm_120); other toolkits and GPUs are untested. Generated code can be rebuilt for different GPU architectures; compiled robot binaries are architecture-specific. This dataset does not cover Jetson. Use the PyPI install above (or the source checkout for development).</p><p>See <a href="docs/user_guide/getting_started/compatibility.html">compatibility and known limitations</a> for joint types, operation coverage, runtime contexts, differentiation, and graph-capture restrictions.</p></details>
   </section>
 
   <section id="research">

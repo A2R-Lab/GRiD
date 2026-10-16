@@ -292,6 +292,22 @@ the other surfaces (its default gradient re-measured between 0.80× and 1.20×
 of the September values on 2 October), so read small JAX differences with
 that in mind.
 
+The fused control step
+----------------------
+
+The deep tutorial (:doc:`user_guide/tutorials/fused_cuda_control_step`) fuses a
+computed-torque control step for iiwa14, a PD term, ``grid::inverse_dynamics_device``
+and an Euler step, into one kernel with one block per state, and checks it
+against the same step through the generated host function. On the RTX 5090
+(sm_120) at batch 256 with 128 threads per block, the median of 200
+cudaEvent-timed runs is 7.65 µs for the fused kernel and 28.70 µs for the
+layered path, a ratio of 3.75×. The two paths agree to a worst relative error
+of 3.8e-7 over the 256 states. The number was taken on an idle GPU on 16
+October 2026 by ``test/benchmarks/timing_night.sh --stages tutorial``
+(``fused_control_step.json`` in the night's output directory) and is not part
+of the release dataset above; ``build_and_time.sh --batch 256 --repeats 200``
+reproduces it.
+
 Protocol
 --------
 
@@ -375,6 +391,23 @@ From the repository root, plan without launching GPU work:
 Add ``--execute --output <fresh-capture>`` only in a coordinated quiet window.
 Raw captures remain in the local benchmark archive (not tracked); published
 assets contain their hashes and provenance.
+
+Regenerating the figures
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+The figures on this page and on the cover page are ``stacked_core``,
+``speedup_core``, ``speedup_pinocchio``, ``speedup_cpu_compute``,
+``speedup_gpu_resident``, ``speedup_gpu_jax_resident``,
+``speedup_gpu_full`` and ``wrappers``, each as the SVG the pages link and the
+PNG thumbnail the cover page and the README show. They are regenerated only
+by ``docs/plot_release_figures.py`` from a reviewed report directory and are
+never edited by hand. ``docs/release_pipeline.py`` rebuilds that report from
+the pinned captures and writes a preview; ``docs/plot_release_figures.py
+<report> --approve`` then writes the figure set and ``manifest.json`` into
+``docs/source/_static/release``, and ``docs/export_release_tables.py
+--approve`` refreshes the tables and audit files there. ``manifest.json``
+lists every file in that directory with its hash, and ``docs/check_site.py``
+refuses a site whose assets differ from it.
 
 Measurement scope
 -----------------

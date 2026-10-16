@@ -83,6 +83,7 @@ constexpr int NQ = grid::NUM_POS;
 constexpr int NV = grid::NUM_VEL;
 constexpr int NX = NQ + NV;
 constexpr int NU = NV;
+constexpr int NB = grid::NUM_BODIES;   // bodies; exceeds NV on mimic robots (fr3: 9 vs 8)
 
 // ---- deterministic problem setup (must match the Python test exactly) ----
 // Use a large finite infinity sentinel detected by isfinite()? No — use real
@@ -239,8 +240,12 @@ __global__ void plant_step_kernel(const T *g_q, const T *g_qd, const T *g_u, T d
                                   const grid::robotModel<T> *d_robotModel, T gravity,
                                   T *o_plant_xkp1, T *o_plant_dAB) {
     __shared__ T s_x[NX], s_u[NU], s_xkp1[NX], s_dAB[2 * NV * 3 * NV];
-    // integrator-gradient scratch (caller-placed; mirrors the integrator-gradient kernel)
-    __shared__ T s_df_du[NV * 2 * NV], s_dc_du[NV * 2 * NV], s_vaf[18 * NV], s_Minv[NV * NV], s_qdd[NV];
+    // integrator-gradient scratch (caller-placed; mirrors the integrator-gradient kernel).
+    // s_vaf is body-indexed (three 6-vectors per body): the generated kernels size it
+    // 18*NUM_JOINTS on mimic robots (NB > NV) and 18*NV otherwise (guide 1a), so the
+    // caller-placed copy takes the larger of the two; 18*NV alone overflowed into
+    // s_Minv on fr3 (9 bodies, 8 velocities) and corrupted the qd rows of dAB.
+    __shared__ T s_df_du[NV * 2 * NV], s_dc_du[NV * 2 * NV], s_vaf[18 * (NB > NV ? NB : NV)], s_Minv[NV * NV], s_qdd[NV];
     __shared__ T s_q_orig[NQ], s_qd_orig[NV], s_stage_grad_qdd[4 * NV], s_D_qdd_stage[4 * NV * 3 * NV];
     __shared__ T s_dInt_q_6x6[36], s_dInt_v_6x6[36];
     // The shared XImats table + the FD-grad inner pool. s_XImats is loaded INTO

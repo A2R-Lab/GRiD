@@ -143,7 +143,9 @@ def _oracle_hessian(ref, leaf_name, q):
 @pytest.mark.developer_only
 @pytest.mark.robot_smoke
 @pytest.mark.parametrize("fixture", ["spherical_arm.urdf", "mixed_spherical_arm.urdf"])
-@pytest.mark.parametrize("gridT", ["float", "double"])
+# The double cell is the fp64 alpha tier (2026-10-15). It carries fp64_alpha, stays
+# outside the signed receipt by collection, and runs under make test-fp64.
+@pytest.mark.parametrize("gridT", ["float", pytest.param("double", marks=pytest.mark.fp64_alpha)])
 def test_cuda_spherical_eepose_gradhess_matches_reference(tmp_path, fixture, gridT):
     """CUDA spherical end_effector_pose_gradient/_hessian must match the
     RBDReference tangent-space oracle on the device functions AND the host

@@ -638,17 +638,17 @@ _ARENA_FULL_FNS: dict[str, Callable[[ArenaCtx], int]] = {
         # runtime_transform (matches the rt-aware kernel carve; §2 fix 2026-07-14).
         lambda c: c.n + ((6*c.feg_dq_jobs if c.has_mimic else 0) + c.ximats_helper_temp) + c.XI + c.rt,
     "inverse_dynamics_regressor":
-        lambda c: (c.n + 2*c.nv) + c.nv*10*c.NB + 18*c.n + c.idr_inner + c.XI + c.rt,
+        lambda c: (c.n + 2*c.nv) + c.nv*10*c.NB + c.id_vaf + c.idr_inner + c.XI + c.rt,
     # dY/dx (B.0): q|qd|qdd input (3*NUM_POS) + s_dc_du id_du-staging scratch +
     # vel-flavour s_vaf + the id_du inner scratch pool (staging provider). The
     # OUTPUT is direct-to-global (never smem), so no output term.
     "inverse_dynamics_regressor_gradient":
         lambda c: 3*c.n + 2*c.nv*c.nv + c.grad_vaf + c.idgrad_inner + c.XI + c.rt,
     "forward_dynamics_parameter_gradient":
-        lambda c: (c.n + 2*c.nv) + c.nv*10*c.NB + c.nv*c.nv + c.nv*10*c.NB + c.nv + 18*c.n + c.nv
+        lambda c: (c.n + 2*c.nv) + c.nv*10*c.NB + c.nv*c.nv + c.nv*10*c.NB + c.nv + c.id_vaf + c.nv
                   + c.fpg_inner + c.XI + c.rt,
     "kinetic_energy_regressor":
-        lambda c: (c.n + c.nv) + 10*c.NB + 18*c.n + c.ker_inner + c.XI + c.rt,
+        lambda c: (c.n + c.nv) + 10*c.NB + c.id_vaf + c.ker_inner + c.XI + c.rt,
     # ── Kinematics (XmatsHom domain — no rt) ──
     "potential_energy_regressor":
         lambda c: c.n + 10*c.NB + 16*c.NJ + c.XHom,
@@ -805,13 +805,13 @@ _ARENA_RUNG_FNS: dict[str, tuple[Callable[[ArenaCtx], int], ...]] = {
         lambda c: 3*c.n + 2*c.nv*c.nv + c.grad_vaf + c.XI + c.rt,                       # emergency: inner -> ws
     ),
     "inverse_dynamics_regressor": (
-        lambda c: (c.n + 2*c.nv) + c.nv*10*c.NB + 18*c.n + c.idr_inner + c.XI + c.rt,   # full: s_Y in smem
-        lambda c: (c.n + 2*c.nv) + 18*c.n + c.idr_inner + c.XI + c.rt,                  # surgical: s_Y -> ws
+        lambda c: (c.n + 2*c.nv) + c.nv*10*c.NB + c.id_vaf + c.idr_inner + c.XI + c.rt,   # full: s_Y in smem
+        lambda c: (c.n + 2*c.nv) + c.id_vaf + c.idr_inner + c.XI + c.rt,                  # surgical: s_Y -> ws
     ),
     "forward_dynamics_parameter_gradient": (
-        lambda c: ((c.n + 2*c.nv) + c.nv*10*c.NB + c.nv*c.nv + c.nv*10*c.NB + c.nv + 18*c.n + c.nv
+        lambda c: ((c.n + 2*c.nv) + c.nv*10*c.NB + c.nv*c.nv + c.nv*10*c.NB + c.nv + c.id_vaf + c.nv
                    + c.fpg_inner + c.XI + c.rt),                                        # full: s_Y in smem
-        lambda c: ((c.n + 2*c.nv) + c.nv*c.nv + c.nv*10*c.NB + c.nv + 18*c.n + c.nv
+        lambda c: ((c.n + 2*c.nv) + c.nv*c.nv + c.nv*10*c.NB + c.nv + c.id_vaf + c.nv
                    + c.fpg_inner + c.XI + c.rt),                                        # surgical: first s_Y -> ws
     ),
     "f_ext_gradient": (

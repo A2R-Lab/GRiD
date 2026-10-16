@@ -282,6 +282,7 @@ def test_cuda_eepose_runtime_thread_invariance(tmp_path, robot_id, base_mode):
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 @pytest.mark.robot_smoke
+@pytest.mark.fp64_alpha  # fp64 alpha tier (2026-10-15): outside the receipt, make test-fp64
 def test_cuda_eepose_runtime_h1_fp64(tmp_path):
     """Deep mimic pose agreement must not depend on single-precision allowances."""
     test_cuda_eepose_runtime_matches_reference(tmp_path, 'h1_2', 'fixed', scalar='double')

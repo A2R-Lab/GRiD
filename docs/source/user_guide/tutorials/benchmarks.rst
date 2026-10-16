@@ -119,7 +119,7 @@ Stability and compile flags
 ---------------------------
 
 A flag exists for working around hardware/toolchain quirks; the
-default is correct on sm_120 (RTX 5090) and likely fine on sm_8x:
+default is correct on sm_120 (RTX 5090); other architectures are untested:
 
 * ``--ptxas-opt-level 2``: drops ptxas from -O3 to -O2, used when nvcc
   ptxas itself crashes (rare).

@@ -9,7 +9,12 @@ reads a per-body external force (body-major ``6*NUM_BODIES`` local frame,
 thread external forces (inverse_dynamics / fd / aba / inverse_dynamics-grad / fd-grad). We feed the
 IDENTICAL f_ext to RBDReference and pinocchio and assert all three agree.
 
-Gated iiwa14 (fixed) first, then g1 (floating).
+Every manifest robot on both bases (widened 2026-10-15), iiwa14 fixed first as
+the gate. For the mimic robots (fr3 / h1_2) the pinocchio leg is left out:
+pinocchio's reduced model collapses the mimic body, so its f_ext has NB-1
+columns and cannot take the same per-body input; the CUDA-vs-RBDReference check
+stands on its own there (RBDReference is pinocchio-validated on the non-mimic
+robots). Narrow with GRID_CUDA_FEXT_ROBOTS="iiwa14:fixed,g1:floating".
 """
 import os
 import shutil
@@ -36,8 +41,26 @@ from test.cuda_equivalents.cuda_harness import (
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_equivalence_runner.cu")
 
-# (robot_id, base_mode). iiwa14 gated first.
-_CASES = [("iiwa14", "fixed"), ("g1", "floating")]
+# (robot_id, base_mode): every manifest robot on both bases, iiwa14 fixed first.
+# Narrow with GRID_CUDA_FEXT_ROBOTS.
+_ALL_ROBOTS = ("iiwa14", "go2", "g1", "h1_2", "fr3", "rizon4", "gen3", "fetch", "baxter")
+
+
+def _cases():
+    raw = os.environ.get("GRID_CUDA_FEXT_ROBOTS")
+    if raw:
+        out = []
+        for tok in raw.split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            rid, _, mode = tok.partition(":")
+            out.append((rid.strip(), (mode.strip() or "fixed")))
+        return out
+    return [(r, b) for b in ("fixed", "floating") for r in _ALL_ROBOTS]
+
+
+_CASES = _cases()
 
 
 def _build_adapters(robot_id, base_mode):
@@ -130,6 +153,17 @@ def test_cuda_fext_three_way_equivalence(robot_id, base_mode, tmp_path):
     f_ext_flat = np.concatenate(f_ext).astype(np.float64)
 
     floating = base_mode == "floating"
+    # Mimic robots: the CUDA path and RBDReference take one f_ext column per body
+    # (NB bodies, the mimic body included); pinocchio's reduced model omits the
+    # mimic body, so its f_ext layout differs and the three-way check becomes the
+    # two-way CUDA-vs-RBDReference check (see the module docstring).
+    has_mimic = any(getattr(j, "is_mimic", False) for j in ref.robot.joints)
+    # gen3: its four continuous joints are RUBZ (cos, sin) slots in pinocchio and raw
+    # angles in GRiD; the cross-library float64 round-off bucket in RBDReference
+    # tests/tolerances.py has no forward_dynamics or f_ext_grad entry, so the
+    # pinocchio leg is left out for gen3 as for the mimic robots (2026-10-16; the
+    # CUDA-vs-RBDReference leg stays). Ask: add those gen3 buckets to RBDReference.
+    pin_excluded = has_mimic or robot_id == "gen3"
     exe = _gen_and_compile(proj, tmp_path, floating)
 
     # stdin matches the runner's read order: q (full project layout, len nq —
@@ -153,7 +187,12 @@ def test_cuda_fext_three_way_equivalence(robot_id, base_mode, tmp_path):
 
     @lru_cache(maxsize=None)
     def _pin_inverse_dynamics_gradient():
+        if pin_excluded:
+            return (None, None)
         return pin.inverse_dynamics_gradient(q, qd, zeros, f_ext=f_ext)
+
+    def _pin(fn, *args, **kwargs):
+        return None if pin_excluded else fn(*args, **kwargs)
 
     @lru_cache(maxsize=None)
     def _ref_fd_grad():
@@ -162,13 +201,13 @@ def test_cuda_fext_three_way_equivalence(robot_id, base_mode, tmp_path):
     def expect(name):
         if name == "inverse_dynamics":
             return (proj.inverse_dynamics(q, qd, zeros, f_ext=f_ext),
-                    pin.inverse_dynamics(q, qd, zeros, f_ext=f_ext))
+                    _pin(pin.inverse_dynamics, q, qd, zeros, f_ext=f_ext))
         if name == "forward_dynamics":
             return (proj.forward_dynamics(q, qd, u, f_ext=f_ext),
-                    pin.aba(q, qd, u, f_ext=f_ext))
+                    _pin(pin.aba, q, qd, u, f_ext=f_ext))
         if name == "aba":
             return (proj.aba(q, qd, u, f_ext=f_ext),
-                    pin.aba(q, qd, u, f_ext=f_ext))
+                    _pin(pin.aba, q, qd, u, f_ext=f_ext))
         if name == "inverse_dynamics_gradient_q":
             return (_ref_inverse_dynamics_gradient()[0], _pin_inverse_dynamics_gradient()[0])
         if name == "inverse_dynamics_gradient_qd":
@@ -185,7 +224,7 @@ def test_cuda_fext_three_way_equivalence(robot_id, base_mode, tmp_path):
     # CUDA-vs-RBDReference (pinocchio has no direct fd-grad-with-fext entry, and
     # the RBDReference fd-grad is itself pinocchio-cross-checked in the Python
     # suite). inverse_dynamics/aba/fd/inverse_dynamics-grad are checked against BOTH refs.
-    pin_checked = {
+    pin_checked = set() if pin_excluded else {
         "inverse_dynamics", "forward_dynamics", "aba",
         "inverse_dynamics_gradient_q", "inverse_dynamics_gradient_qd",
     }

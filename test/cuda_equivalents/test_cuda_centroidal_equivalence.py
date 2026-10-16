@@ -19,14 +19,16 @@ Gravity convention: unified at -9.81. The runner passes gravity = -9.81 to GRiD,
 matching the RBDReference oracles' default GRAVITY = -9.81 — both sides now use
 one convention (the same pairing the main inverse_dynamics CUDA-equivalence test uses).
 
-Robots: iiwa14-fixed (cheap, gate first) + a floating robot (default go2, an
-18-DoF quadruped that compiles quickly; g1/h1_2 also work but their large
-all-profile headers take many minutes to nvcc-compile). NOTE: this runner is
-NON-MIMIC ONLY — it drives grid_plant com_cost/momentum_cost (and com/ccrba
-device fns) which codegen emits for non-mimic robots only (_plant.py). Mimic
-validation of the centroidal id-bias `s_vaf` (NB-sized) path needs a dedicated
-generalized_gravity/nonlinear_effects-only runner (backlog: f2_audit_findings).
-Override with GRID_CUDA_CENTROIDAL_ROBOTS="iiwa14:fixed,g1:floating".
+Robots: every NON-mimic manifest robot on both bases (iiwa14, go2, g1, rizon4,
+gen3, fetch, baxter; widened 2026-10-15), iiwa14-fixed first as the cheap gate.
+The runner launches at GRID_CUDA_CENTROIDAL_THREADS (the test sets 256 since
+2026-10-15): the kernels stride over blockDim, and go2-floating exceeds the
+per-block register budget at MAX_PERF_LEVEL_THREADS. NOTE: this runner is
+NON-MIMIC ONLY: it drives grid_plant com_cost/momentum_cost (and com/ccrba device
+fns) which codegen emits for non-mimic robots only (_plant.py). The mimic robots
+fr3 / h1_2 are covered on both bases by the mimic-safe runner below
+(test_cuda_centroidal_mimic_safe_matches_reference).
+Narrow with GRID_CUDA_CENTROIDAL_ROBOTS="iiwa14:fixed,g1:floating".
 """
 
 from __future__ import annotations
@@ -68,8 +70,17 @@ def _com_des_off():    return np.array([0.05 * (r + 1) for r in range(3)], dtype
 def _mom_des_off():    return np.array([0.1 * (r + 1) for r in range(6)], dtype=np.float64)
 
 
+# Non-mimic robots only (the runner drives the grid_plant centroidal costs, which
+# codegen emits for non-mimic robots; fr3 / h1_2 go through the mimic-safe runner
+# below). go2:floating was de-collected earlier on 2026-10-15 for the register
+# budget at MAX_PERF_LEVEL_THREADS and returned the same day once the runner took
+# the GRID_CUDA_CENTROIDAL_THREADS override (the test launches at 256).
+_NON_MIMIC_ROBOTS = ("iiwa14", "go2", "g1", "rizon4", "gen3", "fetch", "baxter")
+_DEFAULT_ROBOTS = ",".join(f"{r}:{b}" for b in ("fixed", "floating") for r in _NON_MIMIC_ROBOTS)
+
+
 def _robot_modes():
-    raw = os.environ.get("GRID_CUDA_CENTROIDAL_ROBOTS", "iiwa14:fixed,go2:floating")
+    raw = os.environ.get("GRID_CUDA_CENTROIDAL_ROBOTS", _DEFAULT_ROBOTS)
     out = []
     for tok in raw.split(","):
         tok = tok.strip()
@@ -136,9 +147,13 @@ def _mimic_robot_modes():
     # survived on slack; h1_2 NB-NV=12 crashed). FIXED: the macro now sizes s_vaf by
     # 18*NB for mimic (mirroring the device-wrapper fix; non-mimic byte-identical). h1_2:fixed
     # is kept in the default list so a regression re-trips here.
-    # Override the whole list with GRID_CUDA_CENTROIDAL_MIMIC_ROBOTS.
+    #
+    # fr3:floating and h1_2:floating (added 2026-10-15) run the same alpha-folded
+    # device functions under the floating root (NB > NV on both), so both mimic
+    # robots are covered on both bases. Override the whole list with
+    # GRID_CUDA_CENTROIDAL_MIMIC_ROBOTS.
     raw = os.environ.get("GRID_CUDA_CENTROIDAL_MIMIC_ROBOTS",
-                         "fr3:fixed,h1_2:fixed,iiwa14:fixed")
+                         "fr3:fixed,h1_2:fixed,iiwa14:fixed,fr3:floating,h1_2:floating")
     out = []
     for tok in raw.split(","):
         tok = tok.strip()
@@ -205,7 +220,10 @@ def _robot_has_mimic(project_model) -> bool:
 @pytest.mark.robot_smoke
 @pytest.mark.parametrize(("robot_id", "base_mode"), _mimic_robot_modes(),
                          ids=lambda v: v if isinstance(v, str) else None)
-def test_cuda_centroidal_mimic_safe_matches_reference(tmp_path, robot_id, base_mode):
+def test_cuda_centroidal_mimic_safe_matches_reference(tmp_path, monkeypatch, robot_id, base_mode):
+    # Register-safe launch width for every robot (the mimic runner reads it too).
+    monkeypatch.setenv("GRID_CUDA_CENTROIDAL_THREADS",
+                       os.environ.get("GRID_CUDA_CENTROIDAL_THREADS", "256"))
     """Mimic-safe centroidal CUDA equivalence: generalized_gravity / nonlinear_effects.
 
     Drives ONLY the two mimic-supported centroidal id-bias device fns against the
@@ -290,7 +308,11 @@ def _run(executable, cmd, q, qd):
 @pytest.mark.robot_smoke
 @pytest.mark.parametrize(("robot_id", "base_mode"), _robot_modes(),
                          ids=lambda v: v if isinstance(v, str) else None)
-def test_cuda_centroidal_matches_reference(tmp_path, robot_id, base_mode):
+def test_cuda_centroidal_matches_reference(tmp_path, monkeypatch, robot_id, base_mode):
+    # Register-safe launch width for every robot (255 regs x 256 threads fits the
+    # 64K budget); the runner reads it, and a caller's own value is kept.
+    monkeypatch.setenv("GRID_CUDA_CENTROIDAL_THREADS",
+                       os.environ.get("GRID_CUDA_CENTROIDAL_THREADS", "256"))
     spec = _robot_spec(robot_id, base_mode)
     try:
         resolved = resolve_robot_spec(spec)

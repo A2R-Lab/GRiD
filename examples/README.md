@@ -10,6 +10,7 @@ your own kernels). Pick a track by how you intend to use GRiD.
 |-------------|-------|-----|--------------|
 | Easy: Python wrappers | Python bindings | [`notebooks/`](notebooks/) | call GRiD dynamics from Python (numpy / torch / JAX), batched on the GPU. Start here. |
 | Easy: Python wrappers | Runnable scripts | [`../bindings/examples/`](../bindings/examples/) | task-shaped, runnable binding scripts (GPU residency, tools/payloads, multi-contact, sysID, named EE targets, runtime params) |
+| Easy: Python wrappers | Plain-JAX optimisation | [`jax/`](jax/) | run `jax.grad` through GRiD and write the optimiser myself (inverse kinematics by gradient descent, no optimiser library) |
 | Power user: header-only CUDA | Codegen | [`codegen/`](codegen/) | generate a `grid.cuh` from a URDF and drop it into my own C++/CUDA project |
 | Power user: header-only CUDA | Hand-written CUDA | [`cuda/`](cuda/) | write my own CUDA kernel that `#include`s the generated header |
 
@@ -35,6 +36,17 @@ forces, least-squares system identification, named end-effector targets,
 runtime parameter mutation. They are indexed in
 [`../bindings/examples/AGENT_INTEGRATION_GUIDE.md`](../bindings/examples/AGENT_INTEGRATION_GUIDE.md)
 under "Runnable examples".
+
+## `jax/`: gradient descent through GRiD with plain JAX
+
+`jax/ik_gradient_descent.py` solves inverse kinematics for the iiwa14 by
+gradient descent on the end-effector position error, with `jax.grad` running
+through `robot.end_effector_pose` on the JAX handle. GRiD supplies the
+differentiable primitive (the forward and its analytic Jacobian as FFI
+calls); `jax.grad`, `jax.jit` and `jax.lax.fori_loop` supply the rest, and
+the update rule is written out by hand. It needs `grid-rbd[jax]`, a CUDA jax
+wheel and a GPU, runs in seconds on a cached build, and asserts the final
+error. The tutorial page on the site walks through it.
 
 ## `codegen/`: generate `grid.cuh` for your own project
 
@@ -67,6 +79,12 @@ surfaces plus the generated host launchers, dynamic-shared-memory
 registration, batched one-block-per-timestep). This is the CUDA counterpart
 to the `codegen/` track: codegen produces the header and this track consumes
 it. Together they are the "Power user: header-only CUDA" entry point.
+
+The deep tutorial lives in `cuda/fused_control_step/`: one kernel that runs
+a computed-torque control step (PD term, inverse dynamics, Euler step) over
+a batch of states with `grid::inverse_dynamics_device` called from inside it,
+checked against the generated host function stage by stage and timed
+against it (`build_and_time.sh`).
 
 See [`cuda/README.md`](cuda/README.md). The notebook
 [`notebooks/07_inline_cuda.ipynb`](notebooks/07_inline_cuda.ipynb) is the

@@ -1484,6 +1484,31 @@ is their tombstone):
 
 ---
 
+### 7.x Error-message walk (2026-10-15, hardening batch B)
+- `URDFParser` raises typed errors (`URDFParseError`, `UnsupportedJointTypeError`); `grid_codegen/cli.py`'s
+  `validateRobot` None path is dead in practice. The CLI now catches those (and the collision-geometry and
+  algorithm-name `ValueError`s) and prints a `[!Error]` line with the next action, exit code 1 as before.
+- Binding messages that say "re-register" must name the call: `register_robot(name=..., urdf_path=..., force_rebuild=True)`.
+  Several CPU tests match substrings ("predates", "re-register", "jax[cuda12]", the `k: recorded X != current Y` reason
+  format); keep them inside any reworded text. `test/test_error_messages.py` pins the wording for every CPU-reachable path.
+- The torch "no kernel image is available" failure has no grid_rbd raise site: it is torch's own error from the VJP
+  contraction kernels. The only place to guide the user is the `_require_torch` hint and the docs.
+
+### 7.y nvcc splits a -D value on commas (2026-10-15)
+- `-DX=86,120` becomes `-DX=86 -D120` and nvcc fails with "macro names must be identifiers". Pass list-valued
+  defines with another separator (`-DGRID_RBD_ARCHS=86:120`) and stringify in the template (`GRID_RBD_STRINGIFY`).
+
+### 7.z47 Degenerate samples and a no-op sweep found by widening the matrix (2026-10-16)
+- A zero-torque sample puts a floating-base robot in free fall, where the exact parameter gradient of the
+  acceleration is identically zero and the comparison measures float32 forward-dynamics noise through the
+  mass-matrix inverse. The parameter-gradient suite now drives every sample with u = ID(q, qd, qdd_sample),
+  the integrator suite's approach, which removed the g1-only absolute floor as well.
+- `test_cuda_fd_du_output_spill.py` set `GRID_NTHREADS`, which the equivalence runner never reads (it takes
+  argv[1]), so its thread-count sweep had run every build at the default width. When a sweep is cheap to
+  pass, check that the knob reaches the process.
+- Widening a family to all nine robots is what exposed both, plus the mimic `s_vaf` overflow in 7.z46. A
+  family validated on three robots is validated on three robots.
+
 ## 8. Process meta-lessons
 
 - **The backlog drifts — verify "is this still open?" before dispatching.** This session found 5
@@ -2970,3 +2995,165 @@ authenticates every shard receipt's signature; the scope gate is the policy's
 `required_test_manifest` (EXACT set, `test/gpu-proof-tests.txt`) verified by
 the driver right after the merge while the tree is still byte-clean — before
 the launcher promotes the receipt — not a GRiD-side subset check.
+
+### 7.z46 A per-body scratch sized by NUM_POS hides behind a spilled output slot (2026-10-16, h1_2 regressor)
+
+`test_cuda_regressor[h1_2-fixed]` and `[h1_2-floating]` returned O(1) to O(1e4)
+entries of Y in DOF rows 0..4 of body columns 1..5 only (the first leg chain),
+every other row, body and the twelve mimic hand joints exact. The same cell
+passed with a smem target large enough to keep s_Y in shared memory, and
+g1 passed on the forced spill path, so the symptom looked like a workspace
+offset or aliasing bug in the spilled s_Y band. It was bug class 1a. The
+regressor kernel carved `s_vaf` as `18*NUM_POS` (702 floats on h1_2 fixed)
+while `inverse_dynamics_inner` indexes it by raw body id over
+`get_num_joints()` bodies (51, so 918 floats). The f writes of bodies 15..50
+ran 216 floats past the slot. The arena order is `s_vaf | s_Y | s_XImats`.
+At an in-smem tier the overflow lands in s_Y, which the inner zeroes right
+after the forward sweep, so it is harmless and invisible. At a spilled tier
+the s_Y slot is zero bytes and the same 216 floats are exactly the X
+matrices of bodies 0..5; every column whose chain propagates through X[1..5]
+(the left leg) is wrong in its ancestor rows, which is the observed pattern
+(row 5, the leaf's own projection, is applied before the corrupted X). The
+ID kernel had already been fixed to `18*NJ` for mimic robots (section 1a);
+the regressor, the fd parameter gradient (a clone of the same spill) and the
+kinetic-energy regressor kernels and device wrappers had not, and their
+arena descriptors in `algo_registry.py` carried the matching `18*c.n`. Fix:
+size by `get_num_joints()` when `robot_has_mimic_joints()` (the `nb_vaf`
+idiom) and use `c.id_vaf` in the descriptors; non-mimic robots are
+byte-identical. How it was localized: print the bad (row, body, param)
+set per sample rather than the max error, count the overflow in units of
+the neighbour (216 floats is six 6x6 transforms) and read the generated
+arena comment block of the failing kernel; a corrupted-X hypothesis
+predicts exactly which rows and columns fail, an offset bug does not.
+Lesson: a buffer that only overflows into a later-zeroed slot is still a
+bug, and any spill rung that shrinks a slot to zero re-exposes every such
+overflow behind it. Grep every `("s_vaf", 18 *` and `18*c.n` site when a
+mimic robot fails only on a spilled rung.
+
+### 7.z48 A float32 inverse cannot be compared entrywise above cond 1e5; use the normwise backward error (2026-10-16, osc_inertia)
+
+Widening `test_cuda_frame_jacobian.py` to all nine robots failed g1-fixed and
+h1_2-fixed only in the Lambda block, only in the WORLD frame, at one
+ill-conditioned configuration each (5 of 36 and 1 of 36 entries, relative
+1.5e-2 against rtol 5e-3). J and Jdot were exact everywhere. cond(J Minv J^T)
+was 1.2e7 and 2.9e6 at the two failures and below 1e5 at every passing sample.
+The kernel was not wrong: a float32 inverse of A carries an entrywise relative
+error of about u times cond(A), u = 2^-24, so at cond 1e5 the error already
+reaches the 5e-3 class and at cond 1e7 it is percent level. A CPU float32
+inverse of the same A_ref measured 1.6e-3 at the g1 sample, the same class as
+the device. The raw residual max|Lambda A_ref - I| with a fixed tolerance is
+not a fix: it is bounded by the same u times cond (the CPU float32 inverse
+gives 8e-2 at cond 1.2e7 and 1e2 at a singular corner). The check that is
+valid at every conditioning is the normwise backward error of each column
+x_j of Lambda as the solution of A_ref x = e_j, eta_j = ||A_ref x_j - e_j|| /
+(||A_ref|| ||x_j||) (Rigal and Gaches, 1967), the smallest relative
+perturbation of A_ref for which x_j is exact. It measured 1e-11 to 9e-8 on
+every well-conditioned sample of every robot and at most 3e-6 at the cond
+1e14 corner samples, independent of cond, and is held to the harness float32
+class 2e-4. The entrywise comparison stays in force below cond 1e5, where
+float32 represents the inverse to the class. At an A_ref that is singular at
+float32 working precision (cond at or above 2^24: the q=0 corner of iiwa14
+and of h1_2) both the device and a CPU float32 inverse return non-finite
+values, because the inverse does not exist; that outcome is accepted only
+there, and a finite Lambda is always held to the backward error. The checks
+live in `check_osc_inertia` in `test_cuda_frame_jacobian.py` and are shared
+by the host and spill-F tests, which previously dropped samples at cond 1e8
+with a silent continue. Lesson: before loosening a tolerance on an inverse,
+compute cond(A) and the backward error; if the backward error is at unit
+roundoff the kernel is right and the entrywise comparison was the ill-posed
+object. The same reasoning applies to Minv and to any output formed by
+inverting a float32 matrix.
+
+### 7.z49 A composed gradient inherits the float32 class of its pieces; price the cell with the noise model before touching the bound (2026-10-16, rizon4-floating RK4)
+
+Widening `test_cuda_integrator_equivalence.py` to all nine robots failed
+rizon4-floating at TIER_LITE on one check: the RK4 gradient at
+high_acceleration, dt 0.1, missed 2 of 1014 entries by at most 1.49 times
+the scale-relative allowance (max relative 5.1e-3, norm_rel 7.8e-4), the
+same at 32, 96 and the suggested thread count, so not a race. rizon4 is the
+worst member of the float32 floating FD-gradient class in `cuda_harness`
+(forward_dynamics_gradient_q norm_rel 1.6e-3, exact in fp64), and the RK4
+gradient composes four FD-gradient evaluations through the stage chain, so
+the class reaches the integrator. The question was whether the deviation is
+that class or a kernel error, and the suite's own model (7.z31) answers it
+without a GPU: inject the measured class noise into every evaluation of the
+fp64 reference (1.6e-3 norm_rel on each J_qq, 2e-4 on J_qv and Minv, 1e-6
+per forward-dynamics value), compose the reference RK4 gradient 200 times
+and read the spread. With the class noise the model misses a median of 11
+entries per trial (max 28), its per-entry sigma at the two failing entries
+is 1.9 and 1.7 (the device sat at 1.3 and 0.9 sigma) and its norm_rel runs
+median 1.5e-3, max 2.2e-3; the device is quieter than the model. With only
+the strict 2e-4 gradient noise the model misses no entry (max 0.72 of the
+allowance, norm_rel max 4.0e-4), so nothing but the floating-Minv class
+explains the device. The failing log hid the cell's real worst, because
+pytest stops at the first assertion: a sweep of every sample, dt and
+integrator against the cached executable found energetic_random_1 at 3.93
+times the allowance, norm_rel 2.06e-3, where the model gives norm_rel
+median 4.0e-3, max 5.8e-3 (device entries at 0.5 to 1.4 sigma; the strict
+control stays at or below 7.6e-4). The bound was then set from the model
+at that worst sample, not from either diff: the full-matrix norm fallback
+the floating mimic cells already use (`_FLOATING_FDGRAD_NORM_RTOL`, rizon4
+6e-3, the model's max rounded up, the device at a third of it), with the
+entrywise check still first. Lessons: a cell that composes an operator
+inherits that operator's float32 class, so check the harness table for the
+pieces before reading the diff as a kernel error; run the noise model both
+with and without the suspected class, because only the pair proves the
+class is necessary and sufficient; sweep the whole cell before deriving a
+bound, since the first failure is rarely the worst; and write the measured
+numbers into the comment so the next audit can re-measure, as 7.z34 did.
+
+### 7.z50 A test helper that reads a numpy-only handle attribute fails the moment it is handed a backend handle (2026-10-16, floating q cotangent float32 twins)
+
+The float32 twins added to `test_floating_q_cotangent.py` on 2026-10-15 take
+their finite-difference oracle from the float64 `RBDReference`, and the
+helper that builds that oracle, `_reference_cases(ref, h)`, read the
+quaternion block layout as `h.configuration_layout`. Only the numpy
+`RobotHandle` exposes that attribute; the jax and torch handles delegate
+`name`, `num_vel` and `num_ees` to their underlying numpy handle but not the
+layout, so all twelve jax and torch float32 ids died with `AttributeError`
+while the twelve spherical float32 ids passed, because that test already
+passed the numpy handle. The float64 variants never reach the helper (their
+oracle is the public function itself), which is why the fp64 lane stayed
+green. The fix reads the layout from the numpy handle of the same
+registration, `grid_rbd.get_robot(h.name).configuration_layout`, which
+works for every backend handle without touching the bindings. Lesson: a
+helper shared between the numpy and backend handles must take only the
+delegated surface or go through `get_robot(name)`; when a new variant is
+added to one test and not its sibling, run the sibling on the GPU before
+the receipt rather than reading the fp64 pass as coverage.
+
+### 7.z51 A caller-placed per-body scratch sized by NV in a runner is the 1a bug living in test infrastructure (2026-10-16, fr3-fixed plant pass-through)
+
+The plant runner's `plant_step_kernel` hands `grid_plant::plant_step_gradient`
+caller-placed scratch and declared `s_vaf[18 * NV]`. The generated
+integrator-gradient inner writes `s_vaf` body-indexed, three 6-vectors per
+body, and the generator sizes it `18 * get_num_joints()` on mimic robots
+(fr3: 9 bodies, 8 velocities, 162 floats) and `18 * nv` otherwise, so on
+fr3 the inner's last body landed 18 floats past the runner's buffer, into
+the adjacent `s_Minv`. The cell had never been green: before 2026-10-15 it
+could not launch at `MAX_PERF_LEVEL_THREADS` at all, and the first launch at
+256 showed 37 of 384 dAB entries wrong at nominal, up to 77 at
+high_velocity. The evidence that it was a scratch overflow and not the
+mimic fold in the generator: the mismatch set was identical at 128 and 256
+threads on every sample (a race would move), it sat only in rows 8 to 14 of
+dAB (the qd rows, the block that passes through Minv; the q rows and the
+last row stayed within tolerance), and the `grid::integrator_gradient` host path, which
+sizes its own arena from the generator, was the side the test trusted.
+With `s_vaf[18 * (NB > NV ? NB : NV)]`, `NB = grid::NUM_BODIES`, plant dAB
+is bit-identical to the integrator oracle on all eighteen samples at both
+widths; iiwa14 (NB == NV) is unchanged by construction. Lessons: 1a applies
+to every caller-placed buffer in a test runner, not only to the generator,
+so when a runner declares scratch for a generated inner, copy the
+generator's count expression (or carve from the emitted arena struct)
+rather than restating it from NV; read the header's own `@param` line for
+the buffer, which states `3*6*NUM_JOINTS = 162` and would have given the
+answer in one grep; and a mimic-only failure in a cell that is exact on a
+non-mimic robot is a NB versus NV count until proven otherwise.
+
+### 7.z52 A competitor cell that fails only at a few samples of a large batch is a chart-conditioning problem, not a transport bug (2026-10-16, Frax floating-base gradients)
+
+Symptom: the Frax forward_dynamics_gradient gap cell on go2 and g1 passed at batch 16 (relative L2 1e-4, the fp32 class) and failed the 1e-3 gross-error backstop at every larger batch, with block errors up to 1e-2 and single entries off by hundreds. The first reading, "the collector rule is too tight", came from measuring batch 16 only.
+
+Diagnosis in three CPU steps. (1) Per-sample errors from the saved failure.npz against the inputs.npz: every bad sample had |cos(pitch)| between 0.01 and 0.1, that is within a few degrees of the intrinsic XYZ Euler singularity of Frax's floating base; the median sample sat at 1e-4. (2) Replaying the worst samples through the same transport in float64 on the CPU reproduced the oracle to 1e-12, so the transport (frax_floating.py) is right. (3) Replaying in fp32 on the CPU gave 3e-6, but on the GPU 1e-2 under full fp32 and NaN under TF32: Frax solves M_frax = G^T M G by Cholesky, and that matrix's condition number grows like 1/cos^2(pitch) (1e6 at the bad samples), so the fp32 solve is at the mercy of the implementation; the CPU path happens to do better.
+
+Rule: the quantity exists and the mapping is exact; what cannot be validated is the backend's fp32 arithmetic in its own ill-conditioned chart. The collector now takes a validation scope from the adapter (worker.py, `validation_scope`): Frax floating cells validate on the samples with chart condition at most CHART_CONDITION_MAX = 10 (about 1 sample in 100 excluded) and the cell records the counts; timing covers every sample. The threshold came from a sweep over the captured errors (retained relative L2 below 3e-4 at every batch). Do not widen the backstop for everyone to admit one backend's singular chart, and do not change the shared fixture: the other backends validate at those samples.

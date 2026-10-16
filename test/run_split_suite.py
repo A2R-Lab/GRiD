@@ -35,6 +35,17 @@ Usage (from the repo root):
                                                            #   fingerprint-stale shards, carry the rest
   .venv/bin/python test/run_split_suite.py --receipts-carry-from old.json
                                                            # carry unchanged modules from an old receipt
+  .venv/bin/python test/run_split_suite.py --print-receipt-target
+                                                           # which receipt this GPU records (table row)
+
+Receipts by architecture: test/gpu-proof-receipts.yaml maps the detected
+compute capability to a receipt path. The primary row (sm_120, gpu-proof.json)
+is what CI verifies and what run_gpu_proof.sh copies the merged receipt to; a
+secondary row (a Jetson, receipts/gpu-proof-sm87.json) gets its own receipt,
+its own header-key ledger and, when the table says so, its own expected-skips
+baseline, and never touches gpu-proof.json. The driver refuses a GPU without a
+row before any work, and refuses to carry or refresh from a receipt recorded
+on another architecture.
 
 Refresh-carry soundness (the subtlest contract here, see plan_refresh): a
 carried cuda shard is trusted only after (1) the robot-ASSET gate — oracle-side
@@ -162,6 +173,9 @@ WARM_MANIFEST: dict[str, list[dict]] = {
                         _r("fr3", max_batch_size=64),
                         _r("iiwa14", max_batch_size=64, floating_base=True,
                            enable_mujoco_kernels=False)],
+    # The receipt's one fp64 build (2026-10-15): the numpy iiwa14 canary in
+    # test_fp64_parity. Every other fp64 test is in the fp64_alpha lane
+    # (make test-fp64), outside the receipt, and builds on demand.
     "test_fp64_parity": [_r("iiwa14", max_batch_size=8, dtype="float64"),
                          _r("iiwa14", max_batch_size=8)],
     "test_g1_plant_hessian_smoke": [_r("g1", max_batch_size=8,
@@ -176,7 +190,6 @@ WARM_MANIFEST: dict[str, list[dict]] = {
         _r("go2", max_batch_size=256, floating_base=True,
            enable_mujoco_kernels=False)],
     "test_runtime_inertia": [_r("iiwa14", runtime_inertia=True),
-                             _r("iiwa14", runtime_inertia=True, dtype="float64"),
                              _r("iiwa14"),
                              _r("go2", floating_base=True, runtime_inertia=True,
                                 enable_mujoco_kernels=False)],
@@ -192,6 +205,8 @@ WARM_MANIFEST: dict[str, list[dict]] = {
 # GRID_SPLIT_HARD_TIMEOUT. Historical expected COLD durations, for triage only:
 # g1_plant_hessian / joint_dynamics / runtime_joint_dynamics ~1-2h (multi-build,
 # incl. float64); ee_named_target_floating_multileaf ~2h (5 in-module builds).
+# Since 2026-10-15 the fp64 tier is alpha: the receipt's only fp64 build is the
+# test_fp64_parity canary above; fp64_alpha tests are not part of these shards.
 
 
 def discover_modules() -> list[str]:
@@ -803,6 +818,36 @@ def update_durations(merged_receipt: Path) -> None:
 
 
 HEADER_KEYS_PATH = REPO_ROOT / "test" / "gpu-proof-header-keys.json"
+
+
+def detect_cuda_arch() -> int:
+    """Compute capability of the first GPU as an integer (120 for sm_120);
+    0 when no GPU is detectable. Thin seam over grid_rbd._cache so the
+    receipt-row selection below can be exercised without a GPU."""
+    from grid_rbd._cache import detect_cuda_arch as _detect  # noqa: PLC0415
+    return _detect()
+
+
+def receipt_row_for_this_gpu():
+    """The test/gpu-proof-receipts.yaml row this box records to (raises
+    ValueError for a GPU without a row, or when no GPU is detected)."""
+    from test.receipt_integrity import receipt_row_for_arch  # noqa: PLC0415
+    return receipt_row_for_arch(detect_cuda_arch())
+
+
+def refuse_cross_arch_carry(source: str, row) -> str | None:
+    """A carry/refresh source recorded on another architecture is unsound
+    (its shards attest another GPU); return the refusal, or None."""
+    from test.receipt_integrity import receipt_arch  # noqa: PLC0415
+    try:
+        old_arch = receipt_arch(json.loads(Path(source).read_text()))
+    except (OSError, ValueError):
+        return None  # unreadable receipts fail later, in merge/verify
+    if old_arch is None or old_arch == row.arch:
+        return None
+    return (f"{source} was recorded on sm_{old_arch}; this GPU is {row.sm} "
+            f"({row.label}) and records {row.receipt}. Shards cannot carry "
+            f"across architectures; record a fresh full pass on this GPU.")
 
 
 def aggregate_header_keys(rdir: Path, results: list[dict],
@@ -1616,6 +1661,11 @@ def main() -> int:
                     help="delete all but the newest N timestamped run dirs under "
                          "test/.split_suite/ (receipt_* and bare <stamp> dirs; the "
                          "rolling durations/RSS ledgers are never touched), then exit")
+    ap.add_argument("--print-receipt-target", action="store_true",
+                    help="print the test/gpu-proof-receipts.yaml row for the "
+                         "GPU in this box (role, arch, receipt path, label; "
+                         "tab-separated) and exit; rc 2 when the architecture "
+                         "has no row. run_gpu_proof.sh reads this.")
     ap.add_argument("--warm-one", default=None, metavar="SPEC_JSON",
                     help=argparse.SUPPRESS)  # internal pool-worker mode
     ap.add_argument("pytest_args", nargs="*", default=[],
@@ -1624,6 +1674,16 @@ def main() -> int:
 
     if args.warm_one:
         return warm_one_worker(args.warm_one)
+
+    if args.print_receipt_target:
+        try:
+            row = receipt_row_for_this_gpu()
+        except ValueError as exc:
+            print(f"FATAL: {exc}", file=sys.stderr)
+            return 2
+        print("\t".join(["primary" if row.primary else "secondary",
+                         str(row.arch), row.receipt, row.label]))
+        return 0
 
     if args.prune_receipts is not None:
         # Retention housekeeping (N3, 2026-09-09): run dirs are append-only
@@ -1700,6 +1760,30 @@ def main() -> int:
         args.receipts_carry_from = _rp["refresh_from"]
         refresh_resume_mods = list(_rp["wrapper_mods"])
         run_wrappers = run_cuda = True
+
+    # Receipts by architecture (test/gpu-proof-receipts.yaml): resolve the
+    # row for this GPU before any GPU work. A secondary row (a Jetson) gets
+    # its own header-key ledger and expected-skips baseline; the primary row
+    # keeps the paths above untouched. A carry/refresh source from another
+    # architecture is refused here, before planning.
+    global HEADER_KEYS_PATH
+    receipt_row = None
+    if args.receipts:
+        try:
+            receipt_row = receipt_row_for_this_gpu()
+        except ValueError as exc:
+            print(f"FATAL: {exc}", file=sys.stderr)
+            return 2
+        if args.receipts_carry_from:
+            refusal = refuse_cross_arch_carry(args.receipts_carry_from, receipt_row)
+            if refusal:
+                print(f"FATAL: {refusal}", file=sys.stderr)
+                return 2
+        HEADER_KEYS_PATH = REPO_ROOT / receipt_row.header_keys
+        if not receipt_row.primary:
+            print(f"=== receipt target: {receipt_row.receipt} ({receipt_row.sm}, "
+                  f"{receipt_row.label}; secondary, gpu-proof.json is not "
+                  f"written; header keys in {receipt_row.header_keys}) ===")
 
     refresh_cuda_shards: list[ShardSpec] | None = None
     if args.refresh_from:
@@ -1958,7 +2042,7 @@ def main() -> int:
                         "--repo", str(REPO_ROOT),
                         "--policy", str(REPO_ROOT / "test/gpu-proof-policy.yaml"),
                         "--expected-skips",
-                        str(REPO_ROOT / "test/gpu-proof-expected-skips.txt")]
+                        str(REPO_ROOT / receipt_row.expected_skips)]
                 vrc = subprocess.run(vcmd, cwd=REPO_ROOT).returncode
                 print(f"  receipts: everyday-policy verify of {merged} (rc={vrc})")
                 mrc = vrc

@@ -87,19 +87,28 @@ def _robot_ids():
 # centroidal blocks, so it passes regardless; the SEPARATE centroidal test skips
 # the cell when the sentinel is present.
 #
-# Two pre-existing infra limits remain (both honest hardware/static-smem limits,
-# neither a plant correctness bug; the harness skips them cleanly rather than
-# emitting a wrong number):
+# One pre-existing static-smem limit remains (not a plant correctness bug; the
+# runner reports it with a sentinel rather than emitting a wrong number):
 #   * go2:floating COMPILES and runs the cost/barrier/centroidal checks, but the
 #     plant_step/integrator PASS-THROUGH self-gates off (the fixed-size s_temp[4096]
-#     caller pool overflows: FD_DU_MAX_SHARED_MEM_COUNT 12040 > 4096) → the runner
-#     emits `plant_step_skipped` and the test skips ONLY that pass-through block.
-#   * fr3:fixed COMPILES (the centroidal macro-gate fixed the old mimic
-#     compile-failure), but the `plant_kernel` launch at MAX_PERF_LEVEL_THREADS
-#     exceeds this GPU's per-block REGISTER budget ("too many resources requested
-#     for launch") → the shared runner harness pytest.skips the cell (a hardware
-#     launch limit, same as the executable-equivalence suite; the kernel passes at
-#     lower thread counts). It is left in the default so the skip is visible/tracked.
+#     caller pool overflows: FD_DU_MAX_SHARED_MEM_COUNT 12040 > 4096), so the runner
+#     emits `plant_step_skipped` and the test checks everything but that block.
+#
+# Launch thread count (2026-10-15). The runner launches every kernel at
+# grid::MAX_PERF_LEVEL_THREADS unless GRID_CUDA_PLANT_THREADS is set. At that
+# count two of the default cells could not launch in the -O0 runner build: the
+# go2:floating tangent_cost_kernel at 288 threads and the fr3:fixed
+# plant_step_kernel at 1024 threads both exceeded the 64K per-block register
+# budget ("too many resources requested for launch", receipt evidence: refresh
+# 2026-10-12), and because the runner aborts at the first failed launch every
+# cell of those two robots was voided, including the plant_kernel and centroidal
+# checks that had already launched. The runner's thread count is a test choice,
+# not a production launch point (the flagship suite sweeps the generated kernels
+# at MAX_PERF_LEVEL_THREADS), so _run launches the plant runner at
+# _PLANT_RUNNER_THREADS for every cell: 256 threads fit the register budget by
+# construction (255 registers per thread at most, times 256 threads, is within
+# 64K) and every plant kernel strides its work over blockDim. Set
+# GRID_CUDA_PLANT_THREADS to launch at another count.
 # Bigger robots (g1/h1_2, nv~29) additionally overflow the 48 KB static cap in
 # plant_kernel/plant_step_kernel (guide §7); the honest big-robot plant path is the
 # BINDINGS (dynamic-smem + cudaFuncSetAttribute TU). Override with GRID_CUDA_PLANT_CELLS.
@@ -170,8 +179,29 @@ def _stdin(q, qd, u, dt):
     return "\n".join(rows) + f"\n{dt}\n"
 
 
+# Register-safe launch count for cuda_plant_smoke_runner.cu (see the note above
+# _plant_cells). GRID_CUDA_PLANT_THREADS, when set, takes precedence.
+_PLANT_RUNNER_THREADS = "256"
+
+
+@contextlib.contextmanager
+def _plant_runner_threads():
+    key = "GRID_CUDA_PLANT_THREADS"
+    previous = os.environ.get(key)
+    if previous is None:
+        os.environ[key] = _PLANT_RUNNER_THREADS
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
+
+
 def _run(executable, cmd, q, qd, u, dt):
-    out = _run_runner(executable, _stdin(q, qd, u, dt), cmd)
+    with _plant_runner_threads():
+        out = _run_runner(executable, _stdin(q, qd, u, dt), cmd)
     return _parse_runner_output(out)
 
 

@@ -10,11 +10,15 @@ def validate_configuration_layout(blocks, nq, nv):
         if (qi != q_end or vi != v_end or npos <= 0 or nvel <= 0
                 or (expected is not None and (npos, nvel) != expected)
                 or (expected is None and (kind != "euclidean" or npos != nvel))):
-            raise ValueError("Invalid configuration_layout metadata; re-register the robot")
+            raise ValueError(
+                "The cached joint layout of this robot is invalid; re-register the robot "
+                "with register_robot(..., force_rebuild=True).")
         q_end += npos
         v_end += nvel
     if (q_end, v_end) != (nq, nv):
-        raise ValueError("configuration_layout does not cover nq/nv; re-register the robot")
+        raise ValueError(
+            "The cached joint layout of this robot does not cover its nq/nv widths; "
+            "re-register the robot with register_robot(..., force_rebuild=True).")
     return result
 
 
@@ -30,6 +34,8 @@ def configuration_layout_from_meta(meta, nq, nv):
             if nv > 6:
                 blocks.append(("euclidean", 7, 6, nq - 7, nv - 6))
         else:
-            raise ValueError("This cached spherical-joint artifact lacks configuration_layout; "
-                             "re-register the robot with the current generator")
+            raise ValueError(
+                "This spherical-joint robot was compiled by an older grid_rbd that did not "
+                "record its joint layout; re-register the robot with "
+                "register_robot(..., force_rebuild=True).")
     return validate_configuration_layout(blocks, nq, nv)

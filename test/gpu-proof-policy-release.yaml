@@ -47,6 +47,7 @@ required_fingerprint_paths:
   - test/gpu-proof-policy.yaml
   - test/gpu-proof-policy-release.yaml
   - test/gpu-proof-expected-skips.txt
+  - test/gpu-proof-receipts.yaml
   - test/run_validation.py
 required_fingerprint_extra_paths: []
 required_fingerprint_excluded_paths:

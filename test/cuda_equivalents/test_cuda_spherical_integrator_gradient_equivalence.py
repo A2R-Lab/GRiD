@@ -129,13 +129,24 @@ def spherical_case(request, tmp_path_factory):
     assert robot is not None
     build_dir = tmp_path_factory.mktemp(f"sph_intgrad_{fixture.split('.')[0]}")
     _generate_header(robot, build_dir)
-    exes = {t: _compile_runner(build_dir, t) for t in ("float", "double")}
-    return fixture, robot, exes
+    # The header is precision agnostic; the runner selects T at run time from
+    # GRID_EQUIV_T. Each precision gets its own exe, built on first request, so a
+    # float cell never waits on the fp64 alpha build.
+    exes = {}
+
+    def exe_for(equiv_t):
+        if equiv_t not in exes:
+            exes[equiv_t] = _compile_runner(build_dir, equiv_t)
+        return exes[equiv_t]
+
+    return fixture, robot, exe_for
 
 
-@pytest.mark.parametrize("equiv_t", ["float", "double"])
+# The double cell is the fp64 alpha tier (2026-10-15). It carries fp64_alpha, stays
+# outside the signed receipt by collection, and runs under make test-fp64.
+@pytest.mark.parametrize("equiv_t", ["float", pytest.param("double", marks=pytest.mark.fp64_alpha)])
 def test_spherical_integrator_gradient_matches_reference(spherical_case, equiv_t):
-    fixture, robot, exes = spherical_case
+    fixture, robot, exe_for = spherical_case
     ref = RBDReference(robot)
     nv = robot.get_num_vel()
     rng = np.random.default_rng(42)
@@ -145,7 +156,7 @@ def test_spherical_integrator_gradient_matches_reference(spherical_case, equiv_t
         q = _random_q(robot, fixture, rng)
         qd = rng.uniform(-1.0, 1.0, nv)
         u = rng.uniform(-1.0, 1.0, nv)
-        out = _run(exes[equiv_t], q, qd, u, DT, threads=32, equiv_t=equiv_t)
+        out = _run(exe_for(equiv_t), q, qd, u, DT, threads=32, equiv_t=equiv_t)
         for tag, it_name in INTEGRATORS:
             expected = np.asarray(
                 ref.integrator_gradient(q, qd, u, DT, integrator_type=it_name),
@@ -160,9 +171,13 @@ def test_spherical_integrator_gradient_matches_reference(spherical_case, equiv_t
                     f"max|d|={err:.3e} vs oracle (tol {tol})")
 
 
-def test_spherical_integrator_gradient_thread_invariance(spherical_case):
-    """Identical dAB at thread counts 1 / 32 / 256 (fp64, exact match)."""
-    fixture, robot, exes = spherical_case
+# Thread-count invariance is bitwise in both precisions: the reduction order does
+# not depend on the scalar type. The float cell is in the receipt; the double cell
+# is the fp64 alpha tier (2026-10-16).
+@pytest.mark.parametrize("equiv_t", ["float", pytest.param("double", marks=pytest.mark.fp64_alpha)])
+def test_spherical_integrator_gradient_thread_invariance(spherical_case, equiv_t):
+    """Identical dAB at thread counts 1 / 32 / 256 (exact match in the given precision)."""
+    fixture, robot, exe_for = spherical_case
     nv = robot.get_num_vel()
     rng = np.random.default_rng(7)
     q = _random_q(robot, fixture, rng)
@@ -170,7 +185,7 @@ def test_spherical_integrator_gradient_thread_invariance(spherical_case):
     u = rng.uniform(-1.0, 1.0, nv)
     baseline = None
     for threads in (1, 32, 256):
-        out = _run(exes["double"], q, qd, u, DT, threads=threads, equiv_t="double")
+        out = _run(exe_for(equiv_t), q, qd, u, DT, threads=threads, equiv_t=equiv_t)
         stacked = np.concatenate([
             np.asarray(out[tag + "_dAB"], dtype=np.float64).reshape(-1)
             for tag, _ in INTEGRATORS

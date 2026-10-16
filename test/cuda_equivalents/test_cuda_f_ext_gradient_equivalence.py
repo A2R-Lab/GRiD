@@ -21,7 +21,8 @@ root's 6 motion-subspace columns slot into the same pushdown with no SE(3) FD. S
 both sides are the same closed form, A.3 holds to a TIGHT f32 floor (was central-FD
 vs analytic at ~5e-3). The pinocchio cross-check stays self.integrate(q, dv) FD-of-exact.
 
-Gated iiwa14 (fixed, all three) plus go2 / g1 (floating, all three).
+Every manifest robot on both bases (widened 2026-10-15), iiwa14 fixed first.
+Narrow with GRID_CUDA_FEG_ROBOTS="iiwa14:fixed,go2:floating".
 """
 import os
 import shutil
@@ -58,8 +59,27 @@ RUNNER_SOURCE = Path(__file__).with_name("cuda_f_ext_gradient_runner.cu")
 # smem. (All cases are codegen'd with the 'f-ext-gradient' profile
 # {id, minv, f_ext_grad}; mimic integrator gradients are fully supported now, so
 # the narrow profile is purely a compile-time choice, not a workaround.)
-_CASES = [("iiwa14", "fixed"), ("go2", "floating"), ("g1", "floating"),
-          ("fr3", "fixed"), ("fr3", "floating"), ("h1_2", "floating")]
+# Every manifest robot on both bases since 2026-10-15 (rizon4 / gen3 / fetch /
+# baxter are non-mimic like iiwa14 / go2 / g1; h1_2-fixed joins fr3 on the mimic
+# slab path). Narrow with GRID_CUDA_FEG_ROBOTS.
+_ALL_ROBOTS = ("iiwa14", "go2", "g1", "h1_2", "fr3", "rizon4", "gen3", "fetch", "baxter")
+
+
+def _cases():
+    raw = os.environ.get("GRID_CUDA_FEG_ROBOTS")
+    if raw:
+        out = []
+        for tok in raw.split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            rid, _, mode = tok.partition(":")
+            out.append((rid.strip(), (mode.strip() or "fixed")))
+        return out
+    return [(r, b) for b in ("fixed", "floating") for r in _ALL_ROBOTS]
+
+
+_CASES = _cases()
 
 # (All robots now generate with the "f-ext-gradient" profile — the runner only
 # exercises that surface. Historically the restricted profile also sidestepped the
@@ -148,6 +168,12 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
     # for mimic robots; RBDReference (which the CUDA matches exactly) is the
     # authoritative oracle here.
     has_mimic = any(getattr(j, "is_mimic", False) for j in ref.robot.joints)
+    # gen3: its four continuous joints are RUBZ (cos, sin) slots in pinocchio and raw
+    # angles in GRiD; the cross-library float64 round-off bucket in RBDReference
+    # tests/tolerances.py has no forward_dynamics or f_ext_grad entry, so the
+    # pinocchio leg is left out for gen3 as for the mimic robots (2026-10-16; the
+    # CUDA-vs-RBDReference leg stays). Ask: add those gen3 buckets to RBDReference.
+    pin_excluded = has_mimic or robot_id == "gen3"
 
     def row(v):
         return " ".join(f"{x:.9g}" for x in np.asarray(v, dtype=np.float32))
@@ -159,7 +185,7 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
     # pinocchio cross-check stays FD-of-exact. (The emitted CUDA kernel FD's
     # on-device for both modes; it is checked against the analytic numpy oracle.)
     a_dtau, a_dqdd, a_djt = proj.f_ext_gradient(q)
-    if has_mimic:
+    if pin_excluded:
         e_dtau = e_dqdd = e_djt = None
     else:
         e_dtau, e_dqdd, e_djt = pin.f_ext_gradient(q)
@@ -170,7 +196,13 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
 
     failures = []
 
-    def _check(label, cuda_flat, ref_arr, pin_arr, tol_algo, f32_floor=5e-3):
+    def _check(label, cuda_flat, ref_arr, pin_arr, tol_algo, f32_floor=5e-3, pin_fd_h=None):
+        """pin_fd_h: the step of the pinocchio leg when that leg is a central finite
+        difference of an exact quantity (did_du_dfext_dq: pinocchio_backend.f_ext_gradient
+        perturbs q through pin.integrate with h = 1e-6). The two oracles then differ by
+        the O(h) remainder of the perturbation convention on top of round-off, so the
+        pinocchio tolerance carries an h * scale floor; the exact first-order legs do not
+        (2026-10-16: baxter-floating measured 2.3e-7 against a 1.1e-7 bucket)."""
         ref_arr = np.asarray(ref_arr, dtype=np.float64).reshape(-1)
         cuda_flat = np.asarray(cuda_flat, dtype=np.float64).reshape(-1)
         tol = get_tolerance(tol_algo, robot_id=robot_id)
@@ -186,12 +218,12 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
         # RBDReference == pinocchio (the convention itself); honors the per-robot
         # tolerance (e.g. gen3's RNEA-difference round-off override). Skipped for
         # mimic robots (pinocchio's reduced model omits the mimic body's f_ext
-        # column, so the layouts differ — see has_mimic note above).
+        # column, so the layouts differ — see pin_excluded note above).
         if pin_arr is None:
             return
         pin_arr = np.asarray(pin_arr, dtype=np.float64).reshape(-1)
         err_pin = float(np.max(np.abs(ref_arr - pin_arr)))
-        ptol = tol.atol + tol.rtol * scale
+        ptol = tol.atol + tol.rtol * scale + ((pin_fd_h * scale) if pin_fd_h else 0.0)
         if err_pin > ptol:
             failures.append(f"{label}: RBDReference-vs-pinocchio maxerr={err_pin:.3e} > {ptol:.3e}")
 
@@ -209,6 +241,7 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
     for vj in range(nv):
         for col in range(6 * nb):
             cuda3[vj, col, :] = cuda_djt[vj + nv * col, :]
-    _check("did_du_dfext_dq", cuda3, a_djt, e_djt, "f_ext_grad_so", f32_floor=2e-4)
+    _check("did_du_dfext_dq", cuda3, a_djt, e_djt, "f_ext_grad_so", f32_floor=2e-4,
+           pin_fd_h=1e-6)  # the pinocchio leg is a central FD with h = 1e-6 (see _check)
 
     assert not failures, "f_ext_gradient CUDA equivalence failures:\n" + "\n".join(failures)

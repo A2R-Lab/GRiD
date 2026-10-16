@@ -25,8 +25,11 @@ This README points to it.
 
 Version 0.5.1 is on [PyPI](https://pypi.org/project/grid-rbd/); 0.5.0 was the first packaged release. GRiD is alpha
 software and APIs may change between minor versions (see the
-[changelog](https://github.com/A2R-Lab/GRiD/blob/main/CHANGELOG.md)). The tested platform is Linux x86-64 with CPython
-3.10–3.12 and CUDA 12 or 13, validated on an RTX 5090. The [original ICRA 2022 paper](https://a2r-lab.org/publication/grid/)
+[changelog](https://github.com/A2R-Lab/GRiD/blob/main/CHANGELOG.md)). The GPU test receipt and the release timing ran on
+Linux x86-64 with CPython 3.12, CUDA toolkit 13.2 and one RTX 5090 (sm_120); CPython 3.10, 3.11 and 3.13 wheels are built and
+import-checked on CPU in CI, and the CPU test lane runs on 3.10, 3.12 and 3.13. Other toolkits, GPUs and interpreters are untested; the
+[compatibility page](https://a2r-lab.org/GRiD/docs/user_guide/getting_started/compatibility.html) lists the exact
+environment. The [original ICRA 2022 paper](https://a2r-lab.org/publication/grid/)
 describes the implementation preserved in the archival [robot-acceleration/GRiD](https://github.com/robot-acceleration/GRiD)
 repository; it does not describe the feature set or the performance of this release.
 
@@ -50,6 +53,8 @@ print(robot.forward_dynamics(q, qd, tau).shape)  # (8, 7)
 ```
 See [Python wrappers](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/python_wrappers.html) and
 [installation](https://a2r-lab.org/GRiD/docs/user_guide/getting_started/installation.html).
+Deep tutorial: [gradient descent through GRiD with plain JAX](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/jax_ik_gradient_descent.html)
+(`examples/jax/ik_gradient_descent.py`).
 
 ### Header-only CUDA
 Generate one self-contained `grid.cuh` and `#include` it in your own kernels. This path needs only the generator and
@@ -61,18 +66,25 @@ nvcc -arch=sm_90 -std=c++17 my_kernel.cu    # the header vendors its GLASS linea
 ```
 See [Generate CUDA for a robot](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/codegen.html) and
 [`examples/cuda/`](https://github.com/A2R-Lab/GRiD/tree/main/examples/cuda).
+Deep tutorial: [fuse dynamics into your own kernel](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/fused_cuda_control_step.html)
+(`examples/cuda/fused_control_step/`, checked and timed against the host-function path).
 
 Installation needs no GPU or compiler. Registering a robot compiles its CUDA on a machine with a compatible NVIDIA
 GPU, CUDA toolkit and C++17 host compiler; the first load takes minutes and later loads reuse the cache. To develop
 GRiD, or to use the sample URDFs in `grid_assets/robots/`, work from a checkout: `git clone --recursive
 https://github.com/A2R-Lab/GRiD.git && cd GRiD && bash install/base_install.sh && source .venv/bin/activate`.
 
+A Docker image with grid-rbd, `jax[cuda12]`, a cu128 torch wheel and the generated iiwa14 header is published as
+`ghcr.io/a2r-lab/grid:<version>` (`install/docker/Dockerfile`; run with `--gpus all`). A conda recipe
+(`install/environment.yml`) and a uv recipe are on the
+[installation](https://a2r-lab.org/GRiD/docs/user_guide/getting_started/installation.html) page; neither is tested in CI.
+
 ## Where things are documented
 
 | Topic | Site page |
 |-------|-----------|
 | Everyday tasks, index of everything | [How do I…?](https://a2r-lab.org/GRiD/docs/how_do_i.html) |
-| Python API (`register_robot`/`load_robot`, backends, env knobs, fp64) | [Python wrappers](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/python_wrappers.html) |
+| Python API (`register_robot`/`load_robot`, backends, env knobs, fp64 alpha) | [Python wrappers](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/python_wrappers.html) |
 | `grid-generate` CLI, the generated header, debug/print helpers | [Generate CUDA for a robot](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/codegen.html) |
 | Floating-base conventions (`pinocchio` / `legacy` orderings), URDF parsing | [URDF API](https://a2r-lab.org/GRiD/docs/api_reference/urdf.html) |
 | Supported joints, algorithms and restrictions; per-backend inventory | [CUDA support status](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/cuda_support_status.html) · [backend coverage](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/backend_coverage.html) |

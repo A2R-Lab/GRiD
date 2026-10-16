@@ -219,7 +219,14 @@ void run() {
     gpuErrchk(cudaMalloc(&workspace, grid::GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()));
     gpuErrchk(cudaMemset(workspace, 0, grid::GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()));
 
-    const int nthreads = grid::MAX_PERF_LEVEL_THREADS;
+    // GRID_CUDA_CENTROIDAL_THREADS overrides the launch width (2026-10-15): the
+    // kernels stride over blockDim, and go2-floating exceeds the per-block
+    // register budget at MAX_PERF_LEVEL_THREADS, so the test launches at 256.
+    int nthreads = grid::MAX_PERF_LEVEL_THREADS;
+    if (const char *e = std::getenv("GRID_CUDA_CENTROIDAL_THREADS")) {
+        const int v = std::atoi(e);
+        if (v > 0) nthreads = v;
+    }
     // The centroidal device functions compose the grid:: XmatsHom kinematics
     // + EE-Jacobian arena via auto-allocating wrappers (extern __shared__); size
     // each kernel's dynamic smem to the max device requirement it composes.

@@ -27,7 +27,12 @@ Two checks:
 
 2. **The CPU-only filter must be compile-free** (real pytest collection, ~2 s). Asserts
    that `-m "not cuda_equivalence"` collects nothing from `test/cuda_equivalents/`
-   except the allowlisted compile-free sentinels. This deliberately uses a real
+   except the allowlisted compile-free sentinels.
+
+3. **The receipt excludes the fp64 alpha lane by collection** (2026-10-15). The fp64
+   tier is an alpha feature whose tests carry `fp64_alpha` and run under
+   `make test-fp64`; test/conftest.py must not auto-apply `gpu_proof` to them, so
+   `-m "gpu_proof and fp64_alpha"` over the two GPU suites must collect nothing. This deliberately uses a real
    collection rather than AST: the marker is applied four different ways across the
    suite -- a plain decorator, a module-level `pytestmark` scalar, a module-level
    `pytestmark` list, and a dynamic `marks.append(...)` inside `parametrize` -- and only
@@ -165,4 +170,33 @@ def test_cpu_only_filter_collects_no_cuda_equivalence_tests():
         "run for HOURS on the big floating robots. Mark them cuda_equivalence, or -- if "
         "genuinely compile-free -- add the module to _COMPILE_FREE_IN_CUDA_EQUIVALENTS "
         f"in {pathlib.Path(__file__).name}:\n  " + "\n  ".join(leaked)
+    )
+
+
+def test_receipt_filter_collects_no_fp64_alpha_tests():
+    """`-m "gpu_proof and fp64_alpha"` must be empty: the alpha lane stays out of the
+    signed receipt by collection (test/conftest.py), never by a skip.
+
+    Collection only -- nothing is executed, so this never compiles.
+    """
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "pytest",
+            str(_TEST_ROOT / "cuda_equivalents"), str(_TEST_ROOT / "python_wrappers"),
+            "--collect-only", "-q", "-p", "no:cacheprovider",
+            "-m", "gpu_proof and fp64_alpha",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=_TEST_ROOT.parent,
+        timeout=600,
+    )
+    # rc 5 == "no tests collected", the expected outcome.
+    assert proc.returncode in (0, 5), (
+        f"collection failed (rc={proc.returncode}):\n{proc.stdout}\n{proc.stderr}"
+    )
+    leaked = [line for line in proc.stdout.splitlines() if "::" in line]
+    assert not leaked, (
+        f"{len(leaked)} fp64_alpha test(s) carry gpu_proof and would enter the signed "
+        "receipt; test/conftest.py must leave the alpha lane unmarked:\n  " + "\n  ".join(leaked)
     )

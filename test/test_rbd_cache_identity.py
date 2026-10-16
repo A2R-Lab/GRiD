@@ -122,12 +122,13 @@ IDENTITY_KNOBS = [
     ("env:GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES",
      lambda mp: mp.setenv("GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES", "8")),
     ("env:GRID_NO_LICM_BARRIER", lambda mp: mp.setenv("GRID_NO_LICM_BARRIER", "1")),
+    ("env:GRID_RBD_CUDA_ARCHS", lambda mp: mp.setenv(_cache.CUDA_ARCHS_ENV, "86,120")),   # multi-arch build
 ]
 
 
 @pytest.fixture(autouse=True)
 def _clean_generation_env(monkeypatch):
-    for k in _cache.GENERATION_ENV_KNOBS:
+    for k in (*_cache.GENERATION_ENV_KNOBS, _cache.CUDA_ARCHS_ENV):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -167,9 +168,9 @@ class _HandleStub:
         pass
 
 
-def _get(stubs, monkeypatch, name="probe"):
+def _get(stubs, monkeypatch, name="probe", arch=ARCH):
     monkeypatch.setattr(grid_rbd, "RobotHandle", _HandleStub)
-    monkeypatch.setattr(grid_rbd, "detect_cuda_arch", lambda: ARCH)
+    monkeypatch.setattr(grid_rbd, "detect_cuda_arch", lambda: arch)
     h = grid_rbd.get_robot(name, cache_dir=stubs.cache_dir)
     return h
 
@@ -196,6 +197,38 @@ def test_get_robot_loads_a_registered_entry_and_refuses_an_incompatible_one(stub
     assert stubs.generate_calls == 1, "get_robot never builds"
 
 
+def test_multi_arch_entry_loads_on_every_embedded_arch(stubs, monkeypatch):
+    """GRID_RBD_CUDA_ARCHS (2026-10-15): an entry built fat records the embedded
+    list beside its tuning arch; get_robot on a box whose GPU is in that list
+    loads it (the loading box sets no env), another arch is refused."""
+    monkeypatch.setenv(_cache.CUDA_ARCHS_ENV, "120,86")
+    key, so, _ = _warm(stubs)
+    rec = json.loads((so.parent / _cache.BUILD_INPUTS_FILE).read_text())
+    assert rec["cuda_arch"] == ARCH and rec["cuda_archs"] == [86, 120]
+    monkeypatch.delenv(_cache.CUDA_ARCHS_ENV)
+    assert _get(stubs, monkeypatch, arch=86).so_path == str(so)
+    assert _get(stubs, monkeypatch, arch=120).so_path == str(so)
+    with pytest.raises(grid_rbd.StaleRobotError) as ei:
+        _get(stubs, monkeypatch, arch=75)
+    assert ei.value.reasons == ["cuda_arch: recorded 120 != current 75"]
+    assert stubs.generate_calls == 1, "get_robot never builds"
+
+
+def test_multi_arch_build_with_explicit_arch_never_probes_the_gpu(stubs, monkeypatch):
+    """A GPU-less build box (the Docker image build): an explicit cuda_arch plus
+    the env list reaches the compile with no nvidia-smi probe, and the fat
+    build keys apart from the single-arch build of the same inputs."""
+    def _no_probe():
+        raise AssertionError("detect_cuda_arch must not run when cuda_arch is explicit")
+    monkeypatch.setattr(grid_rbd, "detect_cuda_arch", _no_probe)
+    _warm(stubs)
+    monkeypatch.setenv(_cache.CUDA_ARCHS_ENV, "86,89,90,120")
+    key_fat, so_fat, _ = _warm(stubs)
+    assert len(_bykey_entries(stubs.cache_dir)) == 2 and stubs.compile_calls == 2
+    plan = grid_rbd.build_plan("probe", urdf_string=URDF, cache_dir=stubs.cache_dir, cuda_arch=ARCH)
+    assert plan["cached"] and plan["build_identity"]["cuda_archs"] == [86, 89, 90, 120]
+
+
 def test_pointer_without_sidecar_is_a_miss(stubs):
     key, so, _ = _warm(stubs)
     (so.parent / _cache.BUILD_INPUTS_FILE).unlink()
@@ -215,7 +248,7 @@ def test_stale_reasons_are_readable(tmp_path):
     ident = _cache.build_identity(ARCH)
     entry = tmp_path / "entry"; entry.mkdir()
     assert _cache.stale_hit_reasons(entry, ident) == [
-        "no build_inputs.json (entry predates the build-identity record)"]
+        "the entry predates the build-identity record (no build_inputs.json beside it)"]
     _cache.write_build_inputs(entry, ident)
     assert _cache.stale_hit_reasons(entry, ident) == []
     other = dict(ident, glass_content="x" * 64, glass_commit="label-only")

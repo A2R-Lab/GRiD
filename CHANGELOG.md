@@ -13,6 +13,63 @@ first packaged release.
 
 ## [Unreleased]
 
+- Benchmark collector: Frax's floating-base cells validate on the samples whose Euler
+  chart is well conditioned (1/|cos pitch| at most 10) and record the excluded count in
+  the cell and the report; every sample is still timed. Near the pitch singularity
+  Frax's fp32 Cholesky solve of its Euler-chart mass matrix carries 1e-3 to 1e-2
+  relative error on the GPU while the transport is exact in float64.
+- Python 3.13: the wheel matrix and the classifiers add CPython 3.13; the CPU test lane
+  runs on 3.10, 3.12 and 3.13 (pytest-gpu-proof needs 3.11 or newer, so its two scope
+  tests skip on 3.10).
+- Error messages: the bindings and `grid-generate` now say the cause and the next action
+  (missing nvcc or driver, a URDF that does not parse, a missing `[torch]` or `[jax]`
+  extra, a robot built without a framework, a stale or damaged cache entry); exit codes
+  and exception classes are unchanged. `test/test_error_messages.py` pins the wording.
+- Zero expected skips: the floating-base `end_effector_pose_gradient` and `_hessian`
+  cells run by default for every robot (`GRID_CUDA_FLOATING_ALGORITHMS` only narrows);
+  the plant and centroidal runners launch at a register-safe 256 threads, which brings
+  back the six plant cells and go2 centroidal; the six cells that exceed the GPU's
+  shared-memory or register limits at every tier are de-collected with the reason at
+  the site. `test/gpu-proof-expected-skips.txt` is empty.
+- Receipts by architecture: `test/gpu-proof-receipts.yaml` maps the GPU architecture to
+  its receipt file; `gpu-proof.json` (sm_120) keeps gating CI, a Jetson records under
+  `receipts/`, `make verify-all` checks every receipt on disk and
+  `test/receipt_integrity.py --table` prints compatibility rows.
+- Precision: the validated path is fp32 on the GPU. The fp64 tier (`dtype="float64"`) is kept as an
+  alpha feature: its tests carry the `fp64_alpha` marker, run with `make test-fp64`, and sit outside
+  the signed receipt by collection; one numpy iiwa14 parity test stays in the receipt as a canary.
+  Registering an fp64 robot warns once. The dccrba smoke runner now runs in float like every other
+  runner, which brings the g1-floating and h1_2-fixed cells back.
+- Multi-architecture builds: `GRID_RBD_CUDA_ARCHS=86,89,90,120` compiles one robot
+  library for several GPUs (cache keys include the list; launch tuning follows the
+  `cuda_arch` given); the Docker image carries iiwa14 built that way.
+- Release gate: `tools/release_fresh_install.sh` (`make release-check`) builds the sdist
+  and wheel, installs the repaired wheel into a throwaway venv outside the checkout and
+  exercises both entry points (`load_robot` on iiwa14 against RBDReference; `grid-generate`,
+  `nvcc` and `examples/cuda/validate.py`). RELEASING.md requires it before freezing.
+- Install recipes: `install/docker/Dockerfile` and `.github/workflows/docker.yml` publish
+  `ghcr.io/a2r-lab/grid` (CUDA 13.2 devel base, grid-rbd from PyPI, `jax[cuda12]`, torch
+  cu128, baked iiwa14 header; robots compile on first load); `install/environment.yml`
+  (conda) and a uv recipe on the installation page. Neither recipe is tested in CI.
+- Tutorials: `examples/cuda/fused_control_step/` fuses a computed-torque control step
+  around `inverse_dynamics_device` in one kernel and checks and times it against the
+  host-function path (`build_and_time.sh --json`); `examples/jax/ik_gradient_descent.py`
+  runs `jax.grad` through `end_effector_pose` with a hand-written descent. Both have site
+  pages; `docs/test_doc_examples.py` covers them on CPU.
+- Docs: platform claims now state what ran (Linux x86-64, Ubuntu 24.04, CPython 3.12, CUDA
+  toolkit 13.2, driver 615.71.09, torch 2.12.0 cu128, jax 0.10.0 with the cuda12 plugin, one
+  RTX 5090 sm_120); "CUDA 12 or 13", "jax[cuda13]", "sm_8x remain supported" and "cu128 or
+  newer" are replaced by "untested". The compatibility page has a "What we ran" table; Jetson
+  Orin (sm_87) and Xavier (sm_72) rows are planned.
+- Release figures: the unreferenced `stacked_all` and `grid_composition` outputs are removed
+  from `docs/plot_release_figures.py`, the manifest and the tracked assets; the release
+  measurements page documents how the figure set is regenerated.
+- Benchmarks: the release collector covers the Frax floating-base RNEA and FD gradients
+  (Euler-coordinate transport in `frax_floating.py`), the GRiD CUDA end-effector pose
+  gradient and the BARD autograd end-effector pose gradient; the CUDA bridge registers one
+  operation per context through `init_grid_kernel_attr_<op>_checked` and links with
+  `--shared` again; `test/benchmarks/timing_night.sh` runs the gap cells, the release
+  re-collection and the fused control-step microbench as one resumable overnight job.
 - **Checkout layout:** `config/` is now `grid_assets/` (`robots/` for the sample
   URDFs, `launch_configs/` for the tuned per-GPU profiles). Nothing in the wheel
   changes; only paths inside a checkout (`grid_assets/robots/iiwa14.urdf`).

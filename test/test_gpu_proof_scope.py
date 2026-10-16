@@ -1,11 +1,16 @@
 """CPU-only receipt-scope regressions: code invalidates, website wording does not."""
 import subprocess
-import tomllib
 from pathlib import Path
 
 import pytest
 import yaml
-from pytest_gpu_proof.fingerprint import compute_fingerprint
+
+# pytest-gpu-proof requires CPython 3.11 or newer (it reads pyproject with
+# tomllib); the CPU lane on 3.10 cannot install it, so this module skips there
+# and runs in full on 3.12 and 3.13.
+pytest.importorskip("pytest_gpu_proof")
+import tomllib  # noqa: E402
+from pytest_gpu_proof.fingerprint import compute_fingerprint  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SCOPE = tomllib.loads((ROOT / 'pyproject.toml').read_text())['tool']['gpu_proof']['fingerprint_paths']

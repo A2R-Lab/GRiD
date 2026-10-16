@@ -1,25 +1,31 @@
 """CUDA equivalence test for the analytic dCCRBA surfaces.
 
-Validates `gen_dccrba` / `gen_cmm_time_variation` (CUDA, run in DOUBLE) against the
-verified numpy oracle:
+Validates `gen_dccrba` / `gen_cmm_time_variation` (CUDA, run in FLOAT by default;
+GRID_EQUIV_T=double selects the fp64 alpha path) against the verified numpy oracle:
   dccrba             -> RBDReference._CentroidalMixin.dccrba(q)            (6 x NV x NV)
   cmm_time_variation -> RBDReference._CentroidalMixin.cmm_time_variation(q,qd)  (6 x NV)
 
 Both oracles are ANALYTIC (closed-form world sweep + spatial operators, validated
-vs pin.dccrba / computeCentroidalDynamicsDerivatives ~1e-12), so the TIGHT value
-bucket applies (fp64 ~1e-9 relative floor on big robots), NOT the FD bucket.
+vs pin.dccrba / computeCentroidalDynamicsDerivatives ~1e-12). The float runner is
+compared at the harness's float default class (rtol = atol = 2e-4, scale-relative);
+under GRID_EQUIV_T=double the TIGHT fp64 value bucket applies (1e-8 + 1e-7 * scale).
 
 Cross-check (CUDA-side): sum_m d_dccrba[:,:,m] * qd[m] == d_cmm_time_variation.
 
 Thread-invariance: each case swept over {1, 2, 16, 32, 256} threads; the float64
 oracle (not a serial-fp32 accumulation) is the invariance reference (atomicAdd
-reassociation is benign — compare against the oracle, not bit-identity).
+reassociation is benign; compare against the oracle, not bit-identity). The
+run-to-run check between thread counts is held at the same class as the oracle
+comparison (float class in float, 1e-6 * scale in double).
 
-Robots: iiwa14 (fixed, first slice), go2/g1 (floating), and the MIMIC robots
-fr3:fixed / h1_2:fixed (NB>NV). Mimic is now SUPPORTED: centroidal_inner's Jw and
-the per-unit phi here are alpha-folded (dc_unit_alpha), mirroring the mimic-aware
-RBDReference oracle. The oracle is authoritative for mimic (pin omits mimic
-bodies, so skip the pin cross-check; the CUDA-vs-RBDReference diff stands).
+Robots: every manifest robot on both bases (widened 2026-10-15), iiwa14 fixed
+first as the gate slice. fr3 / h1_2 are the MIMIC robots (NB>NV). Mimic is
+SUPPORTED: centroidal_inner's Jw and the per-unit phi here are alpha-folded
+(dc_unit_alpha), mirroring the mimic-aware RBDReference oracle. The oracle is
+authoritative for mimic (pin omits mimic bodies, so skip the pin cross-check;
+the CUDA-vs-RBDReference diff stands). The big robots fit because the runner is
+float: the largest arenas are h1_2-floating at 75440 (dccrba) and 76704
+(cmm_time_variation) bytes against the 101376-byte per-block cap (see _cases).
 """
 
 import contextlib
@@ -38,6 +44,7 @@ from test.cuda_equivalents.cuda_harness import (
     _parse_runner_output,
     _run_runner,
     _sample_to_stdin,
+    CUDA_DEFAULT_TOLERANCE,
     GPU_UNAVAILABLE_PATTERNS,
 )
 from RBDReference.tests import MANIFEST_PATH
@@ -47,15 +54,32 @@ from RBDReference.equivalents.reference_backend import build_project_adapter
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_dccrba_smoke_runner.cu")
 
-# (robot_id, base_mode). iiwa14 first (first green slice), then floating go2/g1,
-# then the MIMIC robots fr3:fixed (small) / h1_2:fixed (big, NB=51>NV=39) — now
-# alpha-folded + de-gated (see module docstring). Override with
-# GRID_CUDA_DCCRBA_ROBOTS="iiwa14:fixed,fr3:fixed".
+# Precision of the runner and of the generated header. "float" (default) is the
+# validated fp32 path; GRID_EQUIV_T=double builds the header with the
+# dtype="double" codegen knob (spill tiers sized for 8-byte values) and the
+# runner takes the same variable to run<double> (the fp64 alpha tier), exactly
+# as cuda_equivalence_runner.cu does.
+_EQUIV_T = "double" if os.environ.get("GRID_EQUIV_T") == "double" else "float"
+
+# (robot_id, base_mode): every manifest robot on both bases, iiwa14 fixed first
+# (the gate slice). Override with GRID_CUDA_DCCRBA_ROBOTS="iiwa14:fixed,fr3:fixed".
+#
+# g1:floating and h1_2:fixed were de-collected on 2026-10-15 in the belief that
+# the limit was hardware. It was the double launch at the full tier: in double,
+# g1:floating requested 132064 bytes of shared memory for dccrba and h1_2:fixed
+# 133488 bytes for cmm_time_variation, against the 101376 bytes this GPU offers
+# per block. The same arenas in float are about 66-67 KB and fit, so with the
+# float runner (same day) both cells are back, and the rest of the manifest came
+# in with them (largest float arenas: h1_2-floating 75440 / 76704 bytes). The
+# double path stays reachable under GRID_EQUIV_T=double, where g1-floating
+# (132064), h1_2-fixed (131296 / 133488) and h1_2-floating (149632) need a
+# complete double spill ladder.
+_ALL_ROBOTS = ("iiwa14", "go2", "g1", "h1_2", "fr3", "rizon4", "gen3", "fetch", "baxter")
+_DEFAULT_ROBOTS = ",".join(f"{r}:{b}" for b in ("fixed", "floating") for r in _ALL_ROBOTS)
+
+
 def _cases():
-    raw = os.environ.get(
-        "GRID_CUDA_DCCRBA_ROBOTS",
-        "iiwa14:fixed,go2:floating,g1:floating,fr3:fixed,h1_2:fixed",
-    )
+    raw = os.environ.get("GRID_CUDA_DCCRBA_ROBOTS", _DEFAULT_ROBOTS)
     out = []
     for tok in raw.split(","):
         tok = tok.strip()
@@ -80,8 +104,11 @@ def _robot_spec(robot_id, base_mode):
 
 def _generate_header(project_model, build_dir: Path) -> Path:
     header_path = build_dir / "grid.cuh"
+    # dtype is the codegen knob that sizes the spill tiers (float by default;
+    # "double" under GRID_EQUIV_T=double, matching the runner's run<T>).
     codegen = GRiDCodeGenerator(
-        project_model.robot, DEBUG_MODE=False, NEED_PRINT_MAT=False, FILE_NAMESPACE="grid"
+        project_model.robot, DEBUG_MODE=False, NEED_PRINT_MAT=False, FILE_NAMESPACE="grid",
+        dtype=_EQUIV_T,
     )
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
         codegen.gen_all_code(
@@ -158,9 +185,26 @@ def test_cuda_dccrba_matches_reference(robot_id, base_mode, tmp_path):
 
         dA_scale = max(1.0, float(np.max(np.abs(dA_ref))) if dA_ref.size else 1.0)
         adot_scale = max(1.0, float(np.max(np.abs(adot_ref))) if adot_ref.size else 1.0)
-        # tight value bucket (fp64): absolute floor + relative on magnitude.
-        dA_atol = 1e-8 + 1e-7 * dA_scale
-        adot_atol = 1e-8 + 1e-7 * adot_scale
+        if _EQUIV_T == "double":
+            # tight value bucket (fp64 alpha path): absolute floor + relative on magnitude.
+            dA_atol = 1e-8 + 1e-7 * dA_scale
+            adot_atol = 1e-8 + 1e-7 * adot_scale
+            inv_dA_tol = 1e-6 * dA_scale
+            inv_adot_tol = 1e-6 * adot_scale
+        else:
+            # Float runner since 2026-10-15 (the double path remains under
+            # GRID_EQUIV_T=double). Basis: the harness's float default class,
+            # CUDA_DEFAULT_TOLERANCE rtol = atol = 2e-4, in its scale-relative
+            # form atol_eff = max(atol, rtol * max|expected|), which with
+            # scale = max(1, max|expected|) is atol = 2e-4 * max(1, scale).
+            # Never looser than that class.
+            dA_atol = max(CUDA_DEFAULT_TOLERANCE["atol"], CUDA_DEFAULT_TOLERANCE["rtol"] * dA_scale)
+            adot_atol = max(CUDA_DEFAULT_TOLERANCE["atol"], CUDA_DEFAULT_TOLERANCE["rtol"] * adot_scale)
+            # Run-to-run thread invariance is held at the same float class: each
+            # run is already within that class of the oracle, and fp32 atomicAdd
+            # reassociation between thread counts is benign below it.
+            inv_dA_tol = dA_atol
+            inv_adot_tol = adot_atol
 
         prev_dA = None
         prev_adot = None
@@ -206,16 +250,16 @@ def test_cuda_dccrba_matches_reference(robot_id, base_mode, tmp_path):
                     f"sum_m dA[:,:,m] qd[m] != Adot, maxerr={err_xc:.3e} > {adot_atol:.3e}"
                 )
 
-            # thread-invariance vs the oracle-anchored previous run (loose, fp64).
+            # thread-invariance vs the oracle-anchored previous run (same class as above).
             if prev_dA is not None:
                 t_dA = float(np.max(np.abs(dA_cuda - prev_dA)))
-                if t_dA > 1e-6 * dA_scale:
+                if t_dA > inv_dA_tol:
                     failures.append(
                         f"{robot_id} @ {sample.name}: dccrba thread-invariance violation "
                         f"(threads={nthreads}) maxdiff={t_dA:.3e}"
                     )
                 t_adot = float(np.max(np.abs(adot_cuda - prev_adot)))
-                if t_adot > 1e-6 * adot_scale:
+                if t_adot > inv_adot_tol:
                     failures.append(
                         f"{robot_id} @ {sample.name}: cmm thread-invariance violation "
                         f"(threads={nthreads}) maxdiff={t_adot:.3e}"

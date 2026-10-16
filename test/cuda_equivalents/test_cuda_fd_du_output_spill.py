@@ -15,7 +15,14 @@ df_du is BIT-IDENTICAL to the unspilled full-smem rung (the validated reference 
 checked against pinocchio elsewhere) AND thread-count invariant. GRiD-vs-GRiD bit-
 equality is a stronger, convention-free check of the spill than an oracle comparison.
 
-Override robots with GRID_CUDA_FD_DU_SPILL_ROBOTS="iiwa14:fixed,go2:floating".
+Every manifest robot on both bases by default (widened 2026-10-15). The
+reference build is the rung the 98304-byte production target picks for that
+robot: the full rung for the small and mid robots, the selective rung (1) for
+g1-floating (full arena 86944 bytes) and the emergency rung (2) for h1_2 on both
+bases (full arenas 38464 / 45008 bytes only after the selective spill; the full
+rung is above the target). The forced output-spill rung must be bit-identical
+to whichever rung that is, which is the relocation claim.
+Narrow with GRID_CUDA_FD_DU_SPILL_ROBOTS="iiwa14:fixed,go2:floating".
 """
 
 from __future__ import annotations
@@ -45,8 +52,12 @@ _SUBSET = ["inverse_dynamics", "minv", "forward_dynamics", "crba", "aba",
 _RUNNER = Path(__file__).with_name("cuda_equivalence_runner.cu")
 
 
+_ALL_ROBOTS = ("iiwa14", "go2", "g1", "h1_2", "fr3", "rizon4", "gen3", "fetch", "baxter")
+_DEFAULT_ROBOTS = ",".join(f"{r}:{b}" for b in ("fixed", "floating") for r in _ALL_ROBOTS)
+
+
 def _robot_modes():
-    raw = os.environ.get("GRID_CUDA_FD_DU_SPILL_ROBOTS", "iiwa14:fixed,go2:floating")
+    raw = os.environ.get("GRID_CUDA_FD_DU_SPILL_ROBOTS", _DEFAULT_ROBOTS)
     out = []
     for tok in raw.split(","):
         tok = tok.strip()
@@ -117,9 +128,11 @@ def _compile(build_dir, arch, floating):
 def _run(exe, q, qd, u, nthreads):
     stdin = ("\n".join(" ".join(f"{x:.9g}" for x in v) for v in (q, qd, u))
              + "\n" + ("0 " * max(6 * len(q), 400)) + "\n")
-    env = dict(os.environ)
-    env["GRID_NTHREADS"] = str(nthreads)
-    res = subprocess.run([str(exe)], input=stdin, capture_output=True, text=True, env=env)
+    # The runner takes the block thread count as argv[1] (an explicit count is
+    # launched as requested). Until 2026-10-15 this passed a GRID_NTHREADS variable
+    # the runner never read, so the thread sweep below ran every build at the
+    # default 32 threads.
+    res = subprocess.run([str(exe), str(nthreads)], input=stdin, capture_output=True, text=True)
 
     def parse(name):
         m = re.search(rf"BEGIN {name} (\d+) (\d+)\n(.*?)\nEND {name}", res.stdout, re.S)
@@ -146,13 +159,17 @@ def test_cuda_fd_du_output_spill_matches_full(tmp_path, robot_id, base_mode):
     robot, nq, nv = pm.robot, pm.nq, pm.nv
     arch = _detect_cuda_arch()
 
-    # FULL (unspilled) reference build at the production target. fd_du's minimal rung
-    # is ALWAYS the output-spill one, so per_tier[2] is its arena t-count and the
-    # emergency arena is that + 3*nv*nv (the s_dc_du(2nv^2)+s_Minv(nv^2) bands).
+    # REFERENCE build at the production target: the rung fd_du really runs at on
+    # this GPU (full for the small and mid robots; the selective rung on
+    # g1-floating and the emergency rung on h1_2, whose larger arenas are above
+    # the target, see the module docstring). The output-spill rung (3) must be
+    # bit-identical to it. fd_du's minimal rung is ALWAYS the output-spill one, so
+    # per_tier[2] is its arena t-count and the emergency arena is that + 3*nv*nv
+    # (the s_dc_du(2nv^2)+s_Minv(nv^2) bands).
     full_dir = tmp_path / "full"
     full_dir.mkdir()
     full_pick, cg_full = _gen_header(robot, full_dir, 98304)
-    assert full_pick == 0, f"expected fd_du full rung (pick 0) at the default target, got {full_pick}"
+    assert full_pick <= 2, f"expected an unspilled-output fd_du rung (pick 0-2) at the default target, got {full_pick}"
     full_exe = _compile(full_dir, arch, base_mode == "floating")
 
     # OUTPUT-SPILL build: force the rung by codegen'ing one byte below the emergency

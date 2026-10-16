@@ -13,6 +13,8 @@ Using GRiD
    backend_coverage
    verified_inputs
    codegen
+   fused_cuda_control_step
+   jax_ik_gradient_descent
    collisions
    python_algorithms
    urdf_parser

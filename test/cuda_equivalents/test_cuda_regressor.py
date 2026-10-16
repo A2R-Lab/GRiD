@@ -41,10 +41,29 @@ from RBDReference.tests.tolerances import get_tolerance
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_regressor_smoke_runner.cu")
 
-# (robot_id, base_mode). iiwa14 gated first, then fr3 (mimic), then one floating
-# robot. fr3 is a MIMIC robot — validates the mimic-aware regressor emit
-# (alpha*s_sign projection + NUM_BODIES sizing) against the mimic numpy oracle.
-_CASES = [("iiwa14", "fixed"), ("fr3", "fixed"), ("g1", "floating")]
+# (robot_id, base_mode): every manifest robot on both bases (widened 2026-10-15),
+# iiwa14 fixed first as the gate. fr3 / h1_2 are the MIMIC robots: they validate
+# the mimic-aware regressor emit (alpha*s_sign projection + NUM_BODIES sizing)
+# against the mimic numpy oracle. Narrow with
+# GRID_CUDA_REGRESSOR_ROBOTS="iiwa14:fixed,fr3:fixed".
+_ALL_ROBOTS = ("iiwa14", "go2", "g1", "h1_2", "fr3", "rizon4", "gen3", "fetch", "baxter")
+
+
+def _cases(env_name="GRID_CUDA_REGRESSOR_ROBOTS"):
+    raw = os.environ.get(env_name)
+    if raw:
+        out = []
+        for tok in raw.split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            rid, _, mode = tok.partition(":")
+            out.append((rid.strip(), (mode.strip() or "fixed")))
+        return out
+    return [(r, b) for b in ("fixed", "floating") for r in _ALL_ROBOTS]
+
+
+_CASES = _cases()
 
 
 def _robot_spec(robot_id, base_mode):

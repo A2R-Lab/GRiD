@@ -313,7 +313,12 @@ def gen_inverse_dynamics_regressor_device(self):
     func_def = ("void inverse_dynamics_regressor_device(T *s_Y, const T *s_q, const T *s_qd, const T *s_qdd, "
                 "const robotModel<T> *d_robotModel, const T gravity) {")
     shared_mem_size = self.gen_inverse_dynamics_regressor_inner_temp_mem_size()
-    extra_t_buffers = [("s_vaf", 18 * n)]
+    # s_vaf is body-indexed by raw body id inside inverse_dynamics_inner (v|a|f
+    # blocks each span get_num_joints() bodies), so a mimic robot (NB > NUM_POS)
+    # needs 18*NB or the high-body f writes overflow into s_XImats (see the
+    # kernel below). Non-mimic keeps 18*NUM_POS byte-identical.
+    nb_vaf = self.robot.get_num_joints() if self.robot_has_mimic_joints() else n
+    extra_t_buffers = [("s_vaf", 18 * nb_vaf)]
     self.gen_device_wrapper(
         "Compute the joint-torque regressor Y (tau = Y . pi)", func_def,
         shared_mem_size,
@@ -330,8 +335,14 @@ def gen_inverse_dynamics_regressor_kernel(self, single_call_timing=False):
     #   3*NUM_POS): q at 0, qd at NUM_POS, qdd at 2*NUM_POS. On a floating base qd/qdd
     #   carry nv values in their LEADING slots plus one trailing pad -- they are NOT
     #   packed tightly at nv width (see test_cuda_input_abi.py).
-    # s_vaf is sized 18*NUM_POS to match the ID kernel convention (oversized but
-    # consistent; the inner indexes it with n=get_num_joints()).
+    # s_vaf is indexed by raw body id inside inverse_dynamics_inner (the v|a|f
+    # blocks each span get_num_joints() bodies), so it is sized 18*NB for mimic
+    # robots (NB > NUM_POS) and 18*NUM_POS otherwise, matching the ID kernel
+    # (2026-10-16: on h1_2 fixed, 18*39 = 702 < 18*51 = 918, and the f writes of
+    # bodies 15..50 ran 216 floats past s_vaf into s_XImats[0..216) = X of bodies
+    # 0..5 whenever the s_Y slot between them was spilled to d_workspace; at an
+    # in-smem tier the overflow landed in s_Y, which the inner zeroes afterwards,
+    # so it hid. The arena term in algo_registry (c.id_vaf) must match this).
     NUM_POS = self.robot.get_num_pos()
     nv = self.robot.get_num_vel()
     NB = self.robot.get_num_bodies()
@@ -372,7 +383,8 @@ def gen_inverse_dynamics_regressor_kernel(self, single_call_timing=False):
     # shrinking the smem footprint exactly to match the tiered DYNAMIC_SHARED_MEM_BYTES.
     self.gen_add_code_line("constexpr bool REGRESSOR_Y_IN_SMEM = INVERSE_DYNAMICS_REGRESSOR_Y_IN_SMEM<RESOURCE_TIER>();")
     self.gen_add_code_line("constexpr int REGRESSOR_Y_SLOT = REGRESSOR_Y_IN_SMEM ? " + str(out_size) + " : 0;")
-    extra_t_buffers = [("s_q_qd_qdd", in_size), ("s_vaf", 18 * NUM_POS), ("s_Y", "REGRESSOR_Y_SLOT")]
+    nb_vaf = self.robot.get_num_joints() if self.robot_has_mimic_joints() else NUM_POS
+    extra_t_buffers = [("s_q_qd_qdd", in_size), ("s_vaf", 18 * nb_vaf), ("s_Y", "REGRESSOR_Y_SLOT")]
     shared_mem_size = self.gen_inverse_dynamics_regressor_inner_temp_mem_size()
     self.gen_XImats_helpers_temp_shared_memory_code(
         shared_mem_size, extra_t_buffers=extra_t_buffers, include_linalg_scratch=True)

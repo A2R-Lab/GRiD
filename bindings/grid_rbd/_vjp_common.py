@@ -97,7 +97,9 @@ def _configuration_cotangent(g, q, mjx=False, *, layout):
                 ])
             parts.extend([g_lin, _quaternion_cotangent(block[..., 3:6], p, mjx)])
         else:
-            raise ValueError(f"Unknown configuration block {kind!r}")
+            raise ValueError(
+                f"Unknown joint block kind {kind!r} in the cached joint layout; "
+                f"re-register the robot with register_robot(..., force_rebuild=True).")
     result = _concat_last(parts)
     if result.shape[-1] != q.shape[-1]:
         raise ValueError("Configuration cotangent layout does not match q")

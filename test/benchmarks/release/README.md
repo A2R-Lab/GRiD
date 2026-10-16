@@ -128,6 +128,28 @@ the stronger control and is recorded in provenance when used.
   --execute --output test/benchmarks/results/release-table-core-baselines
 ```
 
+The gap cells added after the published capture (the Frax floating-base
+gradients, the `grid_cuda` end-effector pose gradient and the BARD end-effector
+pose gradient) collect through the same path:
+
+```bash
+.venv/bin/python -m test.benchmarks.release.collect --stage table \
+  --robots go2 g1 --backends frax \
+  --operations inverse_dynamics_gradient forward_dynamics_gradient \
+  --accuracy-policy fp32-fd-warnings \
+  --execute --output test/benchmarks/results/release-gap-frax-floating-gradients
+.venv/bin/python -m test.benchmarks.release.collect --stage table \
+  --backends grid_cuda --operations end_effector_pose_gradient \
+  --execute --output test/benchmarks/results/release-gap-grid-cuda-ee-gradient
+.venv/bin/python -m test.benchmarks.release.collect --stage table \
+  --backends bard --operations end_effector_pose_gradient \
+  --execute --output test/benchmarks/results/release-gap-bard-ee-gradient
+```
+
+`test/benchmarks/timing_night.sh` runs these gap cells, the four collection
+commands above, the fused control-step microbench and a diagnostic report as
+one resumable overnight job (see `test/benchmarks/README.md`).
+
 `--robots`, `--operations`, `--backends`, and `--batches` restrict work before
 compilation, not only plotting. `--smoke --batches 16 256` exercises both endpoints
 without becoming release evidence. `--timeout` is per job, including build.
@@ -159,9 +181,12 @@ directory and choose which version to retain. Do not merge duplicate repeats.
   sample at the artifact's baked per-algorithm thread count (recorded). Both
   outputs, and the two boundaries against each other, must be bitwise equal to
   the NumPy wrapper's result before any timing is kept. No Python is in the loop.
-  It covers every operation except the end-effector derivatives, so the table
-  figure carries a kernel-level GRiD bar next to each competitor and the
-  speedup heatmaps can compare kernel launch against resident library calls.
+  The bridge registers only the timed operation's kernels through the generated
+  `init_grid_kernel_attr_<op>_checked` twin, never the header's aggregate
+  `init_grid`, so one cell compiles one kernel family. It covers every operation
+  except the end-effector pose Hessian, so the table figure carries a
+  kernel-level GRiD bar next to each competitor and the speedup heatmaps can
+  compare kernel launch against resident library calls.
 - Full-call wall time includes host inputs, necessary H2D copies, evaluation,
   synchronization, and all selected outputs copied to host. Resident wall
   time includes ordinary API dispatch and synchronization. Input generation,
@@ -278,9 +303,21 @@ discrepancy is caused solely by rounding.
 - Pinocchio FK pose-coordinate gradient/Hessian adapters remain pending; its
   spatial derivatives are not automatically the same as xyz+RPY derivatives.
 - MuJoCo Warp dense Minv and full derivative adapters are pending. MuJoCo CPU
-  derivative adapters are pending. MJX Minv and FK-gradient adapters are pending.
-- BARD currently has RNEA and FD adapters. Frax covers fixed-base RNEA/FD/Minv;
-  its six-coordinate free base still needs a validated quaternion conversion.
+  derivative adapters are pending. MJX Minv adapters are pending.
+- BARD has RNEA, FD, CRBA, bias and gravity adapters and the end-effector pose
+  gradient as `torch.func.jacfwd` of its forward kinematics along the pin
+  tangent (the fixed target joint is composed onto its parent link's frame).
+  Its dynamics gradients are not wired.
+- Frax covers RNEA, FD, Minv, CRBA, bias, gravity, the end-effector pose and
+  its gradient on both bases, and the autodiff RNEA and FD gradients on both
+  bases. Frax's free base is x/y/z plus intrinsic XYZ Euler angles; values and
+  first-order gradients are transported between those coordinates and the
+  shared tangent in fp64 outside the timed window (`frax_floating.py`, with the
+  derivation in its module docstring). Frax second derivatives are excluded
+  like every other non-analytical Hessian: the transport would need the
+  Hessian of the Euler-to-tangent map and the cell would no longer be
+  like-for-like.
+- The GRiD CUDA host-call bridge lacks the end-effector pose Hessian.
 - Nonanalytical Hessian approaches are excluded from this study, not labeled
   unsupported. Collision data and protocols remain deferred.
 
@@ -316,11 +353,17 @@ fresh contexts and repeat all warmups.
 
 ```bash
 .venv/bin/python -m pytest test/benchmarks/test_release_collection.py \
+  test/benchmarks/test_release_frax_transport.py test/benchmarks/test_release_kernel_bridge.py \
+  test/benchmarks/test_release_night_script.py \
   test/benchmarks/test_timing_contracts.py test/benchmarks/test_autotune_picker.py -q
 ```
 
 These CPU tests cover the matrix, bad selections, numerical gates, timer
 synchronization, native ABI bridge with a fake CPU library, missing/negative
-overhead, timeouts, hash checks, and strict repeat aggregation. Real GPU smoke
+overhead, timeouts, hash checks, strict repeat aggregation, the Frax
+floating-base transports (round trips and a finite-difference check of the
+gradient transports against the value transports on a synthetic dynamics),
+the CUDA bridge's per-algorithm registration and operation table, and the
+night script's dry run. Real GPU smoke
 captures are a separate requirement and are not a replacement for the final
 release's full GPU validation receipt.

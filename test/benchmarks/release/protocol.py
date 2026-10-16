@@ -116,8 +116,8 @@ def capability(backend, operation, robot):
     if backend == "grid_native":
         return None if operation in WRAPPER_OPS else "adapter_pending: native C-ABI timing bridge covers RNEA and its gradient"
     if backend == "grid_cuda":
-        if operation in {"end_effector_pose_gradient", "end_effector_pose_hessian"}:
-            return "adapter_pending: CUDA host-call timing bridge covers every operation but the end-effector derivatives"
+        if operation == "end_effector_pose_hessian":
+            return "adapter_pending: CUDA host-call timing bridge covers every operation but the end-effector Hessian"
         return None
     if backend == "grid_numpy_prealloc" and operation not in NUMPY_OUT_OPS:
         return ("not_applicable: NumPy out= exists for the gradient and second-order outputs; "
@@ -147,17 +147,16 @@ def capability(backend, operation, robot):
             return None
         return "adapter_pending: selected operation not wired"
     if backend == "bard":
-        if operation in {"inverse_dynamics", "forward_dynamics", "crba", "nonlinear_effects", "generalized_gravity"}:
+        if operation in {"inverse_dynamics", "forward_dynamics", "crba", "nonlinear_effects", "generalized_gravity",
+                         "end_effector_pose_gradient"}:
             return None
         return "adapter_pending: selected operation not wired; not a library capability claim"
     if backend == "frax":
+        # Floating-base gradients: Frax differentiates on its Euler free-base coordinates;
+        # the oracle Jacobian is transported to those coordinates (frax_floating.py).
         if operation in {"inverse_dynamics", "forward_dynamics", "minv", "crba", "nonlinear_effects",
-                         "generalized_gravity", "end_effector_pose", "end_effector_pose_gradient"}:
-            return None
-        if operation in {"inverse_dynamics_gradient", "forward_dynamics_gradient"}:
-            if floating:
-                return ("adapter_pending: autodiff gradient is taken on Frax's Euler floating-base coordinates; "
-                        "the transport of a full dynamics Jacobian to the shared tangent is not implemented")
+                         "generalized_gravity", "end_effector_pose", "end_effector_pose_gradient",
+                         "inverse_dynamics_gradient", "forward_dynamics_gradient"}:
             return None
         return "adapter_pending: selected operation not wired"
     if backend == "curobo":
@@ -220,6 +219,22 @@ def leaves(value):
     if isinstance(value, dict):
         return [a for k in sorted(value) for a in leaves(value[k])]
     return [np.asarray(value)]
+
+
+def validation_subset(value, mask):
+    """The samples a backend can be validated on: every output block restricted
+    along its batch axis to `mask`, a boolean vector over the batch. None keeps
+    the whole output. Timing is never restricted; only the comparison is."""
+    if mask is None:
+        return value
+    mask = np.asarray(mask, bool)
+    out = []
+    for leaf in leaves(value):
+        if leaf.ndim == 0 or leaf.shape[0] != mask.shape[0]:
+            raise ValueError(f"validation mask over {mask.shape[0]} samples does not match "
+                             f"an output block of shape {leaf.shape}")
+        out.append(leaf[mask])
+    return tuple(out)
 
 
 def agreement(actual, expected, *, rtol=2e-4, atol=1e-3):
