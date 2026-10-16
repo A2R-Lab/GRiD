@@ -13,6 +13,21 @@ first packaged release.
 
 ## [Unreleased]
 
+- URDF parser (external/URDFParser): an `<inertial><origin rpy>` now rotates the inertia
+  tensor into the link frame before the parallel-axis shift; it was taken unrotated, which
+  put the UR5e's shoulder and wrist inertias 10 percent off pinocchio. A prismatic joint
+  whose `<origin>` is rotated now translates through that rotation in the homogeneous
+  transform used by the end-effector pose; the 6x6 motion transforms and the dynamics were
+  already right. None of the ten shipped robots exercises either case in a form the receipt
+  could see, so no generated header changes.
+- Parser oracle: `test/test_urdf_oracle.py` checks every shipped robot and every parser
+  fixture against pinocchio, body inertias and joint placements at random configurations,
+  in the CPU lane; the parser's own suite gains the same oracle over its fixtures and a
+  fixture with rotated inertial origins, a rotated prismatic origin, a massive fixed child
+  and hyphenated joint names. The parser CI job installs the dev set so the oracle runs.
+- Codegen: a fixed-joint target whose name is not a C identifier (`tool0-flange`) now
+  emits valid symbols; the raw name still keys the lookup and the string macro.
+
 - Benchmark collector: Frax's floating-base cells validate on the samples whose Euler
   chart is well conditioned (1/|cos pitch| at most 10) and record the excluded count in
   the cell and the report; every sample is still timed. Near the pitch singularity

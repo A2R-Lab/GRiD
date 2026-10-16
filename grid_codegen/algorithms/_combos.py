@@ -1,10 +1,11 @@
 """Combination wrappers (dynamics_core/all_dynamics/kinematics_only) and the
 centroidal quick-win dispatch. H4 move from GRiDCodeGenerator.py (2026-08-27,
 verbatim)."""
+from ..helpers._code_generation_helpers import ident_suffix
 
 
 def gen_combination_functions(self, algorithms, fixed_target_name = ""):
-    kinematics_suffix = "" if fixed_target_name == "" else "_" + fixed_target_name
+    kinematics_suffix = ident_suffix(fixed_target_name)
 
     def has_all(names):
         return all(name in algorithms for name in names)
