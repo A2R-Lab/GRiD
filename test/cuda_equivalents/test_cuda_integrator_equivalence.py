@@ -168,8 +168,15 @@ _FLOATING_MIMIC_NORM_RTOL = 3e-3
 #   the strict 2e-4 gradient noise the model's norm_rel stays at or below 7.6e-4 on
 #   both samples, so the deviation is the floating-Minv class and nothing else.
 #   Bound 6e-3 = the model's max at the worst sample; the kernel sits at a third of it.
+#   gen3 (2026-10-16, the next member of the class: harness norm_rel 1.3e-3 on
+#   forward_dynamics_gradient_q, cond(M) 5.9e4 to 6.1e4 floating): the receipt's full
+#   pass missed rk4 dAB @ high_velocity dt=0.1 at both tiers (16 of 1014 entries, max
+#   abs 413 at scale 1.2e5). The same model with grad_q 1.3e-3 and grad_qd/Minv 2.9e-4
+#   (200 trials) gives norm_rel max 7.8e-3 at high_velocity, 6.1e-3 at
+#   energetic_random_1, 4.6e-3 at high_acceleration. Bound 8e-3 = the model's max.
 _FLOATING_FDGRAD_NORM_RTOL = {
     "rizon4": 6e-3,
+    "gen3": 8e-3,
 }
 
 
