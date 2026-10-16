@@ -28,7 +28,10 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PY="$ROOT/.venv/bin/python"
+# The interpreter with the dev stack: $PYTHON when set, else the repository venv,
+# else the python3 on PATH (CI installs the stack into the runner's interpreter).
+PY="${PYTHON:-$ROOT/.venv/bin/python}"
+[ -x "$PY" ] || PY="$(command -v python3)"
 export PATH=/usr/local/cuda/bin:$PATH
 ALL_STAGES="gaps release tutorial report"
 STAGES="$ALL_STAGES"
@@ -240,7 +243,8 @@ if [ "$DRY" -eq 1 ]; then
         echo "stage $s:"
         while IFS='|' read -r name args; do
           echo "  $name: collect $args"
-          echo "    $(plan_counts "$args")"
+          counts="$(plan_counts "$args")" || { echo "dry plan failed for $name (interpreter $PY)" >&2; exit 1; }
+          echo "    $counts"
         done < <(if [ "$s" = gaps ]; then gap_jobs; else release_jobs; fi) ;;
       tutorial)
         if [ -f "$TUTORIAL" ]; then echo "stage tutorial: bash $TUTORIAL --json $OUT/fused_control_step.json"

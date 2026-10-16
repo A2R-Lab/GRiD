@@ -2,8 +2,10 @@
 run's exit code, stage list and job counts (the collector's dry plans), and the
 rejection of unknown stages. Nothing here touches the GPU or writes a run."""
 from __future__ import annotations
+import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -11,7 +13,10 @@ SCRIPT = ROOT / "test/benchmarks/timing_night.sh"
 
 
 def run(*args):
-    return subprocess.run(["bash", str(SCRIPT), *args], cwd=ROOT, text=True, capture_output=True)
+    # The interpreter running this test has the dev stack; the script must not
+    # depend on a repository venv (CI has none).
+    env = {**os.environ, "PYTHON": sys.executable}
+    return subprocess.run(["bash", str(SCRIPT), *args], cwd=ROOT, text=True, capture_output=True, env=env)
 
 
 def test_syntax_and_help():
