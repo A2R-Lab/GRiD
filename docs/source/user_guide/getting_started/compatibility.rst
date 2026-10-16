@@ -13,7 +13,8 @@ Platforms and toolchain
   toolkit 13.2 and one RTX 5090 (sm_120); the table below lists that
   environment. CUDA 12 toolkits and other GPUs are untested. Jetson-class
   devices are within the design (single-block kernels, resource tiers, runtime
-  memory fitting) but no receipt covers them.
+  memory fitting); the Orin ran the smoke set listed below and the Xavier the
+  header-only example, but no receipt covers them yet.
 * The host compiler standard is C++17 for the code generator, benchmarks and a
   numpy-only build. With the ``[torch]`` extra the wrapper reads the standard
   that torch's ATen header guard demands and compiles with it. The torch we run
@@ -62,6 +63,32 @@ an alpha feature outside the receipt.
        torch 2.11.0+cu128 and jax 0.11.2 from PyPI)
      - receipt 2026-10-15; timing 2026-09-27 to 2026-10-07; install check
        2026-10-15
+   * - sm_87 (compute capability 8.7)
+     - NVIDIA Jetson AGX Orin, 64 GB
+     - 13.2 (V13.2.78)
+     - L4T R39.2 (JetPack; driver API 13.2)
+     - CPython 3.12.3
+     - 2.14.0+cu130 (NVIDIA Jetson build)
+     - jax 0.11.1 (NVIDIA Jetson build)
+     - Ubuntu 24.04.4, Linux 6.8.12-tegra, aarch64
+     - smoke runs on the 0.5.1 main checkout, no receipt: the iiwa14 numpy,
+       torch and jax wrappers (30, 25 and 60 tests), the CUDA equivalence
+       harness on iiwa14 fixed and go2 floating (72 tests), the g1 plant
+       Hessian; pinocchio 3.9.0 and mujoco 3.9.0 from PyPI aarch64 wheels
+     - 2026-10-16
+   * - sm_72 (compute capability 7.2)
+     - NVIDIA Jetson AGX Xavier, 32 GB
+     - 11.4 (V11.4.315)
+     - L4T R35.3.1 (JetPack 5)
+     - CPython 3.8.10 and 3.9 only; grid-rbd needs 3.10
+     - not applicable
+     - not applicable
+     - Ubuntu 20.04, Linux 5.10.104-tegra, aarch64
+     - header-only CUDA: the fused control step example, built against an
+       iiwa14 header generated on the x86-64 machine, compiled with nvcc 11.4
+       for sm_72 and validated fused against layered; the generator, the
+       bindings and the test suite do not install on this Python
+     - 2026-10-16
 
 The toolkit and the framework wheels are separate things. ``nvcc`` 13.2
 compiles the generated kernels and the per-robot ``.so``. The torch wheel
@@ -71,8 +98,10 @@ carries its own CUDA 12.8 runtime libraries for torch's kernels, and the
 615.71.09 does. A ``jax[cuda13]`` plugin, a torch wheel other than cu128, a
 CUDA 12 toolkit and CPython 3.10, 3.11 or 3.13 on a GPU are untested; the CI
 wheel builds for CPython 3.10, 3.11 and 3.13 and the CPU test lane on 3.10 and
-3.13 run on CPU only. Jetson Orin (sm_87) and
-Xavier (sm_72) rows are planned and will be filled from real runs.
+3.13 run on CPU only. The Jetson rows record smoke runs, not receipts. The
+Orin receipt is recorded under ``receipts/`` once the per-architecture receipt
+table is on main; the Xavier stays header-only because JetPack 5 ships CUDA
+11.4 and Python 3.8, below the floors of the generator and the bindings.
 
 Runtime contexts
 ----------------
