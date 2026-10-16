@@ -55,9 +55,9 @@ RUNNER_SOURCE = Path(__file__).with_name("cuda_integrator_smoke_runner.cu")
 # space and is structurally exact, matched by go2-floating non-mimic to ~3e-7).
 # Every cell compares every sample and dt entrywise (audit 2026-09-30: the old
 # floating-mimic scopes hid generator bugs, docs/agent_debugging_guide.md 7.z32/7.z34).
-# Floating mimic cells may fall back to a full-matrix norm bound: fr3-floating's
-# float32 rounding through the floating Minv misses single entries at dt=0.1
-# (see _FLOATING_MIMIC_NORM_RTOL).
+# Floating cells in the float32 floating FD-gradient class may fall back to a
+# full-matrix norm bound: float32 rounding through the floating Minv misses single
+# entries at dt=0.1 (see _FLOATING_MIMIC_NORM_RTOL and _FLOATING_FDGRAD_NORM_RTOL).
 # (prefix, python-side integrator name, has_gradient, fixed_base_only)
 # CONSTANT_ACCELERATION is single-stage; both fixed- and floating-base now emit value +
 # gradient (the floating constant_acceleration gradient carries the SE(3) dIntegrate
@@ -146,6 +146,31 @@ def _torque_driven(project_model, sample):
 # floating-Minv rounding as the FD-gradient guards in cuda_harness. The old 1e-2
 # guard, the value-only h1_2 cell and the zero/conservative, dt<=0.01 scopes are gone.
 _FLOATING_MIMIC_NORM_RTOL = 3e-3
+
+# Non-mimic floating robots in the harness's float32 floating FD-gradient class
+# (cuda_harness.CUDA_ROBOT_ALGORITHM_TOLERANCES: float32 rounding through the
+# floating Minv, cond(M) 3e4 to 6e4, exact in an fp64 build). RK4 at dt=0.1
+# composes four FD-gradient evaluations, so the class reaches the integrator
+# gradient. Each bound comes from the suite's fp32 noise model (7.z31), not from
+# the failing diff: the harness-measured class noise (norm_rel on
+# forward_dynamics_gradient_q, 2e-4 on the gradient_qd and Minv blocks, 1e-6 per
+# forward-dynamics value) is injected into every evaluation of the fp64 reference
+# and the bound is the spread's max norm_rel over 200 trials at the cell's worst
+# sample, rounded up. Add a robot only with its own measurement.
+#   rizon4-floating (2026-10-16, both tiers, RK4 dAB at dt=0.1, class noise 1.6e-3).
+#   high_acceleration (cond(M) 2.9e4): the model gives norm_rel median 1.5e-3,
+#   max 2.2e-3 and a median of 11 entries past the entrywise check per trial; the
+#   kernel missed 2 of 1014 entries by at most 1.49x the allowance (max rel 5.1e-3,
+#   1.3 sigma of the model's per-entry spread), norm_rel 7.8e-4. energetic_random_1
+#   (cond(M) 3.1e4, the cell's worst): the model gives norm_rel median 4.0e-3, max
+#   5.8e-3 and a median of 40 entries past the check; the kernel missed 4 entries by
+#   at most 3.93x (max rel 5.0e-3, 0.5 to 1.4 sigma), norm_rel 2.06e-3. With only
+#   the strict 2e-4 gradient noise the model's norm_rel stays at or below 7.6e-4 on
+#   both samples, so the deviation is the floating-Minv class and nothing else.
+#   Bound 6e-3 = the model's max at the worst sample; the kernel sits at a third of it.
+_FLOATING_FDGRAD_NORM_RTOL = {
+    "rizon4": 6e-3,
+}
 
 
 def _generate_header(project_model, build_dir: Path) -> Path:
@@ -275,7 +300,11 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode,
         )
     project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
     floating_mimic = _robot_has_mimic(project_model) and base_mode == "floating"
-    norm_rtol = _FLOATING_MIMIC_NORM_RTOL if floating_mimic else None
+    norm_rtol = None
+    if floating_mimic:
+        norm_rtol = _FLOATING_MIMIC_NORM_RTOL
+    elif base_mode == "floating":
+        norm_rtol = _FLOATING_FDGRAD_NORM_RTOL.get(robot_id)
     label = f"{robot_id}_{base_mode}_{tier}_cuda_integrator"
     executable, compile_cmd = _build_case(project_model, tmp_path, label, tier=tier)
     samples = [_torque_driven(project_model, s) for s in _samples(project_model)]

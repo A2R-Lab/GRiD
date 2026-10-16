@@ -70,7 +70,7 @@ gpu_guard() {
   local util mem nproc
   util=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
   mem=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
-  nproc=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -c . || echo 0)
+  nproc=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -c . || true)  # grep -c prints 0 itself
   log "GPU: util=${util:-?}%  mem=${mem:-?}MiB  compute_procs=${nproc:-?}"
   if [ "${util:-0}" -gt 5 ] || [ "${mem:-0}" -gt 2000 ] || [ "${nproc:-0}" -gt 0 ]; then
     log "ABORT: GPU is busy (another user). Timing needs an isolated GPU; rerun with --resume $OUT when clear."

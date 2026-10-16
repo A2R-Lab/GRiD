@@ -3063,3 +3063,41 @@ compute cond(A) and the backward error; if the backward error is at unit
 roundoff the kernel is right and the entrywise comparison was the ill-posed
 object. The same reasoning applies to Minv and to any output formed by
 inverting a float32 matrix.
+
+### 7.z49 A composed gradient inherits the float32 class of its pieces; price the cell with the noise model before touching the bound (2026-10-16, rizon4-floating RK4)
+
+Widening `test_cuda_integrator_equivalence.py` to all nine robots failed
+rizon4-floating at TIER_LITE on one check: the RK4 gradient at
+high_acceleration, dt 0.1, missed 2 of 1014 entries by at most 1.49 times
+the scale-relative allowance (max relative 5.1e-3, norm_rel 7.8e-4), the
+same at 32, 96 and the suggested thread count, so not a race. rizon4 is the
+worst member of the float32 floating FD-gradient class in `cuda_harness`
+(forward_dynamics_gradient_q norm_rel 1.6e-3, exact in fp64), and the RK4
+gradient composes four FD-gradient evaluations through the stage chain, so
+the class reaches the integrator. The question was whether the deviation is
+that class or a kernel error, and the suite's own model (7.z31) answers it
+without a GPU: inject the measured class noise into every evaluation of the
+fp64 reference (1.6e-3 norm_rel on each J_qq, 2e-4 on J_qv and Minv, 1e-6
+per forward-dynamics value), compose the reference RK4 gradient 200 times
+and read the spread. With the class noise the model misses a median of 11
+entries per trial (max 28), its per-entry sigma at the two failing entries
+is 1.9 and 1.7 (the device sat at 1.3 and 0.9 sigma) and its norm_rel runs
+median 1.5e-3, max 2.2e-3; the device is quieter than the model. With only
+the strict 2e-4 gradient noise the model misses no entry (max 0.72 of the
+allowance, norm_rel max 4.0e-4), so nothing but the floating-Minv class
+explains the device. The failing log hid the cell's real worst, because
+pytest stops at the first assertion: a sweep of every sample, dt and
+integrator against the cached executable found energetic_random_1 at 3.93
+times the allowance, norm_rel 2.06e-3, where the model gives norm_rel
+median 4.0e-3, max 5.8e-3 (device entries at 0.5 to 1.4 sigma; the strict
+control stays at or below 7.6e-4). The bound was then set from the model
+at that worst sample, not from either diff: the full-matrix norm fallback
+the floating mimic cells already use (`_FLOATING_FDGRAD_NORM_RTOL`, rizon4
+6e-3, the model's max rounded up, the device at a third of it), with the
+entrywise check still first. Lessons: a cell that composes an operator
+inherits that operator's float32 class, so check the harness table for the
+pieces before reading the diff as a kernel error; run the noise model both
+with and without the suspected class, because only the pair proves the
+class is necessary and sufficient; sweep the whole cell before deriving a
+bound, since the first failure is rarely the worst; and write the measured
+numbers into the comment so the next audit can re-measure, as 7.z34 did.
