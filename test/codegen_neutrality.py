@@ -189,9 +189,8 @@ def changed_robot_assets(old_sha: str) -> set[str]:
     return {Path(n).stem for n in names if n.endswith(".urdf")}
 
 
-def _submodule_pins_match(old_sha: str) -> bool:
-    """The worktree reconstruction symlinks the CURRENT external/ checkouts —
-    only valid when the old commit pinned the same submodule SHAs."""
+def _submodule_pins(old_sha: str) -> tuple[dict, dict]:
+    """(old, current) {submodule name: sha} for external/."""
     old = {}
     # "external/" (trailing slash) lists the tree's children; bare "external"
     # returns the tree entry itself — which parsed to ZERO commit entries and
@@ -205,7 +204,23 @@ def _submodule_pins_match(old_sha: str) -> bool:
     for line in _git("submodule", "status").splitlines():
         sha, path = line.split()[0].lstrip("+-U"), line.split()[1]
         cur[path.split("/")[-1]] = sha
+    return old, cur
+
+
+def _submodule_pins_match(old_sha: str) -> bool:
+    old, cur = _submodule_pins(old_sha)
     return all(cur.get(k) == v for k, v in old.items())
+
+
+def _full_robot_matrix() -> tuple:
+    """Every shipped robot on both bases, the default profile: the rows a
+    PARSER change must be proven on, since what the parser emits depends on
+    each robot's own URDF content (a rotated inertial origin, a prismatic
+    joint with a rotated origin), not on the generator's code paths alone."""
+    from grid_assets import robot_urdf  # noqa: F401  (the asset list lives next to it)
+    robots = sorted(p.stem for p in (REPO_ROOT / "grid_assets" / "robots").glob("*.urdf"))
+    return tuple((f"{r}-{'floating' if fl else 'fixed'}-full", r, fl, {})
+                 for r in robots for fl in (False, True))
 
 
 def _generate(tree: Path, row, out: Path) -> None:
@@ -217,27 +232,44 @@ def _generate(tree: Path, row, out: Path) -> None:
 
 
 def prove_byte_neutrality(old_sha: str) -> tuple[bool, str]:
-    """Generate MATRIX from a worktree at ``old_sha`` and from the current
-    tree; return (all byte-identical, detail). Raises on infrastructure
+    """Generate the proof rows from a worktree at ``old_sha`` and from the
+    current tree; return (all byte-identical, detail). Raises on infrastructure
     failure (a row that cannot generate in EITHER tree is a real signal —
-    surface it, don't carry)."""
-    if not _submodule_pins_match(old_sha):
-        return False, "submodule pins differ from the old receipt's commit"
+    surface it, don't carry).
+
+    Submodule pins that moved since ``old_sha`` are materialised at their OLD
+    sha inside the worktree (the superproject's module store already holds
+    those objects); pins that did not move reuse the current checkout. When the
+    URDFParser pin moved the rows are every shipped robot on both bases, not the
+    six covering rows: a parser change is per-robot by nature."""
+    old_pins, cur_pins = _submodule_pins(old_sha)
+    moved = sorted(k for k, v in old_pins.items() if cur_pins.get(k) != v)
+    rows = MATRIX
+    if "URDFParser" in moved:
+        rows = MATRIX + _full_robot_matrix()
     with tempfile.TemporaryDirectory(prefix="grid_neutrality_") as td:
         tmp = Path(td)
         wt = tmp / "old_tree"
         _git("worktree", "add", "--detach", "-q", str(wt), old_sha)
         try:
-            # worktrees do not populate submodules; pins match (checked), so
-            # the current checkouts are the old commit's content.
+            # worktrees do not populate submodules: unchanged pins reuse the
+            # current checkouts; moved pins are checked out at the old sha.
             for sub in (REPO_ROOT / "external").iterdir():
                 dst = wt / "external" / sub.name
+                if sub.name in moved:
+                    done = subprocess.run(
+                        ["git", "submodule", "update", "--init", "--", f"external/{sub.name}"],
+                        cwd=wt, capture_output=True, text=True)
+                    if done.returncode != 0:
+                        return False, (f"cannot materialise external/{sub.name} at the old pin "
+                                       f"{old_pins[sub.name][:12]}: {done.stderr.strip()[:200]}")
+                    continue
                 if dst.is_dir() and not any(dst.iterdir()):
                     dst.rmdir()
                 if not dst.exists():
                     dst.symlink_to(sub)
             diffs = []
-            for row in MATRIX:
+            for row in rows:
                 old_out = tmp / f"{row[0]}.old.cuh"
                 new_out = tmp / f"{row[0]}.new.cuh"
                 _generate(wt, row, old_out)
@@ -246,7 +278,8 @@ def prove_byte_neutrality(old_sha: str) -> tuple[bool, str]:
                     diffs.append(row[0])
             if diffs:
                 return False, "matrix rows differ: " + ", ".join(diffs)
-            return True, f"{len(MATRIX)} matrix rows byte-identical"
+            moved_note = f"; moved pins {moved} materialised at the old sha" if moved else ""
+            return True, f"{len(rows)} matrix rows byte-identical{moved_note}"
         finally:
             subprocess.run(["git", "worktree", "remove", "--force", str(wt)],
                            cwd=REPO_ROOT, capture_output=True)
