@@ -196,7 +196,13 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
 
     failures = []
 
-    def _check(label, cuda_flat, ref_arr, pin_arr, tol_algo, f32_floor=5e-3):
+    def _check(label, cuda_flat, ref_arr, pin_arr, tol_algo, f32_floor=5e-3, pin_fd_h=None):
+        """pin_fd_h: the step of the pinocchio leg when that leg is a central finite
+        difference of an exact quantity (did_du_dfext_dq: pinocchio_backend.f_ext_gradient
+        perturbs q through pin.integrate with h = 1e-6). The two oracles then differ by
+        the O(h) remainder of the perturbation convention on top of round-off, so the
+        pinocchio tolerance carries an h * scale floor; the exact first-order legs do not
+        (2026-10-16: baxter-floating measured 2.3e-7 against a 1.1e-7 bucket)."""
         ref_arr = np.asarray(ref_arr, dtype=np.float64).reshape(-1)
         cuda_flat = np.asarray(cuda_flat, dtype=np.float64).reshape(-1)
         tol = get_tolerance(tol_algo, robot_id=robot_id)
@@ -217,7 +223,7 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
             return
         pin_arr = np.asarray(pin_arr, dtype=np.float64).reshape(-1)
         err_pin = float(np.max(np.abs(ref_arr - pin_arr)))
-        ptol = tol.atol + tol.rtol * scale
+        ptol = tol.atol + tol.rtol * scale + ((pin_fd_h * scale) if pin_fd_h else 0.0)
         if err_pin > ptol:
             failures.append(f"{label}: RBDReference-vs-pinocchio maxerr={err_pin:.3e} > {ptol:.3e}")
 
@@ -235,6 +241,7 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
     for vj in range(nv):
         for col in range(6 * nb):
             cuda3[vj, col, :] = cuda_djt[vj + nv * col, :]
-    _check("did_du_dfext_dq", cuda3, a_djt, e_djt, "f_ext_grad_so", f32_floor=2e-4)
+    _check("did_du_dfext_dq", cuda3, a_djt, e_djt, "f_ext_grad_so", f32_floor=2e-4,
+           pin_fd_h=1e-6)  # the pinocchio leg is a central FD with h = 1e-6 (see _check)
 
     assert not failures, "f_ext_gradient CUDA equivalence failures:\n" + "\n".join(failures)
