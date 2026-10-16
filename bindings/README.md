@@ -136,7 +136,11 @@ The full reference for the rest of the surface lives in the
 (`docs/source/user_guide/tutorials/python_wrappers.rst` in-repo):
 
 * the per-method table (shapes, `qdd=`-aware gradients, `ee_joint_names`,
-  `allow_fp64`),
+  `allow_fp64`) and the precision section. GRiD computes in fp32 on the GPU:
+  inputs of any float dtype are cast to float32 and outputs are float32, and
+  `allow_fp64` is a convenience cast with fp32 accuracy. `dtype="float64"` is
+  the fp64 tier, an alpha feature outside the signed receipt (`make test-fp64`
+  runs its lane); full fp64 support is on the roadmap,
 * the π-regressor family (`inverse_dynamics_regressor`,
   `inverse_dynamics_wrt_params` / `forward_dynamics_wrt_params`,
   `forward_dynamics_parameter_gradient`),

@@ -30,6 +30,11 @@ first packaged release.
   its receipt file; `gpu-proof.json` (sm_120) keeps gating CI, a Jetson records under
   `receipts/`, `make verify-all` checks every receipt on disk and
   `test/receipt_integrity.py --table` prints compatibility rows.
+- Precision: the validated path is fp32 on the GPU. The fp64 tier (`dtype="float64"`) is kept as an
+  alpha feature: its tests carry the `fp64_alpha` marker, run with `make test-fp64`, and sit outside
+  the signed receipt by collection; one numpy iiwa14 parity test stays in the receipt as a canary.
+  Registering an fp64 robot warns once. The dccrba smoke runner now runs in float like every other
+  runner, which brings the g1-floating and h1_2-fixed cells back.
 - Multi-architecture builds: `GRID_RBD_CUDA_ARCHS=86,89,90,120` compiles one robot
   library for several GPUs (cache keys include the list; launch tuning follows the
   `cuda_arch` given); the Docker image carries iiwa14 built that way.

@@ -172,7 +172,13 @@ void run() {
 
     T *o_grav = dmalloc<T>(NV), *o_nle = dmalloc<T>(NV);
 
-    const int nthreads = grid::MAX_PERF_LEVEL_THREADS;
+    // GRID_CUDA_CENTROIDAL_THREADS overrides the launch width (2026-10-16): the
+    // kernels stride over blockDim; the test launches at a register-safe 256.
+    int nthreads = grid::MAX_PERF_LEVEL_THREADS;
+    if (const char *e = std::getenv("GRID_CUDA_CENTROIDAL_THREADS")) {
+        const int v = std::atoi(e);
+        if (v > 0) nthreads = v;
+    }
     // generalized_gravity / nonlinear_effects compose the RNEA id-bias arena via
     // the auto-allocating extern __shared__ wrapper; size to the ID_BIAS macro.
     size_t dyn = grid::INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>();

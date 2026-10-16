@@ -127,7 +127,7 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
     # the XImats region. Non-mimic keeps the legacy 18*n byte-identical.
     id_t_count = compose_arena_full("inverse_dynamics", self._arena_ctx)   # Step 3.1 fold
     # joint-torque regressor (E1): kernel smem = XI + s_q_qd_qdd(NUM_POS+2nv)
-    # + s_Y (nv x 10*NUM_BODIES) + s_vaf(18*NUM_POS) + RNEA forward scratch.
+    # + s_Y (nv x 10*NUM_BODIES) + s_vaf(18*NB mimic, else 18*NUM_POS) + RNEA forward scratch.
     # n == get_num_pos() here. Additive.
     # g1-spill: 2-rung s_Y output-spill ladder (mirror fdpg :795-802). The s_Y output
     # (nv*10*NB, ~277KB on h2_plus -> unlaunchable) routes to the L2-pinned d_workspace
@@ -140,7 +140,7 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
         (_idr_t_count_full, _idr_t_count_surgical)[i] for i in self.inverse_dynamics_regressor_spill_tier_3way)
     self.inverse_dynamics_regressor_spill_Y_ws_count = _idr_Y_count
     # PS5 energy regressors. Both outputs are 10*NUM_BODIES (no DoF sweep).
-    # KE (spatial / XImats domain): s_q_qd(n+nv) + s_y_ke(10NB) + s_vaf(18n)
+    # KE (spatial / XImats domain): s_q_qd(n+nv) + s_y_ke(10NB) + s_vaf(18*NB mimic, else 18n)
     #   + RNEA forward scratch + XI_size.
     self.kinetic_energy_regressor_t_count = compose_arena_full("kinetic_energy_regressor", self._arena_ctx)   # Step 3.1 fold
     # PE (kinematics / XmatsHom domain): s_q(n) + s_y_pe(10NB)
@@ -190,7 +190,7 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
     self.dccrba_spill_out_ws_count = _dccrba_out
     self.dccrba_spill_J_ws_count = _dccrba_sJ
     # FD param gradient: kernel smem = XI + s_q_qd_u(NUM_POS+2nv) + s_dqdd_dpi
-    # + s_Minv(nv*nv) + s_Y(nv x 10*NB) + s_qdd(nv) + s_vaf(18*NUM_POS) + s_c(nv)
+    # + s_Minv(nv*nv) + s_Y(nv x 10*NB) + s_qdd(nv) + s_vaf(18*NB mimic, else 18*NUM_POS) + s_c(nv)
     # + the (max) inner forward scratch. n == get_num_pos() here. Additive.
     # FD-param-gradient g1-spill: 2-level surgical ladder. Level 0 keeps every
     # buffer in smem (current behavior on robots that fit). Level 1 spills the

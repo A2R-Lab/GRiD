@@ -15,7 +15,9 @@ file closes the three remaining gaps:
      link inertias were mutated to the *same* perturbed params. This proves the
      on-device 6x6 rebuild is physically correct, not merely that runtime==baked.
   2. **fp64 + runtime_inertia** — same, at ``dtype="float64"`` to ~1e-9 (exercises
-     the ``RunnerF64`` + double ``set_inertia_params`` path).
+     the ``RunnerF64`` + double ``set_inertia_params`` path). The fp64 tier is an
+     alpha feature (2026-10-15): that test carries ``fp64_alpha`` and runs under
+     ``make test-fp64``, outside the signed receipt; the fp32 sibling (1.) stays in.
   3. **Floating-base runtime_inertia** — go2 floating: runtime==baked + a
      perturbation vs the oracle. Validates the body-0/base index mapping of the
      dropped-base table layout.
@@ -238,6 +240,7 @@ def iiwa_rt_f64():
     )
 
 
+@pytest.mark.fp64_alpha
 def test_mutated_table_matches_oracle_fp64(iiwa_rt_f64):
     """fp64 runtime-inertia: the RunnerF64 + double set_inertia_params path must
     match the perturbed float64 oracle in true double precision.

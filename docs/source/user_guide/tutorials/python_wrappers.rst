@@ -67,8 +67,8 @@ A complete walkthrough exercising every bound method is at
 Method surface
 --------------
 
-Inputs are 2D arrays of the handle dtype (``float32`` unless the artifact was
-built with ``dtype="float64"``) with the batch on axis 0 and ``num_joints``
+Inputs are 2D arrays of any float dtype, cast to ``float32`` on the way in
+(see Precision below), with the batch on axis 0 and ``num_joints``
 (``NJ``, the configuration width ``nq``) on axis 1. On a floating base that
 is ``NV + 1`` (the quaternion pad; a velocity or torque is passed at the same
 ``NJ`` width with the last slot zero). Outputs are batched on axis 0 with the
@@ -189,6 +189,28 @@ an fp64-in/fp64-out convenience cast (compute stays fp32).
 Validation against ``RBDReference`` lives at
 ``test/python_wrappers/test_iiwa14_smoke.py`` (28 tests, all numerical
 methods pass at float32 precision).
+
+Precision
+---------
+
+GRiD computes in fp32 on the GPU. Inputs of any float dtype are cast to
+``float32`` before the launch and outputs are ``float32``; the signed receipt
+and the release timing both ran this path. ``allow_fp64=True`` at
+``register_robot`` (numpy backend) is a convenience cast that accepts and
+returns ``float64`` arrays while the kernels still compute in fp32, so its
+accuracy is that of fp32.
+
+``dtype="float64"`` selects the fp64 tier, an alpha feature. It builds a
+separate ``.so`` (``-DGRID_WRAPPER_T_DOUBLE`` and the codegen knob that
+re-derives the shared-memory spill tiers for 8-byte values) whose handle takes
+and returns ``float64`` arrays computed end to end in double, on the numpy,
+jax and torch backends. The tier is kept in full but it is not validated by
+the receipt: its tests are collected in a separate lane (``make test-fp64``),
+it is not guaranteed to build or fit on every robot (double arenas halve the
+headroom under the per-block shared-memory cap, and big-robot kernels that
+already spill fully at fp32 are left unregistered and raise when called), and
+``register_robot`` emits one warning per process when it is selected. Full
+fp64 support is on the roadmap.
 
 Build cost on large floating-base robots
 ----------------------------------------

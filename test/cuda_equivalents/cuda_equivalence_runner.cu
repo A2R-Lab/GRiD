@@ -68,6 +68,52 @@
 // overridable via argv[1] so the test harness can sweep warp counts to catch
 // thread-count-dependent races.
 int g_num_threads = 32;
+// True when argv[1] was 0 (the harness's "suggested" sweep point): g_num_threads
+// then holds grid::MAX_PERF_LEVEL_THREADS and every launch is clamped per kernel,
+// see grid_runner_launch_threads.
+bool g_suggested_launch = false;
+
+// Launch width for one kernel (2026-10-15). At the "suggested" point the request is
+// the robot's MAX_PERF_LEVEL_THREADS clamped to the LAUNCHED kernel's
+// cudaFuncAttributes maxThreadsPerBlock: the same mechanism as the generated host
+// wrappers (grid_host_clamp_threads in grid.cuh) and the bindings
+// (grid_clamp_threads_for in bindings/grid_rbd/wrapper_common.cuh), so the runner
+// launches exactly the way production does. A register-heavy -O0 kernel (the
+// floating forward_dynamics inline kernel on fr3 / h1_2) cannot hold
+// MAX_PERF_LEVEL_THREADS in the 64K-register block budget, and production never
+// asks it to. An EXPLICIT count (argv[1] > 0) is launched as requested, so the
+// explicit sweep points still probe the cap ("too many resources requested for
+// launch" at those points is a real launch limit the harness reports). The
+// effective width goes to stderr as a `[launch]` line, which the harness logs.
+template <typename KernelFn>
+static int grid_runner_launch_threads(KernelFn kernel, const char *name) {
+    int threads = g_num_threads;
+    int cap = -1;
+    cudaFuncAttributes attr;
+    if (cudaFuncGetAttributes(&attr, (const void *)kernel) == cudaSuccess) {
+        cap = attr.maxThreadsPerBlock;
+    } else {
+        cudaGetLastError();  // swallow: fall back to the requested width
+    }
+    if (g_suggested_launch && cap > 0 && threads > cap) threads = cap;
+    std::fprintf(stderr, "[launch] %s threads=%d requested=%d kernel_cap=%d mode=%s\n",
+                 name, threads, g_num_threads, cap,
+                 g_suggested_launch ? "suggested" : "explicit");
+    return threads;
+}
+template <typename KernelFn>
+static dim3 grid_runner_launch_dims(KernelFn kernel, const char *name) {
+    return dim3(grid_runner_launch_threads(kernel, name), 1, 1);
+}
+// The id / id-gradient / fd-gradient kernels are overloaded (a d_qdd-taking twin),
+// so taking their address needs the exact signature the runner launches: the
+// no-qdd overloads, which the fixed-path host wrappers <T, false, ...> also pick.
+template <typename T>
+using grid_runner_id_kernel_t = void (*)(T *, const T *, const int, T *,
+                                         const grid::robotModel<T> *, const T, const int);
+template <typename T>
+using grid_runner_grad_kernel_t = void (*)(T *, unsigned char *, const T *, const int, T *,
+                                           const grid::robotModel<T> *, const T, const int);
 
 template <typename T>
 __global__ void runtime_probe_kernel(T *dst) {
@@ -340,7 +386,9 @@ template <typename T>
 void run() {
     const T gravity = static_cast<T>(-9.81);
     const dim3 block_dimms(1, 1, 1);
-    const dim3 thread_dimms(g_num_threads, 1, 1);
+    // No shared thread_dimms: every launch below takes its own width from
+    // grid_runner_launch_threads / grid_runner_launch_dims (per-kernel clamp at
+    // the suggested point, the requested count at an explicit one).
 
     // Streams only (no aggregate kernel registration), then this cell's kernels.
     // The floating block below additionally registers its runner-local kernels.
@@ -495,7 +543,7 @@ void run() {
 #if RUN_INVERSE_DYNAMICS
     if (floating_algorithm_requested("inverse_dynamics")) {
         maybe_poison_smem();
-        floating_inverse_dynamics_runner<T><<<1, g_num_threads, grid::INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        floating_inverse_dynamics_runner<T><<<1, grid_runner_launch_threads(floating_inverse_dynamics_runner<T>, "inverse_dynamics"), grid::INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_vec, d_q, d_qd, d_zero, d_robot_model, gravity, /*d_f_ext=*/nullptr
         );
         gpuErrchk(cudaPeekAtLastError());
@@ -508,7 +556,7 @@ void run() {
 #if RUN_MINV
     if (floating_algorithm_requested("minv")) {
         maybe_poison_smem();
-        grid::minv_kernel<T><<<1, g_num_threads, grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::minv_kernel<T><<<1, grid_runner_launch_threads(grid::minv_kernel<T>, "minv"), grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_mat, hd_data->d_workspace, d_q, grid::NUM_JOINTS, d_robot_model, 1
         );
         gpuErrchk(cudaPeekAtLastError());
@@ -521,7 +569,7 @@ void run() {
 #if RUN_FORWARD_DYNAMICS
     if (floating_algorithm_requested("forward_dynamics")) {
         maybe_poison_smem();
-        floating_forward_dynamics_runner<T><<<1, g_num_threads, grid::FORWARD_DYNAMICS_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_MINIMAL>()>>>(
+        floating_forward_dynamics_runner<T><<<1, grid_runner_launch_threads(floating_forward_dynamics_runner<T>, "forward_dynamics"), grid::FORWARD_DYNAMICS_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_MINIMAL>()>>>(
             d_vec, d_q, d_qd, d_u, d_robot_model, gravity, hd_data->d_workspace, /*d_f_ext=*/nullptr
         );
         gpuErrchk(cudaPeekAtLastError());
@@ -534,7 +582,7 @@ void run() {
 #if RUN_ABA
     if (floating_algorithm_requested("aba")) {
         maybe_poison_smem();
-        grid::aba_kernel<T><<<1, g_num_threads, grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::aba_kernel<T><<<1, grid_runner_launch_threads(grid::aba_kernel<T>, "aba"), grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_vec,
             hd_data->d_workspace,
             d_q_qd_u,
@@ -554,7 +602,7 @@ void run() {
 #if RUN_CRBA
     if (floating_algorithm_requested("crba")) {
         maybe_poison_smem();
-        grid::crba_kernel<T><<<1, g_num_threads, grid::CRBA_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::crba_kernel<T><<<1, grid_runner_launch_threads(grid::crba_kernel<T>, "crba"), grid::CRBA_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_mat,
             hd_data->d_workspace,
             d_q_qd,
@@ -573,7 +621,7 @@ void run() {
 #if RUN_END_EFFECTOR_POSE
     if (floating_algorithm_requested("end_effector_pose")) {
         maybe_poison_smem();
-        grid::end_effector_pose_kernel<T><<<1, g_num_threads, grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::end_effector_pose_kernel<T><<<1, grid_runner_launch_threads(grid::end_effector_pose_kernel<T>, "end_effector_pose"), grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_ee,
             d_q,
             grid::NUM_JOINTS,
@@ -598,7 +646,7 @@ void run() {
 #if RUN_END_EFFECTOR_POSE_GRADIENT
     if (floating_algorithm_requested("end_effector_pose_gradient")) {
         maybe_poison_smem();
-        grid::end_effector_pose_gradient_kernel<T><<<1, g_num_threads, grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::end_effector_pose_gradient_kernel<T><<<1, grid_runner_launch_threads(grid::end_effector_pose_gradient_kernel<T>, "end_effector_pose_gradient"), grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_dee,
             hd_data->d_workspace,
             d_q,
@@ -621,7 +669,7 @@ void run() {
             ));
         }
         maybe_poison_smem();
-        grid::end_effector_pose_hessian_kernel<T><<<1, g_num_threads, grid::END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::end_effector_pose_hessian_kernel<T><<<1, grid_runner_launch_threads(grid::end_effector_pose_hessian_kernel<T>, "end_effector_pose_hessian"), grid::END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_d2ee,
             d_dee,
             hd_data->d_workspace,
@@ -645,7 +693,7 @@ void run() {
     if (floating_algorithm_requested("inverse_dynamics_gradient_q") ||
         floating_algorithm_requested("inverse_dynamics_gradient_qd")) {
         maybe_poison_smem();
-        grid::inverse_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::inverse_dynamics_gradient_kernel<T><<<1, grid_runner_launch_threads(static_cast<grid_runner_grad_kernel_t<T>>(&grid::inverse_dynamics_gradient_kernel<T>), "inverse_dynamics_gradient"), grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_grad,
             hd_data->d_workspace,
             d_q_qd,
@@ -672,7 +720,7 @@ void run() {
     if (floating_algorithm_requested("forward_dynamics_gradient_q") ||
         floating_algorithm_requested("forward_dynamics_gradient_qd")) {
         maybe_poison_smem();
-        grid::forward_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::forward_dynamics_gradient_kernel<T><<<1, grid_runner_launch_threads(static_cast<grid_runner_grad_kernel_t<T>>(&grid::forward_dynamics_gradient_kernel<T>), "forward_dynamics_gradient"), grid::FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_grad,
             hd_data->d_workspace,
             d_q_qd_u,
@@ -703,7 +751,7 @@ void run() {
     if (g_use_fext) {
 #if RUN_INVERSE_DYNAMICS
         maybe_poison_smem();
-        floating_inverse_dynamics_runner<T><<<1, g_num_threads, grid::INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        floating_inverse_dynamics_runner<T><<<1, grid_runner_launch_threads(floating_inverse_dynamics_runner<T>, "inverse_dynamics"), grid::INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_vec, d_q, d_qd, d_zero, d_robot_model, gravity, d_f_ext_active
         );
         gpuErrchk(cudaPeekAtLastError());
@@ -714,7 +762,7 @@ void run() {
 
 #if RUN_FORWARD_DYNAMICS
         maybe_poison_smem();
-        floating_forward_dynamics_runner<T><<<1, g_num_threads, grid::FORWARD_DYNAMICS_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_MINIMAL>()>>>(
+        floating_forward_dynamics_runner<T><<<1, grid_runner_launch_threads(floating_forward_dynamics_runner<T>, "forward_dynamics"), grid::FORWARD_DYNAMICS_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_MINIMAL>()>>>(
             d_vec, d_q, d_qd, d_u, d_robot_model, gravity, hd_data->d_workspace, d_f_ext_active
         );
         gpuErrchk(cudaPeekAtLastError());
@@ -725,7 +773,7 @@ void run() {
 
 #if RUN_ABA
         maybe_poison_smem();
-        grid::aba_kernel<T><<<1, g_num_threads, grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::aba_kernel<T><<<1, grid_runner_launch_threads(grid::aba_kernel<T>, "aba"), grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_vec, hd_data->d_workspace, d_q_qd_u, 3 * grid::NUM_JOINTS,
             d_f_ext_active, d_robot_model, gravity, 1
         );
@@ -738,7 +786,7 @@ void run() {
 #if !GRID_RUNNER_SKIP_GRADIENTS
 #if RUN_INVERSE_DYNAMICS_GRADIENT
         maybe_poison_smem();
-        grid::inverse_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::inverse_dynamics_gradient_kernel<T><<<1, grid_runner_launch_threads(static_cast<grid_runner_grad_kernel_t<T>>(&grid::inverse_dynamics_gradient_kernel<T>), "inverse_dynamics_gradient"), grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_grad, hd_data->d_workspace, d_q_qd, grid::NUM_JOINTS + grid::NUM_VEL,
             d_f_ext_active, d_robot_model, gravity, 1
         );
@@ -752,7 +800,7 @@ void run() {
 
 #if RUN_FORWARD_DYNAMICS_GRADIENT
         maybe_poison_smem();
-        grid::forward_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::forward_dynamics_gradient_kernel<T><<<1, grid_runner_launch_threads(static_cast<grid_runner_grad_kernel_t<T>>(&grid::forward_dynamics_gradient_kernel<T>), "forward_dynamics_gradient"), grid::FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_grad, hd_data->d_workspace, d_q_qd_u, 3 * grid::NUM_JOINTS,
             d_f_ext_active, d_robot_model, gravity, 1
         );
@@ -805,16 +853,18 @@ void run() {
     print_vector("runtime_probe", hd_data->h_c, grid::NUM_JOINTS);
 
 #if RUN_INVERSE_DYNAMICS
+    const dim3 thr_inverse_dynamics = grid_runner_launch_dims(static_cast<grid_runner_id_kernel_t<T>>(&grid::inverse_dynamics_kernel<T>), "inverse_dynamics");
     grid::inverse_dynamics<T, false, true>(
-        hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
+        hd_data, d_robot_model, gravity, 1, block_dimms, thr_inverse_dynamics, streams
     );
     gpuErrchk(cudaPeekAtLastError());
     print_vector("inverse_dynamics", hd_data->h_c, grid::NUM_JOINTS);
 #endif
 
 #if RUN_MINV
+    const dim3 thr_minv = grid_runner_launch_dims(grid::minv_kernel<T>, "minv");
     grid::minv<T, true>(
-        hd_data, d_robot_model, 1, block_dimms, thread_dimms, streams
+        hd_data, d_robot_model, 1, block_dimms, thr_minv, streams
     );
     gpuErrchk(cudaPeekAtLastError());
     print_matrix_col_major(
@@ -823,8 +873,9 @@ void run() {
 #endif
 
 #if RUN_FORWARD_DYNAMICS
+    const dim3 thr_forward_dynamics = grid_runner_launch_dims(grid::forward_dynamics_kernel<T>, "forward_dynamics");
     grid::forward_dynamics<T>(
-        hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
+        hd_data, d_robot_model, gravity, 1, block_dimms, thr_forward_dynamics, streams
     );
     gpuErrchk(cudaPeekAtLastError());
     print_vector("forward_dynamics", hd_data->h_qdd, grid::NUM_JOINTS);
@@ -837,8 +888,9 @@ void run() {
     // gradient algorithms for mimic robots (MIMIC_SUPPORTED_ALGORITHMS).
 #if !GRID_RUNNER_SKIP_GRADIENTS
 #if RUN_INVERSE_DYNAMICS_GRADIENT
+    const dim3 thr_inverse_dynamics_gradient = grid_runner_launch_dims(static_cast<grid_runner_grad_kernel_t<T>>(&grid::inverse_dynamics_gradient_kernel<T>), "inverse_dynamics_gradient");
     grid::inverse_dynamics_gradient<T, false, true>(
-        hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
+        hd_data, d_robot_model, gravity, 1, block_dimms, thr_inverse_dynamics_gradient, streams
     );
     gpuErrchk(cudaPeekAtLastError());
     print_matrix_col_major(
@@ -856,8 +908,9 @@ void run() {
 #endif
 
 #if RUN_FORWARD_DYNAMICS_GRADIENT
+    const dim3 thr_forward_dynamics_gradient = grid_runner_launch_dims(static_cast<grid_runner_grad_kernel_t<T>>(&grid::forward_dynamics_gradient_kernel<T>), "forward_dynamics_gradient");
     grid::forward_dynamics_gradient<T, false>(
-        hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
+        hd_data, d_robot_model, gravity, 1, block_dimms, thr_forward_dynamics_gradient, streams
     );
     gpuErrchk(cudaPeekAtLastError());
     print_matrix_col_major(
@@ -876,16 +929,18 @@ void run() {
 #endif
 
 #if RUN_ABA
+    const dim3 thr_aba = grid_runner_launch_dims(grid::aba_kernel<T>, "aba");
     grid::aba<T>(
-        hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
+        hd_data, d_robot_model, gravity, 1, block_dimms, thr_aba, streams
     );
     gpuErrchk(cudaPeekAtLastError());
     print_vector("aba", hd_data->h_qdd, grid::NUM_JOINTS);
 #endif
 
 #if RUN_CRBA
+    const dim3 thr_crba = grid_runner_launch_dims(grid::crba_kernel<T>, "crba");
     grid::crba<T, true>(
-        hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
+        hd_data, d_robot_model, gravity, 1, block_dimms, thr_crba, streams
     );
     gpuErrchk(cudaPeekAtLastError());
     print_matrix_col_major(
@@ -894,8 +949,9 @@ void run() {
 #endif
 
 #if RUN_END_EFFECTOR_POSE
+    const dim3 thr_end_effector_pose = grid_runner_launch_dims(grid::end_effector_pose_kernel<T>, "end_effector_pose");
     grid::end_effector_pose<T>(
-        hd_data, d_robot_model, 1, block_dimms, thread_dimms, streams
+        hd_data, d_robot_model, 1, block_dimms, thr_end_effector_pose, streams
     );
     gpuErrchk(cudaPeekAtLastError());
     print_vector("end_effector_pose", hd_data->h_end_effector_pose, 6 * grid::NUM_EES);
@@ -903,8 +959,9 @@ void run() {
 
 #if !GRID_RUNNER_SKIP_EEPOSE_GRADIENTS
 #if RUN_END_EFFECTOR_POSE_GRADIENT
+    const dim3 thr_end_effector_pose_gradient = grid_runner_launch_dims(grid::end_effector_pose_gradient_kernel<T>, "end_effector_pose_gradient");
     grid::end_effector_pose_gradient<T>(
-        hd_data, d_robot_model, 1, block_dimms, thread_dimms, streams
+        hd_data, d_robot_model, 1, block_dimms, thr_end_effector_pose_gradient, streams
     );
     gpuErrchk(cudaPeekAtLastError());
     print_vector(
@@ -914,8 +971,9 @@ void run() {
 #endif
 
 #if RUN_END_EFFECTOR_POSE_HESSIAN
+    const dim3 thr_end_effector_pose_hessian = grid_runner_launch_dims(grid::end_effector_pose_hessian_kernel<T>, "end_effector_pose_hessian");
     grid::end_effector_pose_hessian<T>(
-        hd_data, d_robot_model, 1, block_dimms, thread_dimms, streams
+        hd_data, d_robot_model, 1, block_dimms, thr_end_effector_pose_hessian, streams
     );
     gpuErrchk(cudaPeekAtLastError());
     print_vector(
@@ -938,7 +996,7 @@ void run() {
 
 #if RUN_INVERSE_DYNAMICS
         grid::inverse_dynamics<T, false, true>(
-            hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
+            hd_data, d_robot_model, gravity, 1, block_dimms, thr_inverse_dynamics, streams
         );
         gpuErrchk(cudaPeekAtLastError());
         print_vector("inverse_dynamics_fext", hd_data->h_c, grid::NUM_JOINTS);
@@ -946,7 +1004,7 @@ void run() {
 
 #if RUN_FORWARD_DYNAMICS
         grid::forward_dynamics<T>(
-            hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
+            hd_data, d_robot_model, gravity, 1, block_dimms, thr_forward_dynamics, streams
         );
         gpuErrchk(cudaPeekAtLastError());
         print_vector("forward_dynamics_fext", hd_data->h_qdd, grid::NUM_JOINTS);
@@ -954,7 +1012,7 @@ void run() {
 
 #if RUN_ABA
         grid::aba<T>(
-            hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
+            hd_data, d_robot_model, gravity, 1, block_dimms, thr_aba, streams
         );
         gpuErrchk(cudaPeekAtLastError());
         print_vector("aba_fext", hd_data->h_qdd, grid::NUM_JOINTS);
@@ -963,7 +1021,7 @@ void run() {
 #if !GRID_RUNNER_SKIP_GRADIENTS
 #if RUN_INVERSE_DYNAMICS_GRADIENT
         grid::inverse_dynamics_gradient<T, false, true>(
-            hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
+            hd_data, d_robot_model, gravity, 1, block_dimms, thr_inverse_dynamics_gradient, streams
         );
         gpuErrchk(cudaPeekAtLastError());
         print_matrix_col_major("inverse_dynamics_gradient_q_fext",
@@ -975,7 +1033,7 @@ void run() {
 
 #if RUN_FORWARD_DYNAMICS_GRADIENT
         grid::forward_dynamics_gradient<T, false>(
-            hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
+            hd_data, d_robot_model, gravity, 1, block_dimms, thr_forward_dynamics_gradient, streams
         );
         gpuErrchk(cudaPeekAtLastError());
         print_matrix_col_major("forward_dynamics_gradient_q_fext",
@@ -998,14 +1056,18 @@ int main(int argc, char **argv) {
     // that is correct only within a single warp).
     if (argc > 1) {
         int requested = std::atoi(argv[1]);
-        // 0 (or non-positive) is the sentinel for "launch at the robot's
-        // MAX_PERF_LEVEL_THREADS" — see the clamp below. >0 requests an explicit count.
+        // 0 (or non-positive) is the sentinel for "launch the way production does":
+        // the robot's MAX_PERF_LEVEL_THREADS clamped per kernel to its real
+        // maxThreadsPerBlock (grid_runner_launch_threads). >0 requests an explicit
+        // count that is launched as is.
         g_num_threads = requested > 0 ? requested : 0;
     }
+    g_suggested_launch = (g_num_threads <= 0);
     // Dynamic clamp: the kernels carry __launch_bounds__(tier_max_threads<TIER>())
     // (= grid::MAX_PERF_LEVEL_THREADS at the default tier), so launching with MORE
     // threads is an invalid configuration. Derive the cap from the generated
-    // header per-robot rather than hardcoding it; 0 => use SUGGESTED exactly.
+    // header per-robot rather than hardcoding it; 0 => start from MAX_PERF_LEVEL_THREADS
+    // and let each launch clamp to its kernel.
     if (g_num_threads <= 0 || g_num_threads > grid::MAX_PERF_LEVEL_THREADS) {
         g_num_threads = grid::MAX_PERF_LEVEL_THREADS;
     }

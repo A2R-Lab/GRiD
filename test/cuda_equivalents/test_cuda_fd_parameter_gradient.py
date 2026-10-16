@@ -9,12 +9,24 @@ Validates `gen_forward_dynamics_parameter_gradient` (CUDA) against
 The CUDA kernel composes minv (Minv), the regressor (Y) at the actual
 acceleration, and the symmetric-upper -Minv . Y apply.
 
-The runner streams q|qd|u (the sample's third vector is used as the torque u).
+The runner streams q|qd|u. Since 2026-10-15 the torque is u = ID(q, qd, qdd_sample)
+(the integrator suite's torque-driven sampling, docs/agent_debugging_guide.md 7.z31):
+the sample's third vector fed in directly as u left every zero-torque sample
+(nominal, zero) in free fall on a floating base, where the exact
+dqdd/dpi = -Minv Y vanishes (Y is identically zero in free fall), so the comparison
+measured float32 forward-dynamics noise amplified by Minv (0.01 to 0.09 on fr3,
+rizon4, gen3, fetch, baxter floating; 0.39 on g1) instead of the kernel. With the
+torque-driven acceleration every sample has a non-degenerate gradient and the
+scale-relative float tolerance applies everywhere; the g1-only atol floor that
+covered the degenerate sample is gone.
 Output is nv x 10*NUM_BODIES and is NOT a gridData field, so the runner allocates
-the output buffer itself. iiwa14 (fixed) gated first, then g1 (floating).
+the output buffer itself. Every manifest robot on both bases except
+iiwa14-floating (widened 2026-10-15; see _CASES for the exclusion). Narrow with
+GRID_CUDA_FPG_ROBOTS="iiwa14:fixed,g1:floating".
 """
 
 import contextlib
+import dataclasses
 import os
 import shutil
 import subprocess
@@ -41,20 +53,41 @@ from RBDReference.tests.tolerances import get_tolerance
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_fd_parameter_gradient_smoke_runner.cu")
 
-# (robot_id, base_mode). iiwa14 gated first (fixed), then a floating-base case.
+# (robot_id, base_mode): every manifest robot on both bases, iiwa14 fixed first.
 # g1-floating (nv=35, nb=30 -> ~138 KB at level 0) overflows this GPU's per-block smem
 # cap, so it exercises the g1-spill rung: the nv x 10*NB regressor Y spills to the
 # L2-pinned d_workspace while Minv + vaf + the inner stay in smem, dropping the arena to
 # ~94 KB (under the sm_120 ~99 KB cap). It covers the full 6-DoF free-flyer root path.
-# iiwa14-floating is SKIPPED: the iiwa14 URDF's 'base' link has a degenerate/missing
-# <inertial> (zero mass), so its floating-base mass matrix is singular and
-# dqdd/dpi = -Minv.Y is not a well-defined oracle (the free-flyer root is covered by g1).
-_CASES = [
-    ("iiwa14", "fixed"),
-    # (iiwa14-floating deliberately omitted per the note above — physically ill-posed,
-    #  not a guardable bug; the free-flyer root path is covered by g1-floating below.)
-    ("g1", "floating"),
-]
+# iiwa14-floating is LEFT OUT at the parametrization: the iiwa14 URDF's 'base' link
+# has a degenerate/missing <inertial> (zero mass), so its floating-base mass matrix
+# is singular and dqdd/dpi = -Minv.Y is not a well-defined oracle (the free-flyer
+# root is covered by the other eight floating robots). Narrow with
+# GRID_CUDA_FPG_ROBOTS="iiwa14:fixed,g1:floating".
+_ALL_ROBOTS = ("iiwa14", "go2", "g1", "h1_2", "fr3", "rizon4", "gen3", "fetch", "baxter")
+# h1_2 (both bases) is LEFT OUT at the parametrization (2026-10-16): the parameter
+# gradient requests more shared memory than the 101376 bytes this GPU offers per
+# block even at the most-spilled tier (181536 bytes floating, measured in the chain
+# B sample; the fixed cell trips the same cap), so the cells cannot launch; they
+# return through GRID_CUDA_FPG_ROBOTS once a deeper rung fits.
+_EXCLUDED = {("iiwa14", "floating"),   # massless root link, see above
+             ("h1_2", "fixed"), ("h1_2", "floating")}  # shared-memory cap, see above
+
+
+def _cases():
+    raw = os.environ.get("GRID_CUDA_FPG_ROBOTS")
+    if raw:
+        out = []
+        for tok in raw.split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            rid, _, mode = tok.partition(":")
+            out.append((rid.strip(), (mode.strip() or "fixed")))
+        return out
+    return [(r, b) for b in ("fixed", "floating") for r in _ALL_ROBOTS if (r, b) not in _EXCLUDED]
+
+
+_CASES = _cases()
 
 
 def _robot_spec(robot_id, base_mode):
@@ -135,8 +168,13 @@ def test_cuda_fd_parameter_gradient_matches_reference(robot_id, base_mode, tmp_p
 
     failures = []
     for sample in samples:
-        # The runner reads the sample's third vector as the torque u.
-        q, qd, u = sample.q, sample.qd, sample.qdd
+        # The runner reads the sample's third vector as the torque u. Drive it with
+        # u = ID(q, qd, qdd_sample) so the actual acceleration is the sample's qdd
+        # (see the module docstring: u = qdd_sample left the zero-acceleration
+        # samples in free fall, where the exact gradient is zero).
+        q, qd = sample.q, sample.qd
+        u = np.asarray(project_model.inverse_dynamics(q, qd, sample.qdd), dtype=np.float64).reshape(-1)
+        sample = dataclasses.replace(sample, qdd=u)
         try:
             stdout = _run_runner(executable, _sample_to_stdin(sample), compile_cmd)
         except Exception as exc:  # noqa: BLE001
@@ -169,21 +207,6 @@ def test_cuda_fd_parameter_gradient_matches_reference(robot_id, base_mode, tmp_p
         ref_mag = float(np.max(np.abs(G_ref))) if G_ref.size else 0.0
         scale = max(1.0, ref_mag)
         atol = tol.atol + tol.rtol * scale + 5e-3 * scale  # float32 CUDA headroom
-
-        # Free-fall cancellation through reduced Minv (g1-floating) amplifies float32 noise to
-        # ~0.4 at near-zero nominal/zero samples, where float64 fd_param = -M⁻¹·Y cancels
-        # to ~0 so |G_ref|≈0 makes the scale-relative tolerance vanish. Floor the atol for
-        # those robots AT THE DEGENERATE SAMPLE ONLY (|G_ref| tiny); non-degenerate samples
-        # keep the strict scale-relative tol, so real errors are still caught. (Floor bumped
-        # 0.25 -> 0.45 once the genuine u-input mis-pack was fixed: the energetic samples now
-        # pass the strict tol, leaving only this near-zero float32 noise on the nominal sample.)
-        # 2026-10-05 diagnosis: nominal/zero max errors 0.388/0.253 at 32 threads;
-        # identical emitted arithmetic with diagnostic global scratch in fp64 gives
-        # sub-1e-9 residuals. Production G1 fp64 needs 191936 B shared memory,
-        # above this GPU's 101376 B limit; that diagnostic is not a supported launch.
-        _COND_ATOL_FLOOR = {"g1": 0.45}
-        if ref_mag < 1e-2:
-            atol = max(atol, _COND_ATOL_FLOOR.get(robot_id, 0.0))
 
         err = float(np.max(np.abs(G_cuda - G_ref))) if G_ref.size else 0.0
         if err > atol:

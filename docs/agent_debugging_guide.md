@@ -1498,6 +1498,17 @@ is their tombstone):
 - `-DX=86,120` becomes `-DX=86 -D120` and nvcc fails with "macro names must be identifiers". Pass list-valued
   defines with another separator (`-DGRID_RBD_ARCHS=86:120`) and stringify in the template (`GRID_RBD_STRINGIFY`).
 
+### 7.z47 Degenerate samples and a no-op sweep found by widening the matrix (2026-10-16)
+- A zero-torque sample puts a floating-base robot in free fall, where the exact parameter gradient of the
+  acceleration is identically zero and the comparison measures float32 forward-dynamics noise through the
+  mass-matrix inverse. The parameter-gradient suite now drives every sample with u = ID(q, qd, qdd_sample),
+  the integrator suite's approach, which removed the g1-only absolute floor as well.
+- `test_cuda_fd_du_output_spill.py` set `GRID_NTHREADS`, which the equivalence runner never reads (it takes
+  argv[1]), so its thread-count sweep had run every build at the default width. When a sweep is cheap to
+  pass, check that the knob reaches the process.
+- Widening a family to all nine robots is what exposed both, plus the mimic `s_vaf` overflow in 7.z46. A
+  family validated on three robots is validated on three robots.
+
 ## 8. Process meta-lessons
 
 - **The backlog drifts — verify "is this still open?" before dispatching.** This session found 5
@@ -2984,3 +2995,71 @@ authenticates every shard receipt's signature; the scope gate is the policy's
 `required_test_manifest` (EXACT set, `test/gpu-proof-tests.txt`) verified by
 the driver right after the merge while the tree is still byte-clean — before
 the launcher promotes the receipt — not a GRiD-side subset check.
+
+### 7.z46 A per-body scratch sized by NUM_POS hides behind a spilled output slot (2026-10-16, h1_2 regressor)
+
+`test_cuda_regressor[h1_2-fixed]` and `[h1_2-floating]` returned O(1) to O(1e4)
+entries of Y in DOF rows 0..4 of body columns 1..5 only (the first leg chain),
+every other row, body and the twelve mimic hand joints exact. The same cell
+passed with a smem target large enough to keep s_Y in shared memory, and
+g1 passed on the forced spill path, so the symptom looked like a workspace
+offset or aliasing bug in the spilled s_Y band. It was bug class 1a. The
+regressor kernel carved `s_vaf` as `18*NUM_POS` (702 floats on h1_2 fixed)
+while `inverse_dynamics_inner` indexes it by raw body id over
+`get_num_joints()` bodies (51, so 918 floats). The f writes of bodies 15..50
+ran 216 floats past the slot. The arena order is `s_vaf | s_Y | s_XImats`.
+At an in-smem tier the overflow lands in s_Y, which the inner zeroes right
+after the forward sweep, so it is harmless and invisible. At a spilled tier
+the s_Y slot is zero bytes and the same 216 floats are exactly the X
+matrices of bodies 0..5; every column whose chain propagates through X[1..5]
+(the left leg) is wrong in its ancestor rows, which is the observed pattern
+(row 5, the leaf's own projection, is applied before the corrupted X). The
+ID kernel had already been fixed to `18*NJ` for mimic robots (section 1a);
+the regressor, the fd parameter gradient (a clone of the same spill) and the
+kinetic-energy regressor kernels and device wrappers had not, and their
+arena descriptors in `algo_registry.py` carried the matching `18*c.n`. Fix:
+size by `get_num_joints()` when `robot_has_mimic_joints()` (the `nb_vaf`
+idiom) and use `c.id_vaf` in the descriptors; non-mimic robots are
+byte-identical. How it was localized: print the bad (row, body, param)
+set per sample rather than the max error, count the overflow in units of
+the neighbour (216 floats is six 6x6 transforms) and read the generated
+arena comment block of the failing kernel; a corrupted-X hypothesis
+predicts exactly which rows and columns fail, an offset bug does not.
+Lesson: a buffer that only overflows into a later-zeroed slot is still a
+bug, and any spill rung that shrinks a slot to zero re-exposes every such
+overflow behind it. Grep every `("s_vaf", 18 *` and `18*c.n` site when a
+mimic robot fails only on a spilled rung.
+
+### 7.z48 A float32 inverse cannot be compared entrywise above cond 1e5; use the normwise backward error (2026-10-16, osc_inertia)
+
+Widening `test_cuda_frame_jacobian.py` to all nine robots failed g1-fixed and
+h1_2-fixed only in the Lambda block, only in the WORLD frame, at one
+ill-conditioned configuration each (5 of 36 and 1 of 36 entries, relative
+1.5e-2 against rtol 5e-3). J and Jdot were exact everywhere. cond(J Minv J^T)
+was 1.2e7 and 2.9e6 at the two failures and below 1e5 at every passing sample.
+The kernel was not wrong: a float32 inverse of A carries an entrywise relative
+error of about u times cond(A), u = 2^-24, so at cond 1e5 the error already
+reaches the 5e-3 class and at cond 1e7 it is percent level. A CPU float32
+inverse of the same A_ref measured 1.6e-3 at the g1 sample, the same class as
+the device. The raw residual max|Lambda A_ref - I| with a fixed tolerance is
+not a fix: it is bounded by the same u times cond (the CPU float32 inverse
+gives 8e-2 at cond 1.2e7 and 1e2 at a singular corner). The check that is
+valid at every conditioning is the normwise backward error of each column
+x_j of Lambda as the solution of A_ref x = e_j, eta_j = ||A_ref x_j - e_j|| /
+(||A_ref|| ||x_j||) (Rigal and Gaches, 1967), the smallest relative
+perturbation of A_ref for which x_j is exact. It measured 1e-11 to 9e-8 on
+every well-conditioned sample of every robot and at most 3e-6 at the cond
+1e14 corner samples, independent of cond, and is held to the harness float32
+class 2e-4. The entrywise comparison stays in force below cond 1e5, where
+float32 represents the inverse to the class. At an A_ref that is singular at
+float32 working precision (cond at or above 2^24: the q=0 corner of iiwa14
+and of h1_2) both the device and a CPU float32 inverse return non-finite
+values, because the inverse does not exist; that outcome is accepted only
+there, and a finite Lambda is always held to the backward error. The checks
+live in `check_osc_inertia` in `test_cuda_frame_jacobian.py` and are shared
+by the host and spill-F tests, which previously dropped samples at cond 1e8
+with a silent continue. Lesson: before loosening a tolerance on an inverse,
+compute cond(A) and the backward error; if the backward error is at unit
+roundoff the kernel is right and the entrywise comparison was the ill-posed
+object. The same reasoning applies to Minv and to any output formed by
+inverting a float32 matrix.

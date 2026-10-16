@@ -124,6 +124,7 @@ markers = [
     "python_wrappers: grid-rbd Python wrapper coverage; requires CUDA + grid-rbd installed.",
     "notebooks: Executable example notebooks (run via nbval-lax); requires CUDA + grid-rbd installed.",
     "gpu_proof: Test outcomes recorded in the signed pytest-gpu-proof receipt (auto-applied to cuda_equivalence + python_wrappers by test/conftest.py).",
+    "fp64_alpha: fp64 (double precision) alpha-tier tests; outside the signed receipt; run with make test-fp64.",
 ]
 
 [tool.gpu_proof]

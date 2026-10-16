@@ -1,4 +1,11 @@
-"""Full [dq|dv] momentum cost, including floating coordinate cross terms."""
+"""Full [dq|dv] momentum cost, including floating coordinate cross terms.
+
+Every manifest robot on both bases (widened 2026-10-15; the momentum_cost kernel
+is emitted for mimic robots too, and the dccrba arena it launches with fits the
+per-block cap at both (dtype, tier) points: at most 75440 bytes in float at
+TIER_SHARED and 37312 bytes in double at TIER_MINIMAL, both on h1_2-floating).
+Narrow with GRID_CUDA_MOMENTUM_ROBOTS="iiwa14:fixed,go2:floating".
+"""
 import contextlib
 import os
 from pathlib import Path
@@ -15,11 +22,26 @@ from test.cuda_equivalents.cuda_harness import _detect_cuda_arch, _build_cuda_sa
 from test.cuda_equivalents.test_cuda_integrator_equivalence import _robot_spec
 
 ROOT = Path(__file__).resolve().parents[2]
+_ALL_ROBOTS = ("iiwa14", "go2", "g1", "h1_2", "fr3", "rizon4", "gen3", "fetch", "baxter")
+
+
+def _cases():
+    raw = os.environ.get("GRID_CUDA_MOMENTUM_ROBOTS")
+    if raw:
+        out = []
+        for tok in raw.split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            rid, _, mode = tok.partition(":")
+            out.append((rid.strip(), (mode.strip() or "fixed")))
+        return out
+    return [(r, b) for b in ("fixed", "floating") for r in _ALL_ROBOTS]
 
 
 @pytest.mark.cuda_equivalence
 @pytest.mark.robot_smoke
-@pytest.mark.parametrize("robot,base", [("iiwa14", "fixed"), ("go2", "floating"), ("fr3", "fixed")])
+@pytest.mark.parametrize("robot,base", _cases())
 @pytest.mark.parametrize("dtype,tier", [("double", "TIER_MINIMAL"), ("float", "TIER_SHARED")])
 def test_full_momentum_contract(tmp_path, robot, base, dtype, tier):
     nvcc = shutil.which("nvcc")

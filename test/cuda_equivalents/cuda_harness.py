@@ -141,20 +141,21 @@ FLAGSHIP_SPLIT_CELLS = (
     SplitCell("end_effector_pose_hessian", ("end_effector_pose_hessian",),
               frozenset({"RUN_END_EFFECTOR_POSE_HESSIAN"}), ("end_effector_pose_hessian",)),
 )
-# Flagship cells removed from the collection on 2026-10-15, as (robot, base, cell,
-# thread count) with 0 standing for the MAX_PERF_LEVEL_THREADS sweep point. Each
-# one is a hardware limit at that launch point: the forward_dynamics inline kernel
-# of the -O0 runner build needs more than the 64K registers a block can hold at
-# the robot's MAX_PERF_LEVEL_THREADS (fr3 floating and h1_2 floating), so the
-# launch fails with "too many resources requested for launch" (receipt evidence:
-# refresh 2026-10-12, cuda_equivalence_runner.cu forward_dynamics launch). The same
-# kernel passes at the other three thread counts, which stay collected. A cell that
-# cannot run on this hardware is de-collected rather than skipped, so the receipt
-# baseline carries no expected skips.
-FLAGSHIP_DECOLLECTED_CELLS = frozenset({
-    ("fr3", "floating", "forward_dynamics", 0),
-    ("h1_2", "floating", "forward_dynamics", 0),
-})
+# Flagship cells removed from the collection, as (robot, base, cell, thread count)
+# with 0 standing for the "suggested" sweep point. A cell goes here only when it
+# cannot run on this hardware (a launch limit measured and recorded with the
+# entry), so the receipt baseline carries no expected skips; a numerical failure
+# is a bug and is never listed. Empty since 2026-10-15 (evening): the two entries
+# it held, fr3-floating and h1_2-floating forward_dynamics at the suggested point,
+# were the runner launching the -O0 inline forward_dynamics kernel at the robot's
+# MAX_PERF_LEVEL_THREADS, above the 64K-register block budget ("too many resources
+# requested for launch", refresh 2026-10-12). Production never launches that way:
+# the host wrappers and the bindings clamp to the kernel's real maxThreadsPerBlock
+# (grid_host_clamp_threads / grid_clamp_threads_for), and since 2026-10-15 the
+# runner's suggested point does the same per kernel (grid_runner_launch_threads in
+# cuda_equivalence_runner.cu, logged as `[launch]` lines), so both cells run and
+# pass. The explicit points (32 / 96 / 100) stay unclamped and still probe the cap.
+FLAGSHIP_DECOLLECTED_CELLS = frozenset()
 GPU_UNAVAILABLE_PATTERNS = (
     "no cuda-capable device",
     "cuda driver version is insufficient",
@@ -295,6 +296,18 @@ KNOWN_FAILING_ROBOT_ALGORITHMS = {
 CUDA_DEFAULT_TOLERANCE = {
     "rtol": 2e-4,
     "atol": 2e-4,
+}
+# The fp64 (double) tolerance class of the fp64_alpha lane (2026-10-15): a header
+# generated with the codegen dtype="double" knob, run through GRID_EQUIV_T=double
+# against the same float64 oracle, with the samples written to stdin at full
+# double precision. Basis: an fp64 build of the floating forward_dynamics_gradient
+# cell, the worst float32 case (the norm guards below), reached norm_rel <= 8e-8
+# (docs/agent_debugging_guide.md 7.z34), so 1e-7 relative with the same
+# scale-relative atol floor (atol_eff = max(atol, rtol * max|expected|)) bounds
+# every cell. The per-robot float overrides never apply in double.
+CUDA_FP64_TOLERANCE = {
+    "rtol": 1e-7,
+    "atol": 1e-7,
 }
 CUDA_ROBOT_ALGORITHM_TOLERANCES = {
     # Every override was re-measured on 2026-09-30 (docs/agent_debugging_guide.md 7.z34):
@@ -583,6 +596,7 @@ def _header_cache_key(
     resolved_model,
     include_homogenous_transforms: bool,
     codegen_algorithm_list=None,
+    dtype: str = "float",
 ) -> str:
     urdf_path = Path(resolved_model.urdf_path)
     payload = {
@@ -632,6 +646,11 @@ def _header_cache_key(
     # default (None) key is byte-identical to the historical full-header key.
     if codegen_algorithm_list is not None:
         payload["codegen_algorithm_list"] = sorted(codegen_algorithm_list)
+    # fp64 (2026-10-15): the codegen dtype="double" knob re-derives every spill
+    # tier at sizeof(double), so a double header must never alias the float one.
+    # Added ONLY for double, so the float key stays byte-identical.
+    if dtype != "float":
+        payload["dtype"] = dtype
     return _stable_json_hash(payload)
 
 
@@ -668,8 +687,13 @@ def _run_gen_all_code(
 
 
 def _generate_grid_header(
-    project_model, resolved_model, build_dir: Path, config, codegen_algorithm_list=None
+    project_model, resolved_model, build_dir: Path, config, codegen_algorithm_list=None,
+    dtype: str = "float",
 ) -> tuple[Path, str]:
+    """``dtype`` ("float" | "double") is the codegen scalar: "double" generates the
+    fp64_alpha lane's header (GRiDCodeGenerator(dtype="double"), the knob
+    bindings/grid_rbd/_compile.py uses for dtype="float64" builds) under its own
+    cache key. The default "float" is the receipt's path, byte-identical to before."""
     header_path = build_dir / "grid.cuh"
     include_homogenous_transforms = True
     header_key = _header_cache_key(
@@ -677,7 +701,9 @@ def _generate_grid_header(
         resolved_model,
         include_homogenous_transforms=include_homogenous_transforms,
         codegen_algorithm_list=codegen_algorithm_list,
+        dtype=dtype,
     )
+    codegen_kwargs = {} if dtype == "float" else {"dtype": dtype}
     if not _cache_enabled():
         _progress(config, f"generating header for {project_model.spec.robot_id}-{project_model.base_mode}")
         codegen = GRiDCodeGenerator(
@@ -685,6 +711,7 @@ def _generate_grid_header(
             DEBUG_MODE=False,
             NEED_PRINT_MAT=True,
             FILE_NAMESPACE="grid",
+            **codegen_kwargs,
         )
         with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
             _run_gen_all_code(
@@ -708,6 +735,7 @@ def _generate_grid_header(
             DEBUG_MODE=False,
             NEED_PRINT_MAT=True,
             FILE_NAMESPACE="grid",
+            **codegen_kwargs,
         )
         with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
             _run_gen_all_code(
@@ -722,6 +750,7 @@ def _generate_grid_header(
                     "base_mode": project_model.base_mode,
                     "target_shared_mem_bytes": os.environ.get("GRID_CUDA_TARGET_SHARED_MEM_BYTES", "default"),
                     "shared_mem_type_size_bytes": os.environ.get("GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES", "default"),
+                    "dtype": dtype,
                 },
                 indent=2,
                 sort_keys=True,
@@ -740,7 +769,13 @@ def _compile_runner(
     skip_eepose_gradients: bool = False,
     run_tokens=None,
     config=None,
+    dtype: str = "float",
 ) -> tuple[Path, list[str]]:
+    """``dtype`` ("float" | "double") names the scalar the header in ``build_dir``
+    was generated for. The runner source instantiates both ``run<float>`` and
+    ``run<double>`` and picks one at run time (GRID_EQUIV_T), so the compile
+    command is the same; the executable key folds the dtype so a double runner
+    never aliases a float one even when their header bytes agree."""
     nvcc = shutil.which("nvcc")
     if nvcc is None:
         pytest.skip("nvcc was not found; install CUDA Toolkit to run CUDA equivalence tests.")
@@ -780,6 +815,8 @@ def _compile_runner(
             # tight group). Fold it into the key so each cell's executable is distinct.
             "run_tokens": sorted(run_tokens) if run_tokens else None,
             "compile_flags": compile_flags,
+            # fp64 (2026-10-15): added ONLY for double, so the float key is byte-identical.
+            **({} if dtype == "float" else {"dtype": dtype}),
         }
     )
 
@@ -884,7 +921,26 @@ def _compile_runner(
         return executable, cmd
 
 
-def _run_runner(executable: Path, sample_input: str, compile_cmd: list[str], num_threads: int | None = None) -> str:
+def _runner_env(dtype: str = "float") -> dict | None:
+    """The runner's environment for ``dtype``: None (inherit) for float, the
+    inherited environment plus GRID_EQUIV_T=double for the fp64_alpha lane."""
+    if dtype == "float":
+        return None
+    env = dict(os.environ)
+    env["GRID_EQUIV_T"] = dtype
+    return env
+
+
+def _run_runner(executable: Path, sample_input: str, compile_cmd: list[str], num_threads: int | None = None,
+                env: dict | None = None, config=None) -> str:
+    """Run one compiled runner on ``sample_input`` and return its stdout.
+
+    ``config`` (the pytest config, optional) routes the runner's ``[launch]`` stderr
+    lines to the progress log: cuda_equivalence_runner.cu prints one per kernel
+    launch with the effective block width, the requested width and the kernel's
+    cudaFuncAttributes cap, so a receipt records the width each cell really ran at
+    (at the suggested point that is the production clamp, see
+    grid_runner_launch_threads)."""
     argv = [str(executable)]
     if num_threads is not None:
         argv.append(str(num_threads))
@@ -894,7 +950,11 @@ def _run_runner(executable: Path, sample_input: str, compile_cmd: list[str], num
         cwd=executable.parent,
         capture_output=True,
         text=True,
+        env=env,
     )
+    for line in result.stderr.splitlines():
+        if line.startswith("[launch] "):
+            _progress(config, f"{executable.name}: {line}")
     combined_output = f"{result.stdout}\n{result.stderr}".lower()
     if result.returncode != 0:
         if any(pattern in combined_output for pattern in GPU_UNAVAILABLE_PATTERNS):
@@ -925,19 +985,22 @@ def _run_runner(executable: Path, sample_input: str, compile_cmd: list[str], num
                 "de-alias (docs/design_history/idsva_so_inner_refactor_notes.md); world-frame is the "
                 "production path and fits."
             )
-        # Register-pressure launch limit: at the robot's MAX_PERF_LEVEL_THREADS
-        # (the "suggested" sweep point) a large floating-base inline kernel can
-        # exceed the per-block register budget (regs/thread * threads > 64K).
-        # This is a hardware launch limit, not a correctness bug — the same
-        # kernel launches and PASSES equivalence at the lower thread counts in
-        # the sweep (32/96). Skip honestly (e.g. fr3-floating FD inline at 1024
-        # autotuned threads). The production launch uses MAX_PERF_LEVEL_THREADS
-        # only when it fits; the runner deliberately probes the cap.
+        # Register-pressure launch limit at an EXPLICIT thread count: a kernel
+        # whose regs/thread * threads exceeds the 64K-register block budget cannot
+        # launch at that width. Since 2026-10-15 the "suggested" point (num_threads
+        # 0) clamps every launch to the kernel's real maxThreadsPerBlock, exactly as
+        # the production host wrappers and bindings do, so this can no longer fire
+        # there; only the unclamped explicit points (32 / 96 / 100, which probe the
+        # cap on purpose) can reach it. It is a hardware launch limit, not a
+        # correctness bug: skip honestly, and de-collect the point with the measured
+        # cap (the runner's `[launch]` line prints kernel_cap) if it recurs, so the
+        # receipt baseline stays free of expected skips.
         if "too many resources requested for launch" in combined_output:
             pytest.skip(
-                "Kernel exceeds this GPU's per-block register budget at the "
-                "MAX_PERF_LEVEL_THREADS sweep point (hardware launch limit, not a "
-                "bug; the same kernel passes equivalence at lower thread counts).\n"
+                "Kernel exceeds this GPU's per-block register budget at this explicit "
+                "thread count (hardware launch limit, not a bug; the suggested point "
+                "clamps to the kernel cap like production). De-collect the point with "
+                "the measured kernel_cap if this recurs.\n"
                 f"  stderr: {result.stderr.strip()}"
             )
         pytest.fail(
@@ -957,7 +1020,11 @@ def _thread_counts() -> tuple[int, ...]:
     GRiD usage launches at, resolved DYNAMICALLY in the runner from the generated
     header — never hardcoded, since it varies per robot: iiwa14=352, go2=288,
     g1/h1_2=512), and one session-random multi-warp count. The runner clamps every
-    requested count to MAX_PERF_LEVEL_THREADS (the kernels' __launch_bounds__ cap).
+    requested count to MAX_PERF_LEVEL_THREADS (the kernels' __launch_bounds__ cap);
+    at the sentinel it further clamps each launch to that kernel's real
+    maxThreadsPerBlock (cudaFuncGetAttributes), which is the production launch
+    (the host wrappers and bindings clamp the same way). Explicit counts are
+    launched as requested.
     Sweeping thread counts catches thread-count-dependent races (missing
     __syncthreads between a write phase and a read/accumulate phase that happens
     to be correct only within a single warp) that a fixed 32-thread launch hides.
@@ -1286,13 +1353,23 @@ def _build_cuda_samples(
     return samples
 
 
-def _sample_to_stdin(sample) -> str:
+def _sample_to_stdin(sample, dtype: str = "float") -> str:
+    """Serialize a sample for the runner's stdin at the runner's precision.
+
+    The runner parses every value as a double and casts it to T, so the floor is
+    set here: float writes float32-rounded values at 9 significant digits (the
+    receipt's path, unchanged), double writes the float64 values at 17 digits so
+    the fp64_alpha lane's inputs carry full double precision."""
+    if dtype == "double":
+        np_dtype, fmt = np.float64, "{value:.17g}"
+    else:
+        np_dtype, fmt = np.float32, "{value:.9g}"
     values = [
-        np.asarray(sample.q, dtype=np.float32),
-        np.asarray(sample.qd, dtype=np.float32),
-        np.asarray(sample.qdd, dtype=np.float32),
+        np.asarray(sample.q, dtype=np_dtype),
+        np.asarray(sample.qd, dtype=np_dtype),
+        np.asarray(sample.qdd, dtype=np_dtype),
     ]
-    serialized_rows = (" ".join(f"{value:.9g}" for value in vec) for vec in values)
+    serialized_rows = (" ".join(fmt.format(value=value) for value in vec) for vec in values)
     return "\n".join(serialized_rows) + "\n"
 
 
@@ -1445,7 +1522,9 @@ def _expected_output(reference_model, project_model, sample, name: str):
     raise ValueError(f"Unexpected CUDA output name: {name}")
 
 
-def _cuda_tolerance(robot_id: str, algorithm: str):
+def _cuda_tolerance(robot_id: str, algorithm: str, dtype: str = "float"):
+    if dtype == "double":
+        return CUDA_FP64_TOLERANCE
     return CUDA_ROBOT_ALGORITHM_TOLERANCES.get(
         (robot_id, algorithm), CUDA_DEFAULT_TOLERANCE
     )
@@ -1556,6 +1635,7 @@ def _assert_close(
     algorithm: str,
     n_leaves: int = 0,
     gimbal_lock_leaves=frozenset(),
+    dtype: str = "float",
 ) -> int:
     """Assert CUDA `actual` matches oracle `expected`; RAISE on mismatch.
 
@@ -1567,7 +1647,7 @@ def _assert_close(
     """
     actual = np.asarray(actual, dtype=np.float64)
     expected = np.asarray(expected, dtype=np.float64)
-    tol = _cuda_tolerance(robot_id, algorithm)
+    tol = _cuda_tolerance(robot_id, algorithm, dtype)
 
     if algorithm in _EE_POSE_ALGORITHMS:
         leaf_idx, component = _ee_row_info(algorithm, expected.reshape(-1), n_leaves)
@@ -1672,9 +1752,11 @@ def _flagship_selected_algorithms(base_mode) -> set:
     return set(FIXED_CUDA_ALGORITHMS)
 
 
-def _run_flagship_split_cell(spec, base_mode, cell, num_threads, tmp_path, request):
+def _run_flagship_split_cell(spec, base_mode, cell, num_threads, tmp_path, request, dtype="float"):
     """Validate ONE flagship split cell: codegen its subset header + compile the runner
     gated to its RUN token(s), then compare only this cell's algorithm(s) vs the oracle.
+    ``dtype`` "double" is the fp64_alpha lane (test_cuda_executable_equivalence_fp64):
+    the same cell with a double header, GRID_EQUIV_T=double and the fp64 tolerance class.
     The default selection collects every cell; only the narrowing overrides
     (GRID_CUDA_FLOATING_ALGORITHMS, GRID_CUDA_CODEGEN_SUBSET) can leave a collected
     cell outside the selection, and that cell is skipped. This REPLACES the monolithic
@@ -1717,6 +1799,7 @@ def _run_flagship_split_cell(spec, base_mode, cell, num_threads, tmp_path, reque
         num_threads=num_threads,
         codegen_algorithm_list=codegen_list,
         run_tokens=cell.run_tokens,
+        dtype=dtype,
     )
 
 
@@ -1731,7 +1814,14 @@ def _run_cuda_equivalence_case(
     num_threads=None,
     codegen_algorithm_list=None,
     run_tokens=None,
+    dtype="float",
 ):
+    """``dtype`` ("float" | "double") selects the scalar of the whole chain: the
+    header's codegen dtype and cache key, the runner's cache key and GRID_EQUIV_T,
+    the stdin precision, the input echo check and the tolerance class. "float" is
+    the receipt's path and leaves every call below exactly as it was."""
+    if dtype not in ("float", "double"):
+        raise ValueError(f"dtype must be 'float' or 'double', got {dtype!r}")
     if sample_selection is None:
         sample_selection = SampleSelection(None, False, False)
     sample_names = sample_selection.names
@@ -1794,9 +1884,13 @@ def _run_cuda_equivalence_case(
 
     build_dir = tmp_path / f"cuda_{spec.robot_id}_{base_mode}"
     build_dir.mkdir()
+    # The dtype kwarg is passed only for double: the float call keeps its exact
+    # historical shape (test/cuda_equivalents/conftest.py wraps this function
+    # for the receipt's header-key records with that signature).
     header_path, header_key = _generate_grid_header(
         project_model, resolved, build_dir, config,
         codegen_algorithm_list=codegen_algorithm_list,
+        **({} if dtype == "float" else {"dtype": dtype}),
     )
     _progress(config, f"fallback summary for {spec.robot_id}-{base_mode}: {_fallback_summary(header_path)}")
     # When a SUBSET header is requested (codegen_algorithm_list), the runner must skip
@@ -1836,7 +1930,12 @@ def _run_cuda_equivalence_case(
         # ee-pose gradient block (skip stays False unless a subset header drops them).
         skip_eepose_gradients=_runner_skip_eepose_gradients,
         config=config,
+        dtype=dtype,
     )
+    runner_env = _runner_env(dtype)
+    # the precision the runner echoes its inputs at (float32 for the receipt's
+    # float path, the full double for the fp64_alpha lane)
+    input_dtype = np.float64 if dtype == "double" else np.float32
 
     failures = []
     known_bug_failures = []
@@ -1851,8 +1950,10 @@ def _run_cuda_equivalence_case(
         if sample_names is not None and sample.name not in sample_names:
             continue
         matched_samples += 1
-        _progress(config, f"{spec.robot_id}-{base_mode}/{sample.name}: running CUDA runner (threads={num_threads or 32})")
-        stdout = _run_runner(executable, _sample_to_stdin(sample), compile_cmd, num_threads=num_threads)
+        _progress(config, f"{spec.robot_id}-{base_mode}/{sample.name}: running CUDA runner "
+                          f"(threads={'suggested, clamped per kernel' if num_threads == 0 else (num_threads or 32)})")
+        stdout = _run_runner(executable, _sample_to_stdin(sample, dtype), compile_cmd,
+                             num_threads=num_threads, env=runner_env, config=config)
         # Run-to-run determinism gate (Inc6). Single-block GRiD kernels must be
         # bit-deterministic run-to-run, not merely oracle-close: a warp-scheduling-
         # dependent shared-memory reduction (e.g. the floating-base shared-parent
@@ -1867,7 +1968,8 @@ def _run_cuda_equivalence_case(
         # to deterministic cell-major sums the same day; this gate keeps them honest.
         if num_threads == 0:
             stdout_repeat = _run_runner(
-                executable, _sample_to_stdin(sample), compile_cmd, num_threads=num_threads
+                executable, _sample_to_stdin(sample, dtype), compile_cmd, num_threads=num_threads,
+                env=runner_env, config=config,
             )
             if stdout_repeat != stdout:
                 first_diff = _first_differing_block(stdout, stdout_repeat)
@@ -1881,25 +1983,25 @@ def _run_cuda_equivalence_case(
 
         np.testing.assert_allclose(
             cuda["input_q"],
-            np.asarray(sample.q, dtype=np.float32).reshape(1, -1),
+            np.asarray(sample.q, dtype=input_dtype).reshape(1, -1),
             rtol=0.0,
             atol=1e-7,
         )
         np.testing.assert_allclose(
             cuda["input_qd"],
-            np.asarray(sample.qd, dtype=np.float32).reshape(1, -1),
+            np.asarray(sample.qd, dtype=input_dtype).reshape(1, -1),
             rtol=0.0,
             atol=1e-7,
         )
         np.testing.assert_allclose(
             cuda["input_u"],
-            np.asarray(sample.qdd, dtype=np.float32).reshape(1, -1),
+            np.asarray(sample.qdd, dtype=input_dtype).reshape(1, -1),
             rtol=0.0,
             atol=1e-7,
         )
         np.testing.assert_allclose(
             cuda["runtime_probe"],
-            np.arange(10, 10 + project_model.nv, dtype=np.float32).reshape(1, -1),
+            np.arange(10, 10 + project_model.nv, dtype=input_dtype).reshape(1, -1),
             rtol=0.0,
             atol=1e-7,
         )
@@ -1955,6 +2057,7 @@ def _run_cuda_equivalence_case(
                     algorithm=name,
                     n_leaves=len(project_model.robot.get_leaf_nodes()),
                     gimbal_lock_leaves=gimbal_lock_leaves,
+                    dtype=dtype,
                 )
                 # Count ONLY comparisons that actually compared elements. A vacuous return (every row
                 # filtered as a legitimate singularity) reports 0 and must NOT inflate `compared` — else

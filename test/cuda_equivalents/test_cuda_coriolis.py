@@ -13,9 +13,12 @@ and the M_dot == C + C^T skew identity via a central finite difference of M(q).
 Thread-invariance: each case is swept over {1, 2, 16, 32, 256} block threads;
 single-block CORE kernels must be thread-count-invariant.
 
-Gated iiwa14 (fixed) first (the first green slice), then go2/g1 (floating),
-then fr3/h1_2 (mimic). The output is the nv x nv C; the runner reads the gridData
-host buffer hd_data->h_coriolis directly.
+Every manifest robot on both bases (widened 2026-10-15; the coriolis_matrix
+header codegens for every robot, mimic included, and every arena fits the
+per-block cap at the default target). iiwa14 (fixed) stays first as the gate
+slice. The output is the nv x nv C; the runner reads the gridData host buffer
+hd_data->h_coriolis directly. Narrow with GRID_CUDA_CORIOLIS_ROBOTS=
+"iiwa14:fixed,go2:floating".
 """
 
 import contextlib
@@ -44,15 +47,27 @@ from RBDReference.tests.tolerances import get_tolerance
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_coriolis_smoke_runner.cu")
 
-# (robot_id, base_mode). iiwa14 gated first (first slice), then floating (go2/g1),
-# then mimic (fr3 fixed / h1_2 fixed).
-_CASES = [
-    ("iiwa14", "fixed"),
-    ("go2", "floating"),
-    ("g1", "floating"),
-    ("fr3", "fixed"),
-    ("h1_2", "fixed"),
-]
+# (robot_id, base_mode): every manifest robot on both bases. iiwa14 fixed first
+# (the gate slice); fr3 / h1_2 are the mimic robots (fixed NB > NV, floating too).
+# Override with GRID_CUDA_CORIOLIS_ROBOTS="iiwa14:fixed,go2:floating".
+_ALL_ROBOTS = ("iiwa14", "go2", "g1", "h1_2", "fr3", "rizon4", "gen3", "fetch", "baxter")
+
+
+def _cases():
+    raw = os.environ.get("GRID_CUDA_CORIOLIS_ROBOTS")
+    if raw:
+        out = []
+        for tok in raw.split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            rid, _, mode = tok.partition(":")
+            out.append((rid.strip(), (mode.strip() or "fixed")))
+        return out
+    return [(r, b) for b in ("fixed", "floating") for r in _ALL_ROBOTS]
+
+
+_CASES = _cases()
 
 # Thread-invariance sweep (single-block CORE kernels must be invariant).
 _THREAD_COUNTS = (1, 2, 16, 32, 256)

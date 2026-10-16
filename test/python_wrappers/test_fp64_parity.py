@@ -1,7 +1,13 @@
 """fp64 (double-precision) tight-tolerance parity for the grid_rbd handle.
 
 The fp64 tier (`register_robot(..., dtype="float64")`, -DGRID_WRAPPER_T_DOUBLE)
-exists to deliver materially tighter numerics than fp32. This guards that:
+is an alpha feature (2026-10-15): GRiD runs in fp32 on the GPU, and the fp64
+tests live in the `fp64_alpha` lane (`make test-fp64`), outside the signed
+receipt. The one exception is this module's numpy iiwa14 parity test, the
+receipt's fp64 canary: it keeps the double build from breaking silently. The
+torch and jax parity tests below carry `fp64_alpha`.
+
+The fp64 tier exists to deliver materially tighter numerics than fp32. This guards that:
   (1) an fp64 handle round-trips float64 and matches the float64 RBDReference
       oracle to ~machine precision (~1e-16, vs fp32's ~1e-7) across the value +
       first-order surfaces — INCLUDING the gravity-using id/fd paths now that the
@@ -123,7 +129,10 @@ def test_fp64_forward_dynamics_tight(h64, ref, samples64):
 
 
 def test_fp64_materially_tighter_than_fp32(h64, h32, ref, samples64):
-    """The load-bearing assertion: on the same robot/sample, fp64's relative error
+    """The receipt's fp64 canary (the one fp64 build the signed receipt keeps; every
+    other fp64 test is in the fp64_alpha lane).
+
+    The load-bearing assertion: on the same robot/sample, fp64's relative error
     vs the float64 oracle is >=100x below fp32's, across crba AND the gravity-using
     id/fd paths. The fp64 gravity-arg precision cap is FIXED: the C-ABI / pybind11
     `gravity` param is now the robot scalar type (CT == double for an fp64 .so), so a
@@ -162,6 +171,8 @@ def test_fp64_materially_tighter_than_fp32(h64, h32, ref, samples64):
 # way the numpy tier is gated: tight vs the float64 oracle AND materially
 # tighter than fp32 — the jax contrast test specifically catches the
 # fp32-attr gravity rounding cap (_core.cpp:49-57 class of bug).
+# Alpha lane (fp64_alpha): these two build the fp64 torch and jax surfaces and
+# run under `make test-fp64`, outside the signed receipt.
 
 
 @pytest.fixture(scope="module")
@@ -185,6 +196,7 @@ def h64_jax():
         floating_base=False, dtype="float64", max_batch_size=8, backend="jax")
 
 
+@pytest.mark.fp64_alpha
 def test_fp64_torch_dtype_and_tight(h64_torch, ref, samples64):
     import torch
     q64, qd64, u64 = samples64["q"], samples64["qd"], samples64["u"]
@@ -212,6 +224,7 @@ def test_fp64_torch_dtype_and_tight(h64_torch, ref, samples64):
             f"torch fp64 fd[{i}]: rel {_rel(got_fd[i], exp):.2e}"
 
 
+@pytest.mark.fp64_alpha
 def test_fp64_jax_dtype_and_tight(h64_jax, ref, samples64):
     import jax.numpy as jnp
     q64, qd64, u64 = samples64["q"], samples64["qd"], samples64["u"]

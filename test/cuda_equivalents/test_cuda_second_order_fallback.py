@@ -51,15 +51,17 @@ def _second_order_smoke_robot_ids() -> tuple[str, ...]:
         return _comma_separated_env("GRID_CUDA_SECOND_ORDER_SMOKE_ROBOTS", "")
     return _comma_separated_env(
         "GRID_CUDA_SECOND_ORDER_SMOKE_ROBOT",
-        # iiwa14 (gate) + go2 (quadruped) + fr3 (the fixed-base mimic sentinel:
-        # exercises the branched reference-order repair + the mimic internal-NB-slab
-        # alpha-fold, incl. the B4 repair-zero NB-vs-NV fix) + the big humanoids
-        # g1/h1_2 (spill-tier exercise). g1/h1_2 all-profile headers are many-minute
-        # nvcc compiles, so the heavy big-robot fixed cells are run only in the
-        # time-budgeted pre-sweep gate (V5: g1-fixed validated; h1_2-fixed deferred to
-        # the sweep). Override the set with the env var to subset, e.g.
-        # GRID_CUDA_SECOND_ORDER_SMOKE_ROBOTS=iiwa14,go2.
-        "iiwa14,go2,fr3,g1,h1_2",
+        # Every manifest robot (widened 2026-10-15): iiwa14 (gate) + go2 (quadruped)
+        # + fr3 (the fixed-base mimic sentinel: exercises the branched reference-order
+        # repair + the mimic internal-NB-slab alpha-fold, incl. the B4 repair-zero
+        # NB-vs-NV fix) + the big humanoids g1/h1_2 (spill-tier exercise; their
+        # all-profile headers are many-minute nvcc compiles) + rizon4 / gen3
+        # (7-DoF arms with their own inertial data) + fetch / baxter (branched,
+        # 14 / 15 DoF). The fixed forced-fallback runner codegens every robot,
+        # mimic included, and nothing here exceeds the per-block shared-memory cap
+        # at the forced 10000-byte target. Override the set with the env var to
+        # subset, e.g. GRID_CUDA_SECOND_ORDER_SMOKE_ROBOTS=iiwa14,go2.
+        "iiwa14,go2,fr3,g1,h1_2,rizon4,gen3,fetch,baxter",
     )
 
 
@@ -99,10 +101,12 @@ def _floating_second_order_robot_ids() -> tuple[str, ...]:
     return _comma_separated_env(
         "GRID_CUDA_FLOATING_SECOND_ORDER_ROBOTS",
         # iiwa14 (gate) + go2 (quadruped) + fr3 (the mimic sentinel) + the big
-        # humanoid g1 (floating spill-tier body-frame SO exercise). fr3-floating
-        # exercises the mimic internal-slot sweep + alpha-fold (incl. the
-        # gravity-shim fold); it was the B4 known-broken cell, now FIXED (col-13
-        # mimic columns assert green vs the pin oracle).
+        # humanoid g1 (floating spill-tier body-frame SO exercise) + rizon4 / gen3
+        # / fetch / baxter (widened 2026-10-15: every floating manifest robot the
+        # body-frame diagnostic can launch). fr3-floating exercises the mimic
+        # internal-slot sweep + alpha-fold (incl. the gravity-shim fold); it was
+        # the B4 known-broken cell, now FIXED (col-13 mimic columns assert green
+        # vs the pin oracle).
         #
         # h1_2 was de-collected on 2026-10-15 (hardware limit, not a bug): the
         # body-frame idsva_so inner this diagnostic forces on is aliased so its
@@ -114,7 +118,7 @@ def _floating_second_order_robot_ids() -> tuple[str, ...]:
         # second-order path is world-frame, which fits and is validated by
         # test_cuda_idsva_so_world_frame.py. The de-alias refactor that would bring
         # the cell back is docs/design_history/idsva_so_inner_refactor_notes.md.
-        "iiwa14,go2,fr3,g1",
+        "iiwa14,go2,fr3,g1,rizon4,gen3,fetch,baxter",
     )
 
 

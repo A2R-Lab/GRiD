@@ -2,10 +2,13 @@
 //   dccrba             dA_dq[:,k,m]  (6*NV*NV, layout dA[row + 6*k + 6*NV*m])
 //   cmm_time_variation Adot          (6*NV, column-major [linear;angular] @ CoM)
 //
-// Runs in DOUBLE (the analytic tensor is validated to the TIGHT value bucket; an
-// fp64 kernel avoids float32 conditioning noise on big robots). Reads both outputs
-// from the gridData host buffers. Accepts argv[1] = block thread count for the
-// thread-invariance sweep (clamped to the kernel __launch_bounds__ cap).
+// Runs in FLOAT by default (since 2026-10-15); GRID_EQUIV_T=double selects the
+// double path, exactly as cuda_equivalence_runner.cu does. The double launch at
+// the default tier requests about 132 KB of shared memory on g1-floating and
+// h1_2-fixed and cannot launch, while the same arena in float is about 66 KB
+// and fits. Reads both outputs from the gridData host buffers. Accepts argv[1] =
+// block thread count for the thread-invariance sweep (clamped to the kernel
+// __launch_bounds__ cap).
 
 #include <cmath>
 #include <cstdlib>
@@ -107,5 +110,12 @@ int run(int req_threads) {
 int main(int argc, char **argv) {
     int req_threads = GRID_CUDA_DCCRBA_TEST_THREADS;
     if (argc > 1) req_threads = std::atoi(argv[1]);
-    return run<double>(req_threads);
+    // GRID_EQUIV_T=double runs the double-precision path (the fp64 alpha tier);
+    // the matching grid.cuh must then be generated with the dtype="double"
+    // codegen knob so its spill tiers are sized for sizeof(double). Default = float.
+    const char *equiv_t = std::getenv("GRID_EQUIV_T");
+    if (equiv_t != nullptr && std::string(equiv_t) == "double") {
+        return run<double>(req_threads);
+    }
+    return run<float>(req_threads);
 }

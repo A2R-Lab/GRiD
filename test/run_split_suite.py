@@ -173,6 +173,9 @@ WARM_MANIFEST: dict[str, list[dict]] = {
                         _r("fr3", max_batch_size=64),
                         _r("iiwa14", max_batch_size=64, floating_base=True,
                            enable_mujoco_kernels=False)],
+    # The receipt's one fp64 build (2026-10-15): the numpy iiwa14 canary in
+    # test_fp64_parity. Every other fp64 test is in the fp64_alpha lane
+    # (make test-fp64), outside the receipt, and builds on demand.
     "test_fp64_parity": [_r("iiwa14", max_batch_size=8, dtype="float64"),
                          _r("iiwa14", max_batch_size=8)],
     "test_g1_plant_hessian_smoke": [_r("g1", max_batch_size=8,
@@ -187,7 +190,6 @@ WARM_MANIFEST: dict[str, list[dict]] = {
         _r("go2", max_batch_size=256, floating_base=True,
            enable_mujoco_kernels=False)],
     "test_runtime_inertia": [_r("iiwa14", runtime_inertia=True),
-                             _r("iiwa14", runtime_inertia=True, dtype="float64"),
                              _r("iiwa14"),
                              _r("go2", floating_base=True, runtime_inertia=True,
                                 enable_mujoco_kernels=False)],
@@ -203,6 +205,8 @@ WARM_MANIFEST: dict[str, list[dict]] = {
 # GRID_SPLIT_HARD_TIMEOUT. Historical expected COLD durations, for triage only:
 # g1_plant_hessian / joint_dynamics / runtime_joint_dynamics ~1-2h (multi-build,
 # incl. float64); ee_named_target_floating_multileaf ~2h (5 in-module builds).
+# Since 2026-10-15 the fp64 tier is alpha: the receipt's only fp64 build is the
+# test_fp64_parity canary above; fp64_alpha tests are not part of these shards.
 
 
 def discover_modules() -> list[str]:

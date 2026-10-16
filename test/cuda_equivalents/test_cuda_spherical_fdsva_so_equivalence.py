@@ -200,7 +200,9 @@ _FDSVA_TOL = {
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 @pytest.mark.robot_smoke
-@pytest.mark.parametrize("dtype", ["float", "double"])
+# The double cell is the fp64 alpha tier (2026-10-15). It carries fp64_alpha, stays
+# outside the signed receipt by collection, and runs under make test-fp64.
+@pytest.mark.parametrize("dtype", ["float", pytest.param("double", marks=pytest.mark.fp64_alpha)])
 @pytest.mark.parametrize("tier", ["perf", "cold"])
 @pytest.mark.parametrize("fixture", ["spherical_arm.urdf", "mixed_spherical_arm.urdf"])
 def test_cuda_spherical_fdsva_so_matches_world_reference(tmp_path, fixture, tier, dtype):

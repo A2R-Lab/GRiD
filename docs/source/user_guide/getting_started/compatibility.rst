@@ -32,7 +32,9 @@ What we ran
 One machine produced every piece of GPU evidence in this release: the full
 test receipt (``gpu-proof.json``, verified by CI), the release timing on the
 :doc:`release measurements <../../release_measurements>` page, and the
-installed-wheel check of the release playbook.
+installed-wheel check of the release playbook. Everything validated ran in
+fp32, the default compute precision; the fp64 tier (``dtype="float64"``) is
+an alpha feature outside the receipt.
 
 .. list-table::
    :header-rows: 1

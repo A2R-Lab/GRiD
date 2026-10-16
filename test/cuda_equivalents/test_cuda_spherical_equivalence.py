@@ -397,7 +397,9 @@ _IDG_TOL = {
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 @pytest.mark.robot_smoke
-@pytest.mark.parametrize("dtype", ["float", "double"])
+# The double cell is the fp64 alpha tier (2026-10-15). It carries fp64_alpha, stays
+# outside the signed receipt by collection, and runs under make test-fp64.
+@pytest.mark.parametrize("dtype", ["float", pytest.param("double", marks=pytest.mark.fp64_alpha)])
 @pytest.mark.parametrize("fixture", ["spherical_arm.urdf", "mixed_spherical_arm.urdf"])
 def test_cuda_spherical_inverse_dynamics_gradient_matches_reference(tmp_path, fixture, dtype):
     """CUDA spherical inverse_dynamics_gradient (dc_du = [dc_dq | dc_dqd], 2*NV*NV)
@@ -493,7 +495,9 @@ _FDG_TOL = {
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 @pytest.mark.robot_smoke
-@pytest.mark.parametrize("dtype", ["float", "double"])
+# The double cell is the fp64 alpha tier (2026-10-15). It carries fp64_alpha, stays
+# outside the signed receipt by collection, and runs under make test-fp64.
+@pytest.mark.parametrize("dtype", ["float", pytest.param("double", marks=pytest.mark.fp64_alpha)])
 @pytest.mark.parametrize("fixture", ["spherical_arm.urdf", "mixed_spherical_arm.urdf"])
 def test_cuda_spherical_forward_dynamics_gradient_matches_reference(tmp_path, fixture, dtype):
     """CUDA spherical forward_dynamics_gradient (df_du = [df_dq | df_dqd], 2*NV*NV)
@@ -633,7 +637,9 @@ def _fdsva_so_value_fd_dvdv(ref, q, qd, u, nv, h=1e-5):
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 @pytest.mark.robot_smoke
-@pytest.mark.parametrize("dtype", ["float", "double"])
+# The double cell is the fp64 alpha tier (2026-10-15). It carries fp64_alpha, stays
+# outside the signed receipt by collection, and runs under make test-fp64.
+@pytest.mark.parametrize("dtype", ["float", pytest.param("double", marks=pytest.mark.fp64_alpha)])
 @pytest.mark.parametrize("fixture", ["spherical_arm.urdf", "mixed_spherical_arm.urdf"])
 def test_cuda_spherical_fdsva_so_matches_reference(tmp_path, fixture, dtype):
     """CUDA spherical fdsva_so (4*NV^3 = [daba_dqdq | daba_dvdq | daba_dvdv |

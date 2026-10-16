@@ -105,10 +105,14 @@ state to the generated workspace.
 Known Caveats
 -------------
 
-* The generated ``g1`` floating-base forward-dynamics inertial-parameter
-  gradient in fp64 requests about 187 KiB of shared memory even at the
-  minimal tier, exceeding the RTX 5090's per-block limit. An fp64
-  diagnostic with global scratch is not a supported production launch.
+* The fp64 tier (``dtype="float64"``) is an alpha feature, and the ``g1``
+  floating-base forward-dynamics inertial-parameter gradient shows why: in
+  double it requests about 187 KiB of shared memory even at the minimal
+  tier, beyond the RTX 5090's per-block limit, while the same arena in float
+  fits. Double arenas halve the headroom under the per-block cap and the
+  spill ladders for double are not complete on the big robots, so such
+  kernels are left unregistered in an fp64 build and raise when called. An
+  fp64 diagnostic with global scratch is not a supported production launch.
 * Floating IDSVA-SO/FDSVA-SO CUDA generation is enabled (the dispatcher
   picks ``idsva_so_world_frame`` for floating-base). FDSVA-SO on
   ``g1_floating`` requires the selective-spill tier under sm_120's

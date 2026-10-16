@@ -14,7 +14,10 @@ checked vs pinocchio in test_cuda_coriolis.py) AND thread-count invariant. A cor
 only codegen subset keeps the SO kernels out of the header so the forced-low target does
 not trigger their pathological deep-spill compile wall.
 
-Override robots with GRID_CUDA_CORIOLIS_SPILL_ROBOTS="g1:floating,iiwa14:fixed".
+Every manifest robot on both bases by default (widened 2026-10-15: the full
+coriolis rung is the production pick for all 18 cells at the 98304-byte target,
+largest arena h1_2-floating at 74976 bytes). Narrow with
+GRID_CUDA_CORIOLIS_SPILL_ROBOTS="g1:floating,iiwa14:fixed".
 """
 
 from __future__ import annotations
@@ -38,8 +41,12 @@ from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 _RUNNER = Path(__file__).with_name("cuda_coriolis_smoke_runner.cu")
 
 
+_ALL_ROBOTS = ("iiwa14", "go2", "g1", "h1_2", "fr3", "rizon4", "gen3", "fetch", "baxter")
+_DEFAULT_ROBOTS = ",".join(f"{r}:{b}" for b in ("fixed", "floating") for r in _ALL_ROBOTS)
+
+
 def _robot_modes():
-    raw = os.environ.get("GRID_CUDA_CORIOLIS_SPILL_ROBOTS", "g1:floating,iiwa14:fixed")
+    raw = os.environ.get("GRID_CUDA_CORIOLIS_SPILL_ROBOTS", _DEFAULT_ROBOTS)
     out = []
     for tok in raw.split(","):
         tok = tok.strip()

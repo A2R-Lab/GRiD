@@ -20,8 +20,9 @@ from grid_codegen.helpers._code_generation_helpers import gen_host_wrapper_head
 #        the six inertia cols are identically zero. (kinematics / s_XmatsHom
 #        domain; (R_i, p_i) from the world-transform BFS chain-up).
 #
-# MIMIC: safe case, no gate. s_vaf is sized 18*NUM_POS and every per-body buffer
-# + output loop is sized by NUM_BODIES (never nv). PE reuses the already
+# MIMIC: safe case, no gate. s_vaf is sized 18*NUM_BODIES for mimic robots (the
+# RNEA inner indexes it by raw body id) and every per-body buffer + output loop
+# is sized by NUM_BODIES (never nv). PE reuses the already
 # mimic-aware s_XmatsHom (effective-angle q-fold baked upstream). Floating-base:
 # KE flows through the RNEA floating-root branch; PE's world chain-up handles the
 # floating root. Output is <= 10*NB floats -> fits every tier (no spill).
@@ -140,7 +141,10 @@ def gen_kinetic_energy_regressor_device(self):
     func_def = ("void kinetic_energy_regressor_device(T *s_y_ke, const T *s_q, const T *s_qd, "
                 "const robotModel<T> *d_robotModel, const T gravity) {")
     shared_mem_size = self.gen_kinetic_energy_regressor_inner_temp_mem_size()
-    extra_t_buffers = [("s_vaf", 18 * n)]
+    # s_vaf is body-indexed (18*NB for mimic robots, else 18*NUM_POS); the RNEA
+    # inner writes f for every body, so 18*NUM_POS overflows into s_XImats.
+    nb_vaf = self.robot.get_num_joints() if self.robot_has_mimic_joints() else n
+    extra_t_buffers = [("s_vaf", 18 * nb_vaf)]
     self.gen_device_wrapper(
         "Compute the kinetic-energy regressor y_KE (KE = y_KE . pi)", func_def,
         shared_mem_size,
@@ -179,7 +183,8 @@ def gen_kinetic_energy_regressor_kernel(self, single_call_timing=False):
     self.gen_add_code_line("__global__")
     self.gen_add_code_line("__launch_bounds__(tier_max_threads<RESOURCE_TIER>())")
     self.gen_add_code_line(func_def, True)
-    extra_t_buffers = [("s_q_qd", in_size), ("s_y_ke", out_size), ("s_vaf", 18 * NUM_POS)]
+    nb_vaf = self.robot.get_num_joints() if self.robot_has_mimic_joints() else NUM_POS
+    extra_t_buffers = [("s_q_qd", in_size), ("s_y_ke", out_size), ("s_vaf", 18 * nb_vaf)]
     shared_mem_size = self.gen_kinetic_energy_regressor_inner_temp_mem_size()
     self.gen_XImats_helpers_temp_shared_memory_code(
         shared_mem_size, extra_t_buffers=extra_t_buffers, include_linalg_scratch=True)

@@ -97,6 +97,30 @@ class RobotNotRegisteredError(KeyError):
 # once per robot/base per process, not once per register_robot/load_robot call.
 _FFI_AUTOTUNE_WARNED: set[tuple[str, bool]] = set()
 
+# The fp64 tier (dtype="float64") is an alpha feature (user decision 2026-10-15):
+# kept in full, computed in double end to end, but outside the signed receipt
+# and not guaranteed to build or fit on every robot. register_robot / precompile
+# warn once per process when it is selected.
+_FP64_ALPHA_WARNED = False
+
+
+def _warn_fp64_alpha() -> None:
+    """Emit the fp64 alpha-tier warning once per process (register_robot or
+    precompile called with dtype="float64"). See the precision paragraph of
+    :py:func:`register_robot`."""
+    global _FP64_ALPHA_WARNED
+    if _FP64_ALPHA_WARNED:
+        return
+    _FP64_ALPHA_WARNED = True
+    warnings.warn(
+        "grid_rbd: dtype='float64' selects the fp64 tier, an alpha feature. It is "
+        "computed in double end to end but is not validated by the signed receipt "
+        "and is not guaranteed to build or fit on every robot; run `make test-fp64` "
+        "for its test lane. The validated path is fp32 (dtype='float32', the default).",
+        UserWarning,
+        stacklevel=3,
+    )
+
 
 def _warn_if_no_ffi_autotune(robot_ident: str, floating_base: bool) -> None:
     """Emit a one-time-per-(robot,base) warning when a robot resolves to NO
@@ -169,21 +193,23 @@ def register_robot(
     entry matching (urdf, options, grid_rbd version, cuda_arch) already
     exists, the existing .so is reused — no recompile.
 
-    Precision (Phase 8): the numpy backend supports a true fp64 compute tier via
-    ``dtype="float64"`` — it builds a SEPARATE .so (``-DGRID_WRAPPER_T_DOUBLE`` +
-    the matching codegen knob that re-derives the shared-mem spill tiers at 2×
-    bytes) and the handle takes/returns float64 numpy arrays computed end-to-end
-    in double precision. fp32 (``dtype="float32"``, default) is unchanged and
-    byte-identical. The fp32 and fp64 .so coexist in the cache (dtype is in the
-    cache key). NOTE: fp64 doubles every arena's smem footprint, lowering
-    occupancy; some big-robot second-order kernels that already max-spill at fp32
-    may not fit the device opt-in cap at fp64 — those kernels are left
-    unregistered and raise a clear runtime error when called (no new gating).
-    Wave 2a: ``dtype="float64"`` works on ALL backends — the fp64 .so carries
-    fp64 jax and torch surfaces (framework arrays must then be float64).
-    ``allow_fp64`` is the LEGACY fp32-compute upcast convenience (compute
-    in fp32, cast i/o to fp64); prefer ``dtype="float64"`` for real double
-    precision. ``allow_fp64`` is ignored when ``dtype="float64"``.
+    Precision. The validated path is fp32: the ``.so`` computes in float on
+    the GPU, wrapper inputs of any float dtype are cast to float32 and outputs
+    are float32. ``allow_fp64`` is the fp32-compute upcast convenience (compute
+    in fp32, cast i/o to fp64; numpy backend only). ``dtype="float64"`` selects
+    the fp64 tier, an alpha feature: it builds a separate ``.so``
+    (``-DGRID_WRAPPER_T_DOUBLE`` plus the codegen knob that re-derives the
+    shared-memory spill tiers for 8-byte values) whose handle takes and returns
+    float64 arrays computed end to end in double on the numpy, jax and torch
+    backends (framework arrays must then be float64). The fp64 tier is not
+    validated by the signed receipt (its tests run in a separate lane,
+    ``make test-fp64``) and is not guaranteed to build or fit on every robot:
+    double arenas halve the headroom under the per-block shared-memory cap, so
+    big-robot kernels that already max-spill at fp32 may be left unregistered
+    and raise a clear runtime error when called. Selecting it emits one
+    ``UserWarning`` per process. Full fp64 support is on the roadmap. The fp32
+    and fp64 ``.so`` coexist in the cache (dtype is in the cache key);
+    ``allow_fp64`` is ignored when ``dtype="float64"``.
 
     **Parameter groups — and what each costs.** A knob that participates in
     the ``.so`` cache key triggers a full codegen + nvcc rebuild the FIRST time
@@ -239,9 +265,9 @@ def register_robot(
         Compute capability as int (e.g. 120 for sm_120). Default detects
         via nvidia-smi.
     dtype : str, optional
-        Compute precision of the ``.so``: ``"float32"`` (default) or
-        ``"float64"`` (true fp64 tier — see the precision paragraph above).
-        Re-keys the cache; the fp32 and fp64 ``.so`` coexist.
+        Compute precision of the ``.so``: ``"float32"`` (default, the validated
+        path) or ``"float64"`` (the alpha fp64 tier; see the precision
+        paragraph above). Re-keys the cache; the fp32 and fp64 ``.so`` coexist.
     allow_fp64 : bool, optional
         LEGACY fp32-compute upcast convenience: accept/return float64 arrays
         while computing in fp32. Runtime-only (same ``.so``); ignored when
@@ -373,6 +399,8 @@ def register_robot(
             "Pass enable_mujoco_kernels=True, or use output_convention='pinocchio'.")
     if dtype not in ("float32", "float64"):
         raise ValueError(f"dtype must be 'float32' or 'float64'; got {dtype!r}")
+    if dtype == "float64":
+        _warn_fp64_alpha()   # alpha tier: one UserWarning per process
     # Wave 2a: dtype="float64" is supported on ALL backends — the fp64 .so now
     # carries fp64 jax (GRID_FFI_T) and torch (GRID_TORCH_DTYPE) surfaces.
     # runtime_inertia / runtime_transform are supported on ALL backends: the jax
@@ -931,6 +959,8 @@ def precompile(
             "max_batch_size": max_batch_size,
             **dict(tier),
         }
+        if opts.get("dtype") == "float64":
+            _warn_fp64_alpha()   # alpha tier: one UserWarning per process
         # Distinct manifest name per tier so multiple tiers under one logical
         # robot don't clobber each other's name binding. Single-tier keeps the
         # plain name so a follow-up get_robot(name) just works.

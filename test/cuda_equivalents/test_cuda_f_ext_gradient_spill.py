@@ -22,7 +22,13 @@ the forced-low target does not trigger their pathological deep-spill compile wal
 h2_plus itself is launch-only: its full rung never fits, so it is generated at the deep
 rung and checked for a finite, non-crashing launch (the de-gate proof).
 
-Override the bit-equality robots with GRID_CUDA_FEG_SPILL_ROBOTS="g1:floating,iiwa14:fixed".
+Every manifest robot on both bases by default (widened 2026-10-15). The reference
+build is whatever first-order rung the sm_120 target picks for that robot: rung 0
+for the small and mid robots, rung 1 for g1-floating, and rung 2 (the deep rung
+itself) for h1_2 on both bases, whose full and rung-1 arenas both exceed the cap;
+on h1_2 the first-order bit-equality is therefore between two builds of the same
+rung and the dq comparison (rung 0 vs the forced rung 1) carries the check.
+Narrow the bit-equality robots with GRID_CUDA_FEG_SPILL_ROBOTS="g1:floating,iiwa14:fixed".
 """
 
 from __future__ import annotations
@@ -56,8 +62,12 @@ _OUTPUTS = ("f_ext_gradient_dtau_dfext", "f_ext_gradient_dqdd_dfext",
             "f_ext_gradient_did_du_dfext_dq")
 
 
+_ALL_ROBOTS = ("iiwa14", "go2", "g1", "h1_2", "fr3", "rizon4", "gen3", "fetch", "baxter")
+_DEFAULT_ROBOTS = ",".join(f"{r}:{b}" for b in ("fixed", "floating") for r in _ALL_ROBOTS)
+
+
 def _bit_equal_robots():
-    raw = os.environ.get("GRID_CUDA_FEG_SPILL_ROBOTS", "g1:floating,iiwa14:fixed")
+    raw = os.environ.get("GRID_CUDA_FEG_SPILL_ROBOTS", _DEFAULT_ROBOTS)
     out = []
     for tok in raw.split(","):
         tok = tok.strip()
@@ -140,11 +150,16 @@ def test_cuda_f_ext_gradient_spill_matches_full(tmp_path, robot_id, base_mode):
     # ~99 KB arena exceeds the cap). This rung is the one the default-tier equivalence
     # test validates vs the pinocchio oracle, so deep == reference transitively proves
     # deep == oracle. (g1's true full rung 0 is un-runnable, so it cannot be the ref.)
+    # h1_2 (both bases) already lands rung 2 at the sm_120 target, so its reference
+    # IS the deep first-order rung; the dq rung (0 here vs 1 forced below) still
+    # differs, which keeps the did_du bit-equality a real relocation check there.
     full_dir = tmp_path / "ref"
     full_dir.mkdir()
     cg_full = _gen(robot, full_dir, 98304)
-    assert cg_full.f_ext_gradient_spill_tier_3way[0] <= 1, \
-        f"reference build must be a runnable (<=rung 1) perf rung, got {cg_full.f_ext_gradient_spill_tier_3way}"
+    assert cg_full.f_ext_gradient_spill_tier_3way[0] <= 2, \
+        f"reference build must be the perf rung the sm_120 target picks, got {cg_full.f_ext_gradient_spill_tier_3way}"
+    assert cg_full.f_ext_gradient_dq_spill_tier_3way[0] == 0, \
+        f"reference build must keep the dq rung at 0 (the forced build spills it), got {cg_full.f_ext_gradient_dq_spill_tier_3way}"
     full_exe = _compile(full_dir, arch, floating)
 
     # DEEP build: a tiny target forces the first-order deep rung (2) AND the dq spill rung (1).

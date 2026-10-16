@@ -163,9 +163,12 @@ def gen_forward_dynamics_parameter_gradient_device(self):
     func_def = ("void forward_dynamics_parameter_gradient_device(T *s_dqdd_dpi, const T *s_q, const T *s_qd, const T *s_u, "
                 "const robotModel<T> *d_robotModel, const T gravity) {")
     shared_mem_size = self.gen_forward_dynamics_parameter_gradient_inner_temp_mem_size()
+    # s_vaf is body-indexed (18*NB for mimic robots, else 18*NUM_POS); see
+    # gen_inverse_dynamics_regressor_kernel for the h1_2 overflow this prevents.
+    nb_vaf = self.robot.get_num_joints() if self.robot_has_mimic_joints() else n
     extra_t_buffers = [
         ("s_Minv", nv * nv), ("s_Y", nv * 10 * NB), ("s_qdd", nv),
-        ("s_vaf", 18 * n), ("s_c", nv),
+        ("s_vaf", 18 * nb_vaf), ("s_c", nv),
     ]
     self.gen_device_wrapper(
         "Compute the FD param gradient dqdd/dpi = -Minv . Y", func_def,
@@ -219,9 +222,12 @@ def gen_forward_dynamics_parameter_gradient_kernel(self, single_call_timing=Fals
     # smem footprint exactly to match FORWARD_DYNAMICS_PARAMETER_GRADIENT_DYNAMIC_SHARED_MEM_BYTES.
     self.gen_add_code_line("constexpr bool REGRESSOR_Y_OUTPUT_IN_SMEM = FD_PARAMETER_GRADIENT_Y_IN_SMEM<RESOURCE_TIER>();")
     self.gen_add_code_line("constexpr int REGRESSOR_Y_OUTPUT_SLOT = REGRESSOR_Y_OUTPUT_IN_SMEM ? " + str(out_size) + " : 0;")
+    # s_vaf is body-indexed (18*NB for mimic robots, else 18*NUM_POS); the arena
+    # term in algo_registry (c.id_vaf) must match.
+    nb_vaf = self.robot.get_num_joints() if self.robot_has_mimic_joints() else NUM_POS
     extra_t_buffers = [
         ("s_q_qd_u", in_size), ("s_dqdd_dpi", out_size), ("s_Minv", nv * nv),
-        ("s_qdd", nv), ("s_vaf", 18 * NUM_POS), ("s_c", nv), ("s_Y", "REGRESSOR_Y_OUTPUT_SLOT"),
+        ("s_qdd", nv), ("s_vaf", 18 * nb_vaf), ("s_c", nv), ("s_Y", "REGRESSOR_Y_OUTPUT_SLOT"),
     ]
     shared_mem_size = self.gen_forward_dynamics_parameter_gradient_inner_temp_mem_size()
     self.gen_XImats_helpers_temp_shared_memory_code(

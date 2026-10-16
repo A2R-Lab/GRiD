@@ -113,6 +113,14 @@ collection equals ``test/gpu-proof-tests.txt`` exactly (the policies'
 (``PYTEST_ARGS="-k go2" test/run_gpu_proof.sh``) is a local diagnostic that
 exercises the plumbing, never a candidate receipt.
 
+The fp64 tier (``register_robot(..., dtype="float64")``) is an alpha feature
+and its tests are outside the receipt by collection: they carry the
+``fp64_alpha`` marker and run in their own lane, ``make test-fp64``, which
+is not part of the signed receipt. One canary stays in the receipt, the numpy
+``iiwa14`` fp64 parity test, so the receipt still shows that the double
+``.so`` builds and agrees with the oracle on one robot. Everything else the
+receipt validates ran in fp32.
+
 The ``gpu_proof`` marker is auto-applied to every ``cuda_equivalence`` and
 ``python_wrappers`` item by ``test/conftest.py`` (no per-test annotation), so
 receipt membership tracks the existing marker taxonomy. Running the script signs

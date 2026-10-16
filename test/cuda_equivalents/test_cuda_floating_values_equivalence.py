@@ -17,9 +17,10 @@ Run (GPU box):
   GRID_CUDA_FLOATING_VALUE_ROBOTS=go2,g1 \
     .venv/bin/python -m pytest test/cuda_equivalents/test_cuda_floating_values_equivalence.py \
     -m cuda_equivalence -vv
-Defaults to the non-mimic floating robots that were masked (go2, g1); override with the
-env var. Mimic floating robots (fr3/h1_2) are validated through the monolithic test's
-mimic-phase gates and are not duplicated here.
+Defaults to every floating manifest robot (widened 2026-10-15 from the two that
+were masked, go2 and g1); narrow with the env var. The runner is compiled with
+only the value RUN tokens, so the mimic robots (fr3 / h1_2), whose shared mimic
+header also carries the gradients, build only the value kernels here.
 """
 
 import os
@@ -46,12 +47,25 @@ FLOATING_VALUE_ALGORITHMS = (
 )
 
 
+# The runner RUN tokens for exactly the value algorithms above: with them the
+# compile is gated to the value kernels on every robot (a mimic robot's shared
+# header carries the gradients too, and without the tokens the runner would
+# compile them).
+FLOATING_VALUE_RUN_TOKENS = frozenset({
+    "RUN_INVERSE_DYNAMICS", "RUN_MINV", "RUN_FORWARD_DYNAMICS", "RUN_ABA", "RUN_CRBA",
+    "RUN_END_EFFECTOR_POSE",
+})
+
+_ALL_FLOATING_ROBOTS = "iiwa14,go2,g1,h1_2,fr3,rizon4,gen3,fetch,baxter"
+
+
 def _selected_floating_value_params():
-    """Floating cases, subset to the robots that were masked (default go2,g1).
+    """Floating cases, subset to GRID_CUDA_FLOATING_VALUE_ROBOTS (default: every
+    floating manifest robot).
 
     Reuses ``build_floating_cuda_case_params`` so the cuda_equivalence/developer_only
     marks + manifest specs come along unchanged; just filters the robot set."""
-    want = os.environ.get("GRID_CUDA_FLOATING_VALUE_ROBOTS", "go2,g1")
+    want = os.environ.get("GRID_CUDA_FLOATING_VALUE_ROBOTS", _ALL_FLOATING_ROBOTS)
     want_ids = {r.strip() for r in want.split(",") if r.strip()}
     params = []
     for param in build_floating_cuda_case_params():
@@ -82,4 +96,6 @@ def test_floating_value_only_matches_python_reference(spec, base_mode, tmp_path,
         # header has no crba_inner (or any gradient) dependency. This is what makes
         # the test un-maskable by a gradient codegen break (the Bug A masking mode).
         codegen_algorithm_list=FLOATING_VALUE_ALGORITHMS,
+        # Gate the runner to the value kernels (mimic robots share one full header).
+        run_tokens=FLOATING_VALUE_RUN_TOKENS,
     )

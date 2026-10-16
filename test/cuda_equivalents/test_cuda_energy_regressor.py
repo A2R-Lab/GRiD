@@ -11,9 +11,11 @@ inertial params pi_i = [m, m*c(3), I_O(6)=[Ixx,Ixy,Ixz,Iyy,Iyz,Izz]]). KE reuses
 the RNEA forward sweep (per-link spatial velocity v_i); PE reuses the ee_pose
 world-transform machinery (link-origin world R_i, p_i).
 
-Gated iiwa14 (fixed) first, then fr3 (mimic), then g1 (floating). The outputs are
-NOT a DoF sweep (no nv dimension); the runner reads the gridData host buffers
-hd_data->h_ke_regressor / h_pe_regressor directly.
+Every manifest robot on both bases (widened 2026-10-15), iiwa14 fixed first as
+the gate; fr3 / h1_2 are the mimic robots. The outputs are NOT a DoF sweep (no nv
+dimension); the runner reads the gridData host buffers hd_data->h_ke_regressor /
+h_pe_regressor directly. Narrow with
+GRID_CUDA_ENERGY_REGRESSOR_ROBOTS="iiwa14:fixed,fr3:fixed,g1:floating".
 """
 
 import contextlib
@@ -43,9 +45,11 @@ from RBDReference.tests.tolerances import get_tolerance
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_energy_regressor_smoke_runner.cu")
 
-# (robot_id, base_mode). iiwa14 gated first (first slice), then fr3 (mimic) +
-# g1 (floating) for both regressors.
-_CASES = [("iiwa14", "fixed"), ("fr3", "fixed"), ("g1", "floating")]
+# (robot_id, base_mode): every manifest robot on both bases for both regressors.
+# Narrow with GRID_CUDA_ENERGY_REGRESSOR_ROBOTS.
+from test.cuda_equivalents.test_cuda_regressor import _cases as _regressor_cases
+
+_CASES = _regressor_cases("GRID_CUDA_ENERGY_REGRESSOR_ROBOTS")
 
 
 def _robot_spec(robot_id, base_mode):

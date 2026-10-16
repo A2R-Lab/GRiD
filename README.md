@@ -84,7 +84,7 @@ A Docker image with grid-rbd, `jax[cuda12]`, a cu128 torch wheel and the generat
 | Topic | Site page |
 |-------|-----------|
 | Everyday tasks, index of everything | [How do I…?](https://a2r-lab.org/GRiD/docs/how_do_i.html) |
-| Python API (`register_robot`/`load_robot`, backends, env knobs, fp64) | [Python wrappers](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/python_wrappers.html) |
+| Python API (`register_robot`/`load_robot`, backends, env knobs, fp64 alpha) | [Python wrappers](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/python_wrappers.html) |
 | `grid-generate` CLI, the generated header, debug/print helpers | [Generate CUDA for a robot](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/codegen.html) |
 | Floating-base conventions (`pinocchio` / `legacy` orderings), URDF parsing | [URDF API](https://a2r-lab.org/GRiD/docs/api_reference/urdf.html) |
 | Supported joints, algorithms and restrictions; per-backend inventory | [CUDA support status](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/cuda_support_status.html) · [backend coverage](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/backend_coverage.html) |

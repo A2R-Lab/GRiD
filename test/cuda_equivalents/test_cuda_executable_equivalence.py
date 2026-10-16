@@ -21,7 +21,13 @@ The (robot, base, cell, thread count) product is built by
 ``build_flagship_cell_params`` (2026-10-15) rather than by stacked parametrize
 decorators, so a single launch point that cannot run on this hardware is
 removed from the collection (``FLAGSHIP_DECOLLECTED_CELLS`` in the harness,
-with the reason at the table) instead of being skipped at run time.
+with the reason at the table) instead of being skipped at run time. The
+"suggested" thread point launches the way production does: the robot's
+MAX_PERF_LEVEL_THREADS clamped per kernel to its real maxThreadsPerBlock
+(``grid_runner_launch_threads`` in cuda_equivalence_runner.cu, the same clamp
+as the generated host wrappers and the bindings), so every (robot, base, cell)
+is collected at that point; the explicit points 32 / 96 / 100 are launched
+unclamped and probe the cap.
 """
 import pytest
 

@@ -9,9 +9,9 @@ world-frame IDSVA-SO smoke-runner pattern: codegen iiwa14 with the
 integrator types over each sample (q, qd, u, dt), then diff the printed
 matrices block-by-block.
 
-Default robot is iiwa14-fixed; pass GRID_CUDA_INTEGRATOR_ROBOTS to widen
-the sweep. Set GRID_CUDA_INTEGRATOR_DT to override the integration
-timestep (default 0.01).
+Every manifest robot on both bases by default (widened 2026-10-15); pass
+GRID_CUDA_INTEGRATOR_ROBOTS to narrow the sweep. Set GRID_CUDA_INTEGRATOR_DT
+to override the integration timesteps (default 0.001,0.01,0.1).
 """
 
 from __future__ import annotations
@@ -91,7 +91,13 @@ def _robot_ids() -> tuple[str, ...]:
     # BIG MIMIC case (NB=51>NV=39 fixed, NB=52>NV=45 floating) — its per-body
     # s_vaf/scratch MUST size by NB, not NV, or the composed FD-grad inner overflows
     # (the recurring mimic-overflow bug class).
-    return _comma_separated_env("GRID_CUDA_INTEGRATOR_ROBOTS", "iiwa14,go2,fr3,g1,h1_2")
+    #
+    # rizon4 / gen3 (7-DoF arms) and fetch / baxter (branched 14 / 15 DoF) complete
+    # the manifest (widened 2026-10-15): the integrators profile codegens every
+    # robot and the runner's host wrappers clamp to each kernel's cap.
+    return _comma_separated_env(
+        "GRID_CUDA_INTEGRATOR_ROBOTS", "iiwa14,go2,fr3,g1,h1_2,rizon4,gen3,fetch,baxter"
+    )
 
 
 def _dts() -> tuple[float, ...]:

@@ -78,8 +78,11 @@ def _damping_diag(urdf, nv):
 
 
 # (name, urdf, dtype) — fp32 + fp64 (numpy backend) for both robots.
-_PARAMS = [("iiwa14", _IIWA, "float32"), ("iiwa14", _IIWA, "float64"),
-           ("fr3", _FR3, "float32"), ("fr3", _FR3, "float64")]
+# The float64 rows are the fp64 alpha tier (outside the receipt; make test-fp64).
+_PARAMS = [("iiwa14", _IIWA, "float32"),
+           pytest.param(("iiwa14", _IIWA, "float64"), marks=pytest.mark.fp64_alpha),
+           ("fr3", _FR3, "float32"),
+           pytest.param(("fr3", _FR3, "float64"), marks=pytest.mark.fp64_alpha)]
 _IDS = ["iiwa14-fp32", "iiwa14-fp64", "fr3-fp32", "fr3-fp64"]
 
 

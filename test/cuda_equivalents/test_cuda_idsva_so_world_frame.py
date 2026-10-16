@@ -9,8 +9,9 @@ It runs the single-pass world-frame algorithm in CUDA — world-frame
 propagation with gravity baked into the main sweep, no separate gravity
 shim. Mirrors `RBDReference.idsva_so_world_frame` line-for-line.
 
-Runs by default; iiwa14-floating is the default robot.
-Set GRID_CUDA_IDSVA_SO_WORLD_FRAME_ROBOTS=iiwa14,go2,g1 to exercise more.
+Runs by default on every manifest robot, floating and fixed base (widened
+2026-10-15). Narrow with GRID_CUDA_IDSVA_SO_WORLD_FRAME_ROBOTS=iiwa14,go2 and
+GRID_CUDA_IDSVA_SO_WORLD_FRAME_BASES=floating.
 """
 
 import contextlib
@@ -56,23 +57,27 @@ def _world_frame_robot_ids() -> tuple[str, ...]:
     # ancestor walk in per-column INTERNAL coordinates (the floating root's 6 DoF + the
     # finger mimic's shared slot) into a 4*n_int^3 slab, then alpha-folds to the reduced
     # 4*NV^3 output (mirrors RBDReference.idsva_so_world_frame's has_mimic path).
-    # g1/h1_2 are the big floating humanoids (spill-tier world-frame SO exercise).
-    # h1_2-floating is the heaviest compile in the repo (~26min), so it is run only
-    # in the pre-sweep gate (V5: ADDED-but-DEFERRED); g1-floating likewise deferred.
-    # fr3 is the floating MIMIC sentinel validated through the world-frame path (NOT
-    # the B4-broken body-frame inner). Override with the env var to subset.
+    # g1/h1_2 are the big floating humanoids (spill-tier world-frame SO exercise;
+    # h1_2 is the heaviest compile in the repo, ~26 min). fr3 is the floating MIMIC
+    # sentinel validated through the world-frame path (NOT the B4-broken body-frame
+    # inner). rizon4 / gen3 / fetch / baxter complete the manifest (widened
+    # 2026-10-15: the world-frame runner codegens every robot, mimic included, and
+    # the 100000-byte target keeps every arena under the per-block cap). Override
+    # with the env var to subset.
     return _comma_separated_env(
-        "GRID_CUDA_IDSVA_SO_WORLD_FRAME_ROBOTS", "iiwa14,go2,g1,h1_2,fr3"
+        "GRID_CUDA_IDSVA_SO_WORLD_FRAME_ROBOTS",
+        "iiwa14,go2,g1,h1_2,fr3,rizon4,gen3,fetch,baxter",
     )
 
 
 def _world_frame_base_modes() -> tuple[str, ...]:
     # EXP-1 (perf_idsva_so_bigrobot.md): the world-frame inner is now a PRODUCTION path
     # for high-DOF FIXED-base robots (NV >= NV_FIXED_WORLD_THRESHOLD), not just floating.
-    # Default keeps the original floating-only coverage; set
-    # GRID_CUDA_IDSVA_SO_WORLD_FRAME_BASES=fixed (or "floating,fixed") to exercise the
-    # fixed-base world-frame emission the EXP-1 routing now selects for g1/h1_2/h2_plus.
-    return _comma_separated_env("GRID_CUDA_IDSVA_SO_WORLD_FRAME_BASES", "floating")
+    # Both bases by default (widened 2026-10-15): the fixed-base world-frame
+    # emission is the production second-order path for g1 / h1_2 / h2_plus and is
+    # forced on for every robot here. Narrow with
+    # GRID_CUDA_IDSVA_SO_WORLD_FRAME_BASES=floating (or fixed).
+    return _comma_separated_env("GRID_CUDA_IDSVA_SO_WORLD_FRAME_BASES", "floating,fixed")
 
 
 def _world_frame_target_shared_bytes() -> int:
