@@ -99,14 +99,22 @@ def _floating_second_order_robot_ids() -> tuple[str, ...]:
     return _comma_separated_env(
         "GRID_CUDA_FLOATING_SECOND_ORDER_ROBOTS",
         # iiwa14 (gate) + go2 (quadruped) + fr3 (the mimic sentinel) + the big
-        # humanoids g1/h1_2 (floating spill-tier body-frame SO exercise). g1/h1_2
-        # floating all-profile headers are the HEAVIEST compiles in the repo
-        # (h1_2-floating idsva_so ~26min), so these big-robot floating cells are run
-        # only in the pre-sweep gate (V5: ADDED-but-DEFERRED). fr3-floating exercises
-        # the mimic internal-slot sweep + alpha-fold (incl. the gravity-shim fold);
-        # it was the B4 known-broken cell, now FIXED (col-13 mimic columns assert
-        # green vs the pin oracle).
-        "iiwa14,go2,fr3,g1,h1_2",
+        # humanoid g1 (floating spill-tier body-frame SO exercise). fr3-floating
+        # exercises the mimic internal-slot sweep + alpha-fold (incl. the
+        # gravity-shim fold); it was the B4 known-broken cell, now FIXED (col-13
+        # mimic columns assert green vs the pin oracle).
+        #
+        # h1_2 was de-collected on 2026-10-15 (hardware limit, not a bug): the
+        # body-frame idsva_so inner this diagnostic forces on is aliased so its
+        # ancestor-pair scratch cannot be spilled on its own, and on h1_2 floating
+        # it requests 3131600 bytes of shared memory against the 101376 bytes this
+        # GPU offers per block (receipt evidence: refresh 2026-10-12). The cell
+        # cannot launch, so it is removed from the default list rather than
+        # skipped. h1_2 keeps its fixed-base cell above, and its production
+        # second-order path is world-frame, which fits and is validated by
+        # test_cuda_idsva_so_world_frame.py. The de-alias refactor that would bring
+        # the cell back is docs/design_history/idsva_so_inner_refactor_notes.md.
+        "iiwa14,go2,fr3,g1",
     )
 
 

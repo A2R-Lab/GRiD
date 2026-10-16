@@ -26,8 +26,8 @@ This README points to it.
 Version 0.5.1 is on [PyPI](https://pypi.org/project/grid-rbd/); 0.5.0 was the first packaged release. GRiD is alpha
 software and APIs may change between minor versions (see the
 [changelog](https://github.com/A2R-Lab/GRiD/blob/main/CHANGELOG.md)). The GPU test receipt and the release timing ran on
-Linux x86-64 with CPython 3.12, CUDA toolkit 13.2 and one RTX 5090 (sm_120); CPython 3.10 and 3.11 wheels are built and
-import-checked on CPU in CI. Other toolkits, GPUs and interpreters are untested; the
+Linux x86-64 with CPython 3.12, CUDA toolkit 13.2 and one RTX 5090 (sm_120); CPython 3.10, 3.11 and 3.13 wheels are built and
+import-checked on CPU in CI, and the CPU test lane runs on 3.10, 3.12 and 3.13. Other toolkits, GPUs and interpreters are untested; the
 [compatibility page](https://a2r-lab.org/GRiD/docs/user_guide/getting_started/compatibility.html) lists the exact
 environment. The [original ICRA 2022 paper](https://a2r-lab.org/publication/grid/)
 describes the implementation preserved in the archival [robot-acceleration/GRiD](https://github.com/robot-acceleration/GRiD)

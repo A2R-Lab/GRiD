@@ -107,6 +107,21 @@ signature, complete scope and release policy on the clean descendant. No carried
 shards, policy bypass or tolerance relaxation: a release receipt is one fresh full
 pass at the release tip, verified under `test/gpu-proof-policy-release.yaml`.
 
+One receipt per architecture. The primary receipt, `gpu-proof.json`, is recorded
+on the RTX 5090 (sm_120); it gates CI, defines the collection manifest and is the
+only receipt the release workflow verifies. Secondary receipts document other
+architectures and live under `receipts/` (`receipts/gpu-proof-sm87.json` for the
+Jetson Orin); `test/gpu-proof-receipts.yaml` maps each compute capability to its
+receipt path, its header-key ledger and, when it needs one, its own expected-skips
+baseline. To record a secondary receipt, install the dev requirements on the
+Jetson and run `SPLIT=1 test/run_gpu_proof.sh` on a clean checkout of the release
+tip; the driver detects the architecture, writes that row's path and never
+touches `gpu-proof.json`. Commit the receipt with its header-key ledger.
+`make verify-all` verifies every receipt on disk, one line per architecture, and
+`test/receipt_integrity.py --table` prints their rows for the compatibility page.
+A release does not wait for secondary receipts; they are documentation of the
+other architectures, recorded when those machines are available.
+
 Inspect final package provenance and verify the exact frozen artifacts before the
 TestPyPI rehearsal and the production upload. Package ownership, publisher setup,
 tagging, pushes and uploads need maintainer approval; the artifact workflow

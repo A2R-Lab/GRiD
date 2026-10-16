@@ -15,29 +15,27 @@ cuda shard's fingerprint, so harness edits stale the whole domain HONESTLY
 and flagship-test edits stale only the flagship shards.
 
 Node ids are unchanged by construction (same module path, same test names,
-same parametrize id functions) — durations ledgers and receipt shard names
-carry over.
+same id scheme), so durations ledgers and receipt shard names carry over.
+
+The (robot, base, cell, thread count) product is built by
+``build_flagship_cell_params`` (2026-10-15) rather than by stacked parametrize
+decorators, so a single launch point that cannot run on this hardware is
+removed from the collection (``FLAGSHIP_DECOLLECTED_CELLS`` in the harness,
+with the reason at the table) instead of being skipped at run time.
 """
 import pytest
 
 from test.cuda_equivalents.cuda_harness import (
-    FLAGSHIP_SPLIT_CELLS,
     _run_flagship_split_cell,
-    _thread_counts,
-    build_fixed_cuda_case_params,
-    build_floating_cuda_case_params,
+    build_flagship_cell_params,
 )
 
 
-@pytest.mark.parametrize("num_threads", _thread_counts(), ids=lambda t: f"threads{'suggested' if t == 0 else t}")
-@pytest.mark.parametrize("cell", FLAGSHIP_SPLIT_CELLS, ids=lambda c: c.cell_id)
-@pytest.mark.parametrize(("spec", "base_mode"), build_fixed_cuda_case_params())
+@pytest.mark.parametrize(("spec", "base_mode", "cell", "num_threads"), build_flagship_cell_params("fixed"))
 def test_fixed_base_generated_cuda_matches_python_reference(spec, base_mode, cell, num_threads, tmp_path, request):
     _run_flagship_split_cell(spec, base_mode, cell, num_threads, tmp_path, request)
 
 
-@pytest.mark.parametrize("num_threads", _thread_counts(), ids=lambda t: f"threads{'suggested' if t == 0 else t}")
-@pytest.mark.parametrize("cell", FLAGSHIP_SPLIT_CELLS, ids=lambda c: c.cell_id)
-@pytest.mark.parametrize(("spec", "base_mode"), build_floating_cuda_case_params())
+@pytest.mark.parametrize(("spec", "base_mode", "cell", "num_threads"), build_flagship_cell_params("floating"))
 def test_floating_base_generated_cuda_matches_python_reference(spec, base_mode, cell, num_threads, tmp_path, request):
     _run_flagship_split_cell(spec, base_mode, cell, num_threads, tmp_path, request)

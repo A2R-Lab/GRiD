@@ -55,6 +55,12 @@ jobs:
 
   cpu-lane:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The receipt is recorded on 3.12; the lane also runs on the oldest and
+        # the newest interpreter the wheels are built for (2026-10-15).
+        python: ['3.10', '3.12', '3.13']
     steps:
       - uses: actions/checkout@v4
         with:
@@ -62,12 +68,18 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
 
       - name: Install GRiD (CPU deps only)
         # Packaging unit tests import the build hooks outside pip's isolated
         # build environment, so their setuptools dependency must be explicit.
-        run: pip install -e . && pip install pytest matplotlib pyyaml "setuptools>=77" "$(grep -o '^pytest-gpu-proof==[0-9.]*' install/requirements-dev.txt)"
+        # pytest-gpu-proof requires CPython 3.11 or newer; on 3.10 the two
+        # plugin-scope test modules importorskip it and everything else runs.
+        run: |
+          pip install -e . && pip install pytest matplotlib pyyaml "setuptools>=77"
+          if python -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'; then
+            pip install "$(grep -o '^pytest-gpu-proof==[0-9.]*' install/requirements-dev.txt)"
+          fi
 
       # The BROAD CPU set (audit W00, 2026-09-19): every test/test_*.py + the
       # benchmark-spec guards + the CPU-only bindings modules. The former six-

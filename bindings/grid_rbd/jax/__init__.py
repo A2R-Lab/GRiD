@@ -76,10 +76,11 @@ def _require_jax():
         import jax
     except ImportError as e:
         raise ImportError(
-            "grid_rbd.jax requires JAX, which isn't installed. Install the "
-            "optional extra:  pip install -e 'grid-rbd[jax]'  (or "
-            "`pip install jax[cuda12]`). The numpy and torch backends do not "
-            "need JAX."
+            "grid_rbd.jax requires JAX, which is not installed in this environment. "
+            "Install it with pip install \"grid-rbd[jax]\" (from a checkout: "
+            "pip install -e \".[jax]\"), then the CUDA wheel for your toolkit, for "
+            "example pip install \"jax[cuda12]\". The numpy and torch backends work "
+            "without JAX."
         ) from e
     return jax
 
@@ -131,15 +132,15 @@ def _register_method_target(
                 surface_present = False
             if surface_present:
                 raise RuntimeError(
-                    f"{method!r} not built into this robot .so — add {method!r} "
-                    f"to algorithm_list in register_robot() and rebuild "
-                    f"(force_rebuild=True). The jax FFI surface is present but this "
-                    f"algorithm was excluded by the subset build."
+                    f"{method!r} not built into this robot .so: the robot was registered "
+                    f"with an algorithm_list that leaves it out. Add {method!r} to "
+                    f"algorithm_list in register_robot() and rebuild with "
+                    f"force_rebuild=True."
                 ) from e
             raise RuntimeError(
-                f"Symbol {symbol!r} missing from {so_path}; was the .so "
-                f"compiled with GRID_RBD_WITH_JAX? (Reinstall jax + "
-                f"force_rebuild=True at register_robot.)"
+                f"This robot's compiled library has no JAX surface: it was built "
+                f"while jax was not installed ({so_path}). Now that jax is importable, "
+                f"rebuild it with register_robot(..., force_rebuild=True)."
             ) from e
         # ctypes function objects are valid void*; wrap as a PyCapsule that
         # JAX accepts. ``jax.ffi.pycapsule`` builds the correct capsule from a
@@ -1644,8 +1645,9 @@ def register_robot(
     entry = manifest_lookup(cache_dir, name)
     if entry is None:
         raise RuntimeError(
-            f"register_robot returned but {name!r} isn't in manifest; "
-            f"cache may be corrupted")
+            f"Robot {name!r} is not in the cache manifest any more (another process "
+            f"may have cleared the cache since it was registered). Register it again "
+            f"with grid_rbd.register_robot(name={name!r}, urdf_path=...).")
     so_path = store_dir(cache_dir, entry["cache_key"]) / "robot.so"
     return JaxRobotHandle(base, entry["cache_key"], str(so_path),
                           output_convention=output_convention)
@@ -1665,7 +1667,10 @@ def get_robot(
     via the handle's ``output_convention`` property."""
     _require_jax()  # fail early with install guidance if jax is missing
     if register_opts and urdf_path is None:
-        raise TypeError(f"get_robot() got register options {sorted(register_opts)} without urdf_path")
+        raise TypeError(
+            f"get_robot() received build options {sorted(register_opts)} but no urdf_path=. "
+            f"A registered robot is looked up by name only; pass urdf_path= to build it "
+            f"on a miss, or drop the build options.")
     _grid_rbd._register_on_miss(name, cache_dir, urdf_path, register_opts)   # just-in-time compile on a miss
     base = _grid_rbd.get_robot(name, cache_dir=cache_dir, _profile_overlay=None)  # jax baked default = ffi
     base.apply_batch_overlay("ffi")  # E6 batch-switch (no-op without a by-n block)

@@ -42,6 +42,11 @@ Two keys (see the "two-stage content-addressed store" section below):
     identity (a pointer recorded before the identity existed, or by a
     different toolchain, is a miss — never a silent stale .so).
 CUDA arch is part of both keys so a multi-GPU user keeps separate .so files.
+GRID_RBD_CUDA_ARCHS (opt-in, 2026-10-15) builds one fat .so for a comma list of
+compute capabilities; the sorted list (always including the build's cuda_arch,
+whose launch configs the binary carries) is folded into both keys and into the
+identity as `cuda_archs`, so a fat build never collides with a single-arch one,
+and a load accepts an entry whose `cuda_archs` contains the detected arch.
 
 The manifest binds a human-friendly `name` to a content key. Re-registering the
 same name with a different URDF or options overwrites the binding (the old
@@ -99,6 +104,44 @@ def detect_cuda_arch() -> int:
         return int(major) * 10 + int(minor)
     except Exception:
         return 0
+
+
+CUDA_ARCHS_ENV = "GRID_RBD_CUDA_ARCHS"
+
+
+def cuda_archs_from_env() -> list[int] | None:
+    """The opt-in multi-architecture list: ``GRID_RBD_CUDA_ARCHS`` as a sorted,
+    deduplicated list of compute capabilities (``"86,89,90,120"`` -> ``[86, 89,
+    90, 120]``), or None when the variable is unset (the single-arch build).
+    A set but malformed value (empty, ``sm_120``, ``8.6``) is an error, never a
+    silent fallback to single-arch."""
+    raw = os.environ.get(CUDA_ARCHS_ENV)
+    if raw is None:
+        return None
+    archs: set[int] = set()
+    for item in raw.split(","):
+        item = item.strip()
+        if not item.isdigit():
+            raise ValueError(
+                f"{CUDA_ARCHS_ENV}={raw!r}: expected a comma list of compute capabilities "
+                f"as integers, e.g. \"86,89,90,120\" (got {item!r})")
+        archs.add(int(item))
+    if not archs:
+        raise ValueError(
+            f"{CUDA_ARCHS_ENV}={raw!r}: expected a comma list of compute capabilities "
+            f"as integers, e.g. \"86,89,90,120\"; unset it for a single-arch build")
+    return sorted(archs)
+
+
+def effective_cuda_archs(cuda_arch: int, archs: list[int] | None = None) -> list[int] | None:
+    """The arch list a build embeds: ``archs`` (default: the env list) plus
+    ``cuda_arch`` itself, sorted and deduplicated, so the arch whose launch
+    configs the binary carries is always one it runs on. None = single-arch."""
+    if archs is None:
+        archs = cuda_archs_from_env()
+    if archs is None:
+        return None
+    return sorted(set(archs) | {int(cuda_arch)})
 
 
 def package_version() -> str:
@@ -215,6 +258,11 @@ def compute_cache_key(urdf_bytes: bytes, options: dict[str, Any], cuda_arch: int
     h.update(urdf_bytes)
     h.update(canonical_options(options).encode())
     h.update(f"arch={cuda_arch}".encode())
+    # Multi-arch (opt-in): the embedded arch list; a fat build never collides
+    # with the single-arch build of the same inputs (unset = no bytes added).
+    archs = effective_cuda_archs(cuda_arch)
+    if archs is not None:
+        h.update(f"archs={archs}".encode())
     h.update(f"grid_rbd={package_version()}".encode())
     h.update(f"wrapper={_wrapper_template_hash()}".encode())
     # Mix in the codegen source hash so editing GRiDCodeGenerator / URDFParser
@@ -440,7 +488,7 @@ def build_identity(cuda_arch: int) -> dict[str, Any]:
     """Every artifact-shaping input that is NOT a caller option, as a readable
     dict (persisted beside each store entry as build_inputs.json). Folded into
     the stage-1 key; its toolchain subset is folded into the content key."""
-    return {
+    identity: dict[str, Any] = {
         "key_schema": _KEY_SCHEMA,
         "cuda_arch": int(cuda_arch),
         "nvcc": _nvcc_identity(),
@@ -453,6 +501,13 @@ def build_identity(cuda_arch: int) -> dict[str, Any]:
         "jax_ffi": _jax_ffi_tag(),
         "generation_env": _generation_env(),
     }
+    # Multi-arch (opt-in): recorded only when set so the single-arch identity
+    # (and every key derived from it) is unchanged. `cuda_arch` stays the arch
+    # the launch configs were selected for; `cuda_archs` is every arch embedded.
+    archs = effective_cuda_archs(cuda_arch)
+    if archs is not None:
+        identity["cuda_archs"] = archs
+    return identity
 
 
 # Identity fields that matter for a stage-1 hit. `glass_commit` is a label
@@ -481,7 +536,7 @@ def stale_hit_reasons(entry_dir: Path, identity: dict[str, Any]) -> list[str]:
     miss; the content key re-hits the same .so if it truly is identical)."""
     recorded = read_build_inputs(entry_dir)
     if recorded is None:
-        return ["no build_inputs.json (entry predates the build-identity record)"]
+        return ["the entry predates the build-identity record (no build_inputs.json beside it)"]
     reasons = []
     for k in sorted(set(identity) | set(recorded)):
         if k == "glass_commit":
@@ -510,9 +565,24 @@ def load_incompat_reasons(entry_dir: Path, identity: dict[str, Any]) -> list[str
     `grid_rbd_device_pool_bytes` missing from an August .so)."""
     recorded = read_build_inputs(entry_dir)
     if recorded is None:
-        return ["no build_inputs.json (entry predates the build-identity record)"]
-    return [f"{k}: recorded {recorded.get(k)!r} != current {identity.get(k)!r}"
-            for k in LOAD_IDENTITY_KEYS if recorded.get(k) != identity.get(k)]
+        return ["the entry predates the build-identity record (no build_inputs.json beside it)"]
+    reasons = []
+    for k in LOAD_IDENTITY_KEYS:
+        if k == "cuda_arch" and _arch_loadable(recorded, identity.get(k)):
+            continue
+        if recorded.get(k) != identity.get(k):
+            reasons.append(f"{k}: recorded {recorded.get(k)!r} != current {identity.get(k)!r}")
+    return reasons
+
+
+def _arch_loadable(recorded: dict[str, Any], current_arch: Any) -> bool:
+    """A stored build runs on the current device when it was compiled for that
+    arch, or (multi-arch build) when the arch is one of the embedded
+    `cuda_archs`. The single-arch record has no `cuda_archs` key."""
+    if recorded.get("cuda_arch") == current_arch:
+        return True
+    archs = recorded.get("cuda_archs")
+    return isinstance(archs, list) and current_arch in archs
 
 
 def compute_content_key(source_dir: Path, options: dict[str, Any],
@@ -524,6 +594,9 @@ def compute_content_key(source_dir: Path, options: dict[str, Any],
     h.update((source_dir / "wrapper.cu").read_bytes())
     h.update((source_dir / "wrapper_common.cuh").read_bytes())   # shared unit header (multi-TU build)
     h.update(f"arch={cuda_arch};max_batch={max_batch}".encode())
+    archs = effective_cuda_archs(cuda_arch)   # multi-arch (opt-in): one -gencode per arch
+    if archs is not None:
+        h.update(f"archs={archs};".encode())
     # Options that drive -D flags / template selection in compile_so (the rest
     # of `options` only shapes the generated bytes, already hashed above).
     for k in ("dtype", "runtime_inertia", "runtime_transform",
@@ -574,9 +647,9 @@ def load_manifest(cache_dir: Path) -> dict[str, Any]:
     if data.get("schema_version") != _SCHEMA_VERSION:
         # Future: handle migrations. For now, refuse to use older manifests.
         raise RuntimeError(
-            f"manifest at {path} has schema_version "
-            f"{data.get('schema_version')!r}, expected {_SCHEMA_VERSION}. "
-            "Delete the cache to start fresh."
+            f"The robot cache at {path} was written by an incompatible grid_rbd (manifest schema_version "
+            f"{data.get('schema_version')!r}; this version expects {_SCHEMA_VERSION}). Delete that cache directory, "
+            "or point cache_dir= / GRID_RBD_CACHE_DIR at a fresh one, and register the robots again."
         )
     return data
 

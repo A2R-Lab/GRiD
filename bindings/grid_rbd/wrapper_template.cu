@@ -91,8 +91,16 @@ static int grid_ctx_create_locked(GridCtx **out, const grid::grid_device_pool_t 
     cudaDeviceGetAttribute(&cc_major, cudaDevAttrComputeCapabilityMajor, dev);
     cudaDeviceGetAttribute(&cc_minor, cudaDevAttrComputeCapabilityMinor, dev);
     const int device_cc = cc_major * 10 + cc_minor;
-    if (GRID_RBD_ARCH != 0 && device_cc != GRID_RBD_ARCH) {
-        fprintf(stderr, "grid_rbd: this robot artifact was compiled for sm_%d but the device is sm_%d\n", (int)GRID_RBD_ARCH, device_cc);
+    if (GRID_RBD_ARCH != 0 && !grid_rbd_device_cc_in_artifact(device_cc)) {
+        fprintf(stderr, "grid_rbd: this robot artifact was compiled for sm_%d"
+#ifdef GRID_RBD_ARCHS
+                " (embedded arches %s)"
+#endif
+                " but the device is sm_%d\n", (int)GRID_RBD_ARCH,
+#ifdef GRID_RBD_ARCHS
+                GRID_RBD_STRINGIFY(GRID_RBD_ARCHS),
+#endif
+                device_cc);
         return 13;
     }
     GridCtx *c = new GridCtx();

@@ -62,6 +62,12 @@ FIXED_CUDA_ALGORITHMS = (
     "end_effector_pose_gradient",
     "end_effector_pose_hessian",
 )
+# The floating flagship validates the same algorithms as the fixed flagship. The
+# end-effector pose gradient and hessian joined the default floating selection on
+# 2026-10-15: the generator emits both kernels on a floating base for every manifest
+# robot (audited on all nine, the mimic robots fr3 and h1_2 included), so holding
+# them back was a matrix decision that surfaced as 72 expected skips per receipt.
+# GRID_CUDA_FLOATING_ALGORITHMS narrows this list (a comma list of names, or "all").
 FLOATING_CUDA_ALGORITHMS = (
     "inverse_dynamics",
     "minv",
@@ -73,12 +79,12 @@ FLOATING_CUDA_ALGORITHMS = (
     "aba",
     "crba",
     "end_effector_pose",
-)
-FLOATING_CUDA_CANDIDATE_ALGORITHMS = (
-    *FLOATING_CUDA_ALGORITHMS,
     "end_effector_pose_gradient",
     "end_effector_pose_hessian",
 )
+# Every name GRID_CUDA_FLOATING_ALGORITHMS may request. Nothing is held back by
+# default any more, so the candidate list is the default list.
+FLOATING_CUDA_CANDIDATE_ALGORITHMS = FLOATING_CUDA_ALGORITHMS
 
 
 class SplitCell(NamedTuple):
@@ -106,10 +112,9 @@ class SplitCell(NamedTuple):
     compare_algorithms: tuple[str, ...]
 
 
-# The flagship runner's algorithms, one SPLIT cell each. FIXED base emits all ten;
-# FLOATING emits the subset selected by _floating_algorithm_selection() (ee_pose
-# gradient/hessian only when GRID_CUDA_FLOATING_ALGORITHMS requests them) — the same
-# gate the monolith used. See SplitCell for the codegen-group rationale.
+# The flagship runner's algorithms, one SPLIT cell each. Both bases validate every
+# cell by default; GRID_CUDA_FLOATING_ALGORITHMS can narrow the floating selection
+# (_floating_algorithm_selection()). See SplitCell for the codegen-group rationale.
 FLAGSHIP_SPLIT_CELLS = (
     SplitCell("inverse_dynamics", ("inverse_dynamics",),
               frozenset({"RUN_INVERSE_DYNAMICS"}), ("inverse_dynamics",)),
@@ -136,6 +141,20 @@ FLAGSHIP_SPLIT_CELLS = (
     SplitCell("end_effector_pose_hessian", ("end_effector_pose_hessian",),
               frozenset({"RUN_END_EFFECTOR_POSE_HESSIAN"}), ("end_effector_pose_hessian",)),
 )
+# Flagship cells removed from the collection on 2026-10-15, as (robot, base, cell,
+# thread count) with 0 standing for the MAX_PERF_LEVEL_THREADS sweep point. Each
+# one is a hardware limit at that launch point: the forward_dynamics inline kernel
+# of the -O0 runner build needs more than the 64K registers a block can hold at
+# the robot's MAX_PERF_LEVEL_THREADS (fr3 floating and h1_2 floating), so the
+# launch fails with "too many resources requested for launch" (receipt evidence:
+# refresh 2026-10-12, cuda_equivalence_runner.cu forward_dynamics launch). The same
+# kernel passes at the other three thread counts, which stay collected. A cell that
+# cannot run on this hardware is de-collected rather than skipped, so the receipt
+# baseline carries no expected skips.
+FLAGSHIP_DECOLLECTED_CELLS = frozenset({
+    ("fr3", "floating", "forward_dynamics", 0),
+    ("h1_2", "floating", "forward_dynamics", 0),
+})
 GPU_UNAVAILABLE_PATTERNS = (
     "no cuda-capable device",
     "cuda driver version is insufficient",
@@ -533,6 +552,32 @@ def build_floating_cuda_case_params():
     return build_cuda_case_params("floating")
 
 
+def build_flagship_cell_params(base_mode: str):
+    """One pytest.param per flagship cell: (spec, base_mode, cell, num_threads).
+
+    The id is ``<robot>-<base>-<cell_id>-threads<N|suggested>``, the same id the
+    stacked parametrize decorators produced before 2026-10-15, so the receipts,
+    the manifest and the durations ledger carry over. Building the product here
+    lets FLAGSHIP_DECOLLECTED_CELLS remove a single (robot, base, cell, threads)
+    point instead of skipping it at run time."""
+    params = []
+    for case in build_cuda_case_params(base_mode):
+        spec = case.values[0]
+        for cell in FLAGSHIP_SPLIT_CELLS:
+            for num_threads in _thread_counts():
+                if (spec.robot_id, base_mode, cell.cell_id, num_threads) in FLAGSHIP_DECOLLECTED_CELLS:
+                    continue
+                thread_id = "suggested" if num_threads == 0 else str(num_threads)
+                params.append(
+                    pytest.param(
+                        spec, base_mode, cell, num_threads,
+                        id=f"{spec.robot_id}-{base_mode}-{cell.cell_id}-threads{thread_id}",
+                        marks=case.marks,
+                    )
+                )
+    return params
+
+
 def _header_cache_key(
     project_model,
     resolved_model,
@@ -707,15 +752,8 @@ def _compile_runner(
     compile_flags = [cxx_standard, "-O0", *linalg_flags]
     l2_persisting = os.environ.get("GRID_CUDA_ENABLE_L2_PERSISTING")
     l2_define = int(l2_persisting) if l2_persisting is not None else 0
-    floating_algorithms = os.environ.get("GRID_CUDA_FLOATING_ALGORITHMS", "")
     enable_floating_eepose_hessian = int(
-        floating_base
-        and (
-            "end_effector_pose_hessian" in {
-                part.strip() for part in floating_algorithms.split(",")
-            }
-            or floating_algorithms.strip().lower() == "all"
-        )
+        floating_base and "end_effector_pose_hessian" in _floating_algorithm_selection()
     )
     runner_key = _stable_json_hash(
         {
@@ -970,6 +1008,9 @@ def _random_sample_count() -> int:
 
 
 def _floating_algorithm_selection() -> tuple[str, ...]:
+    """The floating flagship's algorithm selection: every FLOATING_CUDA_ALGORITHMS
+    entry by default. GRID_CUDA_FLOATING_ALGORITHMS is a narrowing override (a
+    comma list drawn from FLOATING_CUDA_CANDIDATE_ALGORITHMS, or "all")."""
     raw = os.environ.get("GRID_CUDA_FLOATING_ALGORITHMS")
     if not raw:
         return FLOATING_CUDA_ALGORITHMS
@@ -1634,8 +1675,9 @@ def _flagship_selected_algorithms(base_mode) -> set:
 def _run_flagship_split_cell(spec, base_mode, cell, num_threads, tmp_path, request):
     """Validate ONE flagship split cell: codegen its subset header + compile the runner
     gated to its RUN token(s), then compare only this cell's algorithm(s) vs the oracle.
-    A cell not in this base's selection is skipped (e.g. floating ee_pose gradient/hessian
-    unless GRID_CUDA_FLOATING_ALGORITHMS requests them). This REPLACES the monolithic
+    The default selection collects every cell; only the narrowing overrides
+    (GRID_CUDA_FLOATING_ALGORITHMS, GRID_CUDA_CODEGEN_SUBSET) can leave a collected
+    cell outside the selection, and that cell is skipped. This REPLACES the monolithic
     all-algorithm runner: a build break in any other algorithm can no longer void this
     cell (the Bug-A coverage void), and each cell is a tiny, fast, independently-reported TU."""
     selected = _flagship_selected_algorithms(base_mode)

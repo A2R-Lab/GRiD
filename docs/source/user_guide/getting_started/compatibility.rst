@@ -67,8 +67,9 @@ carries its own CUDA 12.8 runtime libraries for torch's kernels, and the
 ``jax-cuda12-plugin`` carries CUDA 12 runtime libraries for XLA; neither uses
 ``nvcc``. The driver has to satisfy every runtime in the process, and
 615.71.09 does. A ``jax[cuda13]`` plugin, a torch wheel other than cu128, a
-CUDA 12 toolkit and CPython 3.10 or 3.11 on a GPU are untested; the CI wheel
-builds for CPython 3.10 and 3.11 run on CPU only. Jetson Orin (sm_87) and
+CUDA 12 toolkit and CPython 3.10, 3.11 or 3.13 on a GPU are untested; the CI
+wheel builds for CPython 3.10, 3.11 and 3.13 and the CPU test lane on 3.10 and
+3.13 run on CPU only. Jetson Orin (sm_87) and
 Xavier (sm_72) rows are planned and will be filled from real runs.
 
 Runtime contexts

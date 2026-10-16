@@ -1484,6 +1484,20 @@ is their tombstone):
 
 ---
 
+### 7.x Error-message walk (2026-10-15, hardening batch B)
+- `URDFParser` raises typed errors (`URDFParseError`, `UnsupportedJointTypeError`); `grid_codegen/cli.py`'s
+  `validateRobot` None path is dead in practice. The CLI now catches those (and the collision-geometry and
+  algorithm-name `ValueError`s) and prints a `[!Error]` line with the next action, exit code 1 as before.
+- Binding messages that say "re-register" must name the call: `register_robot(name=..., urdf_path=..., force_rebuild=True)`.
+  Several CPU tests match substrings ("predates", "re-register", "jax[cuda12]", the `k: recorded X != current Y` reason
+  format); keep them inside any reworded text. `test/test_error_messages.py` pins the wording for every CPU-reachable path.
+- The torch "no kernel image is available" failure has no grid_rbd raise site: it is torch's own error from the VJP
+  contraction kernels. The only place to guide the user is the `_require_torch` hint and the docs.
+
+### 7.y nvcc splits a -D value on commas (2026-10-15)
+- `-DX=86,120` becomes `-DX=86 -D120` and nvcc fails with "macro names must be identifiers". Pass list-valued
+  defines with another separator (`-DGRID_RBD_ARCHS=86:120`) and stringify in the template (`GRID_RBD_STRINGIFY`).
+
 ## 8. Process meta-lessons
 
 - **The backlog drifts — verify "is this still open?" before dispatching.** This session found 5

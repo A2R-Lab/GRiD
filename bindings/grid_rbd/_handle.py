@@ -176,8 +176,9 @@ def _resolve_frame_args(meta, target_jid, reference_frame):
         leaf = meta.get("leaf_jids")
         if not leaf:
             raise RuntimeError(
-                "this .so predates the runtime-target API (no leaf_jids in "
-                "meta.json); re-register with force_rebuild=True")
+                "This robot was compiled by an older grid_rbd that did not record its "
+                "end-effector joints, so runtime end-effector targets are unavailable. "
+                "Re-register it with register_robot(..., force_rebuild=True).")
         tj = int(leaf[0])  # mirrors codegen default_tjid = get_leaf_nodes()[0]
     if rf < 0:
         rf = 2  # LOCAL_WORLD_ALIGNED default
@@ -285,9 +286,10 @@ class RobotHandle:
             cached_val = meta.get(key)
             if cached_val is not None and cached_val != runner_val:
                 raise RuntimeError(
-                    f"Cache inconsistency: meta.json says {key}={cached_val} "
-                    f"but the .so reports {runner_val}. Re-register with "
-                    f"force_rebuild=True."
+                    f"The cached metadata for robot {name!r} does not match its "
+                    f"compiled library ({key}: recorded {cached_val}, library reports "
+                    f"{runner_val}). The cache entry is damaged; rebuild it with "
+                    f"register_robot(name={name!r}, urdf_path=..., force_rebuild=True)."
                 )
 
     # ─── metadata ────────────────────────────────────────────────────────────
@@ -402,10 +404,10 @@ class RobotHandle:
         return self._resolve_convention(convention) == "mujoco" and self.floating_base
 
     _MJX_TWINS_ADVICE = (
-        "needs a floating-base .so built with the mjx kernel twins (this .so "
-        "was built with enable_mujoco_kernels=False, or the robot is mimic/skew "
-        "— twins are never emitted there) — re-register with "
-        "enable_mujoco_kernels=True.")
+        "needs a floating-base robot built with the MuJoCo (mjx) kernel twins. "
+        "This robot was built with enable_mujoco_kernels=False, or it is a "
+        "mimic/skew model, which never gets the twins. Rebuild it with "
+        "register_robot(..., enable_mujoco_kernels=True, force_rebuild=True).")
 
     def _shape_out(self, key: str, raw, *, mjx: bool = False):
         """Apply the spec's out_layout (A3 slice 4): the ONE shared transform
@@ -1486,7 +1488,8 @@ class RobotHandle:
         if self._mjx_active(_convention):
             raise NotImplementedError(
                 "inverse_dynamics_gradient(output_convention='mujoco') needs an explicit "
-                "qdd, no f_ext, and a floating-base .so built with the mjx kernel twins (this .so was built with enable_mujoco_kernels=False, or the robot is mimic/skew — twins are never emitted there) — re-register with enable_mujoco_kernels=True.")
+                "qdd, no f_ext, and a floating-base robot built with "
+                + self._MJX_TWINS_ADVICE.split("built with ", 1)[-1])
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         self._check_nv_width(qd, "qd")
@@ -1524,7 +1527,7 @@ class RobotHandle:
         if self._mjx_active(_convention):
             raise NotImplementedError(
                 "forward_dynamics_gradient(output_convention='mujoco') needs no f_ext "
-                "and a floating-base .so built with " + self._MJX_TWINS_ADVICE.split("built with ", 1)[-1])
+                "and a floating-base robot built with " + self._MJX_TWINS_ADVICE.split("built with ", 1)[-1])
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         u  = np.ascontiguousarray(u,  dtype=self._dt)
@@ -2228,13 +2231,15 @@ class RobotHandle:
             jids = self._meta.get("leaf_jids")
             if jids is None:
                 raise RuntimeError(
-                    "this .so predates the runtime-target API (no leaf_jids in "
-                    "meta.json); re-register with force_rebuild=True")
+                    "This robot was compiled by an older grid_rbd that did not record its "
+                    "end-effector joints, so runtime end-effector targets are unavailable. "
+                    "Re-register it with register_robot(..., force_rebuild=True).")
             return list(jids)
         if names is None:
             raise RuntimeError(
-                "this .so predates the runtime-target API (no joint_names in "
-                "meta.json); re-register with force_rebuild=True")
+                "This robot was compiled by an older grid_rbd that did not record its "
+                "joint names, so joints cannot be selected by name. "
+                "Re-register it with register_robot(..., force_rebuild=True).")
         if isinstance(ee_joint_names, str):
             ee_joint_names = [ee_joint_names]
         jids = []
@@ -2242,7 +2247,9 @@ class RobotHandle:
             try:
                 jids.append(names.index(name))
             except ValueError:
-                raise ValueError(f"Could not find joint named: {name}")
+                raise ValueError(
+                    f"No joint named {name!r} in this robot. "
+                    f"Known joint names: {[n for n in names if n]}")
         return jids
 
     def _normalize_ee_offsets(self, ee_offsets, num_ees):

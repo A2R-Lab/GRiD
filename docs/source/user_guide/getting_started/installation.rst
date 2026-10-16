@@ -11,7 +11,7 @@ Install from PyPI
 ~~~~~~~~~~~~~~~~~
 
 Release wheels and the source distribution are published on PyPI as
-``grid-rbd`` (Linux x86-64, CPython 3.10–3.12)::
+``grid-rbd`` (Linux x86-64, CPython 3.10–3.13)::
 
    python -m pip install grid-rbd
 
@@ -283,15 +283,20 @@ receipt exercises it. Run it with the NVIDIA Container Toolkit:
 
    docker run --rm -it --gpus all -v grid-cache:/var/cache/grid-rbd ghcr.io/a2r-lab/grid:latest
 
-The image contains no compiled robot library. The first ``load_robot`` or
-``register_robot`` in a container compiles the robot for the host GPU with
-the image's ``nvcc`` and caches it under ``GRID_RBD_CACHE_DIR``
-(``/var/cache/grid-rbd``). Mount that directory as a volume, as above, to
-keep the cache across containers. The header-only path needs no compile
+The image's cache store carries one compiled robot library: an iiwa14
+binary for sm_86, sm_89, sm_90 and sm_120, compiled with the sm_120 launch
+configs (``GRID_RBD_CUDA_ARCHS``; the other arches run the same kernels with
+that tuning). Every other robot, and iiwa14 on another GPU, the first
+``load_robot`` or ``register_robot`` in a container compiles for the host
+GPU with the image's ``nvcc`` and caches under ``GRID_RBD_CACHE_DIR``
+(``/var/cache/grid-rbd``). Mount that directory as a named volume, as above,
+to keep the cache across containers; Docker seeds an empty named volume with
+the image's store. The header-only path needs no compile
 step: ``nvcc -arch=sm_90 -std=c++17 -I /opt/grid/iiwa14 my_kernel.cu``
 builds against the baked header. Build the image yourself from the
 repository root with ``docker build -f install/docker/Dockerfile -t grid .``;
-the build argument ``GRID_RBD_VERSION`` selects the PyPI version.
+the build argument ``GRID_RBD_VERSION`` selects the PyPI version and
+``GRID_ARCHS`` the compute capabilities of the precompiled iiwa14 binary.
 
 Conda environment
 ~~~~~~~~~~~~~~~~~

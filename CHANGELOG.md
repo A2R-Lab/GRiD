@@ -13,6 +13,26 @@ first packaged release.
 
 ## [Unreleased]
 
+- Python 3.13: the wheel matrix and the classifiers add CPython 3.13; the CPU test lane
+  runs on 3.10, 3.12 and 3.13 (pytest-gpu-proof needs 3.11 or newer, so its two scope
+  tests skip on 3.10).
+- Error messages: the bindings and `grid-generate` now say the cause and the next action
+  (missing nvcc or driver, a URDF that does not parse, a missing `[torch]` or `[jax]`
+  extra, a robot built without a framework, a stale or damaged cache entry); exit codes
+  and exception classes are unchanged. `test/test_error_messages.py` pins the wording.
+- Zero expected skips: the floating-base `end_effector_pose_gradient` and `_hessian`
+  cells run by default for every robot (`GRID_CUDA_FLOATING_ALGORITHMS` only narrows);
+  the plant and centroidal runners launch at a register-safe 256 threads, which brings
+  back the six plant cells and go2 centroidal; the six cells that exceed the GPU's
+  shared-memory or register limits at every tier are de-collected with the reason at
+  the site. `test/gpu-proof-expected-skips.txt` is empty.
+- Receipts by architecture: `test/gpu-proof-receipts.yaml` maps the GPU architecture to
+  its receipt file; `gpu-proof.json` (sm_120) keeps gating CI, a Jetson records under
+  `receipts/`, `make verify-all` checks every receipt on disk and
+  `test/receipt_integrity.py --table` prints compatibility rows.
+- Multi-architecture builds: `GRID_RBD_CUDA_ARCHS=86,89,90,120` compiles one robot
+  library for several GPUs (cache keys include the list; launch tuning follows the
+  `cuda_arch` given); the Docker image carries iiwa14 built that way.
 - Release gate: `tools/release_fresh_install.sh` (`make release-check`) builds the sdist
   and wheel, installs the repaired wheel into a throwaway venv outside the checkout and
   exercises both entry points (`load_robot` on iiwa14 against RBDReference; `grid-generate`,

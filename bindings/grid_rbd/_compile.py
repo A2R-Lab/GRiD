@@ -80,8 +80,9 @@ def find_nvcc() -> str:
     nvcc = shutil.which("nvcc")
     if not nvcc:
         raise RuntimeError(
-            "nvcc not found on PATH. grid-rbd requires the CUDA Toolkit at "
-            "register_robot() time (used to compile the per-robot library)."
+            "nvcc not found on PATH: compiling a robot library needs the CUDA Toolkit at register_robot() time. "
+            "Install the toolkit, or add its bin directory (usually /usr/local/cuda/bin) to PATH, and register again. "
+            "A cache built elsewhere loads through grid_rbd.get_robot without nvcc."
         )
     return nvcc
 
@@ -565,10 +566,20 @@ def compile_so(
     runtime_joint_dynamics: bool = False,
     object_cache_dir: Path | None = None,
     reuse_objects: bool = True,
+    cuda_archs: list[int] | None = None,
 ) -> None:
     """Invoke nvcc to build wrapper.cu → robot.so.
 
     wrapper.cu must include "grid.cuh" from its own directory.
+
+    ``cuda_archs`` (default: ``GRID_RBD_CUDA_ARCHS``, see
+    ``_cache.effective_cuda_archs``) builds a fat binary: one
+    ``-gencode=arch=compute_X,code=sm_X`` per listed arch (plus ``cuda_arch``
+    itself), with ``-DGRID_RBD_ARCH=cuda_arch`` unchanged (the arch the launch
+    configs were selected for; the other arches run the same kernels with that
+    tuning) and ``-DGRID_RBD_ARCHS=86:120`` (colon-separated) naming every
+    embedded arch for the wrapper's device check. Unset = today's single-arch
+    command, byte for byte.
 
     ``object_cache_dir`` enables the per-unit object cache (see _build_units):
     a unit whose exact compile inputs were compiled before links from the
@@ -582,10 +593,14 @@ def compile_so(
     block (the .so is still fully functional via the plain C ABI).
     """
     nvcc = find_nvcc()
-    arch = f"sm_{cuda_arch}"
+    from . import _cache
+    archs = _cache.effective_cuda_archs(cuda_arch, cuda_archs)
+    gencode_archs = archs if archs is not None else [cuda_arch]
+    arch = "+".join(f"sm_{a}" for a in gencode_archs)
     core_flags: list[str] = []   # flags only the core unit is compiled with
     cmd = [nvcc] + _NVCC_DEFAULT_FLAGS + [
-        f"-gencode=arch=compute_{cuda_arch},code={arch}",
+        f"-gencode=arch=compute_{a},code=sm_{a}" for a in gencode_archs
+    ] + [
         f"-DGRID_RBD_MAX_BATCH={max_batch}",
         f"-DGRID_RBD_ARCH={cuda_arch}",
         # Library embedding: generated gpuAssert must never cudaDeviceReset+exit()
@@ -595,6 +610,12 @@ def compile_so(
         "-DGRID_GPUERRCHK_NO_EXIT",
         f"-I{wrapper_cu.parent}",  # so #include "grid.cuh" resolves
     ]
+    if archs is not None:
+        # Fat binary: every embedded arch, for the wrapper's device-cc check
+        # (GRID_RBD_ARCH alone names the tuning arch). Colon-separated: nvcc
+        # splits a -D value on commas into several macros, and the token must
+        # stay free of shell metacharacters; the template stringifies it.
+        cmd.append("-DGRID_RBD_ARCHS=" + ":".join(str(a) for a in archs))
     if glass_root:
         cmd.extend([f"-I{glass_root}", f"-I{glass_root / 'src'}"])
 
@@ -818,7 +839,9 @@ def _build_units(cmd: list[str], source_dir: Path, out_so: Path, arch: str,
     failed = [(obj, rc, out) for obj, rc, _, out in results if rc != 0]
     if failed:
         obj, rc, out = failed[0]
-        raise RuntimeError(f"nvcc failed (exit {rc}) compiling unit {obj.stem}. Unit log:\n{out}")
+        raise RuntimeError(f"The CUDA compiler failed (nvcc exit {rc}) while building the {obj.stem} part of this robot's library. "
+                f"Its output follows; an internal compiler error or out-of-memory usually means the build needs fewer "
+                f"parallel units (GRID_RBD_BUILD_JOBS=1) or a smaller algorithm_list.\n{out}")
     objs = [str(obj) for obj, _, _, _ in results]
     link = [nvcc, "--shared", "-o", str(out_so)] + objs + link_flags
     t0 = time.monotonic()
@@ -828,7 +851,8 @@ def _build_units(cmd: list[str], source_dir: Path, out_so: Path, arch: str,
         r = subprocess.run(link, stdout=log, stderr=subprocess.STDOUT)
         log.write(f"[link] rc={r.returncode} {time.monotonic() - t0:.1f}s\n")
     if r.returncode != 0:
-        raise RuntimeError(f"nvcc link failed (exit {r.returncode}). Build log:\n" + log_path.read_text())
+        raise RuntimeError(f"The CUDA linker failed (nvcc exit {r.returncode}) while producing this robot's library. The build log "
+            f"follows; retry with force_rebuild=True to recompile every unit.\n" + log_path.read_text())
     for obj in objs:   # uncached objects: keep the store entry lean
         if object_cache_dir is None or Path(obj).parent != object_cache_dir:
             Path(obj).unlink(missing_ok=True)
@@ -947,6 +971,18 @@ def compile_sources(
 
     # Persist meta.json
     meta["cuda_arch"] = cuda_arch
+    # Multi-arch (opt-in, GRID_RBD_CUDA_ARCHS): every arch the fat binary
+    # embeds. cuda_arch stays the arch whose launch configs it carries; the
+    # others run the same kernels with that tuning (thread-count invariant, so
+    # correct; performance may differ from an arch-native build). Absent from
+    # a single-arch build's meta.
+    from ._cache import effective_cuda_archs
+    archs = effective_cuda_archs(cuda_arch)
+    if archs is not None:
+        meta["cuda_archs"] = archs
+        meta["cuda_archs_tuning"] = (
+            f"launch configs selected for sm_{cuda_arch}; the other embedded arches "
+            f"run the same kernels with that tuning")
     meta["max_batch"] = max_batch
     # fp64 (Phase 8): record the element dtype so the handle/Runner picks the
     # matching numpy buffer type (RunnerF64 for float64) without dlopening.

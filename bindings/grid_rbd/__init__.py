@@ -71,9 +71,11 @@ class StaleRobotError(RuntimeError):
     def __init__(self, name: str, reasons: list[str]):
         self.reasons = list(reasons)
         super().__init__(
-            f"The registered build for {name!r} cannot be loaded by this grid_rbd "
-            f"({'; '.join(reasons)}). Re-run grid_rbd.register_robot(name={name!r}, "
-            f"urdf_path=...) or grid_rbd.precompile(...) to rebuild it."
+            f"The cached build of robot {name!r} was made by a different grid_rbd "
+            f"setup and cannot be loaded here: {'; '.join(reasons)}. Rebuild it with "
+            f"grid_rbd.register_robot(name={name!r}, urdf_path=...) or "
+            f"grid_rbd.precompile(...); unchanged sources reuse the cached objects, "
+            f"so the rebuild is usually quick."
         )
 
 
@@ -558,22 +560,28 @@ def warm_robot(
     # key hashes these bytes (compute_cache_key), so an inline string and the
     # equivalent file dedupe to the same .so automatically.
     if (urdf_path is None) == (urdf_string is None):
-        raise ValueError("pass exactly one of urdf_path= or urdf_string=")
+        raise ValueError(
+            "Pass exactly one of urdf_path= (a URDF file) or urdf_string= (inline URDF text).")
     urdf_p: Path | None = None
     if urdf_string is not None:
         urdf_bytes = urdf_string.encode("utf-8")
     else:
         urdf_p = Path(urdf_path).expanduser().resolve()
         if not urdf_p.exists():
-            raise FileNotFoundError(f"URDF not found: {urdf_p}")
+            raise FileNotFoundError(
+                f"URDF file not found: {urdf_p}. Check the urdf_path= argument "
+                f"(a relative path is resolved against the current directory), "
+                f"or pass the model text as urdf_string=.")
         urdf_bytes = urdf_p.read_bytes()
 
     if cuda_arch is None:
         cuda_arch = detect_cuda_arch()
     if cuda_arch == 0:
         raise RuntimeError(
-            "Could not detect CUDA arch via nvidia-smi. "
-            "Pass cuda_arch=<int> explicitly (e.g. 120 for sm_120)."
+            "Could not detect the GPU compute capability: nvidia-smi is not on PATH "
+            "or reports no GPU. Pass cuda_arch= explicitly (for example cuda_arch=120 "
+            "for an sm_120 card) to build without a visible GPU, or install the NVIDIA "
+            "driver so that nvidia-smi works."
         )
 
     # Only options that affect generated code go into the cache key.
@@ -824,7 +832,10 @@ def get_robot(name: str, cache_dir: str | Path | None = None, *,
         return _torch_backend.get_robot(name, cache_dir, output_convention=output_convention,
                                         urdf_path=urdf_path, **register_opts)
     if register_opts and urdf_path is None:
-        raise TypeError(f"get_robot() got register options {sorted(register_opts)} without urdf_path")
+        raise TypeError(
+            f"get_robot() received build options {sorted(register_opts)} but no urdf_path=. "
+            f"A registered robot is looked up by name only; pass urdf_path= to build it "
+            f"on a miss, or drop the build options.")
     _register_on_miss(name, cache_dir, urdf_path, register_opts)
     cache_dir = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
     entry = manifest_lookup(cache_dir, name)
@@ -834,8 +845,10 @@ def get_robot(name: str, cache_dir: str | Path | None = None, *,
     so_path = store_dir(cache_dir, cache_key) / "robot.so"
     if not so_path.exists():
         raise RuntimeError(
-            f"Manifest entry for {name!r} points at {so_path}, but the file "
-            f"is missing. Cache is corrupted; re-register with force_rebuild=True."
+            f"Robot {name!r} is registered but its compiled library is missing from "
+            f"the cache ({so_path}). Rebuild it with grid_rbd.register_robot("
+            f"name={name!r}, urdf_path=..., force_rebuild=True); grid_rbd.gc_cache() "
+            f"lists and removes other dangling cache entries."
         )
     # Load-compatibility (2026-09-24): the manifest is a name -> content-key
     # binding with no validation of its own; before this check a pre-identity
@@ -1005,7 +1018,8 @@ def load_robot(
     if backend not in ("numpy", "jax", "torch"):
         raise ValueError(f"backend must be 'numpy', 'jax', or 'torch'; got {backend!r}")
     if (urdf_path is None) == (urdf_string is None):
-        raise ValueError("pass exactly one of urdf_path= or urdf_string=")
+        raise ValueError(
+            "Pass exactly one of urdf_path= (a URDF file) or urdf_string= (inline URDF text).")
 
     # Stable, content-addressed default name: hash the URDF bytes so reusing the
     # SAME urdf reuses the cache + manifest binding, and two DIFFERENT urdfs map

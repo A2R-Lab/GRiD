@@ -11,7 +11,7 @@
 
 PY := .venv/bin/python
 
-.PHONY: help gen gen-check build test-cpu test-gpu receipt-refresh verify release-check clean-pycache
+.PHONY: help gen gen-check build test-cpu test-gpu receipt-refresh verify verify-all release-check clean-pycache
 
 help:
 	@echo "GRiD targets:"
@@ -21,7 +21,8 @@ help:
 	@echo "  test-cpu        the CPU-only lane (same file list as CI: drift gates, partition logic, packaging)"
 	@echo "  test-gpu        full GPU pass via the crash-isolated split driver (hours; quiet box!)"
 	@echo "  receipt-refresh re-run ONLY the stale receipt shards and re-sign gpu-proof.json"
-	@echo "  verify          verify the committed gpu-proof.json against the everyday policy"
+	@echo "  verify          verify the committed gpu-proof.json against the everyday policy (the CI gate)"
+	@echo "  verify-all      verify every receipt in test/gpu-proof-receipts.yaml that exists on disk, one summary line per architecture"
 	@echo "  release-check   build sdist+wheel, install the wheel into a throwaway venv outside the checkout, exercise both entry points (GPU; minutes)"
 	@echo "  clean-pycache   drop grid_codegen bytecode (required after codegen edits)"
 
@@ -55,6 +56,12 @@ receipt-refresh:
 
 verify:
 	.venv/bin/gpu-proof verify --receipt gpu-proof.json --repo . --policy test/gpu-proof-policy.yaml --expected-skips test/gpu-proof-expected-skips.txt
+
+# Every receipt the table lists (primary gpu-proof.json plus the secondary
+# architectures under receipts/), each with the everyday policy and its own
+# expected-skips file. A missing secondary receipt is reported, not an error.
+verify-all:
+	$(PY) test/receipt_integrity.py --verify-all
 
 # Required release gate (RELEASING.md, "Installed-artifact gates"): the fresh
 # install of the repaired wheel, exercised from outside the checkout.

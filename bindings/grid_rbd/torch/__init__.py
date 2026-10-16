@@ -81,10 +81,11 @@ def _require_torch():
         import torch
     except ImportError as e:
         raise ImportError(
-            "grid_rbd.torch requires PyTorch, which isn't installed. Install "
-            "the optional extra:  pip install -e 'grid-rbd[torch]'  (or "
-            "`pip install torch`; on an RTX 5090 / sm_120 you need a cu128+ "
-            "build). The numpy and jax backends do not need torch."
+            "grid_rbd.torch requires PyTorch, which is not installed in this "
+            "environment. Install it with pip install \"grid-rbd[torch]\" (from a "
+            "checkout: pip install -e \".[torch]\"), or pip install torch with the CUDA "
+            "build that matches your GPU (an RTX 5090 / sm_120 needs a cu128 or newer "
+            "wheel). The numpy and jax backends work without torch."
         ) from e
     return torch
 
@@ -114,10 +115,9 @@ def _resolve_core_op(ops, name: str):
         base = name[:-len("_mujoco")] if name.endswith("_mujoco") else name
         if hasattr(ops, _TORCH_SURFACE_SENTINEL):
             raise RuntimeError(
-                f"{base!r} not built into this robot .so — add {base!r} to "
-                f"algorithm_list in register_robot() and rebuild (force_rebuild=True). "
-                f"The torch op surface is present but this algorithm was excluded by "
-                f"the subset build."
+                f"{base!r} not built into this robot .so: the robot was registered with "
+                f"an algorithm_list that leaves it out. Add {base!r} to algorithm_list "
+                f"in register_robot() and rebuild with force_rebuild=True."
             ) from e
         raise
 
@@ -135,7 +135,10 @@ def _load_ops(so_path: Path, cache_key: str) -> str:
             lib = ctypes.CDLL(str(so_path))
             del lib
         except OSError as e:
-            raise RuntimeError(f"failed to dlopen {so_path}: {e}") from e
+            raise RuntimeError(
+                f"Could not load the compiled robot library {so_path}: {e}. The cache "
+                f"entry may be damaged or built on another machine; rebuild it with "
+                f"register_robot(..., force_rebuild=True).") from e
         torch.ops.load_library(str(so_path))
         # torch.ops.<ns> is created lazily, so its mere existence proves nothing;
         # probe for the ALWAYS-PRESENT sentinel op (an ungated plant cost op) to
@@ -146,9 +149,9 @@ def _load_ops(so_path: Path, cache_key: str) -> str:
             getattr(getattr(torch.ops, ns), _TORCH_SURFACE_SENTINEL)
         except AttributeError as e:
             raise RuntimeError(
-                f"torch op {ns}.{_TORCH_SURFACE_SENTINEL} not found in {so_path}; was the .so "
-                f"compiled with GRID_RBD_WITH_TORCH (torch installed at register time)? "
-                f"Re-register with force_rebuild=True."
+                f"This robot's compiled library has no PyTorch surface: it was built "
+                f"while torch was not installed ({so_path}). Now that torch is "
+                f"importable, rebuild it with register_robot(..., force_rebuild=True)."
             ) from e
         _LOADED[cache_key] = ns
     return ns
@@ -343,10 +346,10 @@ def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None, ctx_i
             # say so instead of crashing on a confusing reshape.
             if q.shape[1] != nv:
                 raise NotImplementedError(
-                    "integrator backward on a FLOATING base needs the SE(3) "
-                    "chart VJP (tangent 2*nv Jacobian vs nq+nv state cotangent) "
-                    "— differentiate integrator_gradient outputs directly, or "
-                    "use a fixed-base robot.")
+                    "integrator backward on a floating base is not implemented: it "
+                    "needs the SE(3) chart VJP (tangent 2*nv Jacobian against the "
+                    "nq+nv state cotangent). Differentiate the integrator_gradient "
+                    "outputs directly, or use a fixed-base robot.")
             g = vjp_backward(ABI_SPECS["integrator"].vjp, grad_x, {
                 # h_dAB is (2*NV x 3*NV) column-major per ts → shared out-layout
                 # (colmajor_whole → row-major (B, 2NV, 3NV)); thirds = gq/gqd/gu.
@@ -1336,7 +1339,10 @@ def get_robot(name: str, cache_dir: str | Path | None = None, *,
     can also be set later via the handle's ``output_convention`` property."""
     _require_torch()  # fail early with install guidance if torch is missing
     if register_opts and urdf_path is None:
-        raise TypeError(f"get_robot() got register options {sorted(register_opts)} without urdf_path")
+        raise TypeError(
+            f"get_robot() received build options {sorted(register_opts)} but no urdf_path=. "
+            f"A registered robot is looked up by name only; pass urdf_path= to build it "
+            f"on a miss, or drop the build options.")
     _grid_rbd._register_on_miss(name, cache_dir, urdf_path, register_opts)   # just-in-time compile on a miss
     base = _grid_rbd.get_robot(name, cache_dir=cache_dir, _profile_overlay="torch")  # E6
     _install_torch_device_pool(base)
@@ -1350,7 +1356,10 @@ def _lookup(name, cache_dir):
     cd = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
     entry = manifest_lookup(cd, name)
     if entry is None:
-        raise RuntimeError(f"{name!r} isn't in manifest; cache may be corrupted")
+        raise RuntimeError(
+            f"Robot {name!r} is not in the cache manifest any more (another process "
+            f"may have cleared the cache since it was registered). Register it again "
+            f"with grid_rbd.register_robot(name={name!r}, urdf_path=...).")
     so_path = store_dir(cd, entry["cache_key"]) / "robot.so"
     return entry["cache_key"], str(so_path)
 

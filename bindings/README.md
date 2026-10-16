@@ -126,7 +126,8 @@ The backward VJP contractions run torch's own CUDA kernels, so the installed
 torch build must support the GPU's compute capability. On an RTX 5090 (sm_120)
 a torch cu128 (or newer) build is required; a cu124 wheel (max sm_90) cannot
 launch on sm_120. The `grid` / `grid_plant` kernels themselves are always
-nvcc-built for the detected arch and are unaffected.
+nvcc-built for the detected arch and are unaffected. The release receipt ran a
+cu128 torch wheel on a CUDA 13.2 toolkit; other torch wheels are untested.
 
 ## Further reference
 
@@ -158,7 +159,7 @@ The full reference for the rest of the surface lives in the
 ## Install
 
 `grid_rbd` ships inside the `grid-rbd` distribution on PyPI (0.5.1: Linux
-x86-64 wheels and an sdist, CPython 3.10–3.12) together with the code
+x86-64 wheels and an sdist, CPython 3.10–3.13) together with the code
 generator and the `grid-generate` / `grid-spherize` CLIs. Each GPU backend is
 an opt-in extra on top of the numpy base; pick the row for the wrapper surface
 you need:
@@ -195,8 +196,9 @@ Three points on the extras:
   built (and cached) on first use.
 * The GPU wheels are the user's choice, mirroring `jax` vs `jax[cuda]`: we
   pin only the minimum API version, never a CUDA-variant. For `[jax]`, install
-  `jax[cuda12]` for your platform; for `[torch]`, a torch CUDA wheel matching
-  the GPU arch (see the compatibility note in the PyTorch section above).
+  `jax[cuda12]` for your platform (what the receipt ran on a CUDA 13.2 toolkit;
+  `jax[cuda13]` is untested); for `[torch]`, a torch CUDA wheel matching the
+  GPU arch (see the compatibility note in the PyTorch section above).
 * `[dev]` is `[all]` + pytest, nothing more. The Pinocchio oracle (`pin<4`
   via cmeel) comes only from `install/requirements-dev.txt`, which
   `install/developer_install.sh` installs; that script also installs
@@ -272,3 +274,20 @@ on the heaviest unit(s) (`GRID_RBD_SPLIT_COMPILE_UNITS`, default
 changes ptxas register allocation (outputs were bitwise identical in our A/B,
 kernel time within noise), is folded into the cache key, and is never used for
 the test runners.
+
+`GRID_RBD_CUDA_ARCHS` (opt-in, default unset) builds a fat binary: a comma list
+of compute capabilities as integers (`86,89,90,120`) adds one
+`-gencode=arch=compute_X,code=sm_X` per listed arch, so one cache store, or the
+GHCR Docker image, carries a `robot.so` that loads on several GPUs. The arch the
+build was made for (`cuda_arch=`, or the detected GPU) is always embedded. The
+sorted list is folded into both cache keys and recorded in the build identity
+and in `meta.json` as `cuda_archs`, beside `cuda_arch`, so a fat build never
+collides with a single-arch build of the same inputs, and `get_robot` accepts a
+stored entry whose `cuda_archs` contains the GPU it finds. Launch configs are
+selected per arch at codegen time: a fat binary carries the configs of its
+`cuda_arch`, and the other arches run the same kernels with that tuning
+(the kernels are thread-count invariant, so results are identical; throughput on
+those arches may differ from an arch-native build). Precompiling on a machine
+without a GPU works with an explicit `cuda_arch=` (`grid_rbd.precompile(name,
+urdf, cuda_arch=120)`): nvcc is needed, `nvidia-smi` is not. Unset, the build
+command, keys and meta are unchanged.

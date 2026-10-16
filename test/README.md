@@ -28,6 +28,19 @@ stale evidence.
 with `test/receipt_integrity.py --receipt <run>/gpu-proof.json --write-manifest
 test/gpu-proof-tests.txt` and commit it before recording; never replace it with a smoke set.
 
+One receipt is recorded per CUDA architecture. The primary receipt,
+`gpu-proof.json` at the repository root, is recorded on the RTX 5090 (sm_120);
+it gates CI and defines the manifest, so `--write-manifest` refuses any other
+receipt. Secondary receipts document other architectures and live under
+`receipts/`; `gpu-proof-receipts.yaml` maps each compute capability to its
+receipt path (`receipts/gpu-proof-sm87.json` for the Jetson Orin), its
+header-key ledger and, optionally, its own expected-skips baseline. The driver
+detects the architecture and records to that row's path, refuses a GPU without
+a row, and refuses to carry or refresh across architectures. To record on a
+Jetson, run `SPLIT=1 test/run_gpu_proof.sh` there on a clean tree and commit the
+receipt with its ledger. `make verify-all` verifies every receipt on disk;
+`test/receipt_integrity.py --table` prints their compatibility-page rows.
+
 ## Root files
 
 ### Receipt machinery
@@ -40,8 +53,11 @@ a committed run; it strips `GRID_*` from its env and holds the timing lock),
 partition/resume/carry), `run_gpu_proof.sh` (a thin wrapper over that driver
 for ad-hoc runs; `SPLIT=1` selects it, `SCOPE=smoke|curated` narrows a local
 diagnostic that is never a candidate receipt),
-`receipt_integrity.py` (header-key verification + `--write-manifest` for
-`gpu-proof-tests.txt`), `compile_sched.py` (RAM-aware parallel compile
+`receipt_integrity.py` (header-key verification, `--write-manifest` for
+`gpu-proof-tests.txt`, the receipt table, `--verify-all` and the `--table`
+reporter), `gpu-proof-receipts.yaml` (the receipt per architecture: the
+primary `gpu-proof.json` and the secondary receipts under `receipts/`),
+`compile_sched.py` (RAM-aware parallel compile
 pool), `prewarm_cuda_flagship.py` (flagship, integrator and SO smoke pre-warm;
 read-only integrator/SO cache inventory with `--inventory --node-ids
 test/gpu-proof-tests.txt --out inventory.json`),

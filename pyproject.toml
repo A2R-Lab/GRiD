@@ -28,6 +28,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: C++",
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Physics",
@@ -148,6 +149,8 @@ fingerprint_paths = [
     # 2026-10-14 audit: executed by every GPU import / consulted by the verifier.
     "test/__init__.py", "test/gpu-proof-policy.yaml", "test/gpu-proof-policy-release.yaml",
     "test/gpu-proof-expected-skips.txt",
+    # 2026-10-15: the driver reads the receipts-by-architecture table.
+    "test/gpu-proof-receipts.yaml",
 ]
 # Documentation that lives inside fingerprinted directories must not stale evidence
 # (docs are outside the receipt by design); keep this list == the release policy's.

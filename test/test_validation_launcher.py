@@ -249,3 +249,92 @@ def test_validation_env_strips_overrides_and_sets_receipt_knobs(monkeypatch):
     assert env['GRID_SPLIT_COMPILE_JOBS'] == '3'
     assert env['GRID_RBD_BUILD_JOBS'] == '4'
     assert 'GRID_CUDA_KIN_THREADS' not in env and 'PYTEST_ADDOPTS' not in env
+
+
+# ─── receipts by architecture: the driver picks the path from the table ──────
+
+from pathlib import Path as _Path
+
+from test import run_split_suite as runner
+
+ROOT = _Path(__file__).resolve().parents[1]
+
+
+def _receipt_on(cap):
+    return {'environment': {'gpu_info': {'devices': [{'compute_capability': cap}]}},
+            'repo': {'commit_sha': 'f' * 40}, 'shards': [], 'tests': []}
+
+
+@pytest.mark.parametrize('arch,role,path', [
+    (120, 'primary', 'gpu-proof.json'),
+    (87, 'secondary', 'receipts/gpu-proof-sm87.json'),
+])
+def test_driver_prints_the_receipt_target_for_the_detected_arch(monkeypatch, capsys, arch, role, path):
+    monkeypatch.setattr(runner, 'detect_cuda_arch', lambda: arch)
+    monkeypatch.setattr('sys.argv', ['run_split_suite', '--print-receipt-target'])
+    assert runner.main() == 0
+    fields = capsys.readouterr().out.rstrip('\n').split('\t')
+    assert fields[:3] == [role, str(arch), path] and fields[3]
+
+
+@pytest.mark.parametrize('arch,match', [(75, 'add a row'), (0, 'no GPU detected')])
+def test_driver_refuses_an_arch_without_a_row_before_any_work(monkeypatch, capsys, arch, match):
+    monkeypatch.setattr(runner, 'detect_cuda_arch', lambda: arch)
+    monkeypatch.setattr(runner.subprocess, 'Popen',
+                        lambda *a, **k: pytest.fail('a shard was launched'))
+    monkeypatch.setattr('sys.argv', ['run_split_suite', '--print-receipt-target'])
+    assert runner.main() == 2
+    err = capsys.readouterr().err
+    assert err.startswith('FATAL:') and match in err
+    if arch:
+        assert 'test/gpu-proof-receipts.yaml' in err
+
+
+@pytest.mark.parametrize('flag', ['--refresh-from', '--receipts-carry-from'])
+def test_driver_refuses_to_carry_across_architectures(tmp_path, monkeypatch, capsys, flag):
+    """A Jetson must not refresh from (or carry) the RTX 5090's receipt."""
+    old = tmp_path / 'gpu-proof.json'
+    old.write_text(json.dumps(_receipt_on('12.0')))
+    monkeypatch.setattr(runner, 'detect_cuda_arch', lambda: 87)
+    monkeypatch.setattr(runner, 'collect_cuda_node_ids',
+                        lambda *a, **k: pytest.fail('planning started before the arch guard'))
+    monkeypatch.setattr(runner.subprocess, 'Popen',
+                        lambda *a, **k: pytest.fail('a shard was launched'))
+    before = runner.HEADER_KEYS_PATH
+    monkeypatch.setattr('sys.argv', ['run_split_suite', '--receipts', flag, str(old),
+                                     '--out', str(tmp_path / 'out')])
+    assert runner.main() == 2
+    err = capsys.readouterr().err
+    assert 'recorded on sm_120' in err and 'sm_87' in err and 'receipts/gpu-proof-sm87.json' in err
+    assert runner.HEADER_KEYS_PATH == before
+
+
+def test_driver_refuses_a_rowless_arch_when_recording(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(runner, 'detect_cuda_arch', lambda: 75)
+    monkeypatch.setattr(runner.subprocess, 'Popen',
+                        lambda *a, **k: pytest.fail('a shard was launched'))
+    monkeypatch.setattr('sys.argv', ['run_split_suite', '--receipts', '--skip-warm',
+                                     '--out', str(tmp_path / 'out')])
+    assert runner.main() == 2
+    assert 'add a row' in capsys.readouterr().err
+
+
+def test_run_gpu_proof_sh_writes_to_the_table_path():
+    """The wrapper asks the driver for the row and never hard-codes the
+    primary path as a destination (a secondary run leaves gpu-proof.json alone)."""
+    text = (ROOT / 'test/run_gpu_proof.sh').read_text()
+    assert 'run_split_suite.py --print-receipt-target' in text
+    assert '--gpu-proof-out="$RECEIPT_PATH"' in text
+    assert 'cp "$OUT_DIR/gpu-proof.json" "$RECEIPT_PATH"' in text
+    assert 'REFRESH_SRC="$RECEIPT_PATH"' in text
+    code = [line for line in text.splitlines() if not line.lstrip().startswith('#')]
+    assert not any('--gpu-proof-out=gpu-proof.json' in line or
+                   'REFRESH_SRC="gpu-proof.json"' in line or
+                   'cp "$OUT_DIR/gpu-proof.json" gpu-proof.json' in line for line in code)
+
+
+def test_launcher_is_primary_only():
+    """run_validation.py refreshes from and promotes to gpu-proof.json; a
+    secondary architecture records through run_gpu_proof.sh instead."""
+    command = launcher.validation_command('/tmp/test-refresh')
+    assert command[command.index('--refresh-from') + 1] == str(launcher.ROOT / 'gpu-proof.json')
