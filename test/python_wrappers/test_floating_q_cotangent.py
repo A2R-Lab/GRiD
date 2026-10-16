@@ -118,8 +118,11 @@ def _normalized_q(q, layout):
 
 def _reference_cases(ref, h):
     """The float64 oracle of ``_jax_cases``: the same scalar losses evaluated by
-    RBDReference at ``normalize(q)``, as functions of ambient (q, qd, u)."""
-    layout = h.configuration_layout
+    RBDReference at ``normalize(q)``, as functions of ambient (q, qd, u).
+    ``h`` is any backend handle; the quaternion block layout is read from the
+    numpy handle of the same registration (only it exposes
+    ``configuration_layout``)."""
+    layout = grid_rbd.get_robot(h.name).configuration_layout
     w_tau = np.linspace(0.5, 1.5, h.num_vel)
     w_pose = np.linspace(-1.0, 1.0, 6 * h.num_ees)
     leaves = [ref.robot.get_joint_by_id(jid).get_name() for jid in ref.robot.get_leaf_nodes()]

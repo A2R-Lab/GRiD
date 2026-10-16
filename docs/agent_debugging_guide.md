@@ -3101,3 +3101,51 @@ with and without the suspected class, because only the pair proves the
 class is necessary and sufficient; sweep the whole cell before deriving a
 bound, since the first failure is rarely the worst; and write the measured
 numbers into the comment so the next audit can re-measure, as 7.z34 did.
+
+### 7.z50 A test helper that reads a numpy-only handle attribute fails the moment it is handed a backend handle (2026-10-16, floating q cotangent float32 twins)
+
+The float32 twins added to `test_floating_q_cotangent.py` on 2026-10-15 take
+their finite-difference oracle from the float64 `RBDReference`, and the
+helper that builds that oracle, `_reference_cases(ref, h)`, read the
+quaternion block layout as `h.configuration_layout`. Only the numpy
+`RobotHandle` exposes that attribute; the jax and torch handles delegate
+`name`, `num_vel` and `num_ees` to their underlying numpy handle but not the
+layout, so all twelve jax and torch float32 ids died with `AttributeError`
+while the twelve spherical float32 ids passed, because that test already
+passed the numpy handle. The float64 variants never reach the helper (their
+oracle is the public function itself), which is why the fp64 lane stayed
+green. The fix reads the layout from the numpy handle of the same
+registration, `grid_rbd.get_robot(h.name).configuration_layout`, which
+works for every backend handle without touching the bindings. Lesson: a
+helper shared between the numpy and backend handles must take only the
+delegated surface or go through `get_robot(name)`; when a new variant is
+added to one test and not its sibling, run the sibling on the GPU before
+the receipt rather than reading the fp64 pass as coverage.
+
+### 7.z51 A caller-placed per-body scratch sized by NV in a runner is the 1a bug living in test infrastructure (2026-10-16, fr3-fixed plant pass-through)
+
+The plant runner's `plant_step_kernel` hands `grid_plant::plant_step_gradient`
+caller-placed scratch and declared `s_vaf[18 * NV]`. The generated
+integrator-gradient inner writes `s_vaf` body-indexed, three 6-vectors per
+body, and the generator sizes it `18 * get_num_joints()` on mimic robots
+(fr3: 9 bodies, 8 velocities, 162 floats) and `18 * nv` otherwise, so on
+fr3 the inner's last body landed 18 floats past the runner's buffer, into
+the adjacent `s_Minv`. The cell had never been green: before 2026-10-15 it
+could not launch at `MAX_PERF_LEVEL_THREADS` at all, and the first launch at
+256 showed 37 of 384 dAB entries wrong at nominal, up to 77 at
+high_velocity. The evidence that it was a scratch overflow and not the
+mimic fold in the generator: the mismatch set was identical at 128 and 256
+threads on every sample (a race would move), it sat only in rows 8 to 14 of
+dAB (the qd rows, the block that passes through Minv; the q rows and the
+last row stayed within tolerance), and the `grid::integrator_gradient` host path, which
+sizes its own arena from the generator, was the side the test trusted.
+With `s_vaf[18 * (NB > NV ? NB : NV)]`, `NB = grid::NUM_BODIES`, plant dAB
+is bit-identical to the integrator oracle on all eighteen samples at both
+widths; iiwa14 (NB == NV) is unchanged by construction. Lessons: 1a applies
+to every caller-placed buffer in a test runner, not only to the generator,
+so when a runner declares scratch for a generated inner, copy the
+generator's count expression (or carve from the emitted arena struct)
+rather than restating it from NV; read the header's own `@param` line for
+the buffer, which states `3*6*NUM_JOINTS = 162` and would have given the
+answer in one grep; and a mimic-only failure in a cell that is exact on a
+non-mimic robot is a NB versus NV count until proven otherwise.
