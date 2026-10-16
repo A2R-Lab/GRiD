@@ -430,6 +430,23 @@ class TensorAdapter:
         from .frax_floating import FloatingFrame
         return [FloatingFrame(q, self.f.nv) for q in self.f.q[:batch]]
 
+    def validation_scope(self, batch):
+        """Frax floating base only: the samples within a few degrees of the Euler
+        pitch singularity are timed but not validated (frax_floating.py, chart
+        conditioning). Returns (mask over the batch, record for the cell)."""
+        if self.backend != "frax" or not getattr(self, "floating", False):
+            return None, None
+        from .frax_floating import CHART_CONDITION_MAX
+        cond = np.array([fr.chart_condition for fr in self._frames(batch)])
+        mask = cond <= CHART_CONDITION_MAX
+        return mask, {
+            "rule": "Frax Euler floating-base chart: samples with 1/|cos(pitch)| above "
+                    f"{CHART_CONDITION_MAX:g} are timed but not validated",
+            "max_chart_condition": CHART_CONDITION_MAX,
+            "samples": int(batch), "validated_samples": int(mask.sum()),
+            "excluded_samples": int((~mask).sum()),
+            "worst_chart_condition": float(cond.max())}
+
     def _frax_inputs(self, batch):
         """Frax-native (q, qd, third) arrays for this operation."""
         f, op = self.f, self.op

@@ -123,6 +123,7 @@ def records(directory):
                     "accuracy_policy": policy,
                     "accuracy_policy_version": version,
                     "warning_checks": c.get("warning_checks", []),
+                    "validation_scope": c.get("validation_scope"),
                     "variation_max_abs_error": max((b["max_abs"] for ck in variation for b in ck.get("blocks", [])), default=None),
                     "variation_relative_l2_error": max((b["relative_l2"] for ck in variation for b in ck.get("blocks", [])), default=None),
                     "host_us": c.get("host_to_host", {}).get("mean_us") if valid else None,
@@ -173,8 +174,11 @@ def aggregate(rows):
         if len({r["repeat"] for r in group}) != len(group):
             raise ValueError(f"Duplicate repeat for {key}; do not merge reruns as independent repeats")
         row = {k: first[k] for k in ("robot", "operation", "backend", "batch", "purpose", "dtype", "method")}
+        scope = next((r.get("validation_scope") for r in group if r.get("validation_scope")), None)
         row.update(repeats=len(group), status="validated", reason="", host_us=None, resident_us=None,
                    resident_eager_us=None,
+                   validated_samples=scope["validated_samples"] if scope else None,
+                   validation_scope=scope,
                    threads="/".join(sorted({str(r.get("threads")) for r in group if r.get("threads") is not None})) or None,
                    accuracy_policy=first.get("accuracy_policy", "strict"),
                    accuracy_policy_version=first.get("accuracy_policy_version", 1),
@@ -196,6 +200,9 @@ def aggregate(rows):
         else:
             if any(r["status"] == "accuracy_warning" for r in group):
                 row.update(status="accuracy_warning", reason="Entrywise oracle/variation gate exceeded; explicitly retained with errors reported")
+            if scope and scope.get("excluded_samples"):
+                row["reason"] = (row["reason"] + "; " if row["reason"] else "") + (
+                    f"validated on {scope['validated_samples']} of {scope['samples']} samples ({scope['rule']})")
             total = [r["host_us"] for r in group]
             row.update(host_us=statistics.median(total), host_min_us=min(total), host_max_us=max(total))
             if all(r.get("resident_eager_us") is not None for r in group):
@@ -823,7 +830,7 @@ def main():
         with (args.output / "decomposition.csv").open("w", newline="") as stream:
             writer = csv.DictWriter(stream, fieldnames=list(decomposition[0]))
             writer.writeheader(); writer.writerows(decomposition)
-    cols = ["robot", "operation", "backend", "batch", "dtype", "status", "accuracy_policy", "accuracy_policy_version", "host_us", "resident_us", "resident_eager_us", "overhead_us", "threads", "max_abs_error", "relative_l2_error", "variation_max_abs_error", "variation_relative_l2_error", "max_bad_entries", "entries", "boundary_flag", "reason"]
+    cols = ["robot", "operation", "backend", "batch", "dtype", "status", "accuracy_policy", "accuracy_policy_version", "host_us", "resident_us", "resident_eager_us", "overhead_us", "threads", "max_abs_error", "relative_l2_error", "variation_max_abs_error", "variation_relative_l2_error", "max_bad_entries", "entries", "validated_samples", "boundary_flag", "reason"]
     esc = lambda v: html.escape(str(v)) if v is not None else "—"
     table = "<tr>"+"".join(f"<th>{c}</th>" for c in cols)+"</tr>"
     table += "".join("<tr>"+"".join(f"<td>{esc(r[c])}</td>" for c in cols)+"</tr>" for r in rows)

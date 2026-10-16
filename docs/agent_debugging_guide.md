@@ -3149,3 +3149,11 @@ rather than restating it from NV; read the header's own `@param` line for
 the buffer, which states `3*6*NUM_JOINTS = 162` and would have given the
 answer in one grep; and a mimic-only failure in a cell that is exact on a
 non-mimic robot is a NB versus NV count until proven otherwise.
+
+### 7.z52 A competitor cell that fails only at a few samples of a large batch is a chart-conditioning problem, not a transport bug (2026-10-16, Frax floating-base gradients)
+
+Symptom: the Frax forward_dynamics_gradient gap cell on go2 and g1 passed at batch 16 (relative L2 1e-4, the fp32 class) and failed the 1e-3 gross-error backstop at every larger batch, with block errors up to 1e-2 and single entries off by hundreds. The first reading, "the collector rule is too tight", came from measuring batch 16 only.
+
+Diagnosis in three CPU steps. (1) Per-sample errors from the saved failure.npz against the inputs.npz: every bad sample had |cos(pitch)| between 0.01 and 0.1, that is within a few degrees of the intrinsic XYZ Euler singularity of Frax's floating base; the median sample sat at 1e-4. (2) Replaying the worst samples through the same transport in float64 on the CPU reproduced the oracle to 1e-12, so the transport (frax_floating.py) is right. (3) Replaying in fp32 on the CPU gave 3e-6, but on the GPU 1e-2 under full fp32 and NaN under TF32: Frax solves M_frax = G^T M G by Cholesky, and that matrix's condition number grows like 1/cos^2(pitch) (1e6 at the bad samples), so the fp32 solve is at the mercy of the implementation; the CPU path happens to do better.
+
+Rule: the quantity exists and the mapping is exact; what cannot be validated is the backend's fp32 arithmetic in its own ill-conditioned chart. The collector now takes a validation scope from the adapter (worker.py, `validation_scope`): Frax floating cells validate on the samples with chart condition at most CHART_CONDITION_MAX = 10 (about 1 sample in 100 excluded) and the cell records the counts; timing covers every sample. The threshold came from a sweep over the captured errors (retained relative L2 below 3e-4 at every batch). Do not widen the backstop for everyone to admit one backend's singular chart, and do not change the shared fixture: the other backends validate at those samples.

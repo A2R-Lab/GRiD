@@ -13,6 +13,11 @@ first packaged release.
 
 ## [Unreleased]
 
+- Benchmark collector: Frax's floating-base cells validate on the samples whose Euler
+  chart is well conditioned (1/|cos pitch| at most 10) and record the excluded count in
+  the cell and the report; every sample is still timed. Near the pitch singularity
+  Frax's fp32 Cholesky solve of its Euler-chart mass matrix carries 1e-3 to 1e-2
+  relative error on the GPU while the transport is exact in float64.
 - Python 3.13: the wheel matrix and the classifiers add CPython 3.13; the CPU test lane
   runs on 3.10, 3.12 and 3.13 (pytest-gpu-proof needs 3.11 or newer, so its two scope
   tests skip on 3.10).

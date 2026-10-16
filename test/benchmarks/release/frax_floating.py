@@ -58,11 +58,35 @@ with ``tau_pin = G^{-T} tau_frax`` held fixed in Frax coordinates, so
 Second derivatives are not transported: the Euler-to-tangent map's Hessian would
 enter the comparison and the cell would no longer be like-for-like with the
 analytical second-order kernels.
+
+Chart conditioning. The intrinsic XYZ Euler chart is singular at pitch +-pi/2:
+``E(theta)`` loses rank there, so ``G`` and every transported quantity scale
+like ``1/cos(pitch)`` and the mass matrix Frax factorises, ``M_frax = G^T M G``,
+has condition number of order ``1/cos^2(pitch)`` times the tangent-space one
+(1e6 at a few degrees from the singularity). Frax's fp32 Cholesky solve of that
+matrix on the GPU then carries 1e-3 to 1e-2 relative error, against 1e-4 on the
+rest of the fixture; the transport itself reproduces the oracle to 1e-12 in
+float64 at the same samples. ``chart_condition`` is ``1/|cos(pitch)|``, and the
+samples above ``CHART_CONDITION_MAX`` are left out of the validation of Frax's
+floating-base cells (never out of the timing); the collector records the count.
 """
+
 from __future__ import annotations
 import numpy as np
 
 _EX, _EY, _EZ = np.eye(3)
+
+# Validation scope for Frax's floating-base cells: samples closer than about
+# 5.7 degrees to the Euler pitch singularity (chart condition above 10) are not
+# validated. Chosen from the 2026-10-16 captures: the retained samples sit in the
+# fp32 class (relative L2 below 3e-4 on go2 and G1 at every batch) and about one
+# sample in a hundred of the fixture is excluded.
+CHART_CONDITION_MAX = 10.0
+
+
+def chart_condition(theta):
+    """1/|cos(pitch)|: the growth factor of the Euler chart's velocity map."""
+    return 1.0 / max(abs(float(np.cos(theta[1]))), np.finfo(float).tiny)
 
 
 def _skew(v):
@@ -174,6 +198,7 @@ class FloatingFrame:
         self.p = q_pin[0:3]
         self.R = rotation_from_quat_xyzw(q_pin[3:7])
         self.theta = euler_xyz_from_rotation(self.R)
+        self.chart_condition = chart_condition(self.theta)
         self.joints = q_pin[7:]
         self.G = velocity_map(self.theta, nv)
         self.Ginv = velocity_map_inverse(self.theta, nv)

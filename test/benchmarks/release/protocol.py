@@ -221,6 +221,22 @@ def leaves(value):
     return [np.asarray(value)]
 
 
+def validation_subset(value, mask):
+    """The samples a backend can be validated on: every output block restricted
+    along its batch axis to `mask`, a boolean vector over the batch. None keeps
+    the whole output. Timing is never restricted; only the comparison is."""
+    if mask is None:
+        return value
+    mask = np.asarray(mask, bool)
+    out = []
+    for leaf in leaves(value):
+        if leaf.ndim == 0 or leaf.shape[0] != mask.shape[0]:
+            raise ValueError(f"validation mask over {mask.shape[0]} samples does not match "
+                             f"an output block of shape {leaf.shape}")
+        out.append(leaf[mask])
+    return tuple(out)
+
+
 def agreement(actual, expected, *, rtol=2e-4, atol=1e-3):
     aa, bb = leaves(actual), leaves(expected)
     if len(aa) != len(bb):
