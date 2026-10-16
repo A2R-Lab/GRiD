@@ -147,15 +147,13 @@ MIT; see [LICENSE](https://github.com/A2R-Lab/GRiD/blob/main/LICENSE).
     </tr>
     <tr>
       <td align="center" valign="top" width="20%"><a href="https://github.com/the-eater"><img src="https://avatars.githubusercontent.com/the-eater?s=100" width="100px;" alt="="/><br /><sub><b>=</b></sub></a><br /></td>
-      <td align="center" valign="top" width="20%"><a href="https://github.com/EmreAdabag"><img src="https://avatars.githubusercontent.com/EmreAdabag?s=100" width="100px;" alt="EmreAdabag"/><br /><sub><b>EmreAdabag</b></sub></a><br /></td>
       <td align="center" valign="top" width="20%"><a href="https://github.com/caelyasutake"><img src="https://avatars.githubusercontent.com/caelyasutake?s=100" width="100px;" alt="Cael Yasutake"/><br /><sub><b>Cael Yasutake</b></sub></a><br /></td>
       <td align="center" valign="top" width="20%"><a href="https://github.com/naren-loganathan"><img src="https://avatars.githubusercontent.com/naren-loganathan?s=100" width="100px;" alt="Naren Loganathan"/><br /><sub><b>Naren Loganathan</b></sub></a><br /></td>
+      <td align="center" valign="top" width="20%"><a href="https://github.com/EmreAdabag"><img src="https://avatars.githubusercontent.com/EmreAdabag?s=100" width="100px;" alt="EmreAdabag"/><br /><sub><b>EmreAdabag</b></sub></a><br /></td>
       <td align="center" valign="top" width="20%"><a href="https://github.com/emilyburnett2003"><img src="https://avatars.githubusercontent.com/emilyburnett2003?s=100" width="100px;" alt="emilyburnett2003"/><br /><sub><b>emilyburnett2003</b></sub></a><br /></td>
     </tr>
     <tr>
       <td align="center" valign="top" width="20%"><a href="https://github.com/pruyontrarakk"><img src="https://avatars.githubusercontent.com/pruyontrarakk?s=100" width="100px;" alt="pruyontrarakk"/><br /><sub><b>pruyontrarakk</b></sub></a><br /></td>
-      <td align="center" valign="top" width="20%"><a href="https://github.com/A2R-Lab/GRiD/graphs/contributors"><img src="https://www.gravatar.com/avatar/b6a2a74133224e85e9714e282a1576df?d=identicon&s=100?s=100" width="100px;" alt="Kimiya Shahamat"/><br /><sub><b>Kimiya Shahamat</b></sub></a><br /></td>
-      <td align="center" valign="top" width="20%"><a href="https://github.com/A2R-Lab/GRiD/graphs/contributors"><img src="https://www.gravatar.com/avatar/b6a2a74133224e85e9714e282a1576df?d=identicon&s=100?s=100" width="100px;" alt="Kimiya Shahamat"/><br /><sub><b>Kimiya Shahamat</b></sub></a><br /></td>
     </tr>
   </tbody>
 </table>

@@ -48,13 +48,6 @@
             "contributions": []
         },
         {
-            "login": "EmreAdabag",
-            "name": "EmreAdabag",
-            "avatar_url": "https://avatars.githubusercontent.com/EmreAdabag",
-            "profile": "https://github.com/EmreAdabag",
-            "contributions": []
-        },
-        {
             "login": "caelyasutake",
             "name": "Cael Yasutake",
             "avatar_url": "https://avatars.githubusercontent.com/caelyasutake",
@@ -69,6 +62,13 @@
             "contributions": []
         },
         {
+            "login": "EmreAdabag",
+            "name": "EmreAdabag",
+            "avatar_url": "https://avatars.githubusercontent.com/EmreAdabag",
+            "profile": "https://github.com/EmreAdabag",
+            "contributions": []
+        },
+        {
             "login": "emilyburnett2003",
             "name": "emilyburnett2003",
             "avatar_url": "https://avatars.githubusercontent.com/emilyburnett2003",
@@ -80,20 +80,6 @@
             "name": "pruyontrarakk",
             "avatar_url": "https://avatars.githubusercontent.com/pruyontrarakk",
             "profile": "https://github.com/pruyontrarakk",
-            "contributions": []
-        },
-        {
-            "login": "Kimiya Shahamat",
-            "name": "Kimiya Shahamat",
-            "avatar_url": "https://www.gravatar.com/avatar/b6a2a74133224e85e9714e282a1576df?d=identicon&s=100",
-            "profile": "https://github.com/A2R-Lab/GRiD/graphs/contributors",
-            "contributions": []
-        },
-        {
-            "login": "Kimiya Shahamat",
-            "name": "Kimiya Shahamat",
-            "avatar_url": "https://www.gravatar.com/avatar/b6a2a74133224e85e9714e282a1576df?d=identicon&s=100",
-            "profile": "https://github.com/A2R-Lab/GRiD/graphs/contributors",
             "contributions": []
         }
     ],
