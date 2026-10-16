@@ -250,9 +250,10 @@ the form:
 collect. ``--header PATH`` builds against an existing header and skips the
 Python generation step.
 
-The measured fused-to-layered ratio on our RTX 5090 is reported on
-:doc:`../../release_measurements` once it has been collected on a quiet GPU.
-A number taken on a shared or busy device is not comparable to it.
+On our RTX 5090 (sm_120) at batch 256 the fused kernel takes 7.65 µs and the
+layered path 28.70 µs, medians of 200 runs on an idle GPU, a ratio of 3.75×;
+:doc:`../../release_measurements` records the provenance. A number taken on a
+shared or busy device is not comparable to it.
 
 Adapting the kernel
 -------------------
