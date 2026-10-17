@@ -85,6 +85,49 @@ def test_accuracy_checks_shapes_blocks_finiteness_and_near_zero():
     assert not p.agreement([1.00001],[1],rtol=0,atol=0)["passed"]
 
 
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("strided", [False, True])
+@pytest.mark.parametrize("tolerances", [(2e-4, 1e-3), (0.0, 0.0)])
+def test_chunked_agreement_matches_full_array_metrics(monkeypatch, dtype, strided, tolerances):
+    monkeypatch.setattr(p, "AGREEMENT_CHUNK_ENTRIES", 17)
+    rng = np.random.default_rng(329)
+    b = rng.normal(size=(11, 9)).astype(dtype)
+    b[0, :4] = [0, 1e-4, 1e-3, -1e-3]
+    a = b + rng.normal(scale=1e-3, size=b.shape).astype(dtype)
+    if strided:
+        a, b = a.T[:, ::2], b.T[:, ::2]
+    rtol, atol = tolerances
+    ac, bc = a.astype(np.float64), b.astype(np.float64)
+    diff, magnitude = np.abs(ac - bc), np.abs(bc)
+    mask = magnitude >= max(atol, 1e-30)
+    expected = {
+        "shape": list(a.shape), "entries": int(a.size),
+        "max_abs": float(diff.max(initial=0)),
+        "bad_entries": int(np.sum(diff > atol + rtol * magnitude)),
+        "max_abs_reference_below_atol": float(diff[magnitude < atol].max(initial=0)),
+        "max_relative_reference_ge_atol": float((diff[mask] / magnitude[mask]).max(initial=0)),
+    }
+    result = p.agreement(a, b, rtol=rtol, atol=atol)
+    block = dict(result["blocks"][0])
+    relative = block.pop("relative_l2")
+    assert block == expected
+    assert relative == pytest.approx(np.linalg.norm(ac-bc) / max(np.linalg.norm(bc), 1e-30), rel=2e-15)
+    assert result["passed"] == (expected["bad_entries"] == 0)
+
+
+def test_chunked_agreement_checks_all_chunks_and_exact_threshold(monkeypatch):
+    monkeypatch.setattr(p, "AGREEMENT_CHUNK_ENTRIES", 3)
+    a, b = np.zeros(10), np.zeros(10)
+    a[-1] = 1e-3
+    assert p.agreement(a, b)["passed"]
+    a[-1] = np.nextafter(1e-3, np.inf)
+    assert p.agreement(a, b)["blocks"][0]["bad_entries"] == 1
+    a[-1] = np.nan
+    assert p.agreement(a, b) == {"passed": False, "reason": "non-finite output"}
+    assert p.agreement(np.empty(0), np.empty(0))["passed"]
+    assert p.agreement(np.array(0.), np.array(0.))["passed"]
+
+
 def test_validation_subset_restricts_every_block_to_the_mask():
     value = (np.arange(8.).reshape(4, 2), np.arange(4.))
     sub = p.validation_subset(value, np.array([True, False, True, False]))

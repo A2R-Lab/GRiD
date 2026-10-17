@@ -13,6 +13,13 @@ first packaged release.
 
 ## [Unreleased]
 
+## [0.5.2] — release candidate
+
+- Benchmark validation checks large Hessians in bounded-memory chunks and releases
+  completed snapshots sooner. Checked entries, tolerances and timed calls are unchanged.
+- Receipt resumption requires a successful shard and an explicit clean receipt at the
+  current commit; missing-tool skips and missing receipts are rerun, not retained as proof.
+
 - URDF parser (external/URDFParser): an `<inertial><origin rpy>` now rotates the inertia
   tensor into the link frame before the parallel-axis shift; it was taken unrotated, which
   put the UR5e's shoulder and wrist inertias 10 percent off pinocchio. A prismatic joint
@@ -217,5 +224,6 @@ update on top of that, organised here by theme:
 - Closed kinematic loops are unsupported.
 - No Windows, macOS, Jetson or precompiled-robot wheels.
 
+[0.5.2]: https://github.com/A2R-Lab/GRiD/compare/v0.5.1...HEAD
 [0.5.1]: https://github.com/A2R-Lab/GRiD/releases/tag/v0.5.1
 [0.5.0]: https://github.com/A2R-Lab/GRiD/releases/tag/v0.5.0

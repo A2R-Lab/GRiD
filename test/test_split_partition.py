@@ -291,6 +291,38 @@ def test_ledger_roundtrip_and_resume_filter(tmp_path):
     assert rss.load_prior_results(tmp_path, names) == []
 
 
+def test_receipt_resume_requires_success_and_explicit_clean_receipt(tmp_path):
+    import subprocess
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=rss.REPO_ROOT,
+                          capture_output=True, text=True, check=True).stdout.strip()
+    cases = {
+        "good": ("OK", 0, {"repo": {"commit_sha": head, "dirty": False}}),
+        "floor": ("FLOOR-SKIP", 1, {"repo": {"commit_sha": head, "dirty": False}}),
+        "deselected": ("DESELECTED", 0, {"repo": {"commit_sha": head, "dirty": False}}),
+        "bad_rc": ("OK", 1, {"repo": {"commit_sha": head, "dirty": False}}),
+        "missing_rc": ("OK", None, {"repo": {"commit_sha": head, "dirty": False}}),
+        "missing": ("OK", 0, None),
+        "empty_repo": ("OK", 0, {"repo": {}}),
+        "unknown_dirty": ("OK", 0, {"repo": {"commit_sha": head}}),
+        "dirty": ("OK", 0, {"repo": {"commit_sha": head, "dirty": True}}),
+        "old_sha": ("OK", 0, {"repo": {"commit_sha": "0" * 40, "dirty": False}}),
+        "bad_repo": ("OK", 0, {"repo": "invalid"}),
+        "bad_document": ("OK", 0, []),
+    }
+    (tmp_path / "receipts").mkdir()
+    rows = []
+    for name, (kind, rc, receipt) in cases.items():
+        rows.append(dict(shard=name, kind=kind, rc=rc))
+        if receipt is not None:
+            (tmp_path / "receipts" / f"{name}.json").write_text(json.dumps(receipt))
+    (tmp_path / "receipts" / "corrupt.json").write_text("{invalid")
+    rows.append(dict(shard="corrupt", kind="OK", rc=0))
+    rss._write_ledger(tmp_path, rows)
+    kept = rss.load_prior_results(tmp_path, {r["shard"] for r in rows}, require_receipts=True)
+    assert [r["shard"] for r in kept] == ["good"]
+    assert kept[0]["fresh"] is False
+
+
 def test_partition_persistence_roundtrip(tmp_path):
     shards = rss.pack_cuda_shards(_synthetic_ids(), {}, 20 * 60.0)
     rss.save_partition(tmp_path, shards)

@@ -39,7 +39,7 @@ PATH="$PWD/.venv/bin:$PATH" .venv/bin/auditwheel repair dist/*.whl --wheel-dir w
 Keep native `linux_x86_64` wheels for local diagnostics; upload only wheels whose
 portable tags have been verified. The October 2026 CPython 3.12 host build meets
 `manylinux_2_34_x86_64` (glibc 2.34 or newer), not an older manylinux baseline.
-The artifact workflow additionally builds and checks CPython 3.10 and 3.11
+The artifact workflow additionally builds and checks CPython 3.10, 3.11 and 3.13
 wheels on a CPU runner; do not advertise an untested interpreter/toolkit/
 framework combination. There are no Windows,
 macOS, Jetson or precompiled robot wheels in this release path.
@@ -141,7 +141,7 @@ ordinary push. Its jobs, in order:
    A tag whose committed receipt is not a fresh release-policy receipt at that exact
    commit (carried shards, stale fingerprints, missing scope) fails here and nothing is
    built.
-2. `build` (CPython 3.10 / 3.11 / 3.12) refuses a tag that does not equal
+2. `build` (CPython 3.10 / 3.11 / 3.12 / 3.13) refuses a tag that does not equal
    `v<pyproject version>`; builds the sdist and the wheel from that sdist under
    `SOURCE_DATE_EPOCH` (reproducible artifacts), `auditwheel repair`s, `twine check`s,
    installs the wheel into a fresh venv outside the checkout with no GPU or build tools

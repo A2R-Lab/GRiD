@@ -723,12 +723,14 @@ def _shard_receipt_repo(out_dir: Path, shard: str) -> dict | None:
     if not path.exists():
         return None
     try:
-        return (json.loads(path.read_text()) or {}).get("repo") or {}
+        data = json.loads(path.read_text())
+        repo = data.get("repo") if isinstance(data, dict) else None
+        return repo if isinstance(repo, dict) else None
     except (json.JSONDecodeError, OSError):
         return None
 
 
-def load_prior_results(out_dir: Path, spec_names: set[str]) -> list[dict]:
+def load_prior_results(out_dir: Path, spec_names: set[str], *, require_receipts: bool = False) -> list[dict]:
     """--resume: keep only CLEAN rows for shards that still exist; everything
     else (failures, casualties, vanished shards) re-runs.
 
@@ -742,7 +744,12 @@ def load_prior_results(out_dir: Path, spec_names: set[str]) -> list[dict]:
     `repo.dirty` (an uncommitted edit to a tracked file was in the tree while
     the shard ran) is NOT clean evidence — the merge folds it into the merged
     receipt's /repo/dirty and the release verify refuses it; a resume that
-    kept it could never finalize (lost an overnight 42/42 run). Re-run it."""
+    kept it could never finalize (lost an overnight 42/42 run). Re-run it.
+
+    Receipt runs additionally require an OK/rc=0 result and an explicit clean,
+    same-HEAD receipt. A missing-tool FLOOR-SKIP is not resumable proof, even
+    though non-receipt diagnostic runs may retain that outcome. Authenticity
+    and complete scope remain checked by the merge/final verification gates."""
     path = out_dir / "results.json"
     if not path.exists():
         return []
@@ -756,12 +763,16 @@ def load_prior_results(out_dir: Path, spec_names: set[str]) -> list[dict]:
                               text=True).stdout.strip()
     except (subprocess.CalledProcessError, OSError):
         head = None
-    kept, divergent, dirty = [], [], []
+    kept, divergent, dirty, unproven = [], [], [], []
     for r in prior:
         if r.get("kind") not in CLEAN_KINDS or r.get("shard") not in spec_names:
             continue
         repo = _shard_receipt_repo(out_dir, r.get("shard", ""))
         sha = None if repo is None else repo.get("commit_sha")
+        if require_receipts and (r.get("kind") != "OK" or r.get("rc") != 0
+                                 or not head or not sha or repo.get("dirty") is not False):
+            unproven.append(r.get("shard"))
+            continue
         if head and sha and sha != head:
             divergent.append(r.get("shard"))
             continue
@@ -769,6 +780,10 @@ def load_prior_results(out_dir: Path, spec_names: set[str]) -> list[dict]:
             dirty.append(r.get("shard"))
             continue
         kept.append(dict(r, fresh=False))
+    if unproven:
+        print(f"  resume: {len(unproven)} shard(s) lack a successful result and "
+              f"explicit clean receipt — re-running: {', '.join(sorted(unproven)[:6])}"
+              + (" …" if len(unproven) > 6 else ""))
     if divergent:
         print(f"  resume: {len(divergent)} clean shard(s) recorded at a "
               f"DIFFERENT commit than HEAD — re-running them so the merged "
@@ -1914,7 +1929,7 @@ def main() -> int:
 
     prior: list[dict] = []
     if args.resume:
-        prior = load_prior_results(out_dir, {s.name for s in specs})
+        prior = load_prior_results(out_dir, {s.name for s in specs}, require_receipts=args.receipts)
         if prior:
             print(f"=== --resume: {len(prior)} clean shard(s) kept, "
                   f"{len(specs) - len(prior)} to run ===")

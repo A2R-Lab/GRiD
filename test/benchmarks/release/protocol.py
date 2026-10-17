@@ -237,6 +237,11 @@ def validation_subset(value, mask):
     return tuple(out)
 
 
+# Bound comparison temporaries independently of the batch/robot output size.
+# This is validation only: timed calls and every checked entry are unchanged.
+AGREEMENT_CHUNK_ENTRIES = 262144
+
+
 def agreement(actual, expected, *, rtol=2e-4, atol=1e-3):
     aa, bb = leaves(actual), leaves(expected)
     if len(aa) != len(bb):
@@ -245,17 +250,32 @@ def agreement(actual, expected, *, rtol=2e-4, atol=1e-3):
     for a, b in zip(aa, bb):
         if a.shape != b.shape:
             return {"passed": False, "reason": f"shape mismatch {a.shape} != {b.shape}"}
-        a, b = a.astype(np.float64), b.astype(np.float64)
-        if not (np.isfinite(a).all() and np.isfinite(b).all()):
-            return {"passed": False, "reason": "non-finite output"}
-        diff = np.abs(a - b)
-        blocks.append({"shape": list(a.shape), "max_abs": float(diff.max(initial=0)),
-            "relative_l2": float(np.linalg.norm(a-b) / max(np.linalg.norm(b), 1e-30)),
-            "bad_entries": int(np.sum(diff > atol + rtol * np.abs(b))),
-            "entries": int(a.size),
-            "max_abs_reference_below_atol": float(diff[np.abs(b) < atol].max(initial=0)),
-            "max_relative_reference_ge_atol": float(
-                (diff[np.abs(b) >= max(atol, 1e-30)] / np.abs(b[np.abs(b) >= max(atol, 1e-30)])).max(initial=0))})
+        max_abs = near_zero = max_relative = diff_norm = reference_norm = 0.0
+        bad_entries = 0
+        # flat slices copy only a bounded chunk, including for strided Hessian
+        # views. Flattening the entire array would allocate another full copy.
+        for start in range(0, a.size, AGREEMENT_CHUNK_ENTRIES):
+            stop = start + AGREEMENT_CHUNK_ENTRIES
+            ac = np.asarray(a.flat[start:stop], dtype=np.float64)
+            bc = np.asarray(b.flat[start:stop], dtype=np.float64)
+            if not (np.isfinite(ac).all() and np.isfinite(bc).all()):
+                return {"passed": False, "reason": "non-finite output"}
+            diff = np.abs(ac - bc)
+            magnitude = np.abs(bc)
+            max_abs = max(max_abs, float(diff.max(initial=0)))
+            bad_entries += int(np.count_nonzero(diff > atol + rtol * magnitude))
+            near_zero = max(near_zero, float(diff[magnitude < atol].max(initial=0)))
+            mask = magnitude >= max(atol, 1e-30)
+            max_relative = max(max_relative, float((diff[mask] / magnitude[mask]).max(initial=0)))
+            # Same Euclidean norm, accumulated without retaining full-size
+            # float64 differences; reduction order can differ at roundoff level.
+            diff_norm = math.hypot(diff_norm, float(np.linalg.norm(diff)))
+            reference_norm = math.hypot(reference_norm, float(np.linalg.norm(bc)))
+        blocks.append({"shape": list(a.shape), "max_abs": max_abs,
+            "relative_l2": diff_norm / max(reference_norm, 1e-30),
+            "bad_entries": bad_entries, "entries": int(a.size),
+            "max_abs_reference_below_atol": near_zero,
+            "max_relative_reference_ge_atol": max_relative})
     return {"passed": all(b["bad_entries"] == 0 for b in blocks),
             "rtol": rtol, "atol": atol, "blocks": blocks}
 
