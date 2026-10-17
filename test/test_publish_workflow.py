@@ -27,3 +27,11 @@ def test_manual_rehearsal_cannot_publish_to_production():
     assert jobs['pypi']['needs'] == 'testpypi'
     assert jobs['pypi']['environment']['name'] == 'pypi'
     assert jobs['testpypi']['environment']['name'] == 'testpypi'
+
+
+def test_testpypi_requires_successful_build_without_inheriting_receipt_skip():
+    job = _jobs()['testpypi']
+    assert job['needs'] == 'build'
+    # An explicit status function avoids GitHub's implicit success() across the
+    # dependency chain, where the tag-only receipt job is skipped on dispatch.
+    assert job['if'] == "${{ !cancelled() && needs.build.result == 'success' }}"
