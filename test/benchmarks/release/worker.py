@@ -64,6 +64,11 @@ def main():
                              validation_subset(blocks(expected), scope_mask), **kw)
         bridged = args.backend in {"grid_native", "grid_cuda"}
         for batch in args.batches:
+            # Drop previous-batch snapshots before constructing the next oracle.
+            # Large Hessians otherwise keep several old outputs alive while the
+            # next batch's full oracle and validation temporaries are allocated.
+            expected = host_output = native_out = kernel_out = None
+            resident_output = post_output = resident_post = None
             cell = {"batch": batch, "status": "error", "comparison_eligible": False}
             try:
                 adapter.prepare(batch)
@@ -119,6 +124,7 @@ def main():
                     cell["native_wrapper_agreement"] = agreement(native_out, host_output, rtol=0, atol=0)
                     if not cell["native_wrapper_agreement"]["passed"]:
                         raise ValueError("Native and NumPy results differ")
+                    native_out = kernel_out = None  # all bridge comparisons recorded
                 elif hasattr(adapter, "time_host"):
                     host_time, extra = adapter.time_host(args.warmups, args.iterations, args.warm_seconds)
                     cell.update(extra)
