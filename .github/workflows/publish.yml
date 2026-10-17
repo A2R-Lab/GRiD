@@ -96,6 +96,9 @@ jobs:
 
   testpypi:
     needs: build
+    # Manual rehearsals intentionally skip receipt; do not propagate that skip
+    # past a successful build. Failed/cancelled builds still cannot upload.
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-24.04
     environment:
       name: testpypi
