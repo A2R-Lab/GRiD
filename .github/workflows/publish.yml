@@ -25,6 +25,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+          # The tested candidate precedes the evidence and merge commits.
+          # Receipt verification must be able to establish that ancestry.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
