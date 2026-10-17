@@ -888,6 +888,7 @@ def gen_inverse_dynamics_kernel(self, use_qdd_input = False, single_call_timing 
     if not single_call_timing:
         # load to shared mem and loop over blocks to compute all requested comps
         self.gen_add_parallel_loop("k","NUM_TIMESTEPS",block_level = True)
+        self.gen_add_code_line("T *d_f_ext_k = d_f_ext ? d_f_ext + static_cast<size_t>(k) * 6 * NUM_BODIES : nullptr;")
         if use_qdd_input:
             self.gen_kernel_load_inputs("q_qd",str(2*n),"qdd",str(n),stride="stride_q_qd",stride2=str(n))
         else:
@@ -900,7 +901,7 @@ def gen_inverse_dynamics_kernel(self, use_qdd_input = False, single_call_timing 
         # compute
         self.gen_add_code_line("// compute")
         self.gen_load_update_XImats_helpers_function_call()
-        self.gen_inverse_dynamics_inner_function_call(compute_c,use_qdd_input)
+        self.gen_inverse_dynamics_inner_function_call(compute_c,use_qdd_input, updated_var_names=dict(d_f_ext_name="d_f_ext_k"))
         self.gen_add_sync()
         # mjx output: tau is a covector -> base-linear rows rotate by R
         if mjx_kernel:

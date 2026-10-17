@@ -13,6 +13,16 @@ first packaged release.
 
 ## [Unreleased]
 
+## [0.5.3] — release candidate
+
+- Fix per-sample external-force indexing in batched inverse/forward dynamics,
+  ABA, their gradients, and integrator value/gradient kernels. Previously every
+  sample used the first force row. Single-sample and no-force calls are unchanged.
+- Add real-robot installed-wheel numerical acceptance checks to the release gate
+  and signed suite, including independently varying force rows across NumPy,
+  JAX and PyTorch. TestPyPI rehearsals now explicitly require exact artifact-hash
+  matching, the numerical matrix, and independently installed source archives.
+
 ## [0.5.2] — release candidate
 
 - Benchmark validation checks large Hessians in bounded-memory chunks and releases
@@ -224,6 +234,7 @@ update on top of that, organised here by theme:
 - Closed kinematic loops are unsupported.
 - No Windows, macOS, Jetson or precompiled-robot wheels.
 
-[0.5.2]: https://github.com/A2R-Lab/GRiD/compare/v0.5.1...HEAD
+[0.5.3]: https://github.com/A2R-Lab/GRiD/compare/v0.5.1...HEAD
+[0.5.2]: https://github.com/A2R-Lab/GRiD/compare/v0.5.1...94f4e5c
 [0.5.1]: https://github.com/A2R-Lab/GRiD/releases/tag/v0.5.1
 [0.5.0]: https://github.com/A2R-Lab/GRiD/releases/tag/v0.5.0

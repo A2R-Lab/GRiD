@@ -1387,6 +1387,7 @@ def _emit_aba_kernel_body_for_flags(self, nq, nv, n, input_count, level, single_
     ws_base = "&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()]" if not single_call_timing else "d_workspace"
     if not single_call_timing:
         self.gen_add_parallel_loop("k","NUM_TIMESTEPS",block_level = True)
+        self.gen_add_code_line("T *d_f_ext_k = d_f_ext ? d_f_ext + static_cast<size_t>(k) * 6 * NUM_BODIES : nullptr;")
         self.gen_kernel_load_inputs("q_qd_tau",str(input_count),stride="stride_q_qd")
     else:
         self.gen_kernel_load_inputs("q_qd_tau",str(input_count))
@@ -1414,8 +1415,8 @@ def _emit_aba_kernel_body_for_flags(self, nq, nv, n, input_count, level, single_
         self.gen_add_code_line("// compute")
         self.gen_load_update_XImats_helpers_function_call()
         self.gen_aba_inner_function_call(
-            updated_var_names = (dict(d_workspace_name = "aba_d_workspace") if use_workspace_temp else
-                                 (dict(d_workspace_name = "aba_d_cold") if use_cold_spill else None)),
+            updated_var_names = (dict(d_workspace_name="aba_d_workspace", d_f_ext_name="d_f_ext_k") if use_workspace_temp else
+                                 (dict(d_workspace_name="aba_d_cold", d_f_ext_name="d_f_ext_k") if use_cold_spill else dict(d_f_ext_name="d_f_ext_k"))),
             temp_in_smem_expr = ("false" if use_workspace_temp else "true"),
             cold_in_smem_expr = ("false" if use_cold_spill else "true"))
         self.gen_add_sync()

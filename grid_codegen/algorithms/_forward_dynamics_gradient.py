@@ -453,6 +453,7 @@ def _emit_forward_dynamics_gradient_kernel_body_for_flags(self, nq, nv, use_sele
         self.gen_add_code_line(f"T *s_q = s_q_qd_u; T *s_qd = &s_q_qd_u[{nq}]; T *s_u = &s_q_qd_u[{2*nq}];")
     if not single_call_timing:
         self.gen_add_parallel_loop("k","NUM_TIMESTEPS",block_level = True)
+        self.gen_add_code_line("T *d_f_ext_k = d_f_ext ? d_f_ext + static_cast<size_t>(k) * 6 * NUM_BODIES : nullptr;")
         if use_qdd_Minv_input:
             self.gen_kernel_load_inputs("q_qd",str(2*nq),"qdd",str(nv),"Minv",str(nv*nv),stride="stride_q_qd",stride2=str(nq),stride3=str(nq*nq))
         else:
@@ -479,6 +480,7 @@ def _emit_forward_dynamics_gradient_kernel_body_for_flags(self, nq, nv, use_sele
         self.gen_add_code_line("// compute — the orchestration inner owns its s_temp pool placement")
         self.gen_forward_dynamics_gradient_device_function_call(
             use_qdd_Minv_input,
+            d_f_ext_name="d_f_ext_k",
             scratch_in_smem_expr = ("false" if use_global_temp else "true"),
             use_da_df_spill_expr = ("true" if use_selective_spill else "false"),
             s_df_du_name = ("d_df_du_k" if (use_global_temp or use_selective_spill) else "s_temp"),

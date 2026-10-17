@@ -17,6 +17,7 @@ RUNNERS = Path(__file__).resolve().parent / "cuda_equivalents"
 
 # runner -> the per-algorithm registrations it must make (its launched kernels)
 CONVERTED = {
+    "cuda_integrator_batch_forces_runner.cu": {"integrator", "integrator_gradient", "integrator_with_gradient"},
     "cuda_equivalence_runner.cu": {
         "inverse_dynamics", "minv", "forward_dynamics", "aba", "crba",
         "end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian",

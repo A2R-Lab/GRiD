@@ -1054,7 +1054,8 @@ def gen_integrator_gradient_device_function_call(self, compute_x_kp1=False,
                                                      use_da_df_spill_expr="false",
                                                      d_workspace_pool_name="nullptr",
                                                      d_temp_spill_name="nullptr",
-                                                     mujoco_output_expr=None):
+                                                     mujoco_output_expr=None,
+                                                     d_f_ext_name="d_f_ext"):
     """Emit the call to `integrator_gradient_device` / `integrator_with_gradient_device`. Arg order MUST
     match the def in gen_integrator_gradient_device. The FD-grad inner POOL
     placement region (d_workspace) and the inverse_dynamics_gradient da_df band spill region
@@ -1073,7 +1074,7 @@ def gen_integrator_gradient_device_function_call(self, compute_x_kp1=False,
               "s_dInt_q_6x6, s_dInt_v_6x6, ")
     middle = self.gen_insert_helpers_function_call()
     end = ("s_temp, " + d_workspace_pool_name + ", " + d_temp_spill_name + ", "
-           + "d_robotModel, d_f_ext, gravity, dt);")
+           + "d_robotModel, " + d_f_ext_name + ", gravity, dt);")
     self.gen_add_code_line(start + middle + end)
 
 
@@ -1415,7 +1416,7 @@ def gen_integrator_gradient_kernel(self, compute_x_kp1=False, single_call_timing
                     gen_workspace_repoint_line("d_temp_spill", slot_expr + " + GRID_INTEGRATOR_GRADIENT_INNER_OFFSET_BYTES<T>()")
                 )
 
-        def _emit_device_call(slot_expr):
+        def _emit_device_call(slot_expr, f_ext_name="d_f_ext"):
             # The FD-grad inner pool base (only consumed by the inner when
             # SCRATCH_IN_SMEM=false; nullptr otherwise).
             pool_name = (gen_workspace_cast_expr(slot_expr + " + GRID_INTEGRATOR_GRADIENT_INNER_OFFSET_BYTES<T>()")
@@ -1423,6 +1424,7 @@ def gen_integrator_gradient_kernel(self, compute_x_kp1=False, single_call_timing
             spill_name = "d_temp_spill" if inner_level == 1 else "nullptr"
             self.gen_integrator_gradient_device_function_call(
                 compute_x_kp1=compute_x_kp1,
+                d_f_ext_name=f_ext_name,
                 scratch_in_smem_expr=scratch_in_smem_expr,
                 use_da_df_spill_expr=spill_flag,
                 d_workspace_pool_name=pool_name,
@@ -1443,11 +1445,12 @@ def gen_integrator_gradient_kernel(self, compute_x_kp1=False, single_call_timing
 
         if not single_call_timing:
             self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
+            self.gen_add_code_line("T *d_f_ext_k = d_f_ext ? d_f_ext + static_cast<size_t>(k) * 6 * NUM_BODIES : nullptr;")
             self.gen_kernel_load_inputs("q_qd_u",str(input_count),stride="stride_q_qd_u")
             _emit_mjx_input_convert()
             self.gen_add_code_line("// compute — the orchestration inner owns its FD-grad s_temp pool placement")
             _emit_spill_pointers("k * GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()")
-            _emit_device_call("k * GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()")
+            _emit_device_call("k * GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()", "d_f_ext_k")
             self.gen_add_sync()
             self.gen_kernel_save_result("dAB",str(2 * n * 3 * n),stride=str(2 * n * 3 * n), sync=not compute_x_kp1)
             if compute_x_kp1:
