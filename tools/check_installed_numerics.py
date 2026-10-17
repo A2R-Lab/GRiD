@@ -145,6 +145,32 @@ def run(work, urdf_dir, robot_cases=(('iiwa14',False),('go2',True)),
                     plus[k][col]+=eps; minus[k][col]-=eps
                     fd[col]=(objective(*plus)-objective(*minus))/(2*eps)
                 compare(f'{name}/{op}/autograd-oracle-input{k}', np.asarray(jg[k])[0], fd)
+        # Backward paths must retain the matching force row too. Compare BOTH
+        # samples independently, not merely the summed gradient or backend parity.
+        for op, third in [('inverse_dynamics', a), ('forward_dynamics', u)]:
+            differentiated = tuple(range(2 if op == 'inverse_dynamics' else 3))
+            jf = jax.jit(jax.grad(
+                lambda x, y, z: getattr(jh, op)(x, y, z, f_ext=jnp.asarray(fe)).sum(),
+                argnums=differentiated))
+            jg = jf(jnp.asarray(q), jnp.asarray(v), jnp.asarray(third))
+            tensors = [torch.tensor(x, device='cuda', requires_grad=True) for x in (q, v, third)]
+            getattr(th, op)(*tensors, f_ext=torch.tensor(fe, device='cuda')).sum().backward()
+            for sample in range(len(q)):
+                base = [q[sample].astype(float), v[sample].astype(float), third[sample].astype(float)]
+                def force_objective(args):
+                    value = getattr(ref, op)(*args, f_ext=fe[sample].reshape(h.nb, 6))
+                    return np.sum(value[0] if op == 'inverse_dynamics' else value)
+                for k in differentiated:
+                    numeric = np.zeros_like(base[k])
+                    for col in range(len(numeric)):
+                        plus, minus = [x.copy() for x in base], [x.copy() for x in base]
+                        plus[k][col] += 1e-5
+                        minus[k][col] -= 1e-5
+                        numeric[col] = (force_objective(plus) - force_objective(minus)) / 2e-5
+                    for backend, gradient in [('jax', np.asarray(jg[k])),
+                                              ('torch', tensors[k].grad.cpu().numpy())]:
+                        compare(f'{name}/{op}/force-autograd/{backend}/row{sample}/input{k}',
+                                gradient[sample], numeric)
         if not floating:
             for op in ('idsva_so','fdsva_so'):
                 arg = a if op=='idsva_so' else u
