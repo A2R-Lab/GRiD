@@ -1510,3 +1510,16 @@ def gen_tier_dispatch(self, picks, emit_body_fn):
             self.gen_add_code_line(head, True)
             emit_body_fn(pick)
             self.gen_add_end_control_flow()
+
+
+def ident_suffix(name):
+    """The suffix that names a target-specific emitted symbol: "_<name>" with
+    every character that is not legal in a C identifier replaced by an
+    underscore, or "" when there is no name. The raw name stays the key for
+    looking the joint up in the robot tree; only the emitted symbol changes.
+    A hyphenated fixed-joint name (UR5e: "tool0-flange") used to be pasted
+    into function and kernel names and broke the compile (2026-10-16)."""
+    if not name:
+        return ""
+    import re
+    return "_" + re.sub(r"[^0-9A-Za-z_]", "_", str(name))

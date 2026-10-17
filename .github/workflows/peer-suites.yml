@@ -66,7 +66,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -r external/URDFParser/requirements.txt pytest
+        run: pip install -r external/URDFParser/requirements-dev.txt
 
       - name: Run URDFParser tests
         run: python -m pytest external/URDFParser/tests -q

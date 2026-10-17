@@ -4,6 +4,7 @@ End effector pose, gradient, and hessian codegen.
 Fixed-joint targets are supported (including on branched trees and multiple
 fixed targets at once) via the ``fixed_target_name`` variants.
 """
+from ..helpers._code_generation_helpers import ident_suffix
 from grid_codegen.helpers._code_generation_helpers import gen_launch_pair, gen_emit_host_result_transfer, _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
 from grid_codegen.helpers._code_generation_helpers import gen_host_wrapper_head
 from grid_codegen.helpers._code_generation_helpers import host_q_compressed_input_transfer_lines
@@ -27,7 +28,7 @@ def gen_end_effector_pose_inner_function_call(self, updated_var_names = None, fi
     if updated_var_names is not None:
         for key,value in updated_var_names.items():
             var_names[key] = value
-    code_start = "end_effector_pose_inner" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "<T, " + temp_in_smem_expr + ">(" + var_names["s_end_effector_pose_name"] + ", " + var_names["s_q_name"] + ", "
+    code_start = "end_effector_pose_inner" + ident_suffix(fixed_target_name) + "<T, " + temp_in_smem_expr + ">(" + var_names["s_end_effector_pose_name"] + ", " + var_names["s_q_name"] + ", "
     code_middle = var_names["s_Xhom_name"] + ", "
     code_end =  var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ", " + var_names["s_linalg_smem_name"] + ");"
     # account for thread group and serial chains
@@ -54,7 +55,7 @@ def gen_end_effector_pose_inner(self, fixed_target_name = ""):
                    "d_workspace is the global-memory chain workspace used in place of s_temp when !TEMP_IN_SMEM", \
                    "s_linalg_smem is optional byte-addressed shared memory (reserved; unused by this inner)"]
     func_notes = ["Assumes the Xhom matricies have already been updated for the given q", "Defaults to all leave nodes if fixed_target_name is not provided"]
-    func_def_start = "void end_effector_pose_inner" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "("
+    func_def_start = "void end_effector_pose_inner" + ident_suffix(fixed_target_name) + "("
     func_def_middle = "T *s_end_effector_pose, const T *s_q, const T *s_Xhom, "
     func_def_end = "T *s_temp, T *d_workspace, unsigned char *s_linalg_smem) {"
     func_def_middle, func_params = self.gen_insert_helpers_func_def_params(func_def_middle, func_params, -1, NO_XI_FLAG = True)
@@ -233,7 +234,7 @@ def gen_end_effector_pose_device(self, fixed_target_name = ""):
                    "s_q is the vector of joint positions", \
                    "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)"]
     func_notes = []
-    func_def_start = "void end_effector_pose_device" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "("
+    func_def_start = "void end_effector_pose_device" + ident_suffix(fixed_target_name) + "("
     func_def_middle = "T *s_end_effector_pose, const T *s_q, "
     func_def_end = "const robotModel<T> *d_robotModel) {"
     func_def = func_def_start + func_def_middle + func_def_end
@@ -255,7 +256,7 @@ def gen_end_effector_pose_kernel(self, single_call_timing = False, fixed_target_
                    "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)", \
                    "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)"]
     func_notes = []
-    func_def_start = "void end_effector_pose_kernel" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "(T *d_end_effector_pose, const T *d_q, const int stride_q, "
+    func_def_start = "void end_effector_pose_kernel" + ident_suffix(fixed_target_name) + "(T *d_end_effector_pose, const T *d_q, const int stride_q, "
     func_def_end = "const robotModel<T> *d_robotModel, const int NUM_TIMESTEPS) {"
     func_def = func_def_start + func_def_end
     if single_call_timing:
@@ -327,7 +328,7 @@ def gen_end_effector_pose_host(self, mode = 0, fixed_target_name = ""):
     # define function def and params
     func_params = host_std_func_params(with_gravity=False)
     func_notes = []
-    func_def_start = "void end_effector_pose" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + \
+    func_def_start = "void end_effector_pose" + ident_suffix(fixed_target_name) + \
                             "(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const int num_timesteps,"
     func_def_end =   "                            const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
     func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
@@ -339,14 +340,14 @@ def gen_end_effector_pose_host(self, mode = 0, fixed_target_name = ""):
     # frame-INVARIANT (no output epilogue) but the kernel still input-converts the
     # quaternion under the flag. Default false -> byte-identical pin codegen.
     mjx_host = gen_host_wrapper_head(self, "end_effector_pose", func_def_start, func_def_end, kind_rule="kinematics")
-    eep_kernel_tmpl = ("end_effector_pose_kernel" + ("" if fixed_target_name == "" else "_" + fixed_target_name) +
+    eep_kernel_tmpl = ("end_effector_pose_kernel" + ident_suffix(fixed_target_name) +
                        ("<T, RESOURCE_TIER, MUJOCO_OUTPUT>" if mjx_host else "<T, RESOURCE_TIER>"))
     func_call_start = eep_kernel_tmpl + \
                         "<<<block_dimms,thread_dimms,END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(hd_data->d_end_effector_pose,hd_data->d_q,stride_q,"
     func_call_end = "d_robotModel,num_timesteps);"
     if single_call_timing:
         if mjx_host:
-            func_call_start = func_call_start.replace("end_effector_pose_kernel" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "<", "end_effector_pose_kernel" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "_single_timing<")
+            func_call_start = func_call_start.replace("end_effector_pose_kernel" + ident_suffix(fixed_target_name) + "<", "end_effector_pose_kernel" + ident_suffix(fixed_target_name) + "_single_timing<")
         else:
             func_call_start = func_call_start.replace("kernel<T, RESOURCE_TIER>","kernel_single_timing<T, RESOURCE_TIER>")
     if not compute_only:
@@ -412,7 +413,7 @@ def gen_end_effector_pose_gradient_inner_function_call(self, updated_var_names =
     if updated_var_names is not None:
         for key,value in updated_var_names.items():
             var_names[key] = value
-    code_start = "end_effector_pose_gradient_inner" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "<T, " + temp_in_smem_expr + ">(" + var_names["s_end_effector_pose_gradient_name"] + ", " + var_names["s_q_name"] + ", "
+    code_start = "end_effector_pose_gradient_inner" + ident_suffix(fixed_target_name) + "<T, " + temp_in_smem_expr + ">(" + var_names["s_end_effector_pose_gradient_name"] + ", " + var_names["s_q_name"] + ", "
     code_middle = var_names["s_Xhom_name"] + ", " + var_names["s_dXhom_name"] + ", "
     code_end =  var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ", " + var_names["s_linalg_smem_name"] + ");"
     # account for thread group
@@ -734,7 +735,7 @@ def gen_end_effector_pose_gradient_inner(self, fixed_target_name = ""):
                    "s_linalg_smem is optional byte-addressed shared memory (reserved; unused)"]
     func_notes = ["Assumes s_Xhom has been populated with the per-joint LOCAL transforms for the given q.",
                   "Output d/dv (TANGENT) is 6 x nv per ee (was 6 x nq for d/dq) -- matches pinocchio."]
-    func_def_start = "void end_effector_pose_gradient_inner" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "("
+    func_def_start = "void end_effector_pose_gradient_inner" + ident_suffix(fixed_target_name) + "("
     func_def_middle = "T *s_end_effector_pose_gradient, const T *s_q, const T *s_Xhom, const T *s_dXhom, "
     func_def_end = "T *s_temp, T *d_workspace, unsigned char *s_linalg_smem) {"
     func_def_middle, func_params = self.gen_insert_helpers_func_def_params(func_def_middle, func_params, -1, NO_XI_FLAG = True)
@@ -854,7 +855,7 @@ def gen_end_effector_pose_gradient_device(self, fixed_target_name = ""):
                    "s_q is the vector of joint positions", \
                    "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)"]
     func_notes = []
-    func_def_start = "void end_effector_pose_gradient_device" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "("
+    func_def_start = "void end_effector_pose_gradient_device" + ident_suffix(fixed_target_name) + "("
     func_def_middle = "T *s_end_effector_pose_gradient, const T *s_q, "
     func_def_end = "const robotModel<T> *d_robotModel) {"
     func_def = func_def_start + func_def_middle + func_def_end
@@ -1011,7 +1012,7 @@ def gen_end_effector_pose_gradient_kernel(self, single_call_timing = False, fixe
                    "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)", \
                    "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)"]
     func_notes = []
-    func_def_start = "void end_effector_pose_gradient_kernel" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "(T *d_end_effector_pose_gradient, unsigned char *d_workspace, const T *d_q, const int stride_q, "
+    func_def_start = "void end_effector_pose_gradient_kernel" + ident_suffix(fixed_target_name) + "(T *d_end_effector_pose_gradient, unsigned char *d_workspace, const T *d_q, const int stride_q, "
     func_def_end = "const robotModel<T> *d_robotModel, const int NUM_TIMESTEPS) {"
     func_def = func_def_start + func_def_end
     if single_call_timing:
@@ -1046,7 +1047,7 @@ def gen_end_effector_pose_gradient_host(self, mode = 0, fixed_target_name = ""):
     # define function def and params
     func_params = host_std_func_params(with_gravity=False)
     func_notes = []
-    func_def_start = "void end_effector_pose_gradient" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const int num_timesteps,"
+    func_def_start = "void end_effector_pose_gradient" + ident_suffix(fixed_target_name) + "(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const int num_timesteps,"
     func_def_end =   "                            const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
     func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     # then generate the code
@@ -1057,13 +1058,13 @@ def gen_end_effector_pose_gradient_host(self, mode = 0, fixed_target_name = ""):
     # base-linear columns reframe by R^T under the flag. Default false -> byte-
     # identical pin codegen.
     mjx_host = gen_host_wrapper_head(self, "end_effector_pose_gradient", func_def_start, func_def_end, kind_rule="kinematics")
-    eepg_kernel_tmpl = ("end_effector_pose_gradient_kernel" + ("" if fixed_target_name == "" else "_" + fixed_target_name) +
+    eepg_kernel_tmpl = ("end_effector_pose_gradient_kernel" + ident_suffix(fixed_target_name) +
                         ("<T, RESOURCE_TIER, MUJOCO_OUTPUT>" if mjx_host else "<T, RESOURCE_TIER>"))
     func_call_start = eepg_kernel_tmpl + "<<<block_dimms,thread_dimms,END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()>>>(hd_data->d_end_effector_pose_gradient,hd_data->d_workspace,hd_data->d_q,stride_q,"
     func_call_end = "d_robotModel,num_timesteps);"
     if single_call_timing:
         if mjx_host:
-            func_call_start = func_call_start.replace("end_effector_pose_gradient_kernel" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "<", "end_effector_pose_gradient_kernel" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "_single_timing<")
+            func_call_start = func_call_start.replace("end_effector_pose_gradient_kernel" + ident_suffix(fixed_target_name) + "<", "end_effector_pose_gradient_kernel" + ident_suffix(fixed_target_name) + "_single_timing<")
         else:
             func_call_start = func_call_start.replace("kernel<T, RESOURCE_TIER>","kernel_single_timing<T, RESOURCE_TIER>")
     if not compute_only:
@@ -1152,7 +1153,7 @@ def gen_end_effector_pose_hessian_inner_function_call(self, updated_var_names = 
     if updated_var_names is not None:
         for key,value in updated_var_names.items():
             var_names[key] = value
-    code_start = "end_effector_pose_hessian_inner" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "<T, " + out_in_smem_expr + ">(" + var_names["s_end_effector_pose_hessian_name"] + ", " + var_names["s_end_effector_pose_gradient_name"] + ", " + var_names["s_q_name"] + ", "
+    code_start = "end_effector_pose_hessian_inner" + ident_suffix(fixed_target_name) + "<T, " + out_in_smem_expr + ">(" + var_names["s_end_effector_pose_hessian_name"] + ", " + var_names["s_end_effector_pose_gradient_name"] + ", " + var_names["s_q_name"] + ", "
     code_middle = var_names["s_Xhom_name"] + ", "
     code_end = var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ", " + var_names["d_robotModel_name"] + ", " + var_names["s_linalg_smem_name"] + ");"
     # account for thread group
@@ -1312,7 +1313,7 @@ def gen_end_effector_pose_hessian_inner(self, fixed_target_name = ""):
         "Closed-form analytic d2(pose)/dv2; matches RBDReference.end_effector_pose_hessian_analytic (which agrees with pinocchio getJointKinematicHessian(LOCAL_WORLD_ALIGNED) to the FD floor fleet-wide; CUDA confirmed on iiwa14-fixed + go2-floating).",
         "Inner-owns scratch placement: the large nv^2 output s_end_effector_pose_hessian moves to d_workspace when !OUT_IN_SMEM. The s_Xworld+s_Sworld+s_E_sc scratch in s_temp stays in smem at every tier.",
     ]
-    func_def_start = "void end_effector_pose_hessian_inner" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "("
+    func_def_start = "void end_effector_pose_hessian_inner" + ident_suffix(fixed_target_name) + "("
     func_def_middle = "T *s_end_effector_pose_hessian, T *s_end_effector_pose_gradient, const T *s_q, T *s_Xhom, "
     func_def_end = "T *s_temp, T *d_workspace, const robotModel<T> *d_robotModel, unsigned char *s_linalg_smem) {"
     func_def_middle, func_params = self.gen_insert_helpers_func_def_params(func_def_middle, func_params, -1, NO_XI_FLAG = True)
@@ -2421,7 +2422,7 @@ def gen_end_effector_pose_hessian_device(self, fixed_target_name = ""):
                    "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)", \
                    "d_workspace is the global scratch buffer; size END_EFFECTOR_POSE_HESSIAN_DEVICE_INLINE_WORKSPACE_BYTES<T, RESOURCE_TIER>() bytes (= 0 at TIER_SHARED, " + str(output_count) + "*sizeof(T) at TIER_LITE+). Pass nullptr at TIER_SHARED"]
     func_notes = ["Inline-CUDA users: at TIER_LITE/TIER_MINIMAL the large s_end_effector_pose_hessian output (~" + str(output_count) + "*sizeof(T) bytes) moves from shared memory to d_workspace, freeing smem for the caller's outer kernel"]
-    func_def_start = "void end_effector_pose_hessian_device" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "("
+    func_def_start = "void end_effector_pose_hessian_device" + ident_suffix(fixed_target_name) + "("
     func_def_middle = "T *s_end_effector_pose_hessian, T *s_end_effector_pose_gradient, const T *s_q, "
     func_def_end = "const robotModel<T> *d_robotModel, T *d_workspace = nullptr) {"
     func_def = func_def_start + func_def_middle + func_def_end
@@ -2564,7 +2565,7 @@ def gen_end_effector_pose_hessian_kernel(self, single_call_timing = False, fixed
                    "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)", \
                    "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)"]
     func_notes = ["Output d^2(pose)/dv^2 is in tangent-space convention (d/dv), shape 6 x nv x nv per ee, C-order. Matches pinocchio."]
-    func_def_start = "void end_effector_pose_hessian_kernel" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "(T *d_end_effector_pose_hessian, T *d_end_effector_pose_gradient, unsigned char *d_workspace, const T *d_q, const int stride_q, "
+    func_def_start = "void end_effector_pose_hessian_kernel" + ident_suffix(fixed_target_name) + "(T *d_end_effector_pose_hessian, T *d_end_effector_pose_gradient, unsigned char *d_workspace, const T *d_q, const int stride_q, "
     func_def_end = "const robotModel<T> *d_robotModel, const int NUM_TIMESTEPS) {"
     func_def = func_def_start + func_def_end
     if single_call_timing:
@@ -2600,7 +2601,7 @@ def gen_end_effector_pose_hessian_host(self, mode = 0, fixed_target_name = ""):
     # define function def and params
     func_params = host_std_func_params(with_gravity=False)
     func_notes = []
-    func_def_start = "void end_effector_pose_hessian" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const int num_timesteps,"
+    func_def_start = "void end_effector_pose_hessian" + ident_suffix(fixed_target_name) + "(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const int num_timesteps,"
     func_def_end =   "                            const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
     func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     # then generate the code
@@ -2611,13 +2612,13 @@ def gen_end_effector_pose_hessian_host(self, mode = 0, fixed_target_name = ""):
     # bundled pose-gradient transform to the mjx convention under the flag. Default
     # false -> byte-identical pin codegen.
     mjx_host = gen_host_wrapper_head(self, "end_effector_pose_hessian", func_def_start, func_def_end, kind_rule="kinematics")
-    eeph_kernel_tmpl = ("end_effector_pose_hessian_kernel" + ("" if fixed_target_name == "" else "_" + fixed_target_name) +
+    eeph_kernel_tmpl = ("end_effector_pose_hessian_kernel" + ident_suffix(fixed_target_name) +
                         ("<T, RESOURCE_TIER, MUJOCO_OUTPUT>" if mjx_host else "<T, RESOURCE_TIER>"))
     func_call_start = eeph_kernel_tmpl + "<<<block_dimms,thread_dimms,END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()>>>(hd_data->d_end_effector_pose_hessian,hd_data->d_end_effector_pose_gradient,hd_data->d_workspace,hd_data->d_q,stride_q,"
     func_call_end = "d_robotModel,num_timesteps);"
     if single_call_timing:
         if mjx_host:
-            func_call_start = func_call_start.replace("end_effector_pose_hessian_kernel" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "<", "end_effector_pose_hessian_kernel" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "_single_timing<")
+            func_call_start = func_call_start.replace("end_effector_pose_hessian_kernel" + ident_suffix(fixed_target_name) + "<", "end_effector_pose_hessian_kernel" + ident_suffix(fixed_target_name) + "_single_timing<")
         else:
             func_call_start = func_call_start.replace("kernel<T, RESOURCE_TIER>","kernel_single_timing<T, RESOURCE_TIER>")
     if not compute_only:

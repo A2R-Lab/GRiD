@@ -8,7 +8,7 @@ import warnings
 from .algorithms._idsva_so import _idsva_so_use_world_frame
 
 from .helpers._host_clamp import _apply_host_thread_clamp_pass
-from .helpers._code_generation_helpers import split_fragment_sentinels
+from .helpers._code_generation_helpers import split_fragment_sentinels, ident_suffix
 
 # Launch-config bake moved to _launch_config.py (H4); re-exported here because
 # bindings/_compile/_handle/autotune_ffi and the parity goldens import these
@@ -498,7 +498,7 @@ class GRiDCodeGenerator:
         # gen_ee_target_aliases (the stable end_effector_pose_target_* symbols) and
         # by _plant.py's ee_pos_cost family, so neither hard-codes a joint name.
         self._ee_target_name = fixed_target_name if fixed_target_name not in ("", "all") else ""
-        self._ee_target_sfx = ("_" + self._ee_target_name) if self._ee_target_name else ""
+        self._ee_target_sfx = ident_suffix(self._ee_target_name)
         # D.4 / Phase 5: runtime-mutable inertia table. When True, the per-link
         # spatial inertia is reconstructed on-device from a mutable d_inertia_params
         # table (set_inertia_params) instead of streamed from the baked d_XImats.
@@ -774,7 +774,7 @@ class GRiDCodeGenerator:
             # the all-leaf default (the unsuffixed symbols, NUM_EES leaves). gen_all_code
             # always emits exactly one of these blocks so the fixed wrapper compiles.
             _ee_named = fixed_target_name not in ("", "all")
-            _ee_sfx = ("_" + fixed_target_name) if _ee_named else ""
+            _ee_sfx = ident_suffix(fixed_target_name) if _ee_named else ""
             self.gen_add_code_lines([
                 "// ---- grid_rbd EE binding entry-point aliases (single named target routes here) ----",
                 "#define GRID_RBD_NUM_EES " + ("1" if _ee_named else "grid::NUM_EES"),

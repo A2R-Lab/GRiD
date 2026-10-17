@@ -41,6 +41,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 _TIME_BIN = "/usr/bin/time"
+# GNU time is optional: it records the per-job .time summary. Without it (a
+# Jetson image ships none) the job still runs and the tree sampler still
+# measures its peak; the first Orin receipt (2026-10-16) launched nothing for
+# hours because the missing binary raised inside the pool thread, silently.
+_HAVE_TIME_BIN = os.path.exists(_TIME_BIN)
 _MAXRSS_RE = re.compile(r"Maximum resident set size \(kbytes\):\s*(\d+)")
 
 DEFAULT_PEAK_KB = 8 * 1024 * 1024      # 8 GB — unmeasured compile assumption (tree peak)
@@ -243,6 +248,20 @@ class RamScheduler:
     # -- internals ---------------------------------------------------------
 
     def _run_pool(self, pending: list[Job]) -> None:
+        try:
+            self._run_pool_inner(pending)
+        except BaseException as exc:   # the thread must never die silently
+            # Every job without a result, including the one whose launch raised
+            # (already taken off `pending`), resolves so waiters unblock.
+            unresolved = [n for n in self.done_events if n not in self.results]
+            print(f"[{self.label}] FATAL: scheduler stopped: {exc!r}; "
+                  f"{len(unresolved)} job(s) unresolved", flush=True)
+            for name in unresolved:
+                self.results[name] = JobResult(name, -1, 0.0, 0, f"scheduler stopped: {exc!r}")
+                self.done_events[name].set()
+            raise
+
+    def _run_pool_inner(self, pending: list[Job]) -> None:
         running: dict[str, tuple[Job, subprocess.Popen, int, float, object, list]] = {}
         busy_groups: set[str] = set()
         predicted_sum = 0
@@ -305,8 +324,11 @@ class RamScheduler:
         if job.env:
             env.update(job.env)
         time_out = Path(job.log_path).with_suffix(".time") if job.log_path else None
-        argv = ([_TIME_BIN, "-v", "-o", str(time_out)] + job.argv
-                if time_out is not None else [_TIME_BIN, "-v"] + job.argv)
+        if _HAVE_TIME_BIN:
+            argv = ([_TIME_BIN, "-v", "-o", str(time_out)] + job.argv
+                    if time_out is not None else [_TIME_BIN, "-v"] + job.argv)
+        else:
+            argv = list(job.argv)
         log_f = open(job.log_path, "w") if job.log_path else subprocess.DEVNULL
         with self._state_lock:
             if self._stop.is_set():
