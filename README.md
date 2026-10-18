@@ -147,9 +147,7 @@ MIT; see [LICENSE](https://github.com/A2R-Lab/GRiD/blob/main/LICENSE).
     </tr>
     <tr>
       <td align="center" valign="top" width="20%"><a href="https://github.com/caelyasutake"><img src="https://avatars.githubusercontent.com/caelyasutake?s=100" width="100px;" alt="Cael Yasutake"/><br /><sub><b>Cael Yasutake</b></sub></a><br /></td>
-      <td align="center" valign="top" width="20%"><a href="https://github.com/A2R-Lab/GRiD/graphs/contributors"><img src="https://www.gravatar.com/avatar/b619b0ff13333ce2a22bb110eda8f7a9?d=identicon&s=100?s=100" width="100px;" alt="Danelle Tuchman"/><br /><sub><b>Danelle Tuchman</b></sub></a><br /></td>
       <td align="center" valign="top" width="20%"><a href="https://github.com/naren-loganathan"><img src="https://avatars.githubusercontent.com/naren-loganathan?s=100" width="100px;" alt="Naren Loganathan"/><br /><sub><b>Naren Loganathan</b></sub></a><br /></td>
-      <td align="center" valign="top" width="20%"><a href="https://github.com/emilyburnett2003"><img src="https://avatars.githubusercontent.com/emilyburnett2003?s=100" width="100px;" alt="emilyburnett2003"/><br /><sub><b>emilyburnett2003</b></sub></a><br /></td>
       <td align="center" valign="top" width="20%"><a href="https://github.com/pruyontrarakk"><img src="https://avatars.githubusercontent.com/pruyontrarakk?s=100" width="100px;" alt="pruyontrarakk"/><br /><sub><b>pruyontrarakk</b></sub></a><br /></td>
     </tr>
   </tbody>
