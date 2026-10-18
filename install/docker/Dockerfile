@@ -51,7 +51,8 @@ RUN pip install torch --index-url "${TORCH_INDEX_URL}" \
 # The sample robot and its generated header. The wheel ships no URDF; this one
 # comes from the build context (grid_assets/robots/iiwa14.urdf).
 COPY grid_assets/robots/iiwa14.urdf /opt/grid/robots/iiwa14.urdf
-RUN grid-generate /opt/grid/robots/iiwa14.urdf -o /opt/grid/iiwa14/grid.cuh \
+RUN mkdir -p /opt/grid/iiwa14 \
+    && grid-generate /opt/grid/robots/iiwa14.urdf -o /opt/grid/iiwa14/grid.cuh \
     && python -c "import grid_rbd, grid_codegen, jax, torch; print(grid_rbd.__version__, jax.__version__, torch.__version__)"
 
 # Precompile iiwa14 into the image's cache store as a fat binary (no GPU at
