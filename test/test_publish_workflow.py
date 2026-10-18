@@ -1,5 +1,8 @@
 """CPU-only guards for receipt ancestry and publication boundaries."""
 from pathlib import Path
+import os
+import subprocess
+import sys
 
 import yaml
 
@@ -35,3 +38,28 @@ def test_testpypi_requires_successful_build_without_inheriting_receipt_skip():
     # An explicit status function avoids GitHub's implicit success() across the
     # dependency chain, where the tag-only receipt job is skipped on dispatch.
     assert job['if'] == "${{ !cancelled() && needs.build.result == 'success' }}"
+
+
+def test_docker_header_generation_creates_output_directory(tmp_path):
+    """Run the recipe's shell prelude with a writer that requires its parent."""
+    dockerfile = (ROOT / 'install/docker/Dockerfile').read_text().replace('\\\n', '')
+    run = next(line.removeprefix('RUN ') for line in dockerfile.splitlines()
+               if line.startswith('RUN ') and 'grid-generate ' in line)
+    # The following Python import/version print is independent of directory setup.
+    command = run.split('&& python -c', 1)[0]
+    command = command.replace('/opt/grid', str(tmp_path / 'grid'))
+    executable = tmp_path / 'grid-generate'
+    executable.write_text(
+        f'#!{sys.executable}\n'
+        'import pathlib, sys\n'
+        'pathlib.Path(sys.argv[sys.argv.index("-o") + 1]).write_text("header\\n")\n'
+    )
+    executable.chmod(0o755)
+    env = dict(os.environ, PATH=str(tmp_path) + os.pathsep + os.environ['PATH'])
+    # The original recipe omitted mkdir; the same writer must fail in that case.
+    old_command = command[command.index('grid-generate '):]
+    result = subprocess.run(['sh', '-ec', old_command], env=env, capture_output=True,
+                            text=True)
+    assert result.returncode != 0 and 'FileNotFoundError' in result.stderr
+    subprocess.run(['sh', '-ec', command], env=env, check=True, capture_output=True)
+    assert (tmp_path / 'grid/iiwa14/grid.cuh').read_text() == 'header\n'
