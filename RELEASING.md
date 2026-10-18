@@ -69,9 +69,11 @@ points from outside the checkout: `load_robot` on iiwa14 with
 `examples/cuda/inverse_dynamics_kernel_example.cu` and
 `examples/cuda/validate.py`. It prints the Python, nvcc, jax and torch
 versions and the wheel name and SHA-256 it used, and ends with one line,
-`release fresh install: PASS` or `release fresh install: FAIL`. Keep the work
+`release fresh install: PASS` or `release fresh install: FAIL`. It also runs
+`tools/check_installed_numerics.py` on supplied iiwa14 and floating-base go2 URDFs
+against the bundled FP64 oracle. Keep the work
 directory's `SHA256SUMS.txt` and `release_fresh_install.log` with the release
-evidence (gate 5). The script takes minutes and downloads `jax[cuda12]` and a
+evidence (gate 5). Compilation time depends on cache state; the script downloads `jax[cuda12]` and a
 torch CUDA wheel into the venv. Set `GRID_RBD_BUILD_JOBS=1` to keep one `nvcc`
 process at a time when the box is shared.
 
@@ -95,6 +97,28 @@ process at a time when the box is shared.
 5. Preserve artifact SHA-256 hashes, build logs, exact versions and installed
    GPU results alongside the fresh full source receipt. Artifact checks do not
    substitute for the full GPU test scope.
+
+### Numerical release matrix
+
+The tiny-robot smoke is necessary but not sufficient. The mandatory
+`tools/check_installed_numerics.py --work DIR --urdf-dir DIR` checks real fixed-
+and floating-base robots, several batch sizes, dynamics and gradients, NumPy/
+JAX/PyTorch values and autograd, pinned outputs and isolated contexts. The fixed-
+base case additionally checks dynamics Hessians, pose derivatives and all six
+integrators. The same matrix runs in the signed wrapper suite. CUDA tests cover
+batched integrator values and gradients directly, including null force pointers.
+
+Every batched operand must vary independently across rows, including external
+forces and optional accelerations. Include distinct, repeated and zero values;
+compare against per-row CPU reference results, concatenated single calls and
+permuted batches. Vary the batch/block relationship for direct CUDA tests.
+Identical force rows previously masked a kernel reading row zero for every sample.
+Cross-backend agreement alone cannot detect a shared generator bug.
+
+Retain failing probes and their outputs. Fix the cause, add a failing-before/
+passing-after regression, and refresh the source receipt; do not label a release
+ready because its minimal smoke passed. Neither malformed-input checks nor
+sanitizers replace numerical comparisons.
 
 ## Freeze and publish
 
@@ -165,8 +189,19 @@ Per release:
 
 1. Rehearse: run the workflow by hand (`workflow_dispatch`; the receipt gate is
    skipped and only TestPyPI is reachable), approve the `testpypi` environment, then
-   install from TestPyPI into a clean virtual environment and run
-   `tools/check_installed_package.py --gpu` on a GPU box.
+   download that exact version from TestPyPI with `--no-deps`. Match **every**
+   downloaded wheel and sdist SHA-256 to that run's artifacts, not a prior run.
+   Install the exact wheel in a new virtual environment outside the checkout;
+   resolve ordinary dependencies from production PyPI separately (no mixed
+   `--extra-index-url` resolution). Run CPU provenance/codegen, `--gpu`, fresh-
+   process `--gpu --reload`, and the numerical matrix above. Independently build
+   and install the downloaded sdist and check CPU provenance/codegen. Audit all
+   wheel RECORD entries and the common bundled payload across Python versions;
+   preserve logs, versions and hashes. Local GPU validation of one interpreter
+   does not establish GPU coverage for every wheel ABI.
+   TestPyPI filenames are immutable: a corrected package needs a new version.
+   An upload skipped by `skip-existing` is not evidence that new bytes were tested;
+   any hash mismatch blocks the rehearsal even if the workflow is green.
 2. Release: push the tag `v<version>` at the commit that carries the fresh release
    receipt. The `receipt` job verifies it, `build` runs, then approve `testpypi`,
    re-check the installed package, and approve `pypi`.

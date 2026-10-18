@@ -17,6 +17,8 @@
 #   4. Python-wrapper path: load_robot on iiwa14 (the URDF is copied out of
 #      grid_assets/robots; the wheel does not ship it), forward_dynamics on a
 #      batch of 8 checked against the bundled RBDReference oracle.
+#      Then the real-robot numerical acceptance matrix on iiwa14 and floating
+#      go2 (three adapters, distinct/repeated/zero batched forces, derivatives).
 #   5. Header-only path: grid-generate on that URDF, nvcc on a copy of
 #      examples/cuda/inverse_dynamics_kernel_example.cu, and
 #      examples/cuda/validate.py against RBDReference.
@@ -207,6 +209,13 @@ for i in range(B):
     assert rel < 1e-4, f"forward_dynamics row {i}: rel_err={rel:.3e}"
 print(f"PASS load_robot iiwa14 forward_dynamics: shape {qdd.shape}, worst rel_err {worst:.3e} (tol 1e-4)")
 PYLOAD
+
+# The same broad matrix runs in the signed suite and on the actual artifact.
+# Independently varying force rows are essential: repeating one wrench hid a
+# per-timestep indexing bug despite a green full receipt (2026-10-17).
+cp "${REPO_ROOT}/grid_assets/robots/go2.urdf" "${WORK}/grid_assets/robots/"
+"${VPY}" -I "${REPO_ROOT}/tools/check_installed_numerics.py" \
+    --work "${WORK}/numerics" --urdf-dir "${WORK}/grid_assets/robots"
 
 # ---------------------------------------------------------------------------
 step "5/5 header-only: grid-generate, nvcc, examples/cuda/validate.py vs RBDReference"

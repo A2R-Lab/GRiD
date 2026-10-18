@@ -17,6 +17,15 @@ FLAGSHIP = "test_cuda_executable_equivalence"
 _P = "test/cuda_equivalents"
 
 
+def test_installed_numerics_helper_is_fingerprinted_and_warmed():
+    assert "tools/check_installed_numerics.py" in rss.wrapper_fingerprint_paths("test_release_numerics")
+    entries = rss.WARM_MANIFEST["test_release_numerics"]
+    assert {(e["robot"], e["floating_base"]) for e in entries} == {("iiwa14", False), ("go2", True)}
+    assert all(e["max_batch_size"] == 32 and not e["enable_mujoco_kernels"] for e in entries)
+    source = (rss.REPO_ROOT / "tools/release_fresh_install.sh").read_text()
+    assert '"${REPO_ROOT}/tools/check_installed_numerics.py"' in source
+
+
 @pytest.fixture(autouse=True)
 def unchanged_oracle_for_synthetic_receipts(monkeypatch):
     # Synthetic receipts below use fictitious commit SHAs; isolate their

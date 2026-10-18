@@ -3158,6 +3158,29 @@ Diagnosis in three CPU steps. (1) Per-sample errors from the saved failure.npz a
 
 Rule: the quantity exists and the mapping is exact; what cannot be validated is the backend's fp32 arithmetic in its own ill-conditioned chart. The collector now takes a validation scope from the adapter (worker.py, `validation_scope`): Frax floating cells validate on the samples with chart condition at most CHART_CONDITION_MAX = 10 (about 1 sample in 100 excluded) and the cell records the counts; timing covers every sample. The threshold came from a sweep over the captured errors (retained relative L2 below 3e-4 at every batch). Do not widen the backstop for everyone to admit one backend's singular chart, and do not change the shared fixture: the other backends validate at those samples.
 
+### 7.z54 Single calls pass but batched force calls fail: inspect every operand's sample stride (2026-10-17)
+
+The installed-wheel acceptance probes exposed a shared generator bug across
+NumPy, JAX and PyTorch: dynamics and gradients used force row zero for every
+sample. Thirty robot/backend/operator combinations agreed with an FP64 oracle
+deliberately fed row zero (worst scaled error 5.4e-7), while correct per-row
+references differed by up to 0.23. Single calls were correct. This is an indexing
+bug, not FP32 conditioning; agreement among backends sharing a kernel proves
+neither the convention nor the math.
+
+Select `d_f_ext + size_t(k) * 6 * NUM_BODIES` at the batched kernel boundary,
+preserving null pointers. Use sample `k`, not `blockIdx.x`, because one block can
+process multiple samples. Inner/device functions receive one force row and must
+not offset again. Audit sibling consumers: integrator values and gradients had
+the same missing offset. Do not change single-input timing kernels.
+
+Regression inputs must vary every batched operand independently. The old force
+test varied forces across bodies but repeated the same row at every sample,
+masking this bug. Require distinct/repeated/zero forces, permutations, single-
+versus-batch and per-row FP64 comparisons; CUDA tests also cover fewer blocks
+than samples and null forces. Run real-robot numerical checks on the actual
+downloaded wheel, not just a tiny smoke or the source checkout.
+
 ### 7.z53 A parser is only as right as its oracle matrix: two rotation-direction bugs invisible to every shipped robot (2026-10-16, URDFParser inertial origins and prismatic origins)
 
 Symptom, relayed from GATO: the UR5e came out 7 to 10 percent off pinocchio on every inertia probe, and rewriting its three rotated inertial tensors into the link frame fixed it. Root cause in `Link.build_spatial_inertia`: the `<inertial><origin rpy>` rotation was never applied; only the translation's parallel-axis term was. The link-frame tensor is E^T I E with the parser's Featherstone E = R^T (equivalently R I R^T with URDF's R = Rz Ry Rx). The receipt never saw it because none of the ten shipped robots rotates an inertial origin.

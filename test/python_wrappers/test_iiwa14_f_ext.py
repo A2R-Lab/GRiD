@@ -75,6 +75,8 @@ def samples(handle):
     for b in range(NB):
         f_ext[:, 6 * b: 6 * b + 6] = (0.1 * (b + 1)) * np.array(
             [0.3, -0.5, 0.2, 1.1, -0.7, 0.9], dtype=np.float32)
+    # Distinct timestep rows expose missing batch offsets, not just body offsets.
+    f_ext *= np.array([1.0, -0.5, 2.0, -1.5], dtype=np.float32)[:, None]
     return {
         "q":  rng.standard_normal((B, NJ)).astype(np.float32),
         "qd": rng.standard_normal((B, NJ)).astype(np.float32),

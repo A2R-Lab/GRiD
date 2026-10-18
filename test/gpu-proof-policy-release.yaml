@@ -31,6 +31,7 @@ required_fingerprint_paths:
   - _build_resources.py
   - MANIFEST.in
   - tools/check_installed_package.py
+  - tools/check_installed_numerics.py
   - test/cuda_equivalents
   - test/python_wrappers
   - test/conftest.py

@@ -1055,6 +1055,7 @@ def _emit_integrator_kernel_body_for_flags(self, nq, nv, spill_minv_F, single_ca
     out_count = nq + nv  # next state [q (nq); qd (nv)]
     if not single_call_timing:
         self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
+        self.gen_add_code_line("T *d_f_ext_k = d_f_ext ? d_f_ext + static_cast<size_t>(k) * 6 * NUM_BODIES : nullptr;")
         self.gen_kernel_load_inputs("q_qd_u",str(input_count),stride="stride_q_qd_u")
         if spill_minv_F:
             self.gen_add_code_line(gen_workspace_repoint_line("int_d_workspace", "GRID_MINV_F_WORKSPACE_OFFSET_BYTES<T>()", batch_indexed=True, declare=True))
@@ -1075,7 +1076,7 @@ def _emit_integrator_kernel_body_for_flags(self, nq, nv, spill_minv_F, single_ca
         self.gen_add_code_line("// compute")
         self.gen_load_update_XImats_helpers_function_call()
         self.gen_integrator_inner_function_call(integrator_type="IT",
-            updated_var_names=(dict(d_workspace_name="int_d_workspace", d_f_ext_name="d_f_ext") if spill_minv_F else dict(d_f_ext_name="d_f_ext")),
+            updated_var_names=(dict(d_workspace_name="int_d_workspace", d_f_ext_name="d_f_ext_k") if spill_minv_F else dict(d_f_ext_name="d_f_ext_k")),
             minv_f_in_smem_expr=minv_f_expr)
         self.gen_add_sync()
         # mjx output (RETRACT): the kernel integrated q in the PIN convention

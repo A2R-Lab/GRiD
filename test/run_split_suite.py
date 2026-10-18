@@ -146,6 +146,15 @@ def _r(robot, **kw):
     return {"robot": robot, **kw}
 
 WARM_MANIFEST: dict[str, list[dict]] = {
+    "test_release_numerics": [
+        _r(robot, max_batch_size=32, floating_base=floating,
+           enable_mujoco_kernels=False,
+           algorithm_list=["inverse_dynamics", "forward_dynamics", "aba", "crba", "minv",
+                           "inverse_dynamics_gradient", "forward_dynamics_gradient", "end_effector_pose"]
+                          + ([] if floating else ["idsva_so_body_frame", "fdsva_so", "integrator",
+                                                  "end_effector_pose_gradient", "end_effector_pose_hessian"]))
+        for robot, floating in (("iiwa14", False), ("go2", True))
+    ],
     "test_centroidal_energy_frame": [_r("iiwa14", max_batch_size=8),
                                      _r("go2", max_batch_size=8)],
     # 08-13: was warm-exempt ("inline registrations") — the 08-12 night pass cold-
@@ -938,6 +947,14 @@ def aggregate_header_keys(rdir: Path, results: list[dict],
 # narrow shard fingerprint, which only covers git-tracked test files — GRiD
 # pins codegen/submodules by commit SHA at the receipt level instead).
 STATE_PATH = REPO_ROOT / "test" / ".split-suite-state.json"
+WRAPPER_HELPER_PATHS = {
+    "test_release_numerics": ["tools/check_installed_numerics.py"],
+}
+
+
+def wrapper_fingerprint_paths(mod: str) -> list[str]:
+    return [f"test/python_wrappers/{mod}.py", "bindings/grid_rbd", "bindings/src",
+            "external/RBDReference", *WRAPPER_HELPER_PATHS.get(mod, [])]
 
 
 def _nvcc_version() -> str:
@@ -957,6 +974,8 @@ def module_fingerprint(mod: str) -> str:
     h = hashlib.sha256()
     h.update((WRAPPERS_DIR / f"{mod}.py").read_bytes())
     h.update((REPO_ROOT / "test" / "conftest.py").read_bytes())
+    for helper in WRAPPER_HELPER_PATHS.get(mod, []):
+        h.update((REPO_ROOT / helper).read_bytes())
     for e in WARM_MANIFEST.get(mod, []):
         try:
             urdf = robot_urdf(e["robot"])
@@ -1893,11 +1912,9 @@ def main() -> int:
         # cuda domain (grid_codegen inputs there would turn every codegen edit
         # into a multi-day full-domain refresh; that class stays covered by the
         # byte-gates + equivalence smokes + release-policy full passes).
-        _BINDINGS_FP = ["bindings/grid_rbd", "bindings/src", "external/RBDReference"]
         specs += [ShardSpec(name=mod, domain="wrappers",
                             targets=[f"test/python_wrappers/{mod}.py"],
-                            fingerprint_paths=[f"test/python_wrappers/{mod}.py"]
-                            + _BINDINGS_FP)
+                            fingerprint_paths=wrapper_fingerprint_paths(mod))
                   for mod in modules]
 
     if run_cuda:

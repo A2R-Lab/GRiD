@@ -1629,6 +1629,7 @@ def _emit_inverse_dynamics_gradient_kernel_body_for_flags(self, NUM_POS, n, use_
     self.gen_add_code_line("T *s_q = s_q_qd; T *s_qd = &s_q_qd[" + str(NUM_POS) + "];")
     if not single_call_timing:
         self.gen_add_parallel_loop("k","NUM_TIMESTEPS",block_level = True)
+        self.gen_add_code_line("T *d_f_ext_k = d_f_ext ? d_f_ext + static_cast<size_t>(k) * 6 * NUM_BODIES : nullptr;")
         if use_qdd_input:
             self.gen_kernel_load_inputs("q_qd",str(n + NUM_POS),"qdd",str(n),stride="stride_q_qd",stride2=str(NUM_POS))
         else:
@@ -1648,6 +1649,7 @@ def _emit_inverse_dynamics_gradient_kernel_body_for_flags(self, NUM_POS, n, use_
         self.gen_add_code_line("// compute — the orchestration inner owns its s_temp pool placement")
         self.gen_inverse_dynamics_gradient_device_function_call(
             use_qdd_input,
+            d_f_ext_name="d_f_ext_k",
             scratch_in_smem_expr = ("false" if use_global_temp else "true"),
             use_da_df_spill_expr = ("true" if use_selective_spill else "false"),
             d_workspace_pool_name = (gen_workspace_cast_expr(batch_indexed=True) if use_global_temp else "nullptr"),

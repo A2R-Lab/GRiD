@@ -217,6 +217,7 @@ def _emit_fd_kernel_body_for_flags(self, nq, nv, spill_minv_F, single_call_timin
     minv_f_expr = "false" if spill_minv_F else "true"
     if not single_call_timing:
         self.gen_add_parallel_loop("k","NUM_TIMESTEPS",block_level = True)
+        self.gen_add_code_line("T *d_f_ext_k = d_f_ext ? d_f_ext + static_cast<size_t>(k) * 6 * NUM_BODIES : nullptr;")
         self.gen_kernel_load_inputs("q_qd_u",str(input_count),stride="stride_q_qd_u")
         # mjx input convert (before XImats so X[0] uses the reordered quaternion):
         # quat wxyz->xyzw, qd[0:3]=R^T qd[0:3], u[0:3]=R^T u[0:3]. fd has no qdd
@@ -232,7 +233,7 @@ def _emit_fd_kernel_body_for_flags(self, nq, nv, spill_minv_F, single_call_timin
         self.gen_add_code_line("// compute")
         self.gen_load_update_XImats_helpers_function_call()
         self.gen_forward_dynamics_inner_function_call(
-            updated_var_names = (dict(d_workspace_name = "fd_d_workspace") if spill_minv_F else None),
+            updated_var_names = (dict(d_workspace_name="fd_d_workspace", d_f_ext_name="d_f_ext_k") if spill_minv_F else dict(d_f_ext_name="d_f_ext_k")),
             minv_f_in_smem_expr = minv_f_expr)
         self.gen_add_sync()
         # mjx output: forward-dynamics accel qdd[0:3] = R (qdd[0:3] + omega x v_local);

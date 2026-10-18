@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 # the wrapper hard-imports the codegen tree at register_robot time, so they were
 # always one distribution — now folded into one editable install.
 name = "grid-rbd"
-version = "0.5.2"
+version = "0.5.3"
 description = "GPU robot dynamics, kinematics and collisions with analytical derivatives"
 readme = "README.md"
 # 3.10 floor: the runtime wrapper + its pybind11 _core ext require it; codegen
@@ -146,7 +146,7 @@ fingerprint_paths = [
     "test/compile_sched.py", "test/prewarm_cuda_flagship.py",
     "test/codegen_neutrality.py", "test/header_key_replay.py",
     "test/receipt_integrity.py", "test/gpu-proof-tests.txt", "test/run_validation.py",
-    "tools/check_installed_package.py",
+    "tools/check_installed_package.py", "tools/check_installed_numerics.py",
     # 2026-10-14 audit: executed by every GPU import / consulted by the verifier.
     "test/__init__.py", "test/gpu-proof-policy.yaml", "test/gpu-proof-policy-release.yaml",
     "test/gpu-proof-expected-skips.txt",
