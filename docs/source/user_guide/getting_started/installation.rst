@@ -281,7 +281,7 @@ receipt exercises it. Run it with the NVIDIA Container Toolkit:
 
 .. code-block:: shell
 
-   docker run --rm -it --gpus all -v grid-cache:/var/cache/grid-rbd ghcr.io/a2r-lab/grid:latest
+   docker run --rm -it --gpus all -v grid-cache:/var/cache/grid-rbd ghcr.io/a2r-lab/grid:0.5.3
 
 The image's cache store carries one compiled robot library: an iiwa14
 binary for sm_86, sm_89, sm_90 and sm_120, compiled with the sm_120 launch
@@ -294,7 +294,8 @@ to keep the cache across containers; Docker seeds an empty named volume with
 the image's store. The header-only path needs no compile
 step: ``nvcc -arch=sm_90 -std=c++17 -I /opt/grid/iiwa14 my_kernel.cu``
 builds against the baked header. Build the image yourself from the
-repository root with ``docker build -f install/docker/Dockerfile -t grid .``;
+repository root with
+``docker build -f install/docker/Dockerfile --build-arg GRID_RBD_VERSION=0.5.3 -t grid:0.5.3 .``;
 the build argument ``GRID_RBD_VERSION`` selects the PyPI version and
 ``GRID_ARCHS`` the compute capabilities of the precompiled iiwa14 binary.
 
