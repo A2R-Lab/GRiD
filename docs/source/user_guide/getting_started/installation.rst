@@ -277,7 +277,11 @@ after each release reaches PyPI. The image is
 and tested with, plus ``grid-rbd`` pinned to the release, ``jax[cuda12]``, a
 cu128 torch wheel and the generated iiwa14 header at
 ``/opt/grid/iiwa14/grid.cuh``. The image is built in CI without a GPU and no
-receipt exercises it. Run it with the NVIDIA Container Toolkit:
+receipt exercises it. A separate smoke test of the 0.5.3 image on an RTX 5090
+(2026-10-19) passed precompiled iiwa14 inverse dynamics against the CPU reference
+on NumPy, JAX and PyTorch, plus new-robot compilation, autograd and cache-only
+reload in a fresh container. This does not validate the other embedded GPU
+architectures. Run it with the NVIDIA Container Toolkit:
 
 .. code-block:: shell
 

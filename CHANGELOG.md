@@ -13,8 +13,9 @@ repository. Everything below describes the packaged A2R-Lab releases.
 ## [Unreleased]
 
 - Docker: create the sample robot's output directory before generating its
-  header. The corrected 0.5.3 image builds and publishes in CI; container GPU
-  execution is not yet validated.
+  header. The corrected 0.5.3 image builds and publishes in CI. An RTX 5090
+  container smoke test passed on 2026-10-19: precompiled iiwa14 values on all
+  three backends, new-robot compilation, autograd and cache-only reload.
 
 ## [0.5.3] — 2026-10-18
 
@@ -91,7 +92,8 @@ Not released on production PyPI; superseded by 0.5.3.
   `ghcr.io/a2r-lab/grid` (CUDA 13.2 devel base, grid-rbd from PyPI, `jax[cuda12]`, torch
   cu128, baked iiwa14 header; robots compile on first load); `install/environment.yml`
   (conda) and a uv recipe on the installation page. The Docker image builds in
-  CI without a GPU; its GPU runtime and the conda recipe remain unvalidated.
+  CI without a GPU; the 0.5.3 image also passed the RTX 5090 smoke test described
+  above. The conda recipe remains unvalidated.
 - Tutorials: `examples/cuda/fused_control_step/` fuses a computed-torque control step
   around `inverse_dynamics_device` in one kernel and checks and times it against the
   host-function path (`build_and_time.sh --json`); `examples/jax/ik_gradient_descent.py`
