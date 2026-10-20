@@ -23,6 +23,10 @@ repository. Everything below describes the packaged A2R-Lab releases.
 - Tests: test_osc_inertia checks every sample through the normwise backward
   error of the task-space inertia (the check the frame-Jacobian suite uses)
   instead of passing over ill-conditioned samples.
+- Tests: g1 floating joins the integrator gradient's float32 norm-bound class
+  with a bound measured on the Jetson AGX Orin (sm_87), where the RK4 gradient at
+  the most energetic sample rounds three times wider than on the RTX 5090. The
+  entrywise check runs first and still passes on the 5090.
 - Receipts: compute-sanitizer racecheck is unsupported on the Jetson Orin's
   integrated GPU ("GPU debugging features are disabled"); the racecheck cell
   skips on that exact message and the sm_87 receipt row carries its own

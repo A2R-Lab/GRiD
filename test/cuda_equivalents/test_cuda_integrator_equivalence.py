@@ -174,9 +174,26 @@ _FLOATING_MIMIC_NORM_RTOL = 3e-3
 #   abs 413 at scale 1.2e5). The same model with grad_q 1.3e-3 and grad_qd/Minv 2.9e-4
 #   (200 trials) gives norm_rel max 7.8e-3 at high_velocity, 6.1e-3 at
 #   energetic_random_1, 4.6e-3 at high_acceleration. Bound 8e-3 = the model's max.
+#   g1 (2026-10-20, the Jetson AGX Orin sm_87 receipt at 9071c0a and again at main
+#   47dd900: rk4 dAB @ high_velocity_accel dt=0.1 missed 2 of 7350 entries at both
+#   tiers and both thread counts, worst 1.48x the allowance, norm_rel 1.45e-3; the
+#   RTX 5090 passes the same cell entrywise at norm_rel 4.06e-4). The class noise
+#   was measured where the cell spends it: the forward_dynamics_gradient kernel at
+#   the four RK4 stage states of that sample (|qd| peaks at 567 by stage 3, cond(M)
+#   1.4e5 to 1.6e5). Stages 0 to 2 and every gradient_qd block are bit-identical on
+#   the two GPUs (norm_rel 3e-6 to 3e-5); the stage-3 gradient_q block alone is
+#   3.77e-4 on sm_120 and 1.15e-3 on sm_87, the same float32 floating-Minv class
+#   rounded differently by the sm_87 code. The model with grad_q 1.15e-3 and
+#   grad_qd/Minv 2e-4 at every stage (200 trials) gives norm_rel max 1.33e-3 at
+#   high_velocity_accel, 1.56e-3 at high_velocity, 1.77e-3 at energetic_random_1
+#   and 2.21e-3 at high_acceleration, with up to 48 entries past the entrywise
+#   check per trial; with the sm_120 class (4.5e-4) the max is 9.1e-4 and no
+#   sample misses. Bound 2.5e-3 = the model's max at the worst sample, rounded up;
+#   the sm_87 kernel sits at 0.58 of it, the sm_120 kernel at 0.16.
 _FLOATING_FDGRAD_NORM_RTOL = {
     "rizon4": 6e-3,
     "gen3": 8e-3,
+    "g1": 2.5e-3,
 }
 
 
