@@ -1,0 +1,9 @@
+# Expected skips for the Jetson AGX Orin (sm_87) receipt, receipts/gpu-proof-sm87.json.
+# The primary baseline (test/gpu-proof-expected-skips.txt) is empty; this file lists
+# the cells a Jetson integrated GPU cannot run, with the reason, and nothing else.
+#
+# compute-sanitizer's racecheck tool needs the GPU debugger interface, which the
+# Orin's integrated GPU does not expose ("GPU debugging features are disabled",
+# CUDA 13.2, 2026-10-17): the sanitizer counts its own refusal as one error while
+# the runner prints OK. The test skips on that exact message.
+test/cuda_equivalents/test_cuda_racecheck_floating.py::test_go2_floating_composition_is_racecheck_clean

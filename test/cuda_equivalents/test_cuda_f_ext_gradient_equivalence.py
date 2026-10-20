@@ -168,12 +168,13 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
     # for mimic robots; RBDReference (which the CUDA matches exactly) is the
     # authoritative oracle here.
     has_mimic = any(getattr(j, "is_mimic", False) for j in ref.robot.joints)
-    # gen3: its four continuous joints are RUBZ (cos, sin) slots in pinocchio and raw
-    # angles in GRiD; the cross-library float64 round-off bucket in RBDReference
-    # tests/tolerances.py has no forward_dynamics or f_ext_grad entry, so the
-    # pinocchio leg is left out for gen3 as for the mimic robots (2026-10-16; the
-    # CUDA-vs-RBDReference leg stays). Ask: add those gen3 buckets to RBDReference.
-    pin_excluded = has_mimic or robot_id == "gen3"
+    # gen3 (2026-10-16 to 2026-10-20): its pinocchio leg was left out because this
+    # module passed tolerance keys RBDReference does not have ("f_ext_grad"), which
+    # fell back to the 1e-7 default instead of gen3's continuous-joint bucket.
+    # RBDReference now refuses unknown keys and the keys here are its own; gen3's
+    # measured residual (1.1e-5 relative, dtau and -dJ^T/dq; 8.5e-7 dqdd) sits
+    # inside the f_ext_gradient buckets, so the three-way check runs for it.
+    pin_excluded = has_mimic
 
     def row(v):
         return " ".join(f"{x:.9g}" for x in np.asarray(v, dtype=np.float32))
@@ -228,8 +229,8 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
             failures.append(f"{label}: RBDReference-vs-pinocchio maxerr={err_pin:.3e} > {ptol:.3e}")
 
     # First-order pair (exact). CUDA layout is nv x 6NB column-major == oracle.
-    _check("dtau_dfext", _cuda("f_ext_gradient_dtau_dfext"), a_dtau, e_dtau, "f_ext_grad")
-    _check("dqdd_dfext", _cuda("f_ext_gradient_dqdd_dfext"), a_dqdd, e_dqdd, "f_ext_grad")
+    _check("dtau_dfext", _cuda("f_ext_gradient_dtau_dfext"), a_dtau, e_dtau, "f_ext_gradient")
+    _check("dqdd_dfext", _cuda("f_ext_gradient_dqdd_dfext"), a_dqdd, e_dqdd, "f_ext_gradient")
 
     # A.3 -dJ^T/dq (both base modes; analytic numpy oracle, on-device-FD CUDA).
     # The runner prints it as a (nv*6NB) x nv
@@ -241,7 +242,7 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
     for vj in range(nv):
         for col in range(6 * nb):
             cuda3[vj, col, :] = cuda_djt[vj + nv * col, :]
-    _check("did_du_dfext_dq", cuda3, a_djt, e_djt, "f_ext_grad_so", f32_floor=2e-4,
+    _check("did_du_dfext_dq", cuda3, a_djt, e_djt, "f_ext_gradient_so", f32_floor=2e-4,
            pin_fd_h=1e-6)  # the pinocchio leg is a central FD with h = 1e-6 (see _check)
 
     assert not failures, "f_ext_gradient CUDA equivalence failures:\n" + "\n".join(failures)

@@ -10,11 +10,9 @@ thread external forces (inverse_dynamics / fd / aba / inverse_dynamics-grad / fd
 IDENTICAL f_ext to RBDReference and pinocchio and assert all three agree.
 
 Every manifest robot on both bases (widened 2026-10-15), iiwa14 fixed first as
-the gate. For the mimic robots (fr3 / h1_2) the pinocchio leg is left out:
-pinocchio's reduced model collapses the mimic body, so its f_ext has NB-1
-columns and cannot take the same per-body input; the CUDA-vs-RBDReference check
-stands on its own there (RBDReference is pinocchio-validated on the non-mimic
-robots). Narrow with GRID_CUDA_FEXT_ROBOTS="iiwa14:fixed,g1:floating".
+the gate, and every robot runs all three legs (2026-10-20: the pinocchio oracle
+maps a wrench on every body, mimic-driven bodies included, and the tolerance
+keys are RBDReference's own). Narrow with GRID_CUDA_FEXT_ROBOTS="iiwa14:fixed,g1:floating".
 """
 import os
 import shutil
@@ -153,17 +151,16 @@ def test_cuda_fext_three_way_equivalence(robot_id, base_mode, tmp_path):
     f_ext_flat = np.concatenate(f_ext).astype(np.float64)
 
     floating = base_mode == "floating"
-    # Mimic robots: the CUDA path and RBDReference take one f_ext column per body
-    # (NB bodies, the mimic body included); pinocchio's reduced model omits the
-    # mimic body, so its f_ext layout differs and the three-way check becomes the
-    # two-way CUDA-vs-RBDReference check (see the module docstring).
-    has_mimic = any(getattr(j, "is_mimic", False) for j in ref.robot.joints)
-    # gen3: its four continuous joints are RUBZ (cos, sin) slots in pinocchio and raw
-    # angles in GRiD; the cross-library float64 round-off bucket in RBDReference
-    # tests/tolerances.py has no forward_dynamics or f_ext_grad entry, so the
-    # pinocchio leg is left out for gen3 as for the mimic robots (2026-10-16; the
-    # CUDA-vs-RBDReference leg stays). Ask: add those gen3 buckets to RBDReference.
-    pin_excluded = has_mimic or robot_id == "gen3"
+    # Every robot runs the three-way check (2026-10-20). Mimic robots used to drop
+    # the pinocchio leg because the oracle placed wrenches through its mimic-free
+    # joint list (h1_2's bodies after a mid-chain mimic joint received their
+    # neighbour's wrench); the oracle now maps every body by name, mimic joints
+    # included, and RBDReference's test_external_force_equivalence.py proves it on
+    # fr3 and h1_2. gen3 was left out because this module passed a tolerance key
+    # RBDReference does not have ("forward_dynamics" then fell back to the 1e-7
+    # default); RBDReference now has that key, refuses unknown ones, and gen3's
+    # measured residual (3e-6 relative with forces) sits inside its bucket.
+    pin_excluded = False
     exe = _gen_and_compile(proj, tmp_path, floating)
 
     # stdin matches the runner's read order: q (full project layout, len nq —

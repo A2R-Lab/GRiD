@@ -23,6 +23,8 @@ from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 
 REPO = Path(__file__).resolve().parents[2]
 RUNNER_SOURCE = Path(__file__).with_name("cuda_racecheck_floating_runner.cu")
+# compute-sanitizer's exact wording when the device has no debugger interface.
+RACECHECK_UNSUPPORTED = "GPU debugging features are disabled"
 
 
 def _sanitizer():
@@ -54,6 +56,15 @@ def test_go2_floating_composition_is_racecheck_clean(tmp_path):
     for threads in (32, 256):
         r = subprocess.run([cs, "--tool", "racecheck", "--print-limit", "50", str(exe), str(threads)],
                            capture_output=True, text=True, cwd=tmp_path)
+        if RACECHECK_UNSUPPORTED in r.stdout:
+            # The sanitizer's racecheck tool needs the GPU debugger interface,
+            # which the Jetson integrated GPUs do not expose (Orin, sm_87, CUDA
+            # 13.2: the runner still prints OK, and the sanitizer counts its own
+            # refusal as one error). That is a tool capability of the machine,
+            # not a hazard, so this cell is a baselined skip in the per-arch
+            # expected-skips file of test/gpu-proof-receipts.yaml; the primary
+            # receipt baseline stays empty.
+            pytest.skip(f"compute-sanitizer racecheck is unsupported on this GPU: {RACECHECK_UNSUPPORTED}")
         assert r.returncode == 0 and "OK" in r.stdout, f"runner failed at {threads} threads:\n{r.stdout[-3000:]}\n{r.stderr[-3000:]}"
         assert "RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)" in r.stdout, \
             f"racecheck hazards at {threads} threads:\n{r.stdout[-6000:]}"

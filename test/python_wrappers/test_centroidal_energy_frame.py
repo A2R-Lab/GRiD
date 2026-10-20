@@ -21,6 +21,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from test.cuda_equivalents.test_cuda_frame_jacobian import check_osc_inertia, osc_inertia_summary
+
 
 # Repo root is parent of `test/`. Insert FIRST so this clone's submodules
 # (URDFParser / RBDReference / GRiDCodeGenerator) and `bindings/` win import.
@@ -252,26 +254,19 @@ def test_osc_inertia(robot):
     fn = _leaf_frame_name(ref)
     L = handle.osc_inertia(s["q"])
     assert L.shape == (_B, 6, 6)
-    # Lambda = (J Minv J^T)^-1 only exists when the task matrix is full-rank.
-    # Gate on conditioning (mirrors the S1 host test's cond < 1e8 guard); only
-    # well-conditioned samples carry a meaningful comparison. float32 round-trip
-    # through the 6x6 inverse is looser than the value surfaces (5e-3, per the S1
-    # gate). A serial arm with a 6-DoF or longer chain gives a full-rank task
-    # matrix at a generic configuration, so at least one sample must pass the gate.
-    checked = 0
+    # Lambda = (J Minv J^T)^-1. Every sample is checked (2026-10-20; before, the
+    # samples with cond(J Minv J^T) >= 1e8 were passed over): the normwise
+    # backward error of each column of Lambda as the solution of A x = e_j holds
+    # at every conditioning, and the entrywise comparison with the float64 oracle
+    # is added below cond 1e5 (check_osc_inertia, test_cuda_frame_jacobian.py).
+    # The float32 round-trip through the 6x6 inverse is looser than the value
+    # surfaces, so the entrywise tier keeps the 5e-3 class of the S1 host test.
+    records = []
     for i, q in enumerate(s["q"]):
         q64 = q.astype(np.float64)
         J = ref.frame_jacobian(q64, fn)
-        task = J @ ref.minv(q64) @ J.T
-        if np.linalg.cond(task) >= 1e8:
-            continue
-        checked += 1
-        L_ref = ref.osc_inertia(q64, fn)
-        # scale-relative gate (mirrors S1 host test atol = max(5e-3, 5e-3*scale)):
-        # Lambda entries can be O(1e2), so a flat 5e-3 absolute tol is too tight.
-        scale = float(np.max(np.abs(L_ref)))
-        assert _max_err(L[i], L_ref) < max(5e-3, 5e-3 * scale)
-    assert checked > 0, (
-        "no well-conditioned task-inertia sample: the leaf chain of this robot is "
-        "rank-deficient, so it belongs outside _OSC_INERTIA_ROBOTS"
-    )
+        A = J @ ref.minv(q64) @ J.T
+        records.append(check_osc_inertia(
+            L[i], A, lambda q64=q64: ref.osc_inertia(q64, fn),
+            f"{fn} sample {i}"))
+    print(osc_inertia_summary("osc_inertia", records))
