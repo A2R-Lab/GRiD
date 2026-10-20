@@ -209,5 +209,38 @@ Per release:
    `[<version>]:` compare link at its bottom) and attach the `SHA256SUMS` files
    from the build artifacts.
 
+### Published container acceptance
+
+A successful `.github/workflows/docker.yml` build/push does not establish public
+pull access or GPU runtime correctness. Before announcing the container:
+
+1. Check the workflow's source revision, version and successful push. First-time
+   GHCR packages default to private; a maintainer must explicitly approve public
+   visibility in the package settings. Do not work around failed anonymous access
+   with a personal token and then call the public release verified.
+2. On an exclusively available GPU host with Docker and NVIDIA Container Toolkit,
+   run `sudo bash tools/check_container_image.sh 0.5.3` (substitute the released
+   version). Omit sudo if Docker is already accessible. No host packages, drivers,
+   group permissions or registry settings are changed by this checker.
+   It uses an empty Docker CLI configuration for the anonymous pull, resolves
+   the tag to a digest, and uses that immutable digest for every container.
+3. The checker requires the existing shared `/tmp/a2rlab-timing.lock` and refuses
+   a busy lock or detected compute/compiler/test processes. On another host,
+   establish an agreed user-owned coordination file first, then pass its path
+   through `GRID_CONTAINER_TIMING_LOCK`; never use a different lock to bypass an
+   active workload. The lock is opened read-only, but held exclusively, so sudo
+   does not need to overwrite a user-owned file in sticky `/tmp`.
+4. Acceptance includes GPU visibility, precompiled iiwa14 values versus the
+   bundled CPU oracle on all three backends without recompilation, installed
+   provenance, new-robot compilation, values/autograd, and a second container's
+   cache-only reload with generation/compilation forbidden. Tests run offline
+   after the pull, with only the checker scripts mounted read-only and a fresh
+   writable scratch directory. The source checkout is not imported.
+5. Preserve the printed work directory, `smoke.log`, image digest, versions and
+   `PASS` marker. Stop and investigate any failure without weakening checks.
+   Report the tested GPU explicitly: a smoke on sm_120 does not validate the
+   embedded sm_86/89/90 variants, replace the real-robot numerical matrix, or
+   constitute a fresh full source receipt. Conda is a separate unvalidated recipe.
+
 Build-hook behavior follows the [setuptools extension protocol](https://setuptools.pypa.io/en/stable/userguide/extension.html);
 the artifact sequence follows the [PyPA packaging flow](https://packaging.python.org/en/latest/flow/).

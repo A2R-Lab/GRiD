@@ -1,9 +1,12 @@
 """CPU-only guards for receipt ancestry and publication boundaries."""
 from pathlib import Path
+import fcntl
+import json
 import os
 import subprocess
 import sys
 
+import pytest
 import yaml
 
 
@@ -63,3 +66,76 @@ def test_docker_header_generation_creates_output_directory(tmp_path):
     assert result.returncode != 0 and 'FileNotFoundError' in result.stderr
     subprocess.run(['sh', '-ec', command], env=env, check=True, capture_output=True)
     assert (tmp_path / 'grid/iiwa14/grid.cuh').read_text() == 'header\n'
+
+
+@pytest.mark.parametrize('scenario', [
+    'success', 'private', 'bad-digest', 'busy-lock', 'gpu-busy',
+    'compiler-busy', 'baked-failure', 'reload-failure',
+])
+def test_container_smoke_protocol(tmp_path, scenario):
+    """Exercise the real shell orchestration without Docker, network or GPU."""
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    calls = tmp_path / 'calls.jsonl'
+    stub = (
+        f'#!{sys.executable}\n'
+        'import json, os, pathlib, sys\n'
+        'tool = pathlib.Path(sys.argv[0]).name\n'
+        'args = sys.argv[1:]\n'
+        'scenario = os.environ["SMOKE_SCENARIO"]\n'
+        'with open(os.environ["SMOKE_CALLS"], "a") as f:\n'
+        '    f.write(json.dumps([tool, args]) + "\\n")\n'
+        'if tool == "pgrep":\n'
+        '    sys.exit(0 if scenario == "compiler-busy" else 1)\n'
+        'if tool == "nvidia-smi":\n'
+        '    if scenario == "gpu-busy": print("12345")\n'
+        '    sys.exit(0)\n'
+        'assert args[0] == "--config"\n'
+        'assert not list(pathlib.Path(args[1]).iterdir()), "Expected empty auth config"\n'
+        'args = args[2:]\n'
+        'if args[0] == "pull":\n'
+        '    sys.exit(1 if scenario == "private" else 0)\n'
+        'if args[:2] == ["image", "inspect"]:\n'
+        '    if "--format" in args:\n'
+        '        print("bad" if scenario == "bad-digest" else "ghcr.io/a2r-lab/grid@sha256:" + "a"*64)\n'
+        '    else: print("{}")\n'
+        '    sys.exit(0)\n'
+        'assert args[0] == "run"\n'
+        'if scenario == "baked-failure" and "/checks/baked.py" in args: sys.exit(42)\n'
+        'if scenario == "reload-failure" and "--reload" in args: sys.exit(42)\n'
+    )
+    for name in ('docker', 'nvidia-smi', 'pgrep'):
+        executable = bin_dir / name
+        executable.write_text(stub)
+        executable.chmod(0o755)
+    lock = tmp_path / 'shared.lock'
+    lock.touch()
+    env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ['PATH'],
+               TMPDIR=str(tmp_path), GRID_CONTAINER_TIMING_LOCK=str(lock),
+               SMOKE_SCENARIO=scenario, SMOKE_CALLS=str(calls))
+    with lock.open('r') as held:
+        if scenario == 'busy-lock':
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = subprocess.run(['bash', str(ROOT / 'tools/check_container_image.sh'), '0.5.3'],
+                                env=env, capture_output=True, text=True, timeout=15)
+    records = [json.loads(line) for line in calls.read_text().splitlines()]
+    runs = [args for tool, args in records if tool == 'docker' and args[2] == 'run']
+    outputs = list(tmp_path.glob('grid-container-smoke-*'))
+    assert len(outputs) == 1
+    assert (outputs[0] / 'PASS').exists() == (scenario == 'success')
+    if scenario == 'success':
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert len(runs) == 4
+        for args in runs:
+            assert 'ghcr.io/a2r-lab/grid@sha256:' + 'a'*64 in args
+            assert args[args.index('--network') + 1] == 'none'
+            assert args[args.index('--gpus') + 1] == 'all'
+        assert '--expected-version' in runs[1] and runs[1][-1] == '0.5.3'
+        assert '--reload' not in runs[2] and '--reload' in runs[3]
+        assert runs[2][runs[2].index('--work') + 1] == runs[3][runs[3].index('--work') + 1]
+        mounts = [runs[2][i+1] for i, arg in enumerate(runs[2][:-1]) if arg == '--mount']
+        assert len(mounts) == 3 and sum(m.endswith(',readonly') for m in mounts) == 2
+    else:
+        assert result.returncode != 0
+        expected_runs = {'baked-failure': 2, 'reload-failure': 4}.get(scenario, 0)
+        assert len(runs) == expected_runs
