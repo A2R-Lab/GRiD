@@ -8,12 +8,19 @@ versions may break APIs.
 GRiD was first released alongside the ICRA 2022 paper *GRiD: GPU-Accelerated
 Rigid Body Dynamics with Analytical Gradients*. That implementation is preserved
 in the archival [robot-acceleration/GRiD](https://github.com/robot-acceleration/GRiD)
-repository. Everything below describes the A2R-Lab rebuild that leads to the
-first packaged release.
+repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
-## [0.5.3] — release candidate
+- Docker: create the sample robot's output directory before generating its
+  header. The corrected 0.5.3 image builds and publishes in CI. An RTX 5090
+  container smoke test passed on 2026-10-19: precompiled iiwa14 values on all
+  three backends, new-robot compilation, autograd and cache-only reload.
+
+## [0.5.3] — 2026-10-18
+
+Published on PyPI and GitHub. Includes the changes listed under the
+TestPyPI-only 0.5.2 rehearsal below.
 
 - Fix per-sample external-force indexing in batched inverse/forward dynamics,
   ABA, their gradients, and integrator value/gradient kernels. Previously every
@@ -23,7 +30,9 @@ first packaged release.
   JAX and PyTorch. TestPyPI rehearsals now explicitly require exact artifact-hash
   matching, the numerical matrix, and independently installed source archives.
 
-## [0.5.2] — release candidate
+## [0.5.2] — TestPyPI rehearsal only
+
+Not released on production PyPI; superseded by 0.5.3.
 
 - Benchmark validation checks large Hessians in bounded-memory chunks and releases
   completed snapshots sooner. Checked entries, tolerances and timed calls are unchanged.
@@ -82,7 +91,9 @@ first packaged release.
 - Install recipes: `install/docker/Dockerfile` and `.github/workflows/docker.yml` publish
   `ghcr.io/a2r-lab/grid` (CUDA 13.2 devel base, grid-rbd from PyPI, `jax[cuda12]`, torch
   cu128, baked iiwa14 header; robots compile on first load); `install/environment.yml`
-  (conda) and a uv recipe on the installation page. Neither recipe is tested in CI.
+  (conda) and a uv recipe on the installation page. The Docker image builds in
+  CI without a GPU; the 0.5.3 image also passed the RTX 5090 smoke test described
+  above. The conda recipe remains unvalidated.
 - Tutorials: `examples/cuda/fused_control_step/` fuses a computed-torque control step
   around `inverse_dynamics_device` in one kernel and checks and times it against the
   host-function path (`build_and_time.sh --json`); `examples/jax/ik_gradient_descent.py`
@@ -234,7 +245,8 @@ update on top of that, organised here by theme:
 - Closed kinematic loops are unsupported.
 - No Windows, macOS, Jetson or precompiled-robot wheels.
 
-[0.5.3]: https://github.com/A2R-Lab/GRiD/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/A2R-Lab/GRiD/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/A2R-Lab/GRiD/compare/v0.5.1...v0.5.3
 [0.5.2]: https://github.com/A2R-Lab/GRiD/compare/v0.5.1...94f4e5c
 [0.5.1]: https://github.com/A2R-Lab/GRiD/releases/tag/v0.5.1
 [0.5.0]: https://github.com/A2R-Lab/GRiD/releases/tag/v0.5.0
