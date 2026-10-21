@@ -12,6 +12,12 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Release measurements: the core and wrapper dataset is the 21 October 2026
+  session at one commit (315 workers, 1,890 measurements at 300 samples per
+  repeat), replacing the stitched September and October captures. It adds the
+  Hessian wrapper cells and the CPU and GPU baselines at the same protocol, so
+  the published selection carries no accepted source drift. The secondary
+  table keeps its 30-sample captures.
 - Tests: the external-force CUDA modules run their pinocchio leg on every robot.
   gen3 was left out because the modules passed tolerance keys RBDReference did
   not have, which fell back to its 1e-7 default; the mimic robots were left out

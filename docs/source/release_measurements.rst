@@ -3,11 +3,13 @@ Release measurements
 
 .. note::
 
-   The September/October 2026 results comprise 300 selected worker
-   processes and 1,800 measurements, all passing the strict numerical checks.
-   The selection includes the Pinocchio 24-worker follow-up, allocate-once
-   wrapper calls, and the updated GRiD Hessian kernels. Capture hashes and
-   per-cell provenance are retained with the tables.
+   The 21 October 2026 dataset comprises 315 worker processes and 1,890
+   measurements from one session at one commit, all passing the strict
+   numerical checks. It covers the three core operations through GRiD's
+   CUDA, C ABI, NumPy, JAX and PyTorch surfaces, each Python surface as its
+   default call and with its buffers allocated once, and every CPU and GPU
+   baseline, at 300 samples per repeat. Capture hashes and per-cell
+   provenance are retained with the tables.
 
 These measurements cover iiwa14 (fixed base, 7 velocities), go2 (floating
 base, 18 velocities), and G1 (floating base, 35 velocities) on one NVIDIA
@@ -19,45 +21,27 @@ through CUDA C++, the C ABI (RNEA and its gradient), NumPy, JAX, and PyTorch,
 with each Python surface measured as its default call and with its buffers
 allocated once and reused.
 
-The main collection used commit ``e92477857b0ca53fb307a8fa4799a4afd5757177``.
-It includes the floating-base JAX Hessian packing correction and preserves
-fp64 mapped inputs for Pinocchio's analytical paths. No numerical tolerance
-was relaxed. Subsequent figure and documentation edits do not alter timed code.
+Every cell of the core and wrapper tables was collected on 21 October 2026
+at commit ``86017f9596d0d4293efe0cb7ed6979a759ed6d45`` in one session on an
+otherwise idle machine: the core collection, the wrapper collection, the
+Hessian wrapper collection and the CPU and GPU baseline collection, in that
+order, each at 300 samples per repeat. No numerical tolerance was relaxed.
+The secondary-operation table keeps its earlier 30-sample captures of 27
+September and 7 October 2026; its provenance is retained next to it.
 
-The wrapper addendum used commits ``53119f2d4c0b1297af19b9bd266879828001c566``
-and ``ab20188681334da365753b42da5f0021c4c70add`` (the latter for the JAX
-allocate-once cells). Between the two collections the bindings changed in the
-ways Figure 4 describes; the generated CUDA did not. A same-day drift check
-re-measured GRiD's native CUDA call on all 18 RNEA-gradient cells: both its
-compute-only and its host call landed within 0.6% of the September values.
-
-The Hessian addendum used commit ``effabf8698fa6af191d5c24867471e971a76880e``.
-It optimized generated CUDA including ``idsva_so`` in both frames,
-plus the ``crba``, Coriolis, integrator-gradient and end-effector kernels:
-block barriers that ordered nothing were removed and a few small
-intermediates are re-formed in registers instead of shared memory, with the
-output verified bit-identical to the previous kernels before timing. The iiwa14
-launch configuration was re-tuned for the new kernel (its best block size
-moved). Every other timed kernel is byte-identical; the drift check above
-was repeated on all 36 RNEA cells of the three robots (worst deviation 0.62%).
-
-The baseline-density addendum of 7 October used commit ``11c23dab285971879145342aef8cb01281d359c9``.
-It changed no GRiD code: it added adapters so that more of the baselines'
-public operations are matched and timed. Frax's floating-base model (six
-prepended prismatic and Euler joints, ``nq == nv``) is mapped to the shared
-quaternion fixture through the exact velocity map between the two coordinate
-systems, so go2 and G1 gain Frax cells for RNEA, gravity, bias, CRBA, M⁻¹,
-forward dynamics and the end-effector pose; Frax's autodiff gradients are
-timed on iiwa14. The end-effector pose gradient, ``d[xyz; rpy]/dv``, is
-matched for Pinocchio (both API modes), MuJoCo CPU, MJX, MuJoCo Warp and Frax
-through one analytic map from each library's world-frame Jacobian to RPY
-rates (MJX and Frax by autodiff of the pose). cuRobo's native CUDA RNEA was
-also wired on the shared iiwa14 URDF and failed the oracle gate (23%
-relative L2 error: its development URDF parser doubles every inertial-origin
-offset and discards the parsed inertia tensor), so it has no timing row; the
-audit records the attempt. These cells follow each table's existing protocol
-(300 samples for RNEA and its gradient, 30 for the secondary table) and were
-collected on an otherwise idle machine.
+Frax's floating-base model (six prepended prismatic and Euler joints,
+``nq == nv``) is mapped to the shared quaternion fixture through the exact
+velocity map between the two coordinate systems, so go2 and G1 have Frax
+cells for RNEA and its gradient here and for gravity, bias, CRBA, M⁻¹,
+forward dynamics and the end-effector pose in the secondary table. The
+end-effector pose gradient, ``d[xyz; rpy]/dv``, is matched for Pinocchio
+(both API modes), MuJoCo CPU, MJX, MuJoCo Warp and Frax through one analytic
+map from each library's world-frame Jacobian to RPY rates (MJX and Frax by
+autodiff of the pose). cuRobo's native CUDA RNEA was wired on the shared
+iiwa14 URDF and failed the oracle gate (23% relative L2 error: its
+development URDF parser doubles every inertial-origin offset and discards the
+parsed inertia tensor), so it has no timing row; the audit records the
+attempt.
 
 What the measurements show
 --------------------------
@@ -70,29 +54,29 @@ compute-only boundary.
 GRiD provides fast robot-specific CUDA for GPU-resident applications. GRiD's
 native compute-only call has a lower median than every evaluated GPU baseline
 on its matched core RNEA/gradient cells. Against MuJoCo Warp and MJX, the
-ratios span 4.3–38.6×. These are resident-call comparisons, not isolated
+ratios span 4.3–35.8×. These are resident-call comparisons, not isolated
 kernel comparisons: GRiD includes native launch and synchronization; the
 competitors also include their framework dispatch.
 
 GRiD's JAX API is faster than MJX on all 36 matched RNEA/gradient cells. The
-ratios are 1.8–4.7× for complete host-to-host calls and 2.2–14.7× with inputs
+ratios are 1.5–4.5× for complete host-to-host calls and 1.7–12.1× with inputs
 and outputs resident on the GPU. Every one of these comparisons remains above
 1× across the observed ranges of the three process means. These are measured
 ranges, not statistical confidence intervals.
 
 Large-batch gradients show substantial compute and host-call gains. At batch
 1024, GRiD's compute-only CUDA calls for RNEA gradients are 2.5× faster on
-iiwa14 and 3.7× faster on go2 than Pinocchio codegen's CPU calls. GRiD takes
-30.8 µs and 116.6 µs, respectively, versus 78.2 µs and 433.5 µs for Pinocchio
+iiwa14 and 3.5× faster on go2 than Pinocchio codegen's CPU calls. GRiD takes
+30.9 µs and 116.9 µs, respectively, versus 76.2 µs and 414.4 µs for Pinocchio
 codegen. The compute-only comparison excludes GRiD's transfers but includes
 native launch and synchronization. Including transfers, GRiD's C++ host calls
-take 59.4 µs and 257.3 µs, retaining 1.3× and 1.7× speedups at the matched
+take 59.4 µs and 257.1 µs, retaining 1.3× and 1.6× speedups at the matched
 host-to-host boundary. These host-call wins remain separated across the
 observed repeat ranges.
 
 Larger batches turn compute gains into host-call wins. Including transfers,
 GRiD's CUDA host call has a lower median than the Pinocchio codegen-mode
-adapter in 10 of 45 core cells at batches 16–256; 8 of those wins remain
+adapter in 7 of 45 core cells at batches 16–256, and all 7 remain
 separated across observed ranges. At batch 1024, it wins 5 of 9 cells across
 those ranges. Both Pinocchio modes use the same standard analytical fp64 path
 for Hessians, not a code-generated Hessian. Pinocchio wins many small-batch
@@ -101,18 +85,18 @@ included. The batch-1024 wins include all three robots' Hessians and the
 iiwa14 and go2 gradients. Full GRiD JAX calls do not beat the updated
 Pinocchio codegen-mode adapter in these core cells.
 
-Peak Hessian gains reach 3.3× including I/O and 13× compute-only. The
-host-call peak is iiwa14 at batch 256: GRiD takes 111.8 µs versus Pinocchio's
-365.6 µs. The compute-only peak is G1 at batch 1024: GRiD takes 4.58 ms
-versus Pinocchio's 59.56 ms. Both compare GRiD fp32 with Pinocchio's standard
+Peak Hessian gains reach 2.1× including I/O and 12.8× compute-only. The
+host-call peak is iiwa14 at batch 1024: GRiD takes 344.9 µs versus
+Pinocchio's 717.0 µs. The compute-only peak is G1 at batch 1024: GRiD takes
+4.56 ms versus Pinocchio's 58.41 ms. Both compare GRiD fp32 with Pinocchio's standard
 analytical fp64 Hessian path; neither is a JAX speedup or a same-precision
 comparison.
 
 Wrapper costs matter. GRiD JAX resident calls beat MuJoCo Warp on all 18
 matched RNEA cells across observed ranges, but the host-to-host results are
-mixed. On iiwa14 RNEA at batch 256, median full calls are 23.3 µs in CUDA,
-24.7 µs through the C ABI, 26.8 µs through NumPy, 61.0 µs through PyTorch,
-and 224.8 µs through JAX. This is one illustrative cell, not a universal
+mixed. On iiwa14 RNEA at batch 256, median full calls are 23.2 µs in CUDA,
+24.7 µs through the C ABI, 26.8 µs through NumPy, 59.7 µs through PyTorch,
+and 265.3 µs through JAX. This is one illustrative cell, not a universal
 wrapper overhead.
 
 Allocating once removes most of the NumPy and PyTorch wrapper cost. A default
@@ -120,10 +104,10 @@ Python call allocates its output on every call. With the buffers created once
 and reused, NumPy and PyTorch are faster in all 90 measured cells, and at
 batch 1024 they land within 10% of the C++ host call on the go2 and G1
 gradients and Hessians (from 1% faster to 9% slower). G1's RNEA gradient at
-batch 1024 takes 1.13 ms in C++, 1.18 ms through NumPy and 1.14 ms through
-PyTorch, against 2.79 ms and 3.32 ms for their default calls; its Hessian
-takes 37.3 ms, 37.5 ms and 38.7 ms against 107.9 ms and 236.4 ms. JAX's
-``to_host`` helps on large outputs (40.9 ms against 130.1 ms on that Hessian)
+batch 1024 takes 1.12 ms in C++, 1.17 ms through NumPy and 1.14 ms through
+PyTorch, against 2.11 ms and 3.36 ms for their default calls; its Hessian
+takes 37.3 ms, 37.2 ms and 38.7 ms against 106.9 ms and 255.5 ms. JAX's
+``to_host`` helps on large outputs (40.8 ms against 142.4 ms on that Hessian)
 and is the default download below 256 KiB.
 
 Figure 1: Where the time goes
@@ -158,9 +142,9 @@ Hessian; there is no codegen Hessian bar. BARD and Frax remain in the tables
 but are omitted from this figure for clarity.
 A red triangle means
 the decomposition is unavailable and the measured full-call total is shown
-without a stack. Three MJX gradient cells have this flag because at least one
-repeat's resident time exceeded its full-call time, even though the median
-difference is positive. Neither boundary is discarded or clamped.
+without a stack. Two MJX cells, one RNEA and one gradient, have this flag
+because at least one repeat's resident time exceeded its full-call time, even
+though the median difference is positive. Neither boundary is discarded or clamped.
 
 Figure 2: Speedup against Pinocchio (CPU)
 -----------------------------------------
@@ -182,7 +166,7 @@ original eight-worker ceiling and is not part of this follow-up.
 
 Pinocchio's CPU paths are strong at small batches, particularly for RNEA.
 Transfers can reverse a compute-only advantage: for iiwa14's RNEA gradient
-at batch 32, GRiD's compute-only call takes 14.8 µs versus 22.0 µs for
+at batch 32, GRiD's compute-only call takes 14.8 µs versus 21.3 µs for
 Pinocchio codegen, but GRiD's full C++ host call takes 24.6 µs.
 
 Figure 2b: GRiD kernel against the CPU libraries, no I/O
@@ -267,30 +251,23 @@ is otherwise the default download itself, so a JAX allocate-once bar is drawn
 only where that route was taken (23 of 54 cells); for RNEA every JAX slot is one
 solid bar because its outputs stay below that floor, where the page-locked route
 would be slower than the default download. A short black tick marks the
-one cell where the default call was not the slower of the two (JAX, iiwa14
-gradient at batch 1024, by 6%).
+one cell where the default call was not the slower of the two (JAX, go2
+gradient at batch 128, by 2%).
 
 Default and allocate-once are the same compiled artifact and the same
 operation; only the buffer handling differs. NumPy and PyTorch are faster
 with reused buffers in every measured cell: by 1.1–2.9× for NumPy and
-1.2–6.0× for PyTorch, growing with output size. Where the JAX page-locked
-route applies, the median gain is 1.3× on gradients and 2.1× on Hessians,
-up to 3.4×.
+1.2–6.6× for PyTorch, growing with output size. Where the JAX page-locked
+route applies, the median gain is 1.3× on gradients and 2.5× on Hessians,
+up to 3.7×.
 
 The C ABI remains available in the downloadable data but is omitted from this
-application-facing figure. Its RNEA-gradient call, and the NumPy call built on
-it, previously downloaded the result twice; they download it once, which made
-the default calls 1.07–1.34× (C ABI) and 1.06–1.27× (NumPy) faster than the
-September measurements they replace in the table.
+application-facing figure.
 
-Each bar comes from one collection. CUDA Device, C++ Host, the PyTorch
-and JAX default calls and NumPy's RNEA are the 27 September measurements. The
-allocate-once calls and NumPy's default gradient are from 2 October. Every
-Hessian bar (CUDA Device and all Python surfaces, default and allocate-once)
-is from 4 October. JAX full calls vary more between sessions than
-the other surfaces (its default gradient re-measured between 0.80× and 1.20×
-of the September values on 2 October), so read small JAX differences with
-that in mind.
+Every bar comes from the 21 October session. JAX full calls vary more between
+repeats than the other surfaces (six of its 54 host-call cells and seven of
+its resident cells span more than 1.5× across the three repeats), so read
+small JAX differences with that in mind.
 
 The fused control step
 ----------------------
