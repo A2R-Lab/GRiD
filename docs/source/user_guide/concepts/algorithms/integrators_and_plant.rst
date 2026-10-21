@@ -133,6 +133,30 @@ the gradient and Hessian. On quaternion models, position-tracking
 derivatives retain tangent blocks embedded in ``NX``-sized outputs;
 momentum uses the compact ``2*NV`` tangent layout.
 
+Every cost term factors as an activation applied per entry to a residual
+``r`` with Jacobian ``J``: value ``sum_i a(r_i)``, gradient ``J^T a'(r)``,
+Gauss-Newton Hessian ``J^T diag(a''(r)) J``. The quadratic terms above are
+the quadratic activation ``a = 1/2 w r^2`` over their residuals. The
+``grid_plant`` namespace also carries the activation layer and a menu over
+it: ``activation_value`` / ``activation_slope`` / ``activation_curvature``
+for the quadratic activation and the pseudo-Huber activation ``a = w
+(sqrt(r^2 + eps^2) - eps)`` (``eps > 0``, the weighted absolute value as
+``eps`` goes to zero, quadratic for ``|r|`` small against ``eps``);
+``state_cost``, ``input_cost`` and ``ee_pos_cost_activated``, the state,
+input and end-effector position residuals under a chosen activation with
+per-entry weights; ``linear_feature_cost<T, M, N>``, the residual ``A v +
+b - target`` over a linear feature of the state (``N = NX``) or the input
+(``N = NU``) with a caller matrix; and ``tracking_cost_menu``, the tracking
+preset with a per-term activation choice and parameter (order ``[ee,
+state, input, linear_x, linear_u]``) and optional linear feature terms on
+``x`` and ``u`` (template row counts, zero omits the term). Every target,
+weight and activation parameter is a runtime buffer the caller writes per
+knot; with the quadratic activation and no linear terms the menu preset is
+``tracking_cost``. The reference is ``RBDReference.state_cost``,
+``input_cost``, ``linear_feature_cost`` and ``ee_pos_cost_activated``.
+Barrier activations, the orientation and velocity residuals and the
+floating-base preset are later phases.
+
 Select ``integrator`` / ``integrator_gradient`` for step values / gradients
 and ``fdsva_so`` for the step Hessian dependency; the plant generator only
 emits operations whose dependencies exist. CoM costs require ``com`` and

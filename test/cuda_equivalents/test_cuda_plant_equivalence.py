@@ -616,3 +616,109 @@ def test_cuda_tangent_state_cost_matches_reference(tmp_path):
               f"{tag} Newton hess (BOTH curvature terms, guide 7.z2)")
         # Newton != GN away from e = 0 — guard against a silently-dead curvature path.
         assert np.max(np.abs(h_nw - h_gn)) > 1e-6, f"{tag}: Newton == GN (curvature path dead?)"
+
+
+# ---- cost menu, phase one: activated terms, the linear feature and the menu preset ----
+_MENU_MX, _MENU_MU = 2, 1
+_PSEUDO_HUBER = 1
+
+
+def _menu_eps(t):      return 0.02 + 0.01 * t
+def _lin_Ax(nx):       return np.array([[0.1 * (m + 1) + 0.05 * n * (1 if m == 0 else -1) for n in range(nx)] for m in range(_MENU_MX)], dtype=np.float64)
+def _lin_bx():         return np.array([0.3 * m for m in range(_MENU_MX)], dtype=np.float64)
+def _lin_tx():         return np.array([0.2 + 0.1 * m for m in range(_MENU_MX)], dtype=np.float64)
+def _lin_Wx():         return np.array([4.0 + m for m in range(_MENU_MX)], dtype=np.float64)
+def _lin_Au(nu):       return np.array([[0.2 - 0.03 * n for n in range(nu)]], dtype=np.float64)
+
+
+def _unpack_term(blk, n):
+    blk = np.asarray(blk, dtype=np.float64).reshape(-1)
+    return blk[0], blk[1:1 + n], blk[1 + n:1 + n + n * n].reshape(n, n, order="F")
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.robot_smoke
+@pytest.mark.parametrize(
+    "robot_id,base_mode", _plant_cells(),
+    ids=[f"{r}-{b}" for r, b in _plant_cells()],
+)
+def test_cuda_cost_menu_matches_reference(tmp_path, robot_id, base_mode):
+    """state_cost / input_cost / ee_pos_cost_activated / linear_feature_cost under the
+    pseudo-Huber activation match RBDReference (value, gradient, GN Hessian); the
+    quadratic activation reproduces the quadratic terms bit for bit; and on fixed base
+    the tracking_cost_menu preset equals the independent composition of its terms."""
+    spec = _robot_spec(robot_id, base_mode)
+    try:
+        resolved = resolve_robot_spec(spec)
+    except RuntimeError as exc:
+        pytest.skip(f"Could not resolve manifest {spec.robot_id}: {exc}")
+    project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
+    build_dir = tmp_path / f"{robot_id}_{base_mode}_menu"
+    build_dir.mkdir()
+    _generate_header(project_model, build_dir)
+    executable, cmd = _compile_runner(build_dir)
+    ref = project_model.reference
+
+    nq, nv = project_model.nq, project_model.nv
+    nx, nu = nq + nv, nv
+    samples = _build_cuda_samples(project_model, random_count=3, include_corner_samples=True)
+    rtol, atol = 2e-3, 2e-3
+
+    def close(actual, expected, msg):
+        expected = np.asarray(expected, dtype=np.float64)
+        scale = float(np.max(np.abs(expected))) if expected.size else 0.0
+        np.testing.assert_allclose(np.asarray(actual, dtype=np.float64), expected,
+                                   rtol=rtol, atol=max(atol, rtol * scale), err_msg=msg)
+
+    checked = 0
+    for sample in samples:
+        q, qd = np.asarray(sample.q, np.float64), np.asarray(sample.qd, np.float64)
+        u = np.asarray(sample.qdd, np.float64)
+        out = _run(executable, cmd, q, qd, u, _DT)
+        if "menu_skipped" in out:
+            pytest.skip(f"{robot_id}:{base_mode}: the activated EE cost is not emitted (no ee_pos_cost)")
+        x = np.concatenate([q, qd])
+        tag = f"{robot_id}:{base_mode} @ {sample.name}"
+
+        val, grad, hess = _unpack_term(out["menu_state"], nx)
+        rv, rg, rh = ref.state_cost(x, _x_des(nx), _Qw(nx), _PSEUDO_HUBER, _menu_eps(1))
+        close(val, rv, f"{tag} state value"); close(grad, rg, f"{tag} state grad"); close(hess, rh, f"{tag} state hess")
+
+        val, grad, hess = _unpack_term(out["menu_input"], nu)
+        rv, rg, rh = ref.input_cost(u, _u_des(nu), _Rw(nu), _PSEUDO_HUBER, _menu_eps(2))
+        close(val, rv, f"{tag} input value"); close(grad, rg, f"{tag} input grad"); close(hess, rh, f"{tag} input hess")
+
+        val, grad, hess = _unpack_term(out["menu_ee"], nx)
+        rv, rg, rh = ref.ee_pos_cost_activated(q, np.zeros(3), _Ww(), _PSEUDO_HUBER, _menu_eps(0), ee=_PLANT_EE)
+        close(val, rv, f"{tag} ee value"); close(grad, rg, f"{tag} ee grad"); close(hess, rh, f"{tag} ee hess")
+        assert np.count_nonzero(grad[nv:]) == 0, f"{tag} ee grad qd-block must be zero"
+
+        val, grad, hess = _unpack_term(out["menu_linx"], nx)
+        rv, rg, rh = ref.linear_feature_cost(x, _lin_Ax(nx), _lin_bx(), _lin_tx(), _lin_Wx(), _PSEUDO_HUBER, _menu_eps(3))
+        close(val, rv, f"{tag} linear x value"); close(grad, rg, f"{tag} linear x grad"); close(hess, rh, f"{tag} linear x hess")
+
+        val, grad, hess = _unpack_term(out["menu_linu"], nu)
+        rv, rg, rh = ref.linear_feature_cost(u, _lin_Au(nu), [0.1], [-0.1], [5.0], _PSEUDO_HUBER, _menu_eps(4))
+        close(val, rv, f"{tag} linear u value"); close(grad, rg, f"{tag} linear u grad"); close(hess, rh, f"{tag} linear u hess")
+
+        # the quadratic activation is the quadratic term: bit for bit for the state cost
+        # (identical arithmetic); to fp32 rounding for the EE cost, whose pose is evaluated
+        # in a separate function body (nvcc contracts its multiplies into FMAs differently,
+        # one ULP on go2 floating).
+        quad = np.asarray(out["menu_quad"], dtype=np.float64).reshape(-1)
+        assert quad[0] == np.asarray(out["state_cost_value"], dtype=np.float64).reshape(-1)[0], f"{tag} quadratic activation != quadratic_state_cost"
+        ee_val = np.asarray(out["ee_cost_value"], dtype=np.float64).reshape(-1)[0]
+        assert abs(quad[1] - ee_val) <= 4e-7 * max(1.0, abs(ee_val)), f"{tag} quadratic activation != ee_pos_cost ({quad[1]} vs {ee_val})"
+
+        if "menu_preset_skipped" not in out:
+            blk = np.asarray(out["menu_preset"], dtype=np.float64).reshape(-1)
+            cnt = 1 + nx + nu + nx * nx + nu * nu
+            preset, reference = blk[:cnt], blk[cnt:]
+            close(preset[0], reference[0], f"{tag} menu preset value == composition")
+            close(preset[1:1 + nx], reference[1:1 + nx], f"{tag} menu preset s_qk == composition")
+            close(preset[1 + nx:1 + nx + nu], reference[1 + nx:1 + nx + nu], f"{tag} menu preset s_rk == composition")
+            close(preset[1 + nx + nu:1 + nx + nu + nx * nx], reference[1 + nx + nu:1 + nx + nu + nx * nx], f"{tag} menu preset s_Qk == composition")
+            close(preset[1 + nx + nu + nx * nx:], reference[1 + nx + nu + nx * nx:], f"{tag} menu preset s_Rk == composition")
+        checked += 1
+    assert checked >= 3

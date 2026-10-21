@@ -447,6 +447,164 @@ __global__ void tracking_preset_kernel(const T *g_q, const T *g_qd, const T *g_u
 }
 #endif  // GRID_PLANT_HAS_TRACKING_COST
 
+// ---- cost menu, phase one: activated terms (pseudo-Huber), the linear feature and the
+// menu preset. Deterministic recipes mirrored by the Python test. Outputs are packed
+// per term as [value(1) | grad(N) | hess(N*N)]; o_quad = [state value, ee value] under
+// the quadratic activation; o_menu = [preset value, qk, rk, Qk, Rk | reference ...].
+#if defined(GRID_PLANT_HAS_ACTIVATED_EE_COST)
+template <typename T> __host__ __device__ T menu_eps_val(int t)       { return static_cast<T>(0.02) + static_cast<T>(0.01) * t; }
+template <typename T> __host__ __device__ T lin_Ax_val(int m, int n)  { return static_cast<T>(0.1) * (m + 1) + static_cast<T>(0.05) * n * ((m == 0) ? 1 : -1); }
+template <typename T> __host__ __device__ T lin_bx_val(int m)         { return static_cast<T>(0.3) * m; }
+template <typename T> __host__ __device__ T lin_tx_val(int m)         { return static_cast<T>(0.2) + static_cast<T>(0.1) * m; }
+template <typename T> __host__ __device__ T lin_Wx_val(int m)         { return static_cast<T>(4.0) + m; }
+template <typename T> __host__ __device__ T lin_Au_val(int n)         { return static_cast<T>(0.2) - static_cast<T>(0.03) * n; }
+#define MENU_MX 2
+#define MENU_MU 1
+#define MENU_STATE_CNT (1 + NX + NX * NX)
+#define MENU_INPUT_CNT (1 + NU + NU * NU)
+#define MENU_PRESET_CNT (1 + NX + NU + NX * NX + NU * NU)
+template <typename T>
+__global__ void cost_menu_kernel(const T *g_q, const T *g_qd, const T *g_u, const grid::robotModel<T> *d_robotModel,
+                                 T *o_as, T *o_ai, T *o_ae, T *o_lx, T *o_lu, T *o_quad, T *o_menu) {
+    __shared__ T s_x[NX], s_u[NU], s_xdes[NX], s_udes[NU], s_eedes[3], s_Q[NX], s_R[NU], s_W[3];
+    __shared__ T s_Ax[MENU_MX * NX], s_bx[MENU_MX], s_tx[MENU_MX], s_Wx[MENU_MX];
+    __shared__ T s_Au[MENU_MU * NU], s_bu[MENU_MU], s_tu[MENU_MU], s_Wu[MENU_MU];
+    __shared__ int s_act[5]; __shared__ T s_eps[5];
+    __shared__ T s_eePos[6 * grid::NUM_EES], s_deePos[6 * NV * grid::NUM_EES];
+    extern __shared__ __align__(16) T s_arena[];
+    __shared__ T s_out[1], s_grad[NX], s_hess[NX * NX];
+    const int tid = threadIdx.x + threadIdx.y * blockDim.x;
+    const int nth = blockDim.x * blockDim.y;
+    for (int i = tid; i < NX; i += nth) { s_x[i] = (i < NQ) ? g_q[i] : g_qd[i - NQ]; s_xdes[i] = x_des_val<T>(i); s_Q[i] = Qw_val<T>(i); }
+    for (int i = tid; i < NU; i += nth) { s_u[i] = g_u[i]; s_udes[i] = u_des_val<T>(i); s_R[i] = Rw_val<T>(i); }
+    for (int r = tid; r < 3; r += nth) { s_eedes[r] = static_cast<T>(0); s_W[r] = Ww_val<T>(r); }
+    for (int i = tid; i < MENU_MX * NX; i += nth) { s_Ax[i] = lin_Ax_val<T>(i % MENU_MX, i / MENU_MX); }
+    for (int m = tid; m < MENU_MX; m += nth) { s_bx[m] = lin_bx_val<T>(m); s_tx[m] = lin_tx_val<T>(m); s_Wx[m] = lin_Wx_val<T>(m); }
+    for (int n = tid; n < MENU_MU * NU; n += nth) { s_Au[n] = lin_Au_val<T>(n); }
+    for (int m = tid; m < MENU_MU; m += nth) { s_bu[m] = static_cast<T>(0.1); s_tu[m] = static_cast<T>(-0.1); s_Wu[m] = static_cast<T>(5.0); }
+    for (int t = tid; t < 5; t += nth) { s_act[t] = grid_plant::GRID_PLANT_ACTIVATION_PSEUDO_HUBER; s_eps[t] = menu_eps_val<T>(t); }
+    __syncthreads();
+
+    // activated state cost
+    grid_plant::state_cost<T>(s_out, s_x, s_xdes, s_Q, s_act[1], s_eps[1], s_arena);
+    __syncthreads(); if (tid == 0) o_as[0] = s_out[0]; __syncthreads();
+    grid_plant::state_cost_gradient<T, false>(s_grad, s_x, s_xdes, s_Q, s_act[1], s_eps[1]);
+    grid_plant::state_cost_hessian<T, false>(s_hess, s_x, s_xdes, s_Q, s_act[1], s_eps[1]);
+    __syncthreads();
+    for (int i = tid; i < NX; i += nth) o_as[1 + i] = s_grad[i];
+    for (int i = tid; i < NX * NX; i += nth) o_as[1 + NX + i] = s_hess[i];
+    __syncthreads();
+    // activated input cost
+    grid_plant::input_cost<T>(s_out, s_u, s_udes, s_R, s_act[2], s_eps[2], s_arena);
+    __syncthreads(); if (tid == 0) o_ai[0] = s_out[0]; __syncthreads();
+    grid_plant::input_cost_gradient<T, false>(s_grad, s_u, s_udes, s_R, s_act[2], s_eps[2]);
+    grid_plant::input_cost_hessian<T, false>(s_hess, s_u, s_udes, s_R, s_act[2], s_eps[2]);
+    __syncthreads();
+    for (int i = tid; i < NU; i += nth) o_ai[1 + i] = s_grad[i];
+    for (int i = tid; i < NU * NU; i += nth) o_ai[1 + NU + i] = s_hess[i];
+    __syncthreads();
+    // activated end-effector position cost (s_x[:NQ] is q)
+    grid_plant::ee_pos_cost_activated<T, PLANT_EE>(s_out, s_x, s_eedes, s_W, s_act[0], s_eps[0], s_eePos, s_arena, d_robotModel);
+    __syncthreads(); if (tid == 0) o_ae[0] = s_out[0]; __syncthreads();
+    grid_plant::ee_pos_cost_activated_gradient<T, PLANT_EE, false>(s_grad, s_x, s_eedes, s_W, s_act[0], s_eps[0], s_eePos, s_deePos, s_arena, d_robotModel);
+    __syncthreads();
+    for (int i = tid; i < NX; i += nth) o_ae[1 + i] = s_grad[i];
+    __syncthreads();
+    grid_plant::ee_pos_cost_activated_hessian<T, PLANT_EE, false>(s_hess, s_x, s_eedes, s_W, s_act[0], s_eps[0], s_eePos, s_deePos, s_arena, d_robotModel);
+    __syncthreads();
+    for (int i = tid; i < NX * NX; i += nth) o_ae[1 + NX + i] = s_hess[i];
+    __syncthreads();
+    // linear feature on x
+    grid_plant::linear_feature_cost<T, MENU_MX, NX>(s_out, s_x, s_Ax, s_bx, s_tx, s_Wx, s_act[3], s_eps[3], s_arena);
+    __syncthreads(); if (tid == 0) o_lx[0] = s_out[0]; __syncthreads();
+    grid_plant::linear_feature_cost_gradient<T, MENU_MX, NX, false>(s_grad, s_x, s_Ax, s_bx, s_tx, s_Wx, s_act[3], s_eps[3], s_arena);
+    __syncthreads();
+    grid_plant::linear_feature_cost_hessian<T, MENU_MX, NX, false>(s_hess, s_x, s_Ax, s_bx, s_tx, s_Wx, s_act[3], s_eps[3], s_arena);
+    __syncthreads();
+    for (int i = tid; i < NX; i += nth) o_lx[1 + i] = s_grad[i];
+    for (int i = tid; i < NX * NX; i += nth) o_lx[1 + NX + i] = s_hess[i];
+    __syncthreads();
+    // linear feature on u
+    grid_plant::linear_feature_cost<T, MENU_MU, NU>(s_out, s_u, s_Au, s_bu, s_tu, s_Wu, s_act[4], s_eps[4], s_arena);
+    __syncthreads(); if (tid == 0) o_lu[0] = s_out[0]; __syncthreads();
+    grid_plant::linear_feature_cost_gradient<T, MENU_MU, NU, false>(s_grad, s_u, s_Au, s_bu, s_tu, s_Wu, s_act[4], s_eps[4], s_arena);
+    __syncthreads();
+    grid_plant::linear_feature_cost_hessian<T, MENU_MU, NU, false>(s_hess, s_u, s_Au, s_bu, s_tu, s_Wu, s_act[4], s_eps[4], s_arena);
+    __syncthreads();
+    for (int i = tid; i < NU; i += nth) o_lu[1 + i] = s_grad[i];
+    for (int i = tid; i < NU * NU; i += nth) o_lu[1 + NU + i] = s_hess[i];
+    __syncthreads();
+    // the quadratic activation reproduces the quadratic terms
+    grid_plant::state_cost<T>(s_out, s_x, s_xdes, s_Q, grid_plant::GRID_PLANT_ACTIVATION_QUADRATIC, s_eps[1], s_arena);
+    __syncthreads(); if (tid == 0) o_quad[0] = s_out[0]; __syncthreads();
+    grid_plant::ee_pos_cost_activated<T, PLANT_EE>(s_out, s_x, s_eedes, s_W, grid_plant::GRID_PLANT_ACTIVATION_QUADRATIC, s_eps[0], s_eePos, s_arena, d_robotModel);
+    __syncthreads(); if (tid == 0) o_quad[1] = s_out[0]; __syncthreads();
+
+#if defined(GRID_PLANT_HAS_COST_MENU)
+    // ===== menu PRESET (chained ACCUMULATE) vs the independent composition =====
+    __shared__ T s_lo_q[NQ], s_hi_q[NQ], s_lo_v[NV], s_hi_v[NV], s_lo_u[NU], s_hi_u[NU];
+    __shared__ T s_qk[NX], s_rk[NU], s_Qk[NX * NX], s_Rk[NU * NU];
+    __shared__ T s_rv[1], s_tv[1], s_tg[NX], s_th[NX * NX];
+    const T mu = static_cast<T>(0.1);
+    for (int i = tid; i < NQ; i += nth) { s_lo_q[i] = g_q[i] - static_cast<T>(1); s_hi_q[i] = g_q[i] + static_cast<T>(1); if (i == 0) { s_lo_q[i] = -HUGE_VALF; s_hi_q[i] = HUGE_VALF; } }
+    for (int i = tid; i < NV; i += nth) { s_lo_v[i] = g_qd[i] - static_cast<T>(1); s_hi_v[i] = g_qd[i] + static_cast<T>(1); }
+    for (int i = tid; i < NU; i += nth) { s_lo_u[i] = g_u[i] - static_cast<T>(1); s_hi_u[i] = g_u[i] + static_cast<T>(1); }
+    __syncthreads();
+    grid_plant::tracking_cost_menu<T, PLANT_EE, MENU_MX, MENU_MU>(s_out, s_x, s_u, s_xdes, s_udes, s_eedes, s_Q, s_R, s_W,
+        s_lo_q, s_hi_q, mu, s_lo_v, s_hi_v, mu, s_lo_u, s_hi_u, mu, s_act, s_eps,
+        s_Ax, s_bx, s_tx, s_Wx, s_Au, s_bu, s_tu, s_Wu, s_eePos, s_arena, d_robotModel);
+    __syncthreads(); if (tid == 0) o_menu[0] = s_out[0]; __syncthreads();
+    grid_plant::tracking_cost_menu_gradient<T, PLANT_EE, MENU_MX, MENU_MU>(s_qk, s_rk, s_x, s_u, s_xdes, s_udes, s_eedes, s_Q, s_R, s_W,
+        s_lo_q, s_hi_q, mu, s_lo_v, s_hi_v, mu, s_lo_u, s_hi_u, mu, s_act, s_eps,
+        s_Ax, s_bx, s_tx, s_Wx, s_Au, s_bu, s_tu, s_Wu, s_eePos, s_deePos, s_arena, d_robotModel);
+    __syncthreads();
+    grid_plant::tracking_cost_menu_hessian<T, PLANT_EE, MENU_MX, MENU_MU>(s_Qk, s_Rk, s_x, s_u, s_xdes, s_udes, s_eedes, s_Q, s_R, s_W,
+        s_lo_q, s_hi_q, mu, s_lo_v, s_hi_v, mu, s_lo_u, s_hi_u, mu, s_act, s_eps,
+        s_Ax, s_bx, s_tx, s_Wx, s_Au, s_bu, s_tu, s_Wu, s_eePos, s_deePos, s_arena, d_robotModel);
+    __syncthreads();
+    for (int i = tid; i < NX; i += nth) o_menu[1 + i] = s_qk[i];
+    for (int i = tid; i < NU; i += nth) o_menu[1 + NX + i] = s_rk[i];
+    for (int i = tid; i < NX * NX; i += nth) o_menu[1 + NX + NU + i] = s_Qk[i];
+    for (int i = tid; i < NU * NU; i += nth) o_menu[1 + NX + NU + NX * NX + i] = s_Rk[i];
+    __syncthreads();
+    // reference: the activated and linear term values are in o_as/o_ai/o_ae/o_lx/o_lu (written by this block); add the barriers
+    if (tid == 0) s_rv[0] = o_ae[0] + o_as[0] + o_ai[0] + o_lx[0] + o_lu[0];
+    for (int i = tid; i < NX; i += nth) s_qk[i] = o_ae[1 + i] + o_as[1 + i] + o_lx[1 + i];
+    for (int i = tid; i < NU; i += nth) s_rk[i] = o_ai[1 + i] + o_lu[1 + i];
+    for (int i = tid; i < NX * NX; i += nth) s_Qk[i] = o_ae[1 + NX + i] + o_as[1 + NX + i] + o_lx[1 + NX + i];
+    for (int i = tid; i < NU * NU; i += nth) s_Rk[i] = o_ai[1 + NU + i] + o_lu[1 + NU + i];
+    if (tid == 0) s_tv[0] = static_cast<T>(0);
+    __syncthreads();
+    grid_plant::joint_position_barrier<T>(s_tv, s_x, s_lo_q, s_hi_q, mu, s_th);
+    __syncthreads(); if (tid == 0) { s_rv[0] += s_tv[0]; s_tv[0] = static_cast<T>(0); } __syncthreads();
+    grid_plant::joint_velocity_barrier<T>(s_tv, s_x, s_lo_v, s_hi_v, mu, s_th);
+    __syncthreads(); if (tid == 0) { s_rv[0] += s_tv[0]; s_tv[0] = static_cast<T>(0); } __syncthreads();
+    grid_plant::joint_torque_barrier<T>(s_tv, s_u, s_lo_u, s_hi_u, mu, s_th);
+    __syncthreads(); if (tid == 0) { s_rv[0] += s_tv[0]; } __syncthreads();
+    for (int i = tid; i < NX; i += nth) s_tg[i] = static_cast<T>(0); __syncthreads();
+    grid_plant::joint_position_barrier_gradient<T, 0, 0>(s_tg, s_x, s_lo_q, s_hi_q, mu);
+    __syncthreads(); for (int i = tid; i < NX; i += nth) { s_qk[i] += s_tg[i]; s_tg[i] = static_cast<T>(0); } __syncthreads();
+    grid_plant::joint_velocity_barrier_gradient<T, NQ, NQ>(s_tg, s_x, s_lo_v, s_hi_v, mu);
+    __syncthreads(); for (int i = tid; i < NX; i += nth) { s_qk[i] += s_tg[i]; s_tg[i] = static_cast<T>(0); } __syncthreads();
+    grid_plant::joint_torque_barrier_gradient<T, 0, 0>(s_tg, s_u, s_lo_u, s_hi_u, mu);
+    __syncthreads(); for (int i = tid; i < NU; i += nth) { s_rk[i] += s_tg[i]; } __syncthreads();
+    for (int i = tid; i < NX * NX; i += nth) s_th[i] = static_cast<T>(0); __syncthreads();
+    grid_plant::joint_position_barrier_hessian<T, NX, 0, 0>(s_th, s_x, s_lo_q, s_hi_q, mu);
+    __syncthreads(); for (int i = tid; i < NX * NX; i += nth) { s_Qk[i] += s_th[i]; s_th[i] = static_cast<T>(0); } __syncthreads();
+    grid_plant::joint_velocity_barrier_hessian<T, NX, NQ, NQ>(s_th, s_x, s_lo_v, s_hi_v, mu);
+    __syncthreads(); for (int i = tid; i < NX * NX; i += nth) { s_Qk[i] += s_th[i]; s_th[i] = static_cast<T>(0); } __syncthreads();
+    grid_plant::joint_torque_barrier_hessian<T, NU, 0, 0>(s_th, s_u, s_lo_u, s_hi_u, mu);
+    __syncthreads(); for (int i = tid; i < NU * NU; i += nth) { s_Rk[i] += s_th[i]; } __syncthreads();
+    const int ro = MENU_PRESET_CNT;
+    if (tid == 0) o_menu[ro] = s_rv[0];
+    for (int i = tid; i < NX; i += nth) o_menu[ro + 1 + i] = s_qk[i];
+    for (int i = tid; i < NU; i += nth) o_menu[ro + 1 + NX + i] = s_rk[i];
+    for (int i = tid; i < NX * NX; i += nth) o_menu[ro + 1 + NX + NU + i] = s_Qk[i];
+    for (int i = tid; i < NU * NU; i += nth) o_menu[ro + 1 + NX + NU + NX * NX + i] = s_Rk[i];
+#endif  // GRID_PLANT_HAS_COST_MENU
+}
+#endif  // GRID_PLANT_HAS_ACTIVATED_EE_COST
+
 // ---- tangent (log-map) state cost check (floating-base preset; GATO ASK3) ----
 // x_des is built ON DEVICE from the input state: q_des = integrate(q, delta) with a
 // fixed deterministic tangent delta (guaranteed-valid quaternion by construction),
@@ -604,6 +762,16 @@ void run() {
     gpuErrchkKernel();
 #endif
 
+#if defined(GRID_PLANT_HAS_ACTIVATED_EE_COST)
+    // Cost menu: activated terms + linear feature (+ the menu preset on fixed base).
+    T *o_mas = dmalloc<T>(MENU_STATE_CNT), *o_mai = dmalloc<T>(MENU_INPUT_CNT), *o_mae = dmalloc<T>(MENU_STATE_CNT);
+    T *o_mlx = dmalloc<T>(MENU_STATE_CNT), *o_mlu = dmalloc<T>(MENU_INPUT_CNT), *o_mq = dmalloc<T>(2);
+    T *o_mm = dmalloc<T>(2 * MENU_PRESET_CNT);
+    cudaFuncSetAttribute(cost_menu_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)plant_dyn);
+    cost_menu_kernel<T><<<1, nthreads, plant_dyn>>>(g_q, g_qd, g_u, d_robotModel, o_mas, o_mai, o_mae, o_mlx, o_mlu, o_mq, o_mm);
+    gpuErrchkKernel();
+#endif
+
 #ifdef GRID_PLANT_HAS_TANGENT_STATE_COST
     // Tangent (log-map) state cost — static __shared__ only, no dynamic arena.
     T *o_tcv = dmalloc<T>(1), *o_tcg = dmalloc<T>(2 * NV);
@@ -720,6 +888,21 @@ void run() {
     dcopy_out("tracking_ref_Rk", o_trRk, NU, NU);
 #else
     std::cout << "BEGIN tracking_preset_skipped 1 1\n1\nEND tracking_preset_skipped\n";
+#endif
+#if defined(GRID_PLANT_HAS_ACTIVATED_EE_COST)
+    dcopy_out("menu_state", o_mas, 1, MENU_STATE_CNT);
+    dcopy_out("menu_input", o_mai, 1, MENU_INPUT_CNT);
+    dcopy_out("menu_ee", o_mae, 1, MENU_STATE_CNT);
+    dcopy_out("menu_linx", o_mlx, 1, MENU_STATE_CNT);
+    dcopy_out("menu_linu", o_mlu, 1, MENU_INPUT_CNT);
+    dcopy_out("menu_quad", o_mq, 1, 2);
+#if defined(GRID_PLANT_HAS_COST_MENU)
+    dcopy_out("menu_preset", o_mm, 1, 2 * MENU_PRESET_CNT);
+#else
+    std::cout << "BEGIN menu_preset_skipped 1 1\n1\nEND menu_preset_skipped\n";
+#endif
+#else
+    std::cout << "BEGIN menu_skipped 1 1\n1\nEND menu_skipped\n";
 #endif
 #ifdef GRID_PLANT_HAS_STEP_HESSIAN
     // Row-major flat (1 x D2AB_CNT); reshaped to (2*NV, 3*NV, 3*NV) C-order in Python.

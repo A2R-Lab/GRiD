@@ -12,6 +12,22 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Docs: the compatibility page records the JAX 0.11 CUDA initialization
+  warning under Compute Sanitizer (fabric handle support requires IMEX
+  channels; reproduced without GRiD) as an accepted limitation of the
+  combined sanitizer invocation, with the NumPy and PyTorch surfaces passing
+  at zero errors.
+- Cost menu, phase one. `grid_plant` gains the activation layer (quadratic
+  and pseudo-Huber with a positive `eps`), the activated terms `state_cost`,
+  `input_cost` and `ee_pos_cost_activated`, the linear feature residual
+  `linear_feature_cost<T, M, N>` (`A v + b - target` over the state or the
+  input with a caller matrix), and `tracking_cost_menu`, the tracking preset
+  with a per-term activation choice and parameter per knot and optional
+  linear feature terms on `x` and `u`. Every existing term keeps its bytes and
+  the quadratic activation reproduces it; `RBDReference` carries the same
+  functions, checked against finite differences, and the CUDA plant suite
+  compares every new term with the reference on iiwa14, go2 and fr3 and the
+  menu preset with the composition of its terms.
 - Topology helpers. The header states the rule for `TOPOLOGY_HELPERS_COUNT`
   (`(not serial) * (5n + 1) + (not identical S) * n`, `n = max(NUM_POS,
   NUM_JOINTS)`: iiwa14 0, a three-joint +Z, -Z, +X arm 3, rizon4 7) in
