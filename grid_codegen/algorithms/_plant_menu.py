@@ -774,7 +774,7 @@ def gen_tracking_cost_menu(self):
     self.gen_add_code_line("if (!ACCUMULATE) { if (threadIdx.x == 0 && threadIdx.y == 0) { s_out[0] = static_cast<T>(0); } }")
     self.gen_add_sync()
     terms = [
-        ("FRAME_POS", "frame_position_cost<T, true>(s_out, s_x, CF, p.ee_des, p.W, " + act("FRAME_POS") + ", " + eps("FRAME_POS") + ", p.cf_lower == nullptr ? nullptr : nullptr, nullptr, s_frame, s_scratch, d_robotModel);"),
+        ("FRAME_POS", "frame_position_cost<T, true>(s_out, s_x, CF, p.ee_des, p.W, " + act("FRAME_POS") + ", " + eps("FRAME_POS") + ", nullptr, nullptr, s_frame, s_scratch, d_robotModel);"),
         ("STATE", "state_cost<T, true>(s_out, s_x, p.x_des, p.Q, " + act("STATE") + ", " + eps("STATE") + ", p.x_lower, p.x_upper, s_scratch);"),
         ("INPUT", "input_cost<T, true>(s_out, s_u, p.u_des, p.R, " + act("INPUT") + ", " + eps("INPUT") + ", p.ub_lower, p.ub_upper, s_scratch);"),
     ]
