@@ -137,25 +137,45 @@ Every cost term factors as an activation applied per entry to a residual
 ``r`` with Jacobian ``J``: value ``sum_i a(r_i)``, gradient ``J^T a'(r)``,
 Gauss-Newton Hessian ``J^T diag(a''(r)) J``. The quadratic terms above are
 the quadratic activation ``a = 1/2 w r^2`` over their residuals. The
-``grid_plant`` namespace also carries the activation layer and a menu over
-it: ``activation_value`` / ``activation_slope`` / ``activation_curvature``
-for the quadratic activation and the pseudo-Huber activation ``a = w
-(sqrt(r^2 + eps^2) - eps)`` (``eps > 0``, the weighted absolute value as
-``eps`` goes to zero, quadratic for ``|r|`` small against ``eps``);
-``state_cost``, ``input_cost`` and ``ee_pos_cost_activated``, the state,
-input and end-effector position residuals under a chosen activation with
-per-entry weights; ``linear_feature_cost<T, M, N>``, the residual ``A v +
-b - target`` over a linear feature of the state (``N = NX``) or the input
-(``N = NU``) with a caller matrix; and ``tracking_cost_menu``, the tracking
-preset with a per-term activation choice and parameter (order ``[ee,
-state, input, linear_x, linear_u]``) and optional linear feature terms on
-``x`` and ``u`` (template row counts, zero omits the term). Every target,
-weight and activation parameter is a runtime buffer the caller writes per
-knot; with the quadratic activation and no linear terms the menu preset is
+``grid_plant`` namespace carries the activation layer and a menu over it.
+
+Activations (``GRID_PLANT_ACTIVATION_*``, with ``activation_value`` /
+``activation_slope`` / ``activation_curvature``): quadratic; pseudo-Huber
+``a = w (sqrt(r^2 + eps^2) - eps)`` with ``eps > 0`` (the weighted absolute
+value as ``eps`` goes to zero, quadratic for ``|r|`` small against ``eps``);
+the relaxed log barrier of Grandia et al. on the feature value ``v`` in
+``[lo, hi]`` (``w`` is ``mu``, ``eps`` the relaxation ``delta``: the log
+barrier above ``delta`` and its quadratic extension below, so an infeasible
+iterate keeps a finite value and slope); and the one-sided quadratic barrier
+``1/2 w (max(0, lo - v)^2 + max(0, v - hi)^2)``. An infinite bound
+contributes nothing; every activated term takes per-entry bound buffers that
+may be null when the activation is not a barrier. ``GRID_PLANT_ACTIVATION_NONE``
+skips a term in the preset.
+
+Residuals: ``state_cost`` and ``input_cost`` on ``x - x_des`` and ``u -
+u_des``; ``linear_feature_cost<T, M, N>`` on ``A v + b - target`` over the
+state (``N = NX``) or the input (``N = NU``) with a caller matrix; and, on a
+baked cost frame, ``frame_position_cost`` on ``p_f(q) - p_des``,
+``frame_orientation_cost`` on the log-map residual ``log(R_des^T R_f(q))``
+with Jacobian ``Jr(e)^-1`` times the frame's body-axes angular Jacobian (no
+Euler chart, regular at every orientation), and ``frame_velocity_cost`` on
+the twist ``J(q) qd - v_des`` with the residual Jacobian ``[d(J qd)/dq | J]``
+(fixed base). Cost frames are named joints or fixed joints baked with
+``gen_all_code(cost_frames=[...])`` or ``register_robot(cost_frames=[...])``
+(the fixed joint's offset applied; the end-effector target is always frame
+0); ``frame_eval`` is the caller-scratch evaluator behind the three terms,
+built on ``grid::frame_jacobian_inner``. ``gravity_torque`` is the
+caller-scratch ``RNEA(q, 0, 0)`` a consumer uses to set a knot's torque target
+to the gravity-holding torque in place. ``tracking_cost_menu<T, MX, MU, CF,
+CF2>`` composes the frame position, state, input, the three joint barriers,
+the linear features, the frame orientation and twist and a second frame
+position behind ``cost_menu_params<T>``, every target, weight, bound and
+activation parameter a runtime buffer the caller writes per knot; with
+quadratic activations on the first three terms and the rest off it is
 ``tracking_cost``. The reference is ``RBDReference.state_cost``,
-``input_cost``, ``linear_feature_cost`` and ``ee_pos_cost_activated``.
-Barrier activations, the orientation and velocity residuals and the
-floating-base preset are later phases.
+``input_cost``, ``linear_feature_cost``, ``frame_position_cost``,
+``frame_orientation_cost``, ``frame_velocity_cost`` and ``gravity_torque``.
+The floating-base preset composition is a later phase.
 
 Select ``integrator`` / ``integrator_gradient`` for step values / gradients
 and ``fdsva_so`` for the step Hessian dependency; the plant generator only

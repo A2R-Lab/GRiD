@@ -386,3 +386,37 @@ def test_build_plan_does_not_create_the_cache_root(stubs, tmp_path):
     assert plan["cached"] is False and not root.exists(), "build_plan created the cache root"
     _warm(stubs)  # a build still creates its own root
     assert stubs.cache_dir.exists()
+
+
+def test_plant_menu_options_key_the_cache(stubs):
+    """friction_model="tanh" (with its width) and cost_frames are codegen inputs:
+    each lands in the generated-sources options, keys its own entry, and the
+    default build keeps the entry it had (the inject-only-when-non-default
+    contract of the other build knobs)."""
+    key0, so0, _ = _warm(stubs)
+    seen = {}
+    real = stubs.generate_sources
+    def spy(urdf_path, options, out_dir):
+        seen.update(options)
+        return real(urdf_path, options, out_dir)
+    stubs.generate_sources = spy
+    import grid_rbd as _g
+    _g.generate_sources = spy
+    _warm(stubs, use_joint_dynamics=True, friction_model="tanh", friction_width=0.05)
+    assert seen.get("friction_model") == "tanh" and seen.get("friction_width") == 0.05 and seen.get("use_joint_dynamics") is True
+    _warm(stubs, cost_frames=["elbow", "tool"])
+    assert seen.get("cost_frames") == ["elbow", "tool"]
+    # the stage-1 input keys differ (the stub emits identical bytes, so the content key may not)
+    def input_key(**kw):
+        return grid_rbd.build_plan("probe", urdf_string=URDF, cache_dir=stubs.cache_dir, cuda_arch=ARCH, **kw)["input_key"]
+    keys = {input_key(), input_key(use_joint_dynamics=True, friction_model="tanh", friction_width=0.05),
+            input_key(use_joint_dynamics=True), input_key(cost_frames=["elbow", "tool"])}
+    assert len(keys) == 4
+    key3, so3, _ = _warm(stubs)
+    assert (key3, so3) == (key0, so0)
+    with pytest.raises(ValueError):
+        _warm(stubs, friction_model="tanh")              # needs use_joint_dynamics
+    with pytest.raises(ValueError):
+        _warm(stubs, use_joint_dynamics=True, friction_width=0.1)   # width needs the tanh model
+    with pytest.raises(ValueError):
+        _warm(stubs, use_joint_dynamics=True, friction_model="huber")

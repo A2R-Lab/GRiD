@@ -295,6 +295,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # gen_all_code (bakes the f_ext_body* device family + fc plant controls +
     # GRID_HAS_CONTACT_FRAMES) and persisted to meta so the handle can echo the
     # registered frames at runtime. Default None = byte-identical build.
+    cost_frames = options.get("cost_frames")
     contact_frame_names = options.get("contact_frames")
     contact_frame_specs = None
     if contact_frame_names:
@@ -314,6 +315,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
             # fixed-base robots (g1/h1_2/h2_plus) whose idsva_so_device still
             # dispatches there -> undefined idsva_so_world_frame_inner.
             enable_idsva_so_world_frame=None,
+            cost_frames=cost_frames,
             runtime_inertia=runtime_inertia,
             runtime_transform=runtime_transform,
             runtime_joint_dynamics=runtime_joint_dynamics,
@@ -426,6 +428,8 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     if use_joint_dynamics:
         meta["use_joint_dynamics"] = True
         meta["friction_model"] = friction_model
+    if cost_frames:
+        meta["cost_frames"] = [nm for nm, _, _ in cg._cost_frames]
     # runtime_joint_dynamics (C5): persist the BAKED alpha-folded per-v-slot
     # damping/friction (each length nv) so handle.joint_damping/.joint_friction echo
     # EXACTLY what init_joint_dynamics_params wrote, and set_joint_dynamics can fetch-

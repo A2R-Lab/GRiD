@@ -183,6 +183,7 @@ def register_robot(
     friction_width=None,
     enable_tool: bool = False,
     contact_frames: list[str] | tuple[str, ...] | None = None,
+    cost_frames: list[str] | tuple[str, ...] | None = None,
     output_convention: str = "pinocchio",
     algorithm_list: list[str] | tuple[str, ...] | str | None = None,
     enable_mujoco_kernels: bool = True,
@@ -338,6 +339,11 @@ def register_robot(
         composition. Re-keys the cache only when ``"tanh"``. Match against
         ``RBDReference(..., use_joint_dynamics=True, friction_model="tanh",
         friction_width=w)``.
+    cost_frames : list[str], optional
+        Named joints or fixed joints baked as cost frames for the plant menu's
+        frame position, orientation and twist terms (``grid_plant::frame_eval``
+        and ``tracking_cost_menu``); the end-effector target is always frame 0.
+        Pulls the frame Jacobian family into the build and re-keys the cache.
     friction_width : float | sequence of float | None, optional
         The tanh width ``w`` in rad/s (m/s for prismatic joints): one scalar for
         every velocity slot or one value per velocity slot (length nv). ``None``
@@ -468,6 +474,7 @@ def register_robot(
             output_convention=output_convention, algorithm_list=algorithm_list,
             use_joint_dynamics=use_joint_dynamics,
             friction_model=friction_model, friction_width=friction_width,
+            cost_frames=cost_frames,
             runtime_joint_dynamics=runtime_joint_dynamics,
             runtime_inertia=runtime_inertia,
             runtime_transform=runtime_transform, enable_tool=enable_tool,
@@ -482,6 +489,7 @@ def register_robot(
             output_convention=output_convention, algorithm_list=algorithm_list,
             use_joint_dynamics=use_joint_dynamics,
             friction_model=friction_model, friction_width=friction_width,
+            cost_frames=cost_frames,
             runtime_joint_dynamics=runtime_joint_dynamics,
             runtime_inertia=runtime_inertia,
             runtime_transform=runtime_transform, enable_tool=enable_tool,
@@ -497,7 +505,7 @@ def register_robot(
         runtime_joint_dynamics=runtime_joint_dynamics,
         use_joint_dynamics=use_joint_dynamics, enable_tool=enable_tool,
         friction_model=friction_model, friction_width=friction_width,
-        contact_frames=contact_frames,
+        contact_frames=contact_frames, cost_frames=cost_frames,
         algorithm_list=algorithm_list, enable_mujoco_kernels=enable_mujoco_kernels,
     )
     handle = RobotHandle(name, str(so_path), meta, allow_fp64=allow_fp64)
@@ -590,6 +598,7 @@ def warm_robot(
     plan_only: bool = False,
     friction_model: str = "sign",
     friction_width=None,
+    cost_frames: list[str] | tuple[str, ...] | None = None,
 ) -> tuple[str, Path, dict]:
     """Generate + compile (or cache-hit) a robot's ``.so`` WITHOUT constructing
     a handle — no dlopen, no eager ``grid_rbd_init``, no device allocations.
@@ -667,6 +676,10 @@ def warm_robot(
     # cache entry (the baked family + GRID_HAS_CONTACT_FRAMES change the header).
     if contact_frames:
         code_options["contact_frames"] = list(contact_frames)
+    # Cost frames (plant menu): named frames baked for the frame residuals; inject only
+    # when given so a default build keeps its cache entry.
+    if cost_frames:
+        code_options["cost_frames"] = [str(n) for n in cost_frames]
     if runtime_inertia:
         code_options["runtime_inertia"] = True
     # runtime_transform (mirror of runtime_inertia): runtime-mutable joint-frame

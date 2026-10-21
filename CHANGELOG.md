@@ -17,17 +17,25 @@ repository. Everything below describes the packaged A2R-Lab releases.
   channels; reproduced without GRiD) as an accepted limitation of the
   combined sanitizer invocation, with the NumPy and PyTorch surfaces passing
   at zero errors.
-- Cost menu, phase one. `grid_plant` gains the activation layer (quadratic
-  and pseudo-Huber with a positive `eps`), the activated terms `state_cost`,
-  `input_cost` and `ee_pos_cost_activated`, the linear feature residual
+- Cost menu. `grid_plant` gains the activation layer (quadratic, pseudo-Huber
+  with a positive `eps`, the relaxed log barrier and the one-sided quadratic
+  barrier on bounded feature values), the activated terms `state_cost` and
+  `input_cost`, the linear feature residual
   `linear_feature_cost<T, M, N>` (`A v + b - target` over the state or the
-  input with a caller matrix), and `tracking_cost_menu`, the tracking preset
-  with a per-term activation choice and parameter per knot and optional
-  linear feature terms on `x` and `u`. Every existing term keeps its bytes and
-  the quadratic activation reproduces it; `RBDReference` carries the same
-  functions, checked against finite differences, and the CUDA plant suite
-  compares every new term with the reference on iiwa14, go2 and fr3 and the
-  menu preset with the composition of its terms.
+  input with a caller matrix), baked cost frames (`cost_frames=` on
+  `gen_all_code` and `register_robot`: named joints or fixed joints with their
+  offsets, the end-effector target always frame 0) with `frame_eval`,
+  `frame_position_cost`, the log-map `frame_orientation_cost` and, on fixed
+  base, `frame_velocity_cost` with its analytic configuration derivative, the
+  caller-scratch `gravity_torque` (RNEA at zero velocity) for gravity-holding
+  torque targets, and `tracking_cost_menu` behind `cost_menu_params<T>`: a
+  per-term activation choice and parameter per knot, linear features on `x`
+  and `u`, the frame orientation and twist and a second frame position. Every
+  existing term keeps its bytes and the quadratic activation reproduces it;
+  `RBDReference` carries the same functions, checked against finite
+  differences, and the CUDA plant suite compares every term with the
+  reference on iiwa14, go2 and fr3 and the menu preset with the composition of
+  its terms.
 - Topology helpers. The header states the rule for `TOPOLOGY_HELPERS_COUNT`
   (`(not serial) * (5n + 1) + (not identical S) * n`, `n = max(NUM_POS,
   NUM_JOINTS)`: iiwa14 0, a three-joint +Z, -Z, +X arm 3, rizon4 7) in

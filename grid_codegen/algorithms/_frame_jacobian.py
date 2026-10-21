@@ -93,6 +93,34 @@ def _emit_world_transform_chainup(self, declare_xworld = True):
         self.gen_add_sync()
 
 
+def frame_jacobian_jobs(self):
+    """The baked column table of frame_jacobian_inner: one (target_jid, jj, vi,
+    ang_local[3], lin_local[3], alpha) row per (frame joint, ancestor-or-self
+    joint, DoF column); alpha is the mimic multiplier (1.0 without mimic joints).
+    Shared with the grid_plant frame-velocity derivative so both read one source."""
+    NJ = self.robot.get_num_joints()
+    HAS_MIMIC = self.robot_has_mimic_joints()
+    jobs = []
+    for jid in range(NJ):
+        chain = sorted(self.robot.get_ancestors_by_id(jid)) + [jid]
+        for jj in chain:
+            S = np.asarray(self.robot.get_S_by_id(jj), dtype=np.float64)
+            if S.ndim == 1:
+                S = S.reshape(-1, 1)
+            vinds = self.robot.get_joint_index_v(jj)
+            if not isinstance(vinds, (list, tuple, np.ndarray)):
+                vinds = [vinds]
+            else:
+                vinds = list(vinds)
+            alpha = self._alpha_for_jid(jj) if HAS_MIMIC else 1.0
+            for c in range(S.shape[1]):
+                vi = vinds[c] if c < len(vinds) else vinds[-1]
+                ang = [float(S[0, c]), float(S[1, c]), float(S[2, c])]
+                lin = [float(S[3, c]), float(S[4, c]), float(S[5, c])]
+                jobs.append((jid, jj, vi, ang, lin, alpha))
+    return jobs
+
+
 def gen_frame_jacobian_inner(self):
     """Emit frame_jacobian_inner: build per-joint world transforms then the
     geometric Jacobian (6 x NV, [linear; angular]) of `target_jid` in
@@ -139,26 +167,7 @@ def gen_frame_jacobian_inner(self):
     # the per-job alpha. For a NON-mimic robot every alpha == 1.0, so the alpha
     # array/multiply is gated on HAS_MIMIC to keep non-mimic emit byte-identical.
     HAS_MIMIC = self.robot_has_mimic_joints()
-    jobs = []  # (target_jid, jj, vi, ang_local[3], lin_local[3], alpha)
-    for jid in range(NJ):
-        if self.robot.get_parent_id(jid) == -1 and jid != 0:
-            pass
-        chain = sorted(self.robot.get_ancestors_by_id(jid)) + [jid]
-        for jj in chain:
-            S = np.asarray(self.robot.get_S_by_id(jj), dtype=np.float64)
-            if S.ndim == 1:
-                S = S.reshape(-1, 1)
-            vinds = self.robot.get_joint_index_v(jj)
-            if not isinstance(vinds, (list, tuple, np.ndarray)):
-                vinds = [vinds]
-            else:
-                vinds = list(vinds)
-            alpha = self._alpha_for_jid(jj) if HAS_MIMIC else 1.0
-            for c in range(S.shape[1]):
-                vi = vinds[c] if c < len(vinds) else vinds[-1]
-                ang = [float(S[0, c]), float(S[1, c]), float(S[2, c])]
-                lin = [float(S[3, c]), float(S[4, c]), float(S[5, c])]
-                jobs.append((jid, jj, vi, ang, lin, alpha))
+    jobs = frame_jacobian_jobs(self)  # (target_jid, jj, vi, ang_local[3], lin_local[3], alpha)
 
     njobs = len(jobs)
     if njobs > 0:

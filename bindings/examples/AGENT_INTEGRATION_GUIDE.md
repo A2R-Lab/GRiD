@@ -356,8 +356,12 @@ all turn about +Z, `n` for any other serial chain and `5n + 1` more for a
 branching tree (`n = max(NUM_POS, NUM_JOINTS)`); pass a filled block whenever
 the count is nonzero, reserve `grid::TOPOLOGY_HELPERS_T_COUNT<T>()` T elements
 for it in an arena sized in T, and generate with `DEBUG_MODE=True` to have
-every helper-reading `_inner` assert the pointer is not null.
-See `examples/cuda/wrapper_types.md`.
+every helper-reading `_inner` assert the pointer is not null. A consumer that
+builds its cost from the `grid_plant` menu passes `cost_frames=[...]` (named
+joints or fixed joints) to `register_robot` or `gen_all_code`, which bakes the
+frames the position, orientation and twist terms address by index and pulls
+the frame Jacobian family into the build; the plant concept page lists the
+activations and terms. See `examples/cuda/wrapper_types.md`.
 
 ## Recommended practice
 

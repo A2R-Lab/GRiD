@@ -688,7 +688,12 @@ def gen_XImats_helpers_temp_shared_memory_code(self, temp_mem_size = 0, include_
                                                include_homogenous_transforms = False, extra_t_buffers = None,
                                                include_linalg_scratch = False,
                                                linalg_scratch_bytes = "GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()",
-                                               tier_workspace_expr = None):
+                                               tier_workspace_expr = None, arena_base_expr = None):
+    """Carve the XImats-domain arena. ``arena_base_expr`` (default None: the
+    kernel's own ``extern __shared__`` arena) names a caller pointer to carve
+    from instead, for caller-scratch inners callable from another kernel's
+    block (the grid_plant raw evaluators). Returns the resolved ArenaLayout so a
+    caller can size the arena it must be handed."""
     n = self.robot.get_num_pos()
     XI_size = self.gen_get_XI_size(include_base_inertia,include_homogenous_transforms)
     if extra_t_buffers is None:
@@ -730,7 +735,9 @@ def gen_XImats_helpers_temp_shared_memory_code(self, temp_mem_size = 0, include_
                                   temp_name = "s_temp",
                                   topology_name = "s_topology_helpers",
                                   extra_byte_regions = (layout.extra_byte_regions or None),
-                                  tier_workspace_expr = tier_workspace_expr)
+                                  tier_workspace_expr = tier_workspace_expr,
+                                  arena_base_expr = arena_base_expr)
+    return layout
 
 def _emit_mimic_q_fold(self):
     """Emit the per-BODY effective-angle q-fold scratch used by every
@@ -1189,6 +1196,7 @@ def gen_XmatsHom_helpers_temp_shared_memory_code(self, temp_mem_size = 0, includ
                                   extra_byte_regions = (layout.extra_byte_regions or None),
                                   tier_workspace_expr = tier_workspace_expr,
                                   arena_base_expr = arena_base_expr)
+    return layout
 
 def gen_load_topology_helpers(self):
     """Emit a standalone ``load_topology_helpers(s_topology_helpers, d_robotModel)``

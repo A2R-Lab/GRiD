@@ -2792,12 +2792,12 @@ def gen_grid_plant(self, algorithms):
     else:
         self.gen_add_code_line("// [grid_plant] tracking_cost preset skipped: requires ee_pos_cost (both 'end_effector_pose' and 'end_effector_pose_gradient').")
 
-    # Cost menu, phase one (2026-10-21): the activation layer (quadratic, pseudo-Huber),
-    # activated state / input / EE-position terms, the linear feature residual and the
+    # Cost menu (2026-10-21): the activation layer, the activated state / input terms,
+    # the linear feature residual, the cost-frame residuals, gravity_torque and the
     # tracking_cost_menu preset. Emitted after the existing terms so every function
     # above keeps its bytes; the quadratic activation reproduces each existing term.
     from ._plant_menu import gen_cost_menu
-    gen_cost_menu(self, ee_cost_ok)
+    gen_cost_menu(self, algorithms, ee_cost_ok)
 
     # CoM-tracking / centroidal-momentum-tracking costs need the centroidal
     # kinematics-domain device fns (grid::com_device / grid::ccrba_device), which

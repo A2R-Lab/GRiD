@@ -379,7 +379,7 @@ class GRiDCodeGenerator:
                      runtime_joint_dynamics = None, multi_target_batch = None, collision_spec = None,
                      contact_frames = None, enable_contact_runtime = False, enable_mujoco_kernels = None,
                      emit_alloc_gating = False, fragments_dir = None,
-                     vendor_glass = True, glass_revision = None):
+                     vendor_glass = True, glass_revision = None, cost_frames = None):
         """Pure option resolution for gen_all_code (hygiene 5/9, 2026-09-24): profile/
         closure expansion, feature gates and every `self.*` build flag are decided
         HERE, emitting nothing. Returns (algorithms, include_any_kinematics,
@@ -453,7 +453,19 @@ class GRiDCodeGenerator:
         # explicit request enables the world-frame emit even on fixed-base
         # (where the kwarg default is False). Resolve the algorithm set up front
         # so the request can be OR'd into enable_idsva_so_world_frame below.
-        algorithms = self._normalize_codegen_algorithms(codegen_profile, algorithm_list)
+        if cost_frames:
+            # cost_frames (plant menu, 2026-10-21): the named-frame residuals ride on
+            # frame_jacobian_inner, so an explicit frame list pulls that family (and its
+            # closure) into the plan on top of the requested profile or list.
+            if algorithm_list is None:
+                requested = [str(codegen_profile or "all")]
+            elif isinstance(algorithm_list, str):
+                requested = [algorithm_list]
+            else:
+                requested = list(algorithm_list)
+            algorithms = self._normalize_codegen_algorithms(codegen_profile, requested + ["frame_jacobian"])
+        else:
+            algorithms = self._normalize_codegen_algorithms(codegen_profile, algorithm_list)
         # mjx twins (floating base, enable_mujoco_kernels): the MUJOCO_OUTPUT
         # epilogues of the ID gradient and fdsva_so rebuild the dense mass matrix
         # with crba_inner, a dependency the pin-only closure never sees. A
@@ -536,6 +548,10 @@ class GRiDCodeGenerator:
         # gen_ee_target_aliases (the stable end_effector_pose_target_* symbols) and
         # by _plant.py's ee_pos_cost family, so neither hard-codes a joint name.
         self._ee_target_name = fixed_target_name if fixed_target_name not in ("", "all") else ""
+        # cost frames (plant menu): the baked named frames the position, orientation and
+        # velocity residuals can address by index; frame 0 is the end-effector target.
+        from .algorithms._plant_menu import resolve_cost_frames
+        self._cost_frames = resolve_cost_frames(self, cost_frames)
         self._ee_target_sfx = ident_suffix(self._ee_target_name)
         # D.4 / Phase 5: runtime-mutable inertia table. When True, the per-link
         # spatial inertia is reconstructed on-device from a mutable d_inertia_params
@@ -615,8 +631,8 @@ class GRiDCodeGenerator:
                      runtime_joint_dynamics = None, multi_target_batch = None, collision_spec = None,
                      contact_frames = None, enable_contact_runtime = False, enable_mujoco_kernels = None,
                      emit_alloc_gating = False, fragments_dir = None,
-                     vendor_glass = True, glass_revision = None):
-        algorithms, include_any_kinematics, include_homogenous_transforms = self._resolve_emission_plan(include_base_inertia=include_base_inertia, include_homogenous_transforms=include_homogenous_transforms, fixed_target_name=fixed_target_name, output_path=output_path, codegen_profile=codegen_profile, algorithm_list=algorithm_list, enable_floating_second_order=enable_floating_second_order, enable_idsva_so_world_frame=enable_idsva_so_world_frame, enable_idsva_so_body_frame=enable_idsva_so_body_frame, runtime_inertia=runtime_inertia, runtime_transform=runtime_transform, runtime_joint_dynamics=runtime_joint_dynamics, multi_target_batch=multi_target_batch, collision_spec=collision_spec, contact_frames=contact_frames, enable_contact_runtime=enable_contact_runtime, enable_mujoco_kernels=enable_mujoco_kernels, emit_alloc_gating=emit_alloc_gating, fragments_dir=fragments_dir, vendor_glass=vendor_glass, glass_revision=glass_revision)
+                     vendor_glass = True, glass_revision = None, cost_frames = None):
+        algorithms, include_any_kinematics, include_homogenous_transforms = self._resolve_emission_plan(include_base_inertia=include_base_inertia, include_homogenous_transforms=include_homogenous_transforms, fixed_target_name=fixed_target_name, output_path=output_path, codegen_profile=codegen_profile, algorithm_list=algorithm_list, enable_floating_second_order=enable_floating_second_order, enable_idsva_so_world_frame=enable_idsva_so_world_frame, enable_idsva_so_body_frame=enable_idsva_so_body_frame, runtime_inertia=runtime_inertia, runtime_transform=runtime_transform, runtime_joint_dynamics=runtime_joint_dynamics, multi_target_batch=multi_target_batch, collision_spec=collision_spec, contact_frames=contact_frames, enable_contact_runtime=enable_contact_runtime, enable_mujoco_kernels=enable_mujoco_kernels, emit_alloc_gating=emit_alloc_gating, fragments_dir=fragments_dir, vendor_glass=vendor_glass, glass_revision=glass_revision, cost_frames=cost_frames)
         file_notes = [ "Interface is:", \
             "    __host__   robotModel<T> *d_robotModel = init_robotModel<T>()", \
             "    __host__   cudaStream_t streams = init_grid<T>()", \
