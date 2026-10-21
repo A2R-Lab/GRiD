@@ -12,6 +12,8 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+## [0.5.4] — 2026-10-21
+
 - Docs: the compatibility page records the JAX 0.11 CUDA initialization
   warning under Compute Sanitizer (fabric handle support requires IMEX
   channels; reproduced without GRiD) as an accepted limitation of the
@@ -332,7 +334,8 @@ update on top of that, organised here by theme:
 - Closed kinematic loops are unsupported.
 - No Windows, macOS, Jetson or precompiled-robot wheels.
 
-[Unreleased]: https://github.com/A2R-Lab/GRiD/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/A2R-Lab/GRiD/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/A2R-Lab/GRiD/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/A2R-Lab/GRiD/compare/v0.5.1...v0.5.3
 [0.5.2]: https://github.com/A2R-Lab/GRiD/compare/v0.5.1...94f4e5c
 [0.5.1]: https://github.com/A2R-Lab/GRiD/releases/tag/v0.5.1
