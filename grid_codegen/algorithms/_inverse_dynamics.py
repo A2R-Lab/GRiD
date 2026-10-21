@@ -86,8 +86,13 @@ def gen_inverse_dynamics_joint_dynamics_bias(self):
     HAS_MIMIC = self.robot_has_mimic_joints()
     fb = self.robot.floating_base
     RUNTIME = getattr(self, "runtime_joint_dynamics", False)
+    TANH = self._jd_tanh_active()
+    w_vslot = self.get_friction_width_baked() if TANH else None
     self.gen_add_code_line("//")
-    self.gen_add_code_line("// joint-local viscous damping + Coulomb friction: s_c += b*qd + f*sign(qd)")
+    if TANH:
+        self.gen_add_code_line("// joint-local viscous damping + smooth Coulomb friction: s_c += b*qd + f*tanh(qd/w)")
+    else:
+        self.gen_add_code_line("// joint-local viscous damping + Coulomb friction: s_c += b*qd + f*sign(qd)")
     self.gen_add_code_line("//")
     self.gen_add_sync()
     self.gen_add_serial_ops()
@@ -108,7 +113,11 @@ def gen_inverse_dynamics_joint_dynamics_bias(self):
             terms = []
             if b != 0.0:
                 terms.append("d_robotModel->d_joint_dynamics_params[" + str(vs) + "] * " + qd)
-            if fr != 0.0:
+            if fr != 0.0 and TANH:
+                # smooth model: f*tanh(qd/w) with f and w read from the table rows.
+                terms.append("d_robotModel->d_joint_dynamics_params[" + str(nv + vs)
+                             + "] * tanh(" + qd + " / d_robotModel->d_joint_dynamics_params[" + str(2 * nv + vs) + "])")
+            elif fr != 0.0:
                 # exact sign matching np.sign (0 at qd==0): (qd>0) - (qd<0).
                 terms.append("d_robotModel->d_joint_dynamics_params[" + str(nv + vs)
                              + "] * static_cast<T>((" + qd + " > static_cast<T>(0)) - ("
@@ -136,7 +145,11 @@ def gen_inverse_dynamics_joint_dynamics_bias(self):
             terms = []
             if b != 0.0:
                 terms.append("static_cast<T>(" + repr(alpha * b) + ") * " + qd)
-            if fr != 0.0:
+            if fr != 0.0 and TANH:
+                # smooth model: alpha*f*tanh(qd/w), the width per v-slot baked.
+                terms.append("static_cast<T>(" + repr(alpha * fr) + ") * tanh(" + qd
+                             + " / static_cast<T>(" + repr(float(w_vslot[vs])) + "))")
+            elif fr != 0.0:
                 # exact sign matching np.sign (0 at qd==0): (qd>0) - (qd<0).
                 terms.append("static_cast<T>(" + repr(alpha * fr)
                              + ") * static_cast<T>((" + qd + " > static_cast<T>(0)) - ("

@@ -139,6 +139,11 @@ def _record_header_content_keys():
                       "MUJOCO_OUTPUT": bool(getattr(self, "MUJOCO_OUTPUT", False)),
                       "launch_config_profile": getattr(self, "launch_config_profile", "host"),
                       "runtime_joint_dynamics": bool(getattr(self, "runtime_joint_dynamics", False)),
+                      # smooth friction (2026-10-21): the model and per-slot width shape
+                      # the joint-dynamics emit; old records lack the keys and replay
+                      # with the defaults ("sign", 0.03), which is what they were built with.
+                      "friction_model": getattr(self, "FRICTION_MODEL", "sign"),
+                      "friction_width": list(getattr(self, "FRICTION_WIDTH", [])),
                       "launch_config_robot": bool(getattr(self, "launch_config_robot", None)),
                       # fp64 (audit 2026-09-18): the ctor's dtype="double" folds into
                       # cuda_shared_mem_type_size_bytes (8 vs 4) and reshapes every

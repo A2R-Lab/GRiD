@@ -66,7 +66,8 @@ def _aba_vslot(self, jid):
 
 def _aba_jd_bias_term_cpp(self, jid):
     """C++ subexpression for body ``jid``'s joint-local damping + Coulomb friction
-    bias, or "" when there is none to apply.
+    bias, or "" when there is none to apply. The friction shape is sign(qd), or
+    tanh(qd/w) under FRICTION_MODEL="tanh" (see gen_inverse_dynamics_joint_dynamics_bias).
 
     The ABA available-torque accumulation is ``u = tau - S^T*pA - U^T*c`` (matches
     RBDReference.aba: ``u[inds_v] = tau - dyn_bias - ...``), where ``dyn_bias`` is
@@ -102,6 +103,7 @@ def _aba_jd_bias_term_cpp(self, jid):
         alpha = 1.0
     qd = "s_qd[" + str(vs) + "]"
     terms = []
+    TANH = self._jd_tanh_active()
     if getattr(self, "runtime_joint_dynamics", False):
         # runtime_joint_dynamics: read the alpha-FOLDED per-v-slot coefficient from
         # the mutable device table (damping at [vs], friction at [nv+vs]) instead of
@@ -111,14 +113,21 @@ def _aba_jd_bias_term_cpp(self, jid):
         nv = self.robot.get_num_vel()
         if b != 0.0:
             terms.append("d_robotModel->d_joint_dynamics_params[" + str(vs) + "] * " + qd)
-        if fr != 0.0:
+        if fr != 0.0 and TANH:
+            terms.append("d_robotModel->d_joint_dynamics_params[" + str(nv + vs)
+                         + "] * tanh(" + qd + " / d_robotModel->d_joint_dynamics_params[" + str(2 * nv + vs) + "])")
+        elif fr != 0.0:
             terms.append("d_robotModel->d_joint_dynamics_params[" + str(nv + vs)
                          + "] * static_cast<T>((" + qd + " > static_cast<T>(0)) - ("
                          + qd + " < static_cast<T>(0)))")
         return " + ".join(terms)
     if b != 0.0:
         terms.append("static_cast<T>(" + repr(alpha * b) + ") * " + qd)
-    if fr != 0.0:
+    if fr != 0.0 and TANH:
+        # smooth model: alpha*f*tanh(qd/w) with the per-v-slot width baked.
+        terms.append("static_cast<T>(" + repr(alpha * fr) + ") * tanh(" + qd
+                     + " / static_cast<T>(" + repr(float(self.get_friction_width_baked()[vs])) + "))")
+    elif fr != 0.0:
         # exact sign matching np.sign (0 at qd==0): (qd>0) - (qd<0).
         terms.append("static_cast<T>(" + repr(alpha * fr)
                      + ") * static_cast<T>((" + qd + " > static_cast<T>(0)) - ("

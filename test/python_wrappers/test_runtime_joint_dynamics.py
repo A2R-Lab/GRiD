@@ -246,3 +246,81 @@ def test_fr3_mimic_untouched_equals_baked_and_zero_toggles():
     h_rt.set_joint_dynamics(damping=np.zeros(nv, np.float32), friction=np.zeros(nv, np.float32))
     assert _maxabs(h_rt.inverse_dynamics(q, qd), h_bare.inverse_dynamics(q, qd)) < 1e-4, \
         "fr3: zeroed table != bare"
+
+
+# ─── fr3 tanh friction: the width is the table's third row ────────────────────
+
+
+def _rest_in_width_samples(nj, width, seed=0):
+    """Rows: at rest, inside the width, and two random velocities."""
+    rng = np.random.default_rng(seed)
+    q = rng.standard_normal((4, nj)).astype(np.float32)
+    qd = rng.standard_normal((4, nj))
+    qd[0] = 0.0
+    qd[1] = rng.uniform(-0.5, 0.5, nj) * width
+    u = rng.standard_normal((4, nj)).astype(np.float32)
+    return q, qd.astype(np.float32), u
+
+
+@pytest.mark.skipif(not _FR3.exists(), reason="fr3 URDF not present")
+def test_fr3_tanh_width_row_pokes_and_matches_analytic(iiwa_builds):
+    """friction_model="tanh" + runtime_joint_dynamics: the table carries a third row
+    (the per-slot width). Untouched runtime == baked tanh build; a width poke
+    changes the bias to b*qd + f*tanh(qd/w_new) per v-slot (folded coefficients,
+    exact on the mimic fold); zeroing damping and friction == bare; the baked
+    values restore the baked result; a sign-model build rejects friction_width."""
+    common = dict(urdf_path=str(_FR3), floating_base=False, max_batch_size=8,
+                  use_joint_dynamics=True, friction_model="tanh")
+    h_rt = _grid_rbd.register_robot(name="fr3_rtjd_tanh_pytest", runtime_joint_dynamics=True,
+                                    force_rebuild=True, **common)
+    h_baked = _grid_rbd.register_robot(name="fr3_baked_jd_tanh_pytest", force_rebuild=True, **common)
+    h_bare = _grid_rbd.register_robot(name="fr3_bare_jd_tanh_pytest", urdf_path=str(_FR3),
+                                      floating_base=False, max_batch_size=8, force_rebuild=True)
+    nj = h_rt.num_joints
+    nv = h_rt.num_vel
+    assert h_rt.friction_model == "tanh" and h_baked.friction_model == "tanh"
+    assert h_bare.friction_model == "sign"
+    w0 = h_rt.joint_friction_width
+    assert w0.shape == (nv,) and np.allclose(w0, 0.03)
+    q, qd, u = _rest_in_width_samples(nj, 0.03, seed=31)
+
+    rt = _na(h_rt.inverse_dynamics(q, qd))
+    bk = _na(h_baked.inverse_dynamics(q, qd))
+    assert np.allclose(rt, bk, rtol=1e-5, atol=1e-6), \
+        f"fr3 tanh: untouched runtime != baked ({np.max(np.abs(rt - bk)):.2e})"
+    rt_g = _na(h_rt.inverse_dynamics_gradient(q, qd, u))
+    bk_g = _na(h_baked.inverse_dynamics_gradient(q, qd, u))
+    assert np.allclose(rt_g, bk_g, rtol=1e-5, atol=1e-5)
+
+    # poke the width: bias delta vs the bare build is b*qd + f*tanh(qd/w_new)
+    w_new = np.full(nv, 0.1, np.float32)
+    h_rt.set_joint_dynamics(friction_width=w_new)
+    b = _na(h_rt.joint_damping); f = _na(h_rt.joint_friction)
+    delta = _na(h_rt.inverse_dynamics(q, qd)) - _na(h_bare.inverse_dynamics(q, qd))
+    qd64 = _na(qd)
+    expected = b[None, :] * qd64 + f[None, :] * np.tanh(qd64 / _na(w_new)[None, :])
+    err = float(np.max(np.abs(delta - expected)))
+    assert err < 2e-3, f"width poke: bias delta != b*qd + f*tanh(qd/w): {err:.2e}"
+    # the slope at rest follows the new width: dc_dqd diagonal delta = b + f/w_new
+    g_delta = _na(h_rt.inverse_dynamics_gradient(q, qd, u))[0] - _na(h_bare.inverse_dynamics_gradient(q, qd, u))[0]
+    assert np.allclose(np.diag(g_delta[:, nv:]), b + f / _na(w_new), atol=2e-2 * float(np.max(f / _na(w_new))))
+
+    # zero damping and friction: the width row is inert and the build equals bare
+    h_rt.set_joint_dynamics(damping=np.zeros(nv, np.float32), friction=np.zeros(nv, np.float32))
+    assert _maxabs(h_rt.inverse_dynamics(q, qd), h_bare.inverse_dynamics(q, qd)) < 1e-4
+    # restore every row: back to the baked result
+    h_rt.set_joint_dynamics(damping=h_rt.joint_damping, friction=h_rt.joint_friction,
+                            friction_width=h_rt.joint_friction_width)
+    assert np.allclose(_na(h_rt.inverse_dynamics(q, qd)), bk, rtol=1e-5, atol=1e-6)
+    # the table is 3*nv wide on this build
+    with pytest.raises(ValueError):
+        h_rt.set_joint_dynamics(friction_width=np.full(nv + 1, 0.1, np.float32))
+    with pytest.raises(ValueError):
+        h_rt.set_joint_dynamics(friction_width=np.zeros(nv, np.float32))
+
+    # a sign-model runtime build has no width row and rejects the argument
+    h_sign_rt, _, _ = iiwa_builds
+    with pytest.raises(RuntimeError):
+        h_sign_rt.joint_friction_width
+    with pytest.raises(RuntimeError):
+        h_sign_rt.set_joint_dynamics(friction_width=np.full(h_sign_rt.num_vel, 0.1, np.float32))

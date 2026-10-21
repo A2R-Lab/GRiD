@@ -8,7 +8,8 @@ def _idg_Svec_cpp(S_vec):
 
 
 def _idg_damping_diag_cpp(self, n):
-    """Emit the gated joint-local DAMPING contribution to the velocity gradient.
+    """Emit the gated joint-local DAMPING contribution to the velocity gradient
+    (and, under FRICTION_MODEL="tanh", the smooth friction slope).
 
     The ID value path folds ``c += damping*qd + friction*sign(qd)`` into s_c
     (gen_inverse_dynamics_joint_dynamics_bias). Differentiating that bias:
@@ -39,18 +40,24 @@ def _idg_damping_diag_cpp(self, n):
     """
     if not getattr(self, "USE_JOINT_DYNAMICS", False):
         return
-    if not self.robot.robot_has_joint_damping():
+    TANH = self._jd_tanh_active()
+    if not (self.robot.robot_has_joint_damping() or TANH):
         return
     HAS_MIMIC = self.robot_has_mimic_joints()
+    HAS_DAMP = self.robot.robot_has_joint_damping()
     fb = self.robot.floating_base
     # collect (v_slot -> summed alpha*damping) so mimic joints sharing a slot
-    # fold to a single += into the diagonal cell.
+    # fold to a single += into the diagonal cell. Under the tanh model the folded
+    # alpha*friction per slot is collected too: its slope (f/w) sech^2(qd/w) is
+    # the second diagonal term.
     diag = {}
+    fdiag = {}
     for jid in range(self.robot.get_num_joints()):
         if fb and jid == 0:
             continue  # floating root carries no damping
-        b = float(self.robot.get_damping_by_id(jid))
-        if b == 0.0:
+        b = float(self.robot.get_damping_by_id(jid)) if HAS_DAMP else 0.0
+        fr = float(self.robot.get_friction_by_id(jid)) if TANH else 0.0
+        if b == 0.0 and fr == 0.0:
             continue
         if HAS_MIMIC:
             vs = self._v_slot_cpp(jid)
@@ -58,16 +65,24 @@ def _idg_damping_diag_cpp(self, n):
         else:
             vs = self.robot.get_joint_index_v(jid)
             alpha = 1.0
-        diag[vs] = diag.get(vs, 0.0) + alpha * b
-    if not diag:
+        if b != 0.0:
+            diag[vs] = diag.get(vs, 0.0) + alpha * b
+        if fr != 0.0:
+            fdiag[vs] = fdiag.get(vs, 0.0) + alpha * fr
+    if not (diag or fdiag):
         return
     self.gen_add_code_line("//")
-    self.gen_add_code_line("// joint-local viscous damping gradient: dc_dqd diagonal += damping (friction -> 0)")
+    if TANH:
+        self.gen_add_code_line("// joint-local damping + smooth friction gradient: dc_dqd diagonal += b + (f/w) sech^2(qd/w)")
+    else:
+        self.gen_add_code_line("// joint-local viscous damping gradient: dc_dqd diagonal += damping (friction -> 0)")
     self.gen_add_code_line("//")
     self.gen_add_sync()
     # one thread per damped v-slot (parallel; each writes a distinct diagonal cell)
-    slots = sorted(diag.keys())
+    slots = sorted(set(diag.keys()) | set(fdiag.keys()))
     RUNTIME = getattr(self, "runtime_joint_dynamics", False)
+    w_vslot = self.get_friction_width_baked() if TANH else None
+    nv = self.robot.get_num_vel()
     self.gen_add_parallel_loop("ind", str(len(slots)))
     for k, vs in enumerate(slots):
         # diagonal cell of the dc_dqd half: base nv*nv, col vs, row vs
@@ -80,9 +95,24 @@ def _idg_damping_diag_cpp(self, n):
             # the damping half [vs] is read (never [nv+vs]). Bit-identical until poked.
             rhs = "d_robotModel->d_joint_dynamics_params[" + str(vs) + "]"
         else:
-            rhs = "static_cast<T>(" + repr(diag[vs]) + ")"
-        self.gen_add_code_line(("if (ind == " + str(k) + ") " if len(slots) > 1 else "")
-                               + "s_dc_du[" + str(cell) + "] += " + rhs + ";")
+            rhs = "static_cast<T>(" + repr(diag.get(vs, 0.0)) + ")"
+        guard = ("if (ind == " + str(k) + ") " if len(slots) > 1 else "")
+        if TANH and vs in fdiag:
+            # tanh friction slope: (f/w) * (1 - tanh^2(qd/w)); f and w from the table
+            # under runtime_joint_dynamics, literals otherwise. The damping cell is
+            # still added when the slot has damping.
+            if RUNTIME:
+                f_expr = "d_robotModel->d_joint_dynamics_params[" + str(nv + vs) + "]"
+                w_expr = "d_robotModel->d_joint_dynamics_params[" + str(2 * nv + vs) + "]"
+            else:
+                f_expr = "static_cast<T>(" + repr(fdiag[vs]) + ")"
+                w_expr = "static_cast<T>(" + repr(float(w_vslot[vs])) + ")"
+            damp = (rhs + " + ") if (vs in diag or RUNTIME) else ""
+            self.gen_add_code_line(guard + "{ T th = tanh(s_qd[" + str(vs) + "] / " + w_expr + "); "
+                                   + "s_dc_du[" + str(cell) + "] += " + damp + "(" + f_expr + " / " + w_expr
+                                   + ") * (static_cast<T>(1) - th * th); }")
+        else:
+            self.gen_add_code_line(guard + "s_dc_du[" + str(cell) + "] += " + rhs + ";")
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 

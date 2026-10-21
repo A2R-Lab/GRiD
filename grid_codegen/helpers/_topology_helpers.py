@@ -406,8 +406,10 @@ def gen_get_joint_dynamics_params_size(self):
     # runtime_joint_dynamics: nv damping + nv friction = 2*nv scalars, v-slot
     # indexed (damping in [0,nv), friction in [nv,2nv)). Damping/friction are
     # pure per-DOF scalars (NOT in any sparsity pattern), so this is the
-    # simplest of the three runtime tables.
-    return 2 * self.robot.get_num_vel()
+    # simplest of the three runtime tables. Under the tanh friction model a
+    # third row holds the per-slot width w (in [2nv,3nv)).
+    rows = 3 if self._jd_tanh_active() else 2
+    return rows * self.robot.get_num_vel()
 
 def gen_init_joint_dynamics_params(self):
     # runtime_joint_dynamics (mirror of gen_init_inertia_params): host-side init
@@ -436,6 +438,13 @@ def gen_init_joint_dynamics_params(self):
             self.gen_add_code_line("h_joint_dynamics_params[" + str(vs) + "] = static_cast<T>(" + repr(float(b)) + ");")
         if fr != 0.0:
             self.gen_add_code_line("h_joint_dynamics_params[" + str(nv + vs) + "] = static_cast<T>(" + repr(float(fr)) + ");")
+    if self._jd_tanh_active():
+        # tanh friction: the third row is the per-slot width w (always positive,
+        # written for every slot so a later friction poke on a slot the URDF left
+        # friction-free still has a valid width).
+        self.gen_add_code_line("// tanh friction width per v-slot")
+        for vs, w in enumerate(self.get_friction_width_baked()):
+            self.gen_add_code_line("h_joint_dynamics_params[" + str(2 * nv + vs) + "] = static_cast<T>(" + repr(float(w)) + ");")
     self.gen_checked_table_tail("h_joint_dynamics_params", "d_joint_dynamics_params", str(size), "T")
     self.gen_legacy_init_wrapper("init_joint_dynamics_params", "T")
 
@@ -447,8 +456,9 @@ def gen_set_joint_dynamics_params(self):
     # (same basis as init_joint_dynamics_params); passing the baked values back
     # reproduces the baked result bit-for-bit.
     size = self.gen_get_joint_dynamics_params_size()
+    layout = "[damping(nv) || friction(nv) || friction_width(nv)]" if self._jd_tanh_active() else "[damping(nv) || friction(nv)]"
     self.gen_add_func_doc("Updates the mutable joint-dynamics table on the GPU at runtime (no recompile)",
-            ["h_params is the host array of " + str(size) + " floats: [damping(nv) || friction(nv)], v-slot indexed"],
+            ["h_params is the host array of " + str(size) + " floats: " + layout + ", v-slot indexed"],
             [], None)
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__host__")
@@ -1670,6 +1680,13 @@ def gen_insert_helpers_func_def_params(self, func_def, func_params, param_insert
     # topology into the generated indices); -Wunused-parameter is off in our builds.
     func_def += "int *" + var_names["s_topology_helpers_name"] + ", "
     func_params.insert(param_insert_position,"s_topology_helpers is the (shared) memory location for the topology_helpers (nullptr/unused for serial chains with identical Ss)")
+    # DEBUG_MODE: the inner whose head this builds reads the helpers whenever the
+    # robot has any, so its first body line asserts the pointer is not null (a
+    # consumer that passes nullptr to a branching or non-+Z robot reads garbage
+    # silently in release). gen_add_code_line emits the assert right after the
+    # head line that carries this parameter name; release headers are untouched.
+    if getattr(self, "DEBUG_MODE", False) and self.gen_topology_helpers_size() > 0:
+        self._pending_helpers_assert = var_names["s_topology_helpers_name"]
     return func_def, func_params
 
 def _robotModel_members(self):

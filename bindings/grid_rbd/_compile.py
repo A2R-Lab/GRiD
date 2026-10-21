@@ -159,6 +159,13 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # model.damping/friction). Injected into `options` (and thus the cache key) ONLY when
     # True, so a damped .so never collides with the historical no-op .so.
     use_joint_dynamics = bool(options.get("use_joint_dynamics", False))
+    # Smooth friction (2026-10-21): options["friction_model"] ("sign" default, "tanh")
+    # and options["friction_width"] (the tanh width in rad/s: one scalar or one value
+    # per v-slot) feed the codegen FRICTION_MODEL / FRICTION_WIDTH knobs. register_robot
+    # puts them in options (and thus the cache key) only when non-default, so every
+    # existing cache entry stays valid and the sign-model header is byte-identical.
+    friction_model = str(options.get("friction_model", "sign"))
+    friction_width = options.get("friction_width", 0.03)
     # A1b launch-config bake: the grid_assets/launch_configs/<robot>/<gpu>.json dir is keyed
     # by the CANONICAL robot id (e.g. "iiwa14", "go2", "g1"), which the URDF FILENAME
     # stem often EXCEEDS (iiwa14_primitive_collision, g1_29dof). Resolve the stem to its
@@ -181,6 +188,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         launch_config_robot, options.get("cuda_arch"))
     cg = GRiDCodeGenerator(robot, debug_mode, FILE_NAMESPACE=file_namespace,
                            dtype=codegen_dtype, USE_JOINT_DYNAMICS=use_joint_dynamics,
+                           FRICTION_MODEL=friction_model, FRICTION_WIDTH=friction_width,
                            LAUNCH_CONFIG_ROBOT=launch_config_robot,
                            LAUNCH_CONFIG_PROFILE=launch_config_profile,
                            LAUNCH_CONFIG_GPU=launch_config_gpu)
@@ -417,6 +425,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         meta["transform_params"] = [[float(v) for v in op] for op in oparams]
     if use_joint_dynamics:
         meta["use_joint_dynamics"] = True
+        meta["friction_model"] = friction_model
     # runtime_joint_dynamics (C5): persist the BAKED alpha-folded per-v-slot
     # damping/friction (each length nv) so handle.joint_damping/.joint_friction echo
     # EXACTLY what init_joint_dynamics_params wrote, and set_joint_dynamics can fetch-
@@ -427,6 +436,10 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         meta["runtime_joint_dynamics"] = True
         meta["joint_damping"]  = [float(b) for b in b_vslot]
         meta["joint_friction"] = [float(f) for f in f_vslot]
+        if cg._jd_tanh_active():
+            # the table's third row: the per-v-slot tanh width the device table is
+            # initialized with (set_joint_dynamics(friction_width=) fetch-then-mutate).
+            meta["joint_friction_width"] = [float(w) for w in cg.get_friction_width_baked()]
     return meta
 
 

@@ -372,6 +372,9 @@ public:
         // runtime_joint_dynamics=True (-DGRID_RBD_RUNTIME_JOINT_DYNAMICS).
         // set_joint_dynamics_params() raises a clear error if this symbol is null.
         fn_set_jd_params_ = reinterpret_cast<fn_set_params_t>(opt_sym("grid_rbd_set_joint_dynamics_params"));
+        // The table length (2*nv, or 3*nv under the tanh friction model) is exported
+        // next to the setter; it sizes the params check below.
+        fn_jd_params_size_ = reinterpret_cast<fn_int_v_t>(opt_sym("grid_rbd_joint_dynamics_params_size"));
 
         // Cache constants (avoid the indirect-function-call cost on every read).
         num_joints_ = fn_num_joints_();
@@ -2033,21 +2036,23 @@ public:
 
     // set_joint_dynamics_params(params) — runtime-mutable damping/friction (C5).
     // params is a flat (2*num_vel,) array = [damping(nv) || friction(nv)], v-slot
-    // indexed and alpha-folded (matching init_joint_dynamics_params). Copies it into
-    // the device d_joint_dynamics_params table; all subsequent id/fd/aba/*_gradient
-    // calls read the biased coefficients from it (no recompile). Bit-identical to the
-    // baked literal until poked. Only available on a .so built with
-    // runtime_joint_dynamics=True.
+    // indexed and alpha-folded (matching init_joint_dynamics_params); a tanh friction
+    // build carries a third row [friction_width(nv)] (3*num_vel; the .so exports the
+    // length as grid_rbd_joint_dynamics_params_size). Copies it into the device
+    // d_joint_dynamics_params table; all subsequent id/fd/aba/*_gradient calls read
+    // the biased coefficients from it (no recompile). Bit-identical to the baked
+    // literal until poked. Only available on a .so built with runtime_joint_dynamics=True.
     void set_joint_dynamics_params(arr_t params) {
         if (!fn_set_jd_params_) throw std::runtime_error(
             "set_joint_dynamics_params not available in this .so: register the robot with "
             "runtime_joint_dynamics=True (and force_rebuild=True) to enable the mutable "
             "damping/friction table.");
-        const int want = 2 * num_vel_;
+        const int want = fn_jd_params_size_ ? fn_jd_params_size_() : 2 * num_vel_;
         if (params.ndim() != 1 || (int)params.shape(0) != want) {
             throw std::runtime_error(
                 "set_joint_dynamics_params: params must be a flat (" + std::to_string(want) +
-                ",) array = 2 * num_vel ([damping(nv) || friction(nv)]); got "
+                ",) array = [damping(nv) || friction(nv)" +
+                std::string(want == 3 * num_vel_ ? " || friction_width(nv)" : "") + "]; got "
                 "ndim=" + std::to_string(params.ndim()) +
                 ", size=" + std::to_string(params.size()));
         }
@@ -2267,6 +2272,7 @@ private:
     fn_set_params_t   fn_set_inertia_params_          = nullptr;
     fn_set_params_t fn_set_transform_params_        = nullptr;
     fn_set_params_t        fn_set_jd_params_               = nullptr;
+    fn_int_v_t             fn_jd_params_size_              = nullptr;  // table length (2*nv or 3*nv)
 
     int num_joints_ = 0;
     int num_vel_    = 0;
@@ -2623,8 +2629,9 @@ static void register_runner(py::module_& m, const char* cls_name) {
              py::arg("params"),
              "Update the device-resident mutable damping/friction table (C5 "
              "runtime_joint_dynamics). params is a flat (2*num_vel,) array = "
-             "[damping(nv) || friction(nv)], v-slot indexed (alpha-folded). Only "
-             "available on a .so built with runtime_joint_dynamics=True; raises otherwise.");
+             "[damping(nv) || friction(nv)], v-slot indexed (alpha-folded), or "
+             "(3*num_vel,) with a trailing friction_width(nv) row on a tanh friction build. "
+             "Only available on a .so built with runtime_joint_dynamics=True; raises otherwise.");
 }
 
 

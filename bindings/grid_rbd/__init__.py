@@ -179,6 +179,8 @@ def register_robot(
     runtime_transform: bool = False,
     runtime_joint_dynamics: bool = False,
     use_joint_dynamics: bool = False,
+    friction_model: str = "sign",
+    friction_width=None,
     enable_tool: bool = False,
     contact_frames: list[str] | tuple[str, ...] | None = None,
     output_convention: str = "pinocchio",
@@ -220,7 +222,8 @@ def register_robot(
       ``floating_base``, ``ee_joint_names``.
     - *Build contents & size* (re-keys the cache): ``max_batch_size``,
       ``dtype``, ``algorithm_list``, ``enable_mujoco_kernels`` (only when
-      ``False``), ``use_joint_dynamics``, ``enable_tool``.
+      ``False``), ``use_joint_dynamics``, ``friction_model`` and
+      ``friction_width`` (only when non-default), ``enable_tool``.
     - *Runtime-mutable tables* (re-keys the cache): ``runtime_inertia``,
       ``runtime_transform``, ``runtime_joint_dynamics``.
     - *Cache & toolchain* (no codegen effect): ``cache_dir``,
@@ -324,6 +327,24 @@ def register_robot(
         damping/friction). When True the bias is emitted ONLY for robots that declare
         nonzero damping/friction; it re-keys the cache (the damped .so coexists with
         the baked no-op one). Match against ``RBDReference(..., use_joint_dynamics=True)``.
+    friction_model : str, optional
+        The velocity shape of the Coulomb term under ``use_joint_dynamics``.
+        ``"sign"`` (default) applies ``friction*sign(qd)``, whose derivatives are
+        zero almost everywhere. ``"tanh"`` applies the smooth
+        ``friction*tanh(qd/w)``: the inverse-dynamics gradient gains
+        ``(friction/w)*sech^2(qd/w)`` on the velocity diagonal, the second-order
+        kernels gain ``-(2*friction/w^2)*tanh(qd/w)*sech^2(qd/w)`` on the qd-qd
+        triple diagonal, and the forward-dynamics derivatives follow by
+        composition. Re-keys the cache only when ``"tanh"``. Match against
+        ``RBDReference(..., use_joint_dynamics=True, friction_model="tanh",
+        friction_width=w)``.
+    friction_width : float | sequence of float | None, optional
+        The tanh width ``w`` in rad/s (m/s for prismatic joints): one scalar for
+        every velocity slot or one value per velocity slot (length nv). ``None``
+        (default) is 0.03. Baked as a literal; on a ``runtime_joint_dynamics``
+        build it is the third row of the mutable table and
+        :py:meth:`RobotHandle.set_joint_dynamics` can change it. Requires
+        ``friction_model="tanh"``.
     algorithm_list : list[str] | str | None, optional
         Build only a SUBSET of algorithms into the per-robot ``.so`` instead of the
         full default profile. Default ``None`` ⇒ the historical full build (every
@@ -446,6 +467,7 @@ def register_robot(
             cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch,
             output_convention=output_convention, algorithm_list=algorithm_list,
             use_joint_dynamics=use_joint_dynamics,
+            friction_model=friction_model, friction_width=friction_width,
             runtime_joint_dynamics=runtime_joint_dynamics,
             runtime_inertia=runtime_inertia,
             runtime_transform=runtime_transform, enable_tool=enable_tool,
@@ -459,6 +481,7 @@ def register_robot(
             cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch,
             output_convention=output_convention, algorithm_list=algorithm_list,
             use_joint_dynamics=use_joint_dynamics,
+            friction_model=friction_model, friction_width=friction_width,
             runtime_joint_dynamics=runtime_joint_dynamics,
             runtime_inertia=runtime_inertia,
             runtime_transform=runtime_transform, enable_tool=enable_tool,
@@ -473,6 +496,7 @@ def register_robot(
         runtime_transform=runtime_transform,
         runtime_joint_dynamics=runtime_joint_dynamics,
         use_joint_dynamics=use_joint_dynamics, enable_tool=enable_tool,
+        friction_model=friction_model, friction_width=friction_width,
         contact_frames=contact_frames,
         algorithm_list=algorithm_list, enable_mujoco_kernels=enable_mujoco_kernels,
     )
@@ -564,6 +588,8 @@ def warm_robot(
     algorithm_list: list[str] | tuple[str, ...] | str | None = None,
     enable_mujoco_kernels: bool = True,
     plan_only: bool = False,
+    friction_model: str = "sign",
+    friction_width=None,
 ) -> tuple[str, Path, dict]:
     """Generate + compile (or cache-hit) a robot's ``.so`` WITHOUT constructing
     a handle — no dlopen, no eager ``grid_rbd_init``, no device allocations.
@@ -655,6 +681,21 @@ def warm_robot(
     # entry — a damped build never collides with the historical no-op build.
     if use_joint_dynamics:
         code_options["use_joint_dynamics"] = True
+    # Smooth friction: friction_model="tanh" (and its width) re-key the cache only
+    # when requested, so the default sign-model build reuses its existing .so.
+    if friction_model not in ("sign", "tanh"):
+        raise ValueError(f"friction_model must be 'sign' or 'tanh', got {friction_model!r}")
+    if friction_model == "tanh" or friction_width is not None:
+        if not use_joint_dynamics:
+            raise ValueError("friction_model='tanh' / friction_width require use_joint_dynamics=True")
+        if friction_model != "tanh":
+            raise ValueError("friction_width applies to friction_model='tanh' only")
+        code_options["friction_model"] = "tanh"
+        if friction_width is not None:
+            try:
+                code_options["friction_width"] = [float(w) for w in friction_width]
+            except TypeError:
+                code_options["friction_width"] = float(friction_width)
     # runtime_joint_dynamics (C5, mirror of runtime_inertia): runtime-mutable
     # damping/friction table (set_joint_dynamics). Inject the flag (re-keying the
     # cache) only when True, so a default register_robot is byte-identical and reuses

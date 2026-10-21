@@ -1052,13 +1052,14 @@ GRID_RBD_RUNTIME_PARAM_SETTER(transform, 6 * grid::NUM_JOINTS)
 // Gated on GRID_RBD_RUNTIME_JOINT_DYNAMICS (set by grid_rbd._compile alongside the
 // codegen runtime_joint_dynamics flag). grid.cuh then exports
 // grid::set_joint_dynamics_params (a thin cudaMemcpy into the device-resident
-// d_joint_dynamics_params table). h_params: 2*grid::NUM_VEL scalars,
-// [damping(nv) || friction(nv)], v-slot indexed and ALPHA-FOLDED (one fused
-// coefficient per v-slot, matching init_joint_dynamics_params). The table is
-// bit-identical to the baked literal bias until poked (no sincos rebuild, no
-// sparsity change). Returns 0 on success.
+// d_joint_dynamics_params table). h_params: grid::JOINT_DYNAMICS_PARAMS_COUNT
+// scalars, [damping(nv) || friction(nv)] (2*NUM_VEL), plus a third row
+// [friction_width(nv)] under FRICTION_MODEL="tanh" (3*NUM_VEL); v-slot indexed and
+// ALPHA-FOLDED (one fused coefficient per v-slot, matching
+// init_joint_dynamics_params). The table is bit-identical to the baked literal
+// bias until poked (no sincos rebuild, no sparsity change). Returns 0 on success.
 #ifdef GRID_RBD_RUNTIME_JOINT_DYNAMICS
-GRID_RBD_RUNTIME_PARAM_SETTER(joint_dynamics, 2 * grid::NUM_VEL)
+GRID_RBD_RUNTIME_PARAM_SETTER(joint_dynamics, grid::JOINT_DYNAMICS_PARAMS_COUNT)
 #endif
 
 

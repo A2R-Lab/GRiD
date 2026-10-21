@@ -145,3 +145,100 @@ def test_floating_damped_cuda_matches_damped_oracle(tmp_path):
                 "USE_JOINT_DYNAMICS appears inactive")
         checked += 1
     assert checked >= 3
+
+
+# ---- smooth (tanh) friction: derivatives at rest and inside the width ----------
+_TANH_WIDTH = 0.03
+
+
+def _rest_and_in_width_samples(samples, width):
+    """Derive from each sample one at rest (qd = 0) and one with every velocity
+    inside the tanh width, the two regimes where the sign model has no slope."""
+    rng = np.random.default_rng(20261021)
+    derived = []
+    for s in samples:
+        derived.append(dataclasses.replace(s, name=s.name + "_rest", qd=np.zeros_like(s.qd)))
+        derived.append(dataclasses.replace(
+            s, name=s.name + "_inwidth",
+            qd=(rng.uniform(-0.5, 0.5, size=s.qd.shape) * width).astype(np.float64)))
+    return derived
+
+
+def test_floating_tanh_friction_cuda_matches_tanh_oracle(tmp_path):
+    """fr3 FLOATING (friction + mimic fold + root skip) with FRICTION_MODEL="tanh":
+    id/fd/aba values and the id/fd gradients match RBDReference(use_joint_dynamics=True,
+    friction_model="tanh") at random velocities, at rest and inside the width. At
+    rest the smooth gradient carries the friction slope (f/w) sech^2(0) = f/w per
+    slot, which the sign-model oracle does not; the test pins that difference."""
+    spec = _floating_spec("fr3")
+    try:
+        resolved = resolve_robot_spec(spec)
+    except RuntimeError as exc:
+        pytest.skip(f"could not resolve fr3 manifest: {exc}")
+
+    project_model = build_project_adapter(spec, resolved, base_mode="floating")
+    if not project_model.robot.robot_has_joint_friction():
+        pytest.fail("fr3 manifest URDF no longer declares joint friction — "
+                    "pick a robot with friction for this gate.")
+    smooth = dataclasses.replace(
+        project_model,
+        reference=RBDReference(project_model.robot, use_joint_dynamics=True,
+                               friction_model="tanh", friction_width=_TANH_WIDTH),
+    )
+    sign = dataclasses.replace(
+        project_model,
+        reference=RBDReference(project_model.robot, use_joint_dynamics=True),
+    )
+
+    header = tmp_path / "grid.cuh"
+    codegen = GRiDCodeGenerator(
+        project_model.robot, DEBUG_MODE=False, NEED_PRINT_MAT=True,
+        FILE_NAMESPACE="grid", USE_JOINT_DYNAMICS=True,
+        FRICTION_MODEL="tanh", FRICTION_WIDTH=_TANH_WIDTH,
+    )
+    with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
+        codegen.gen_all_code(
+            include_homogenous_transforms=True,
+            algorithm_list=list(_ALGOS),
+            output_path=str(header),
+        )
+    executable, compile_cmd = _compile_runner(
+        tmp_path, floating_base=True, run_tokens=_RUN_TOKENS,
+    )
+
+    base = _build_cuda_samples(project_model, random_count=2)
+    samples = base + _rest_and_in_width_samples(base, _TANH_WIDTH)
+    nv = project_model.nv
+    checked = 0
+    slope_pinned = 0
+    for sample in samples:
+        stdout = _run_runner(executable, _sample_to_stdin(sample), compile_cmd)
+        outputs = _parse_runner_output(stdout)
+        for name, tol in _COMPARES:
+            if name not in outputs:
+                pytest.fail(f"runner printed no '{name}' output for {sample.name}")
+            expected = np.asarray(
+                _expected_output(smooth, smooth, sample, name), dtype=np.float64
+            ).reshape(-1)
+            actual = np.asarray(outputs[name], dtype=np.float64).reshape(-1)
+            assert actual.shape == expected.shape, (name, actual.shape, expected.shape)
+            scale = max(float(np.linalg.norm(expected)), 1.0)
+            err = float(np.linalg.norm(actual - expected)) / scale
+            assert err < tol, (
+                f"{sample.name} {name}: tanh CUDA vs tanh oracle relnorm={err:.3e} (tol {tol})")
+        if sample.name.endswith("_rest"):
+            # the smooth model's velocity gradient differs from the sign model's by
+            # the friction slope on the diagonal of the actuated slots (f/w per slot)
+            sign_grad = np.asarray(
+                _expected_output(sign, sign, sample, "inverse_dynamics_gradient_qd"),
+                dtype=np.float64).reshape(nv, nv)
+            cuda_grad = np.asarray(outputs["inverse_dynamics_gradient_qd"], dtype=np.float64).reshape(nv, nv)
+            slope = np.asarray(smooth.reference._joint_dynamics_derivative_diag(np.zeros(nv), 1)) \
+                - np.asarray(sign.reference._joint_dynamics_derivative_diag(np.zeros(nv), 1))
+            assert float(np.max(slope)) > 1.0, "fr3 friction slope at rest should be large (f/w)"
+            delta = cuda_grad - sign_grad
+            assert np.allclose(delta, np.diag(slope), atol=2e-2 * float(np.max(slope))), (
+                f"{sample.name}: CUDA tanh gradient minus sign oracle is not the friction slope diagonal")
+            slope_pinned += 1
+        checked += 1
+    assert checked >= 6 and slope_pinned >= 2

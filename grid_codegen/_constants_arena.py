@@ -1029,6 +1029,13 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              "const int NUM_BODIES = " + str(self.robot.get_num_bodies()) + ";", \
                              "const int SECOND_ORDER_COORDS = " + str(self.robot.get_num_vel()) + ";", \
                              "const int SECOND_ORDER_TENSOR_SIZE = " + str(4 * self.robot.get_num_vel()**3) + ";", \
+                             ] + ([
+                             "// runtime_joint_dynamics: length of the mutable [damping || friction (|| friction_width)] table, v-slot indexed",
+                             "const int JOINT_DYNAMICS_PARAMS_COUNT = " + str(self.gen_get_joint_dynamics_params_size()) + ";",
+                             ] if getattr(self, "runtime_joint_dynamics", False) else []) + ([
+                             "// USE_JOINT_DYNAMICS with FRICTION_MODEL=\"tanh\": the Coulomb term is f*tanh(qd/w) with derivatives in the gradient and second-order kernels",
+                             "const int JOINT_FRICTION_MODEL_TANH = 1;",
+                             ] if self._jd_tanh_active() else []) + [ \
                              "const int Q_QD_U_STRIDE = " + str(3 * self.robot.get_num_pos()) + ";", \
                              "// h_q_qd_u / h_q_qd_qdd input ABI (PUBLISHED — docs: user_guide/concepts/input_output_abi):", \
                              "// three NUM_POS-wide slots per timestep (stride Q_QD_U_STRIDE = 3*NUM_POS):", \
@@ -1043,6 +1050,10 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              "const int GRID_QDD_OFFSET = " + str(2 * self.robot.get_num_pos()) + ";", \
                              "const int NUM_EES = " + str(self.robot.get_total_leaf_nodes()) + ";", \
                              "const int TOPOLOGY_HELPERS_COUNT = " + str(topology_count) + ";", \
+                             "// TOPOLOGY_HELPERS_T_COUNT<T>(): the helper block's footprint in T elements, so an arena sized in T", \
+                             "// elements (a plant-layer workspace built from the *_SHARED_MEM_COUNT constants) reserves", \
+                             "// COUNT + TOPOLOGY_HELPERS_T_COUNT<T>() for the helpers; exact when sizeof(T) == sizeof(int), a ceiling otherwise.", \
+                             "template <typename T> __host__ __device__ constexpr size_t TOPOLOGY_HELPERS_T_COUNT() { return (sizeof(int) * static_cast<size_t>(TOPOLOGY_HELPERS_COUNT) + sizeof(T) - 1) / sizeof(T); }", \
                              "const int DYNAMICS_XI_T_COUNT = " + str(XI_size) + ";", \
                              "const int XHOM_T_COUNT = " + str(XHom_size) + ";", \
                              "const int DXHOM_T_COUNT = " + str(dXhom_size) + ";", \
@@ -1487,7 +1498,8 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
         struct_lines.append("    T *d_transform_params;")
     if getattr(self, "runtime_joint_dynamics", False):
         # runtime_joint_dynamics: flag-gated mutable joint-dynamics table
-        # (2*nv floats, v-slot indexed, [damping||friction], alpha-folded).
+        # (2*nv floats, v-slot indexed, [damping||friction], alpha-folded; a
+        # third nv row of tanh friction widths under FRICTION_MODEL="tanh").
         # Emitted ONLY under runtime_joint_dynamics so the baked struct stays
         # byte-identical.
         struct_lines.append("    T *d_joint_dynamics_params;")

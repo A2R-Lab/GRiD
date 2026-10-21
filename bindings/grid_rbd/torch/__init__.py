@@ -1282,6 +1282,8 @@ def register_robot(
     contact_frames: list[str] | tuple[str, ...] | None = None,
     enable_mujoco_kernels: bool = True,
     dtype: str = "float32",
+    friction_model: str = "sign",
+    friction_width=None,
 ) -> TorchRobotHandle:
     """Register a robot for the torch backend (same cache as the plain/JAX
     surfaces). Returns a :py:class:`TorchRobotHandle`.
@@ -1301,6 +1303,7 @@ def register_robot(
         max_batch_size=max_batch_size, cache_dir=cache_dir,
         force_rebuild=force_rebuild, cuda_arch=cuda_arch,
         algorithm_list=algorithm_list, use_joint_dynamics=use_joint_dynamics,  # C5
+        friction_model=friction_model, friction_width=friction_width,  # smooth friction (tanh)
         runtime_joint_dynamics=runtime_joint_dynamics,  # C5 mutable damping/friction table
         runtime_inertia=runtime_inertia,  # D.4: mutable inertia table (torch op reads same device global)
         runtime_transform=runtime_transform,  # mutable joint-origin table (shared device global)

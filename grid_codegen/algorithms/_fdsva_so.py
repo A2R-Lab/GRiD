@@ -1,10 +1,11 @@
 """Second-order forward-dynamics derivatives (∂²qdd/∂x²).
 
-NOTE: joint damping/friction contribute NOTHING to second-order derivatives, so
-this file emits no damping term. The damping bias τ_damp = b·qd is linear in qd
-(∂²/∂*∂* = 0); Coulomb friction f·sign(qd) is non-smooth (subgradient 0 a.e.).
-They appear only in the FIRST-order inverse_dynamics_gradient output, which
-fdsva_so already composes — never here.
+NOTE: this file emits no joint-dynamics term of its own. Under the default sign
+friction model damping/friction contribute NOTHING at second order (the damping
+bias τ_damp = b·qd is linear in qd; Coulomb friction f·sign(qd) has subgradient 0
+a.e.) and appear only in the FIRST-order inverse_dynamics_gradient output, which
+fdsva_so composes. Under FRICTION_MODEL="tanh" the idsva_so inner this file
+composes adds the smooth term's qd-qd triple diagonal, so fdsva_so follows.
 """
 
 # Shared block-parallel emit primitives (also used by _idsva_so). See _mjx_blockpar.

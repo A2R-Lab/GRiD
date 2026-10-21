@@ -12,6 +12,44 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Topology helpers. The header states the rule for `TOPOLOGY_HELPERS_COUNT`
+  (`(not serial) * (5n + 1) + (not identical S) * n`, `n = max(NUM_POS,
+  NUM_JOINTS)`: iiwa14 0, a three-joint +Z, -Z, +X arm 3, rizon4 7) in
+  `examples/cuda/README.md`, `examples/cuda/wrapper_types.md` and the agent
+  integration guide; emits `grid::TOPOLOGY_HELPERS_T_COUNT<T>()`, the helper
+  block's footprint in T elements, next to the count so an arena sized in T
+  reserves `COUNT + TOPOLOGY_HELPERS_T_COUNT<T>()`; and, in a `DEBUG_MODE`
+  header, asserts at the top of every helper-reading `_inner` that the pointer
+  is not null when the count is nonzero. Release headers gain the one
+  constexpr line only.
+- Suggested thread counts. Every header ends with `grid::<ALGO>_SUGGESTED_THREADS`
+  for each algorithm it carries, plus `TRACKING_COST_SUGGESTED_THREADS` when the
+  plant preset is emitted: the smallest multiple of 32 covering the widest
+  block-parallel compute loop reachable from the algorithm's kernel, read back
+  from the emitted code at generation time and clamped to [32, 1024]. Copy and
+  zero-fill loops do not count. The constants are GPU-independent and untuned;
+  a consumer that fuses several algorithms into one kernel takes the max over
+  the ones it calls instead of `MAX_PERF_LEVEL_THREADS`, and `launch_cfg`
+  stays the tuned override. No kernel body changes; the block reopens the
+  namespace after everything else (fragment `suggested_threads`).
+- Smooth joint friction. `GRiDCodeGenerator(..., FRICTION_MODEL="tanh",
+  FRICTION_WIDTH=w)` and `register_robot(..., use_joint_dynamics=True,
+  friction_model="tanh", friction_width=w)` replace the Coulomb term
+  `friction*sign(qd)` by `friction*tanh(qd/w)` (w = 0.03 rad/s by default, one
+  value for every velocity slot or one per slot). The inverse-dynamics
+  gradient carries its slope `(friction/w) sech^2(qd/w)` on the velocity
+  diagonal, the second-order kernels carry `-(2 friction/w^2) tanh(qd/w)
+  sech^2(qd/w)` on the qd-qd triple diagonal, and the forward-dynamics
+  derivatives follow by composition, so a consumer that linearizes at rest
+  sees the friction slope the sign model does not have. `RBDReference(...,
+  friction_model=, friction_width=)` is the matching reference. On a
+  `runtime_joint_dynamics` build the width is the third row of the mutable
+  table (`set_joint_dynamics(friction_width=)`, `handle.joint_friction_width`,
+  `grid::JOINT_DYNAMICS_PARAMS_COUNT`). The default sign model and every
+  friction-free robot emit byte-identical headers. Tests cover fr3 (friction
+  and a mimic joint) at rest and inside the width on the CUDA runner, the
+  numpy, jax and torch surfaces and the runtime table, and the reference
+  against its own finite differences on fr3 and floating iiwa14.
 - Release measurements: the core and wrapper dataset is the 21 October 2026
   session at one commit (315 workers, 1,890 measurements at 300 samples per
   repeat), replacing the stitched September and October captures. It adds the

@@ -141,6 +141,8 @@ def _direct_content(record: dict) -> tuple[str | None, str]:
                 MUJOCO_OUTPUT=ctor.get("MUJOCO_OUTPUT", False),
                 LAUNCH_CONFIG_PROFILE=ctor.get("launch_config_profile", "host"),
                 runtime_joint_dynamics=ctor.get("runtime_joint_dynamics", False),
+                FRICTION_MODEL=ctor.get("friction_model", "sign"),
+                FRICTION_WIDTH=(ctor.get("friction_width") or 0.03),
                 # fp64: reconstruct the ctor dtype from the recorded resolved
                 # T byte size (old records lack the key -> 4 -> "float", which
                 # matches how every pre-audit record was generated). When the
