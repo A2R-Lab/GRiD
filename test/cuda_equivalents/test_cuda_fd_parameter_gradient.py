@@ -203,7 +203,7 @@ def test_cuda_fd_parameter_gradient_matches_reference(robot_id, base_mode, tmp_p
             f"{robot_id}: CUDA dqdd/dpi shape {G_cuda.shape} != ref {G_ref.shape}"
         )
 
-        tol = get_tolerance("fd", robot_id=robot_id)
+        tol = get_tolerance("forward_dynamics_parameter_gradient", robot_id=robot_id)
         ref_mag = float(np.max(np.abs(G_ref))) if G_ref.size else 0.0
         scale = max(1.0, ref_mag)
         atol = tol.atol + tol.rtol * scale + 5e-3 * scale  # float32 CUDA headroom

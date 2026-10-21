@@ -34,6 +34,7 @@ secondary:
   - arch: 87
     label: Jetson Orin
     receipt: receipts/gpu-proof-sm87.json
+    expected_skips: test/gpu-proof-expected-skips-sm87.txt
   - arch: 72
     label: Jetson Xavier
     receipt: receipts/gpu-proof-sm72.json

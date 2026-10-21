@@ -12,6 +12,25 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Tests: the external-force CUDA modules run their pinocchio leg on every robot.
+  gen3 was left out because the modules passed tolerance keys RBDReference did
+  not have, which fell back to its 1e-7 default; the mimic robots were left out
+  because the pinocchio oracle placed per-body wrenches through a mimic-free
+  joint list. RBDReference (external/RBDReference) now refuses unknown tolerance
+  keys, carries forward_dynamics and inverse_dynamics_gradient buckets, maps a
+  wrench on every body including mimic-driven ones, and checks external forces
+  on every robot against pinocchio.
+- Tests: test_osc_inertia checks every sample through the normwise backward
+  error of the task-space inertia (the check the frame-Jacobian suite uses)
+  instead of passing over ill-conditioned samples.
+- Tests: g1 floating joins the integrator gradient's float32 norm-bound class
+  with a bound measured on the Jetson AGX Orin (sm_87), where the RK4 gradient at
+  the most energetic sample rounds three times wider than on the RTX 5090. The
+  entrywise check runs first and still passes on the 5090.
+- Receipts: compute-sanitizer racecheck is unsupported on the Jetson Orin's
+  integrated GPU ("GPU debugging features are disabled"); the racecheck cell
+  skips on that exact message and the sm_87 receipt row carries its own
+  expected-skips baseline listing that one cell. The primary baseline stays empty.
 - Docker: create the sample robot's output directory before generating its
   header. The corrected 0.5.3 image builds and publishes in CI. An RTX 5090
   container smoke test passed on 2026-10-19: precompiled iiwa14 values on all
