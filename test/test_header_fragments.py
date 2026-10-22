@@ -34,7 +34,7 @@ EXPECTED_ORDER = [
     "forward_dynamics_gradient", "f_ext_gradient",
     "aba", "crba", "integrator", "second_order", "centroidal",
     "frame_jacobian_family", "ee_runtime", "combinations", "init_close",
-    "grid_plant", "collision",
+    "grid_plant", "collision", "suggested_threads",
 ]
 
 

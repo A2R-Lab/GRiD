@@ -174,9 +174,10 @@ pass the same value to both for cross-validation.
        joint-local ``f_ext``; needs a ``register_robot(contact_frames=[...])``
        build.
    * - ``set_inertia_params(t)`` / ``set_transform_params(t)`` /
-       ``set_joint_dynamics(damping=, friction=)``
+       ``set_joint_dynamics(damping=, friction=, friction_width=)``
      - none
      - Runtime-mutable model tables (flag-gated builds; no recompile).
+       ``friction_width`` is accepted on a ``friction_model="tanh"`` build.
    * - ``fk_batched(q)``
      - ``(B, 7)``
      - Large-batch forward kinematics for the leaf EE frame
@@ -446,6 +447,25 @@ calibration (the gradient with respect to ``π`` at the current model), not
 as a function evaluated at a different ``π``. To change the model, call
 ``set_inertia_params`` (``runtime_inertia=True`` builds). The API does not
 offer a functional parameterized forward.
+
+Joint damping and friction are opt-in. ``register_robot(use_joint_dynamics=True)``
+applies the URDF ``<dynamics damping= friction=>`` values as the joint-local
+bias ``damping*qd + friction*s(qd)`` in ``inverse_dynamics``,
+``forward_dynamics`` and ``aba``, and carries its derivative through the
+gradients. The shape ``s`` is ``friction_model``: ``"sign"`` (the default)
+applies ``sign(qd)``, whose derivative is zero almost everywhere, so a
+linearization at rest sees no friction slope. ``"tanh"`` applies
+``tanh(qd/w)`` with the width ``friction_width`` (0.03 rad/s unless given,
+one scalar or one value per velocity slot); its slope ``(friction/w)
+sech^2(qd/w)`` enters the velocity diagonal of ``inverse_dynamics_gradient``
+and, through composition, ``forward_dynamics_gradient``, and its second
+derivative ``-(2 friction/w^2) tanh(qd/w) sech^2(qd/w)`` enters the qd-qd
+triple diagonal of ``idsva_so`` and ``fdsva_so``. The reference is
+``RBDReference(robot, use_joint_dynamics=True, friction_model=,
+friction_width=)``. A ``runtime_joint_dynamics`` build stores the width as the
+third row of the mutable table, so ``set_joint_dynamics(friction_width=)``
+changes it without a recompile; the handle reports ``friction_model`` and
+``joint_friction_width``.
 
 Runtime tables reach dynamics, not baked kinematics. ``runtime_inertia``,
 ``runtime_transform`` and ``runtime_joint_dynamics`` rebuild the dynamics

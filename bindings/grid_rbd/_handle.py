@@ -901,14 +901,38 @@ class RobotHandle:
                 "register_robot(..., runtime_joint_dynamics=True, force_rebuild=True).")
         return np.asarray(vals, dtype=self._dt)
 
-    def set_joint_dynamics(self, damping=None, friction=None) -> None:
+    @property
+    def friction_model(self) -> str:
+        """The Coulomb friction shape of a ``use_joint_dynamics`` build: ``"sign"``
+        (the default, derivatives zero almost everywhere) or ``"tanh"`` (the smooth
+        ``friction*tanh(qd/w)`` with its derivatives in the gradient and second-order
+        kernels). ``"sign"`` on a build without joint dynamics."""
+        return str(self._meta.get("friction_model", "sign"))
+
+    @property
+    def joint_friction_width(self):
+        """Baked per-v-slot tanh friction width w (length nv, rad/s). Only on a
+        runtime_joint_dynamics build with ``friction_model="tanh"`` and a robot
+        that declares friction (raises otherwise)."""
+        vals = self._meta.get("joint_friction_width")
+        if vals is None:
+            raise RuntimeError(
+                "joint_friction_width is only available on a robot registered with "
+                "runtime_joint_dynamics=True, use_joint_dynamics=True and "
+                "friction_model='tanh' whose URDF declares joint friction.")
+        return np.asarray(vals, dtype=self._dt)
+
+    def set_joint_dynamics(self, damping=None, friction=None, friction_width=None) -> None:
         """Update the device-resident damping/friction table at runtime (no recompile).
 
-        Pass either/both as length-nv arrays (v-slot indexed, same basis as
-        :py:attr:`joint_damping` / :py:attr:`joint_friction`). An omitted side keeps
-        its current baked value. This is the sysID / domain-randomization entry point
-        for joint dynamics; passing the baked values back reproduces the baked result
-        bit-for-bit. Only on a runtime_joint_dynamics build (raises otherwise).
+        Pass any of the three as length-nv arrays (v-slot indexed, same basis as
+        :py:attr:`joint_damping` / :py:attr:`joint_friction` /
+        :py:attr:`joint_friction_width`). An omitted side keeps its current baked
+        value. ``friction_width`` is accepted only on a ``friction_model="tanh"``
+        build, where the table carries a third row. This is the sysID /
+        domain-randomization entry point for joint dynamics; passing the baked values
+        back reproduces the baked result bit-for-bit. Only on a
+        runtime_joint_dynamics build (raises otherwise).
         """
         if not self.runtime_joint_dynamics:
             raise RuntimeError(
@@ -922,8 +946,22 @@ class RobotHandle:
             raise ValueError(
                 f"damping and friction must each be length nv={nv} (v-slot indexed); "
                 f"got {b.shape} and {f.shape}.")
-        # [damping(nv) || friction(nv)], matching grid_rbd_set_joint_dynamics_params.
-        arr = np.ascontiguousarray(np.concatenate([b, f]), dtype=self._dt)
+        rows = [b, f]
+        if self._meta.get("joint_friction_width") is not None:
+            w = np.asarray(self.joint_friction_width if friction_width is None else friction_width,
+                           dtype=self._dt)
+            if w.shape != (nv,):
+                raise ValueError(f"friction_width must be length nv={nv} (v-slot indexed); got {w.shape}.")
+            if not np.all(w > 0):
+                raise ValueError("friction_width must be positive in every slot.")
+            rows.append(w)
+        elif friction_width is not None:
+            raise RuntimeError(
+                "friction_width is only accepted on a build registered with "
+                "friction_model='tanh' (and a URDF that declares joint friction).")
+        # [damping(nv) || friction(nv) (|| friction_width(nv))], matching
+        # grid_rbd_set_joint_dynamics_params / grid::JOINT_DYNAMICS_PARAMS_COUNT.
+        arr = np.ascontiguousarray(np.concatenate(rows), dtype=self._dt)
         self._runner.set_joint_dynamics_params(arr)
 
     @property

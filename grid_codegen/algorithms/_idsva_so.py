@@ -1,14 +1,73 @@
 """Second-order inverse-dynamics derivatives (∂²τ/∂x²), body- and world-frame.
 
-NOTE: joint damping/friction contribute NOTHING to second-order derivatives, so
-this file emits no damping term. The damping bias τ_damp = b·qd is linear in qd
-(∂²/∂*∂* = 0); Coulomb friction f·sign(qd) is non-smooth (subgradient 0 a.e.).
-They appear only in the FIRST-order inverse_dynamics_gradient output, never here.
+NOTE: under the default sign friction model joint damping/friction contribute
+NOTHING to second-order derivatives. The damping bias τ_damp = b·qd is linear in
+qd (∂²/∂*∂* = 0); Coulomb friction f·sign(qd) is non-smooth (subgradient 0 a.e.).
+They appear only in the FIRST-order inverse_dynamics_gradient output. Under
+FRICTION_MODEL="tanh" the smooth term f·tanh(qd/w) has the second derivative
+-(2f/w²)·tanh(qd/w)·sech²(qd/w) on the qd-qd triple diagonal, which
+_emit_idsva_so_joint_dynamics_diag adds to the finalized public slab at the end
+of both inners (fdsva_so composes the same inner, so it follows).
 """
 
 # Shared block-parallel emit primitives (also used by _fdsva_so). See _mjx_blockpar.
 from ._mjx_blockpar import bpfor as _bpfor, stride_rc as _bp_stride_rloop
 from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
+
+
+def _emit_idsva_so_joint_dynamics_diag(self, out_name):
+    """Add the tanh friction second derivative to the finalized public SO slab.
+
+    Emitted only when _jd_tanh_active(): d2tau_dqd2[vs, vs, vs] +=
+    -(2f/w^2) tanh(qd/w) (1 - tanh^2(qd/w)) per v-slot with folded alpha*f, where
+    the dqd2 block sits at NV^3 in ``out_name`` and the triple diagonal cell is
+    NV^3 + vs*NV*NV + vs*NV + vs (the same cell under either index convention).
+    Runs after any mimic fold, on the reduced slab, reading the reduced s_qd. Under
+    runtime_joint_dynamics f and w come from the table rows [nv+vs] and [2nv+vs].
+    Byte-neutral for every sign-model or friction-free build.
+    """
+    if not self._jd_tanh_active():
+        return
+    NV = self.robot.get_num_vel()
+    HAS_MIMIC = self.robot_has_mimic_joints()
+    fb = self.robot.floating_base
+    fdiag = {}
+    for jid in range(self.robot.get_num_joints()):
+        if fb and jid == 0:
+            continue
+        fr = float(self.robot.get_friction_by_id(jid))
+        if fr == 0.0:
+            continue
+        if HAS_MIMIC:
+            vs = self._v_slot_cpp(jid)
+            alpha = float(self._alpha_for_jid(jid))
+        else:
+            vs = self.robot.get_joint_index_v(jid)
+            alpha = 1.0
+        fdiag[vs] = fdiag.get(vs, 0.0) + alpha * fr
+    if not fdiag:
+        return
+    RUNTIME = getattr(self, "runtime_joint_dynamics", False)
+    w_vslot = self.get_friction_width_baked()
+    slots = sorted(fdiag.keys())
+    self.gen_add_sync()
+    self.gen_add_code_line("// smooth friction second derivative: d2tau_dqd2 triple diagonal += -(2f/w^2) tanh(qd/w) sech^2(qd/w)")
+    self.gen_add_parallel_loop("ind", str(len(slots)))
+    for k, vs in enumerate(slots):
+        cell = NV**3 + vs * NV * NV + vs * NV + vs
+        if RUNTIME:
+            f_expr = "d_robotModel->d_joint_dynamics_params[" + str(NV + vs) + "]"
+            w_expr = "d_robotModel->d_joint_dynamics_params[" + str(2 * NV + vs) + "]"
+            coef = "(static_cast<T>(-2) * " + f_expr + " / (" + w_expr + " * " + w_expr + "))"
+        else:
+            w = float(w_vslot[vs])
+            w_expr = "static_cast<T>(" + repr(w) + ")"
+            coef = "static_cast<T>(" + repr(-2.0 * fdiag[vs] / (w * w)) + ")"
+        guard = ("if (ind == " + str(k) + ") " if len(slots) > 1 else "")
+        self.gen_add_code_line(guard + "{ T th = tanh(s_qd[" + str(vs) + "] / " + w_expr + "); "
+                               + out_name + "[" + str(cell) + "] += " + coef + " * th * (static_cast<T>(1) - th * th); }")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
 
 
 def idsva_so_body_frame_tot_span(num_bodies):
@@ -2730,6 +2789,7 @@ def gen_idsva_so_body_frame_inner(self):
         self.gen_add_end_control_flow()
         self.gen_add_sync()
 
+    _emit_idsva_so_joint_dynamics_diag(self, "s_idsva_so_public" if is_mimic else "s_idsva_so")
     self.gen_add_end_function()
 
         
@@ -3838,6 +3898,9 @@ def gen_idsva_so_world_frame_inner(self):
         self.gen_add_code_line("s_idsva_so_public[idx] = acc;")
         self.gen_add_end_control_flow()
         self.gen_add_sync()
+
+    # smooth friction (tanh) second derivative on the finalized pin slab, before the mjx epilogue
+    _emit_idsva_so_joint_dynamics_diag(self, "s_idsva_so_public" if is_mimic else "s_idsva_so")
 
     # ---- mjx output-convention epilogue (floating non-mimic/skew only) ----
     # Runs at the very END of the inner, where s_temp (Xup/IC/BC/.../Xdown/v_w/a_w)

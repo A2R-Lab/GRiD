@@ -114,7 +114,16 @@ grid::inverse_dynamics_inner<T>(
 ```
 
 `s_topology_helpers` is `nullptr` here because `grid::TOPOLOGY_HELPERS_COUNT == 0`
-for iiwa14; robots that need it allocate `TOPOLOGY_HELPERS_COUNT` ints.
+for iiwa14; robots that need it allocate `TOPOLOGY_HELPERS_COUNT` ints and fill them
+with `load_update_XImats_helpers` (or the fill loop the kernels use). The count is
+`(not serial) * (5n + 1) + (not identical S) * n` with `n = max(NUM_POS, NUM_JOINTS)`:
+zero for a serial chain whose joints all turn about +Z (iiwa14), `n` for a serial chain
+with any other cardinal or skew axis (a three-joint +Z, -Z, +X arm: 3; rizon4: 7), and
+`5n + 1` more when the tree branches (go2, g1). Whenever the count is nonzero the
+`_inner` functions read the block, so a consumer must pass a filled one; a header
+generated with `DEBUG_MODE=True` asserts the pointer is not null at the top of every
+helper-reading `_inner`. `grid::TOPOLOGY_HELPERS_T_COUNT<T>()` is the block's footprint
+in T elements, for arenas sized in T from the `*_SHARED_MEM_COUNT` constants.
 
 See `wrapper_types.md` for when to reach for `_inner` vs `_device` vs `_kernel`
 vs the host function.

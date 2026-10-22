@@ -23,8 +23,13 @@ call ``gen_all_code(...)``. Common options are:
 * ``collision_spec``: provide collision geometry and tier configuration.
 * ``vendor_glass``: embed GLASS (default) or include an external copy.
 
-The constructor also accepts ``dtype`` (``"float"`` by default) and
-``FILE_NAMESPACE`` (``"grid"`` by default). The full signatures live in
+The constructor also accepts ``dtype`` (``"float"`` by default),
+``FILE_NAMESPACE`` (``"grid"`` by default), ``USE_JOINT_DYNAMICS`` (apply the
+URDF damping and friction in the dynamics and their derivatives, off by
+default), ``FRICTION_MODEL`` (``"sign"`` by default, or ``"tanh"`` for the
+smooth Coulomb term ``friction*tanh(qd/w)`` with its first and second
+derivatives) and ``FRICTION_WIDTH`` (the tanh width ``w``, 0.03 rad/s by
+default, one scalar or one value per velocity slot). The full signatures live in
 ``grid_codegen/GRiDCodeGenerator.py``. See :doc:`../user_guide/concepts/codegen_architecture`
 for emission profiles and dependencies.
 

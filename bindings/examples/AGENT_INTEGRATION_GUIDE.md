@@ -342,6 +342,27 @@ Batch-regime switching: `set_threads_for_n`/`apply_batch_overlay`/`get_batch_swi
 apply per-algo small-batch thread overrides from the config's `ffi_bases_by_n` block.
 
 
+## Fusing GRiD into your own CUDA kernel
+
+A consumer that calls the generated `_inner` functions from its own kernel
+(a merit kernel running one forward dynamics and one cost per block) sizes its
+block from the header, not from `MAX_PERF_LEVEL_THREADS`: every header ends
+with `grid::<ALGO>_SUGGESTED_THREADS`, the smallest multiple of 32 covering the
+algorithm's widest block-parallel compute loop, and the fused kernel takes the
+max over the algorithms it calls (`TRACKING_COST_SUGGESTED_THREADS` for the
+plant preset). The `s_topology_helpers` block the `_inner` functions take is
+`grid::TOPOLOGY_HELPERS_COUNT` ints: zero only for a serial chain whose joints
+all turn about +Z, `n` for any other serial chain and `5n + 1` more for a
+branching tree (`n = max(NUM_POS, NUM_JOINTS)`); pass a filled block whenever
+the count is nonzero, reserve `grid::TOPOLOGY_HELPERS_T_COUNT<T>()` T elements
+for it in an arena sized in T, and generate with `DEBUG_MODE=True` to have
+every helper-reading `_inner` assert the pointer is not null. A consumer that
+builds its cost from the `grid_plant` menu passes `cost_frames=[...]` (named
+joints or fixed joints) to `register_robot` or `gen_all_code`, which bakes the
+frames the position, orientation and twist terms address by index and pulls
+the frame Jacobian family into the build; the plant concept page lists the
+activations and terms. See `examples/cuda/wrapper_types.md`.
+
 ## Recommended practice
 
 - `device_put` inputs once and keep outputs as device arrays/tensors across calls.

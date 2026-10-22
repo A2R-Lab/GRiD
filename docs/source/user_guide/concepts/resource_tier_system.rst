@@ -425,6 +425,26 @@ distinct ``__global__`` per tier is the reason that registration exists.
 Untuned robots and algorithms fall back to ``TIER_SHARED`` via the primary
 ``launch_cfg`` template.
 
+Suggested thread counts
+~~~~~~~~~~~~~~~~~~~~~~~
+
+The tuned ``launch_cfg`` entries are per GPU and exist only for the robots
+the autotuners have visited. For everything else, and for a consumer that
+fuses several algorithms into one kernel, the header ends with one derived
+constant per algorithm, ``grid::<ALGO>_SUGGESTED_THREADS`` (and
+``grid::TRACKING_COST_SUGGESTED_THREADS`` when the plant preset is emitted).
+It is the smallest multiple of 32 that covers the widest block-parallel
+compute loop reachable from the algorithm's kernel, read back from the
+emitted code at generation time (``grid_codegen/suggested_threads.py``); copy
+and zero-fill loops do not count, because striding them costs nothing against
+the serial compute of the loops that do arithmetic. The value is independent
+of the GPU and needs no tuning; a fused kernel takes the maximum over the
+algorithms it calls instead of ``MAX_PERF_LEVEL_THREADS``. Values are clamped
+to [32, 1024]; an algorithm whose loops exceed 1024 strides, so 1024 is the
+honest answer there. ``launch_cfg<GRID_ALGO_*>::THREADS`` remains the tuned
+override where one exists. On iiwa14 the inverse dynamics suggestion is 96
+and the inverse-dynamics gradient 352, which is also its ``MAX_PERF_LEVEL_THREADS``.
+
 A separate LITE smem target
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

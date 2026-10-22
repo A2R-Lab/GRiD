@@ -80,6 +80,13 @@ def gen_add_code_line(self, new_code_line, add_indent_after = False):
     self._append_code(self.indent_level * "    " + new_code_line + "\n")
     if add_indent_after:
         self.indent_level += 1
+    # DEBUG_MODE topology-helper null check (set by gen_insert_helpers_func_def_params
+    # for the inner head being emitted): the line that opens that body is followed by
+    # the assert, once.
+    pending = getattr(self, "_pending_helpers_assert", None)
+    if pending and new_code_line.rstrip().endswith("{") and ("int *" + pending) in new_code_line:
+        self._pending_helpers_assert = None
+        self._append_code(self.indent_level * "    " + "assert(" + pending + " != nullptr);  // DEBUG_MODE: TOPOLOGY_HELPERS_COUNT > 0, the caller fills the topology helpers\n")
 
 
 # ── per-algorithm header fragments (M3 F0, design doc

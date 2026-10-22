@@ -12,6 +12,11 @@ FRICTION produces ZERO gradient delta (damping-only sensitivity).
 
 Robots: iiwa14 (damping 0.5×7, no friction), fr3 (damping+friction, mimic).
 fp32 + fp64 (numpy backend). Skips if grid_rbd / nvcc / URDF unavailable.
+
+friction_model="tanh" (fr3-tanh row): the smooth f*tanh(qd/w) term replaces
+f*sign(qd); its slope (f/w) sech^2(qd/w) enters the dc_dqd diagonal, so the
+on-minus-off gradient delta is the oracle's per-sample joint-dynamics slope and
+the samples include qd = 0 and |qd| <= w, where the sign model has no slope.
 """
 from __future__ import annotations
 
@@ -39,17 +44,26 @@ if not (_IIWA.exists() and _FR3.exists()):
     pytest.skip("iiwa14/fr3 URDF not present", allow_module_level=True)
 
 
-def _oracle(urdf, use_jd):
+_WIDTH = 0.03
+
+
+def _oracle(urdf, use_jd, model="sign"):
     from URDFParser import URDFParser
     from RBDReference import RBDReference
-    return RBDReference(URDFParser().parse(str(urdf), floating_base=False), use_joint_dynamics=use_jd)
+    return RBDReference(URDFParser().parse(str(urdf), floating_base=False),
+                        use_joint_dynamics=use_jd, friction_model=model, friction_width=_WIDTH)
 
 
-def _samples(nj, seed=0, dt=np.float32):
+def _samples(nj, seed=0, dt=np.float32, model="sign"):
+    """Four (q, qd, u) rows. Under the tanh model row 0 is at rest and row 1 has
+    every velocity inside the width, the regimes the sign model cannot differentiate."""
     rng = np.random.default_rng(seed)
-    return (rng.standard_normal((4, nj)).astype(dt),
-            rng.standard_normal((4, nj)).astype(dt),
-            rng.standard_normal((4, nj)).astype(dt))
+    q = rng.standard_normal((4, nj)).astype(dt)
+    qd = rng.standard_normal((4, nj))
+    if model == "tanh":
+        qd[0] = 0.0
+        qd[1] = rng.uniform(-0.5, 0.5, nj) * _WIDTH
+    return q, qd.astype(dt), rng.standard_normal((4, nj)).astype(dt)
 
 
 def _max(a, b):
@@ -77,19 +91,21 @@ def _damping_diag(urdf, nv):
     return diag
 
 
-# (name, urdf, dtype) — fp32 + fp64 (numpy backend) for both robots.
-# The float64 rows are the fp64 alpha tier (outside the receipt; make test-fp64).
-_PARAMS = [("iiwa14", _IIWA, "float32"),
-           pytest.param(("iiwa14", _IIWA, "float64"), marks=pytest.mark.fp64_alpha),
-           ("fr3", _FR3, "float32"),
-           pytest.param(("fr3", _FR3, "float64"), marks=pytest.mark.fp64_alpha)]
-_IDS = ["iiwa14-fp32", "iiwa14-fp64", "fr3-fp32", "fr3-fp64"]
+# (name, urdf, dtype, friction_model) — fp32 + fp64 (numpy backend) for both robots,
+# plus the fr3 tanh friction build (fp32). The float64 rows are the fp64 alpha tier
+# (outside the receipt; make test-fp64).
+_PARAMS = [("iiwa14", _IIWA, "float32", "sign"),
+           pytest.param(("iiwa14", _IIWA, "float64", "sign"), marks=pytest.mark.fp64_alpha),
+           ("fr3", _FR3, "float32", "sign"),
+           pytest.param(("fr3", _FR3, "float64", "sign"), marks=pytest.mark.fp64_alpha),
+           ("fr3", _FR3, "float32", "tanh")]
+_IDS = ["iiwa14-fp32", "iiwa14-fp64", "fr3-fp32", "fr3-fp64", "fr3-tanh-fp32"]
 
 
 @pytest.fixture(scope="module", params=_PARAMS, ids=_IDS)
 def robot(request):
-    name, urdf, dtype = request.param
-    suf = "" if dtype == "float32" else "_f64"
+    name, urdf, dtype, model = request.param
+    suf = ("" if dtype == "float32" else "_f64") + ("" if model == "sign" else "_tanh")
     # force_rebuild: the grid-rbd cache key is content-addressed on the BUILD
     # INPUTS (urdf, flags, arch), NOT on the generated CUDA source, so a robot
     # registered before a codegen change keeps its stale .cuh/.so. This test
@@ -99,6 +115,8 @@ def robot(request):
     # -> on==off and the assertions silently regress). Rebuild both handles.
     h_on = _grid_rbd.register_robot(name=f"{name}_jd_on{suf}_pytest", urdf_path=str(urdf),
                                     floating_base=False, use_joint_dynamics=True,
+                                    friction_model=model,
+                                    friction_width=(_WIDTH if model == "tanh" else None),
                                     dtype=dtype, max_batch_size=8, force_rebuild=True)
     h_off = _grid_rbd.register_robot(name=f"{name}_jd_off{suf}_pytest", urdf_path=str(urdf),
                                      floating_base=False, dtype=dtype, max_batch_size=8,
@@ -106,15 +124,16 @@ def robot(request):
     np_dt = np.float64 if dtype == "float64" else np.float32
     # fp64 reaches ~1e-9; fp32 ~1e-3.
     tol = 1e-7 if dtype == "float64" else _TOL
-    return h_on, h_off, urdf, np_dt, tol
+    assert h_on.friction_model == model and h_off.friction_model == "sign"
+    return h_on, h_off, urdf, np_dt, tol, model
 
 
 def test_damping_friction_value_path(robot):
     """id/fd/aba with use_joint_dynamics=True match RBDReference(use_joint_dynamics=True)."""
-    h_on, _, urdf, dt, tol = robot
+    h_on, _, urdf, dt, tol, model = robot
     nj = h_on.num_joints
-    q, qd, u = _samples(nj, dt=dt)
-    ref = _oracle(urdf, use_jd=True)
+    q, qd, u = _samples(nj, dt=dt, model=model)
+    ref = _oracle(urdf, use_jd=True, model=model)
     id_g = h_on.inverse_dynamics(q, qd)
     fd_g = h_on.forward_dynamics(q, qd, u)
     aba_g = h_on.aba(q, qd, u)
@@ -130,10 +149,10 @@ def test_damping_gradient_path(robot):
     """id_gradient + fd_gradient with use_joint_dynamics=True match
     RBDReference(use_joint_dynamics=True) — the damping diagonal flows through
     dc_dqd (id) and qdd_dqd = -Minv*dc_dqd (fd, no separate emit)."""
-    h_on, _, urdf, dt, tol = robot
+    h_on, _, urdf, dt, tol, model = robot
     nj = h_on.num_joints
-    q, qd, u = _samples(nj, seed=2, dt=dt)
-    ref = _oracle(urdf, use_jd=True)
+    q, qd, u = _samples(nj, seed=2, dt=dt, model=model)
+    ref = _oracle(urdf, use_jd=True, model=model)
     idg = h_on.inverse_dynamics_gradient(q, qd, u)        # (B, NV, 2*NV) = [dc_dq|dc_dqd]
     fdg = h_on.forward_dynamics_gradient(q, qd, u)        # (B, NV, 2*NV) = [qdd_dq|qdd_dqd]
     for i, (qi, qdi, ui) in enumerate(zip(q, qd, u)):
@@ -148,30 +167,41 @@ def test_damping_gradient_path(robot):
 def test_gradient_delta_is_damping_diag_only_no_friction(robot):
     """on - off gradient delta is EXACTLY the damping diagonal on dc_dqd; the
     dc_dq half and the off-diagonal dc_dqd are unchanged, and FRICTION (fr3)
-    contributes ZERO — proves the friction subgradient is correctly dropped."""
-    h_on, h_off, urdf, dt, tol = robot
+    contributes ZERO — proves the friction subgradient is correctly dropped.
+    Under the tanh model the delta is the oracle's per-sample slope diagonal
+    b + (f/w) sech^2(qd/w), which is largest at rest (row 0)."""
+    h_on, h_off, urdf, dt, tol, model = robot
     nj = h_on.num_joints
     nv = h_on.num_vel
-    q, qd, u = _samples(nj, seed=3, dt=dt)
+    q, qd, u = _samples(nj, seed=3, dt=dt, model=model)
     idg_on = h_on.inverse_dynamics_gradient(q, qd, u)
     idg_off = h_off.inverse_dynamics_gradient(q, qd, u)
     delta = np.asarray(idg_on, np.float64) - np.asarray(idg_off, np.float64)
-    expected = np.zeros((nv, 2 * nv))
-    expected[:, nv:] = np.diag(_damping_diag(urdf, nv))   # only dc_dqd diagonal
+    ref = _oracle(urdf, use_jd=True, model=model)
     for i in range(delta.shape[0]):
-        assert _max(delta[i], expected) < tol, (
-            f"grad delta[{i}] != damping-diag-only (friction leaked?): {_max(delta[i], expected):.2e}")
+        expected = np.zeros((nv, 2 * nv))
+        if model == "tanh":
+            slope = ref._joint_dynamics_derivative_diag(qd[i].astype(np.float64), 1)
+            expected[:, nv:] = np.diag(slope)
+            # the friction slope is present at rest; the sign model would show damping only
+            if i == 0:
+                assert float(np.max(slope - _damping_diag(urdf, nv))) > 1.0
+        else:
+            expected[:, nv:] = np.diag(_damping_diag(urdf, nv))   # only dc_dqd diagonal
+        scale = max(1.0, float(np.max(np.abs(expected))))
+        assert _max(delta[i], expected) / scale < tol, (
+            f"grad delta[{i}] != joint-dynamics slope diagonal: {_max(delta[i], expected):.2e}")
     # sanity: the delta is non-trivial (damping is actually present)
-    assert float(np.max(np.abs(expected))) > 1e-3
+    assert float(np.max(np.abs(_damping_diag(urdf, nv)))) > 1e-3
 
 
 def test_default_off_matches_bare_oracle_and_differs_from_on(robot):
     """Default (no use_joint_dynamics) matches the BARE oracle in BOTH value and
     gradient, and the damping term is non-trivial (on != off) — proves the flag
     actually does something and the default build's gradients are unchanged."""
-    h_on, h_off, urdf, dt, tol = robot
+    h_on, h_off, urdf, dt, tol, model = robot
     nj = h_off.num_joints
-    q, qd, u = _samples(nj, seed=1, dt=dt)
+    q, qd, u = _samples(nj, seed=1, dt=dt, model=model)
     ref_bare = _oracle(urdf, use_jd=False)
     id_off = h_off.inverse_dynamics(q, qd)
     idg_off = h_off.inverse_dynamics_gradient(q, qd, u)
@@ -186,24 +216,30 @@ def test_default_off_matches_bare_oracle_and_differs_from_on(robot):
     assert _max(h_on.inverse_dynamics_gradient(q, qd, u), idg_off) > 1e-3
 
 
-@pytest.mark.parametrize("urdf", [_IIWA, _FR3], ids=["iiwa14", "fr3"])
-def test_rbdreference_oracle_dqd_block_matches_fd(urdf):
+@pytest.mark.parametrize("urdf,model", [(_IIWA, "sign"), (_FR3, "sign"), (_FR3, "tanh")],
+                         ids=["iiwa14", "fr3", "fr3-tanh"])
+def test_rbdreference_oracle_dqd_block_matches_fd(urdf, model):
     """RBDReference self-test (no GPU): the analytic inverse_dynamics_gradient
     dc_dqd block (use_joint_dynamics=True) matches a central finite-difference of
     inverse_dynamics w.r.t. qd. Validates the oracle damping fix directly.
 
-    The qd samples are kept WELL away from 0 so the friction term f*sign(qd) is
-    locally constant (sign(qd±h)==sign(qd)) -> its central-difference is exactly
-    0, matching the analytic gradient which (correctly) drops friction."""
+    Under the sign model the qd samples are kept WELL away from 0 so the friction
+    term f*sign(qd) is locally constant (sign(qd±h)==sign(qd)) -> its
+    central-difference is exactly 0, matching the analytic gradient which
+    (correctly) drops friction. Under the tanh model the samples sit inside the
+    width, where the slope (f/w) sech^2(qd/w) is largest."""
     from URDFParser import URDFParser
     from RBDReference import RBDReference
     rp = URDFParser().parse(str(urdf), floating_base=False)
     nv = rp.get_num_vel()
-    ref = RBDReference(rp, use_joint_dynamics=True)
+    ref = RBDReference(rp, use_joint_dynamics=True, friction_model=model, friction_width=_WIDTH)
     rng = np.random.default_rng(7)
     q = rng.standard_normal(nv)
-    # bias velocity sign strongly away from 0 (|qd| >= 0.5) so friction is smooth.
-    qd = np.sign(rng.standard_normal(nv)) * (0.5 + np.abs(rng.standard_normal(nv)))
+    if model == "tanh":
+        qd = rng.uniform(-0.5, 0.5, nv) * _WIDTH
+    else:
+        # bias velocity sign strongly away from 0 (|qd| >= 0.5) so friction is smooth.
+        qd = np.sign(rng.standard_normal(nv)) * (0.5 + np.abs(rng.standard_normal(nv)))
     qdd = rng.standard_normal(nv)
     grad = np.asarray(ref.inverse_dynamics_gradient(q, qd, qdd, GRAVITY=-9.81))
     dqd_analytic = grad[:, nv:]   # dc_dqd half of the hstacked [dc_dq | dc_dqd]

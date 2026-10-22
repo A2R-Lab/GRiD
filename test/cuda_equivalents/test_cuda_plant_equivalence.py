@@ -150,6 +150,13 @@ def _robot_spec(robot_id, base_mode):
     pytest.skip(f"{robot_id}-{base_mode} not in manifest")
 
 
+def _cost_frames(project_model):
+    """The two baked cost frames of this suite: the first leaf joint (the plant
+    end-effector, frame 0) and joint 1 (an inner joint, frame 1)."""
+    robot = project_model.robot
+    return [robot.get_joint_by_id(robot.get_leaf_nodes()[_PLANT_EE]).get_name(), robot.get_joint_by_id(1).get_name()]
+
+
 def _generate_header(project_model, build_dir):
     header = build_dir / "grid.cuh"
     codegen = GRiDCodeGenerator(project_model.robot, FILE_NAMESPACE="grid")
@@ -157,8 +164,9 @@ def _generate_header(project_model, build_dir):
         # Full profile is JUSTIFIED here (unlike the other aux suites, which use
         # split codegen): plant_step_hessian consumes fdsva_so + integrator, the
         # cost families consume the full ee/centroidal surfaces — restricting
-        # would drop the very compositions this suite validates.
-        codegen.gen_all_code(codegen_profile="all", output_path=str(header))
+        # would drop the very compositions this suite validates. cost_frames adds
+        # the frame Jacobian family and bakes the two frames the menu cells address.
+        codegen.gen_all_code(codegen_profile="all", output_path=str(header), cost_frames=_cost_frames(project_model))
     return header
 
 
@@ -616,3 +624,161 @@ def test_cuda_tangent_state_cost_matches_reference(tmp_path):
               f"{tag} Newton hess (BOTH curvature terms, guide 7.z2)")
         # Newton != GN away from e = 0 — guard against a silently-dead curvature path.
         assert np.max(np.abs(h_nw - h_gn)) > 1e-6, f"{tag}: Newton == GN (curvature path dead?)"
+
+
+# ---- cost menu: activated terms, barrier activations, linear features, cost frames, the preset ----
+_MENU_MX, _MENU_MU = 2, 1
+_GRAVITY = -9.81
+_PSEUDO_HUBER = 1
+
+
+def _menu_eps(t):      return 0.02 + 0.01 * t
+def _lin_Ax(nx):       return np.array([[0.1 * (m + 1) + 0.05 * n * (1 if m == 0 else -1) for n in range(nx)] for m in range(_MENU_MX)], dtype=np.float64)
+def _lin_bx():         return np.array([0.3 * m for m in range(_MENU_MX)], dtype=np.float64)
+def _lin_tx():         return np.array([0.2 + 0.1 * m for m in range(_MENU_MX)], dtype=np.float64)
+def _lin_Wx():         return np.array([4.0 + m for m in range(_MENU_MX)], dtype=np.float64)
+def _lin_Au(nu):       return np.array([[0.2 - 0.03 * n for n in range(nu)]], dtype=np.float64)
+def _v_des():          return np.array([0.1 * (r % 3) - 0.05 * (r // 3) for r in range(6)], dtype=np.float64)
+def _Wv():             return np.array([1.0 + r for r in range(6)], dtype=np.float64)
+def _Wcf():            return np.array([5.0 + 0.5 * r for r in range(3)], dtype=np.float64)
+def _cf_des():         return np.array([0.05 * (r + 1) for r in range(3)], dtype=np.float64)
+def _R_des():
+    cy, sy, cp, sp, cr, sr = np.cos(0.3), np.sin(0.3), np.cos(0.2), np.sin(0.2), np.cos(0.1), np.sin(0.1)
+    Rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]]); Ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]]); Rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]])
+    return Rz @ Ry @ Rx
+
+
+def _unpack_term(blk, n):
+    blk = np.asarray(blk, dtype=np.float64).reshape(-1)
+    return blk[0], blk[1:1 + n], blk[1 + n:1 + n + n * n].reshape(n, n, order="F")
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.robot_smoke
+@pytest.mark.parametrize(
+    "robot_id,base_mode", _plant_cells(),
+    ids=[f"{r}-{b}" for r, b in _plant_cells()],
+)
+def test_cuda_cost_menu_matches_reference(tmp_path, robot_id, base_mode):
+    """The cost menu against RBDReference: gravity_torque; state_cost under pseudo-Huber and
+    under both barrier activations with bounds; input_cost; the frame 0 (end-effector) and
+    frame 1 position, the frame 0 log-map orientation and, on fixed base, the frame 0 twist;
+    the linear features on x and u; the quadratic activation reproducing the quadratic
+    terms; and, on fixed base, the tracking_cost_menu preset equal to the independent
+    composition of its terms."""
+    spec = _robot_spec(robot_id, base_mode)
+    try:
+        resolved = resolve_robot_spec(spec)
+    except RuntimeError as exc:
+        pytest.skip(f"Could not resolve manifest {spec.robot_id}: {exc}")
+    project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
+    build_dir = tmp_path / f"{robot_id}_{base_mode}_menu"
+    build_dir.mkdir()
+    _generate_header(project_model, build_dir)
+    executable, cmd = _compile_runner(build_dir)
+    ref = project_model.reference
+
+    nq, nv = project_model.nq, project_model.nv
+    nx, nu = nq + nv, nv
+    samples = _build_cuda_samples(project_model, random_count=3, include_corner_samples=True)
+    rtol, atol = 2e-3, 2e-3
+
+    def close(actual, expected, msg):
+        expected = np.asarray(expected, dtype=np.float64)
+        scale = float(np.max(np.abs(expected))) if expected.size else 0.0
+        np.testing.assert_allclose(np.asarray(actual, dtype=np.float64), expected,
+                                   rtol=rtol, atol=max(atol, rtol * scale), err_msg=msg)
+
+    checked = 0
+    for sample in samples:
+        q, qd = np.asarray(sample.q, np.float64), np.asarray(sample.qd, np.float64)
+        u = np.asarray(sample.qdd, np.float64)
+        out = _run(executable, cmd, q, qd, u, _DT)
+        if "menu_skipped" in out:
+            pytest.skip(f"{robot_id}:{base_mode}: the activated EE cost is not emitted (no ee_pos_cost)")
+        x = np.concatenate([q, qd])
+        tag = f"{robot_id}:{base_mode} @ {sample.name}"
+
+        frames = _cost_frames(project_model)
+        close(np.asarray(out["menu_gravity"], dtype=np.float64).reshape(-1), ref.gravity_torque(q, GRAVITY=_GRAVITY),
+              f"{tag} gravity_torque == RNEA(q, 0, 0)")
+
+        val, grad, hess = _unpack_term(out["menu_state"], nx)
+        rv, rg, rh = ref.state_cost(x, _x_des(nx), _Qw(nx), _PSEUDO_HUBER, _menu_eps(1))
+        close(val, rv, f"{tag} state value"); close(grad, rg, f"{tag} state grad"); close(hess, rh, f"{tag} state hess")
+
+        # barrier activations on the state with bounds x_des +- 0.45 (relaxed log barrier: mu = Q, delta = 0.2;
+        # 0.45 keeps the bounds off the round corner-sample values, see the runner)
+        lo, hi = _x_des(nx) - 0.45, _x_des(nx) + 0.45
+        val, grad, hess = _unpack_term(out["menu_rlb_state"], nx)
+        rv, rg, rh = ref.state_cost(x, _x_des(nx), _Qw(nx), 2, 0.2, lo, hi)
+        close(val, rv, f"{tag} relaxed log barrier value"); close(grad, rg, f"{tag} relaxed log barrier grad"); close(hess, rh, f"{tag} relaxed log barrier hess")
+        val, grad, hess = _unpack_term(out["menu_qb_state"], nx)
+        rv, rg, rh = ref.state_cost(x, _x_des(nx), _Qw(nx), 3, 0.0, lo, hi)
+        close(val, rv, f"{tag} quadratic barrier value"); close(grad, rg, f"{tag} quadratic barrier grad")
+        # the quadratic barrier's curvature is a step at the bound (0 inside, w outside): value and
+        # gradient are continuous there, the Hessian is not, so an entry within fp32 rounding of a
+        # bound is compared on value and gradient only (the corner samples sit on round values)
+        away = (np.abs(x - lo) > 1e-5) & (np.abs(x - hi) > 1e-5)
+        close(np.diag(hess)[away], np.diag(rh)[away], f"{tag} quadratic barrier hess (entries away from a bound)")
+        assert np.count_nonzero(hess - np.diag(np.diag(hess))) == 0, f"{tag} quadratic barrier hess must be diagonal"
+
+        val, grad, hess = _unpack_term(out["menu_input"], nu)
+        rv, rg, rh = ref.input_cost(u, _u_des(nu), _Rw(nu), _PSEUDO_HUBER, _menu_eps(2))
+        close(val, rv, f"{tag} input value"); close(grad, rg, f"{tag} input grad"); close(hess, rh, f"{tag} input hess")
+
+        # frame 0 position: the end-effector target
+        val, grad, hess = _unpack_term(out["menu_ee"], nx)
+        rv, rg, rh = ref.frame_position_cost(q, frames[0], np.zeros(3), _Ww(), _PSEUDO_HUBER, _menu_eps(0))
+        close(val, rv, f"{tag} frame 0 position value"); close(grad, rg, f"{tag} frame 0 position grad"); close(hess, rh, f"{tag} frame 0 position hess")
+        assert np.count_nonzero(grad[nv:]) == 0, f"{tag} frame position grad qd-block must be zero"
+
+        # frame 0 orientation: log-map residual against R_des = Rz(0.3) Ry(0.2) Rx(0.1)
+        val, grad, hess = _unpack_term(out["menu_orient"], nx)
+        rv, rg, rh = ref.frame_orientation_cost(q, frames[0], _R_des().flatten(order="F"), _Ww(), _PSEUDO_HUBER, _menu_eps(5))
+        close(val, rv, f"{tag} orientation value"); close(grad, rg, f"{tag} orientation grad"); close(hess, rh, f"{tag} orientation hess")
+
+        # frame 1 position
+        val, grad, hess = _unpack_term(out["menu_frame2"], nx)
+        rv, rg, rh = ref.frame_position_cost(q, frames[1], _cf_des(), _Wcf(), _PSEUDO_HUBER, _menu_eps(7))
+        close(val, rv, f"{tag} frame 1 position value"); close(grad, rg, f"{tag} frame 1 position grad"); close(hess, rh, f"{tag} frame 1 position hess")
+
+        # frame 0 twist (fixed base only)
+        if "menu_vel" in out:
+            val, grad, hess = _unpack_term(out["menu_vel"], nx)
+            rv, rg, rh = ref.frame_velocity_cost(q, qd, frames[0], _v_des(), _Wv(), _PSEUDO_HUBER, _menu_eps(6))
+            close(val, rv, f"{tag} twist value"); close(grad, rg, f"{tag} twist grad"); close(hess, rh, f"{tag} twist hess")
+        else:
+            assert base_mode == "floating"
+
+        val, grad, hess = _unpack_term(out["menu_linx"], nx)
+        rv, rg, rh = ref.linear_feature_cost(x, _lin_Ax(nx), _lin_bx(), _lin_tx(), _lin_Wx(), _PSEUDO_HUBER, _menu_eps(3))
+        close(val, rv, f"{tag} linear x value"); close(grad, rg, f"{tag} linear x grad"); close(hess, rh, f"{tag} linear x hess")
+
+        val, grad, hess = _unpack_term(out["menu_linu"], nu)
+        rv, rg, rh = ref.linear_feature_cost(u, _lin_Au(nu), [0.1], [-0.1], [5.0], _PSEUDO_HUBER, _menu_eps(4))
+        close(val, rv, f"{tag} linear u value"); close(grad, rg, f"{tag} linear u grad"); close(hess, rh, f"{tag} linear u hess")
+
+        # the quadratic activation is the quadratic term: bit for bit for the state cost
+        # (identical arithmetic); to fp32 rounding for the frame position, whose pose is
+        # evaluated in a separate function body (nvcc contracts its multiplies into FMAs
+        # differently, one ULP on go2 floating).
+        quad = np.asarray(out["menu_quad"], dtype=np.float64).reshape(-1)
+        assert quad[0] == np.asarray(out["state_cost_value"], dtype=np.float64).reshape(-1)[0], f"{tag} quadratic activation != quadratic_state_cost"
+        ee_val = np.asarray(out["ee_cost_value"], dtype=np.float64).reshape(-1)[0]
+        assert abs(quad[1] - ee_val) <= 4e-7 * max(1.0, abs(ee_val)), f"{tag} quadratic activation != ee_pos_cost ({quad[1]} vs {ee_val})"
+
+        if "menu_preset_skipped" not in out:
+            blk = np.asarray(out["menu_preset"], dtype=np.float64).reshape(-1)
+            cnt = 1 + nx + nu + nx * nx + nu * nu
+            preset, reference = blk[:cnt], blk[cnt:]
+            close(preset[0], reference[0], f"{tag} menu preset value == composition")
+            close(preset[1:1 + nx], reference[1:1 + nx], f"{tag} menu preset s_qk == composition")
+            close(preset[1 + nx:1 + nx + nu], reference[1 + nx:1 + nx + nu], f"{tag} menu preset s_rk == composition")
+            close(preset[1 + nx + nu:1 + nx + nu + nx * nx], reference[1 + nx + nu:1 + nx + nu + nx * nx], f"{tag} menu preset s_Qk == composition")
+            close(preset[1 + nx + nu + nx * nx:], reference[1 + nx + nu + nx * nx:], f"{tag} menu preset s_Rk == composition")
+        else:
+            assert base_mode == "floating"
+        checked += 1
+    assert checked >= 3

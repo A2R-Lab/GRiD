@@ -290,6 +290,18 @@ class BaseDelegateMixin:
         return self._base.joint_friction
 
     @property
+    def friction_model(self) -> str:
+        """``"sign"`` or ``"tanh"``: the Coulomb friction shape of a
+        ``use_joint_dynamics`` build."""
+        return self._base.friction_model
+
+    @property
+    def joint_friction_width(self):
+        """Baked per-v-slot tanh friction width (length nv). Only on a
+        ``runtime_joint_dynamics`` build with ``friction_model="tanh"``."""
+        return self._base.joint_friction_width
+
+    @property
     def max_perf_level_threads(self) -> int:
         """Codegen-time thread-count hint (DOF-aware, warp-rounded); the default
         per-block thread count for kernel launches."""
@@ -322,12 +334,14 @@ class BaseDelegateMixin:
         registered with ``runtime_inertia=True``."""
         self._base.set_inertia_params(params)
 
-    def set_joint_dynamics(self, damping=None, friction=None) -> None:
+    def set_joint_dynamics(self, damping=None, friction=None, friction_width=None) -> None:
         """Update the device-resident damping/friction table at runtime (no
-        recompile). ``damping``/``friction`` are length-nv (v-slot indexed); an
-        omitted side keeps its baked value. Only on a ``runtime_joint_dynamics``
-        build."""
-        self._base.set_joint_dynamics(damping=damping, friction=friction)
+        recompile). ``damping``/``friction``/``friction_width`` are length-nv
+        (v-slot indexed); an omitted side keeps its baked value; ``friction_width``
+        only on a ``friction_model="tanh"`` build. Only on a
+        ``runtime_joint_dynamics`` build."""
+        self._base.set_joint_dynamics(damping=damping, friction=friction,
+                                      friction_width=friction_width)
 
     def set_threads_per_block(self, n: int) -> None:
         """Force a single global per-block thread count for all subsequent kernel

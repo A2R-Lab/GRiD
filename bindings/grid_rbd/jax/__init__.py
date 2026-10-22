@@ -1584,6 +1584,9 @@ def register_robot(
     contact_frames: list[str] | tuple[str, ...] | None = None,
     enable_mujoco_kernels: bool = True,
     dtype: str = "float32",
+    friction_model: str = "sign",
+    friction_width=None,
+    cost_frames: list[str] | tuple[str, ...] | None = None,
 ) -> JaxRobotHandle:
     """Register a robot for use with JAX.
 
@@ -1623,6 +1626,8 @@ def register_robot(
         cuda_arch=cuda_arch,
         algorithm_list=algorithm_list,
         use_joint_dynamics=use_joint_dynamics,  # C5: baked into id/fd/aba/*_gradient kernels
+        friction_model=friction_model, friction_width=friction_width,  # smooth friction (tanh)
+        cost_frames=cost_frames,  # plant menu frame residuals
         runtime_joint_dynamics=runtime_joint_dynamics,  # C5: mutable damping/friction table
         runtime_inertia=runtime_inertia,  # D.4: mutable inertia table (FFI reads the same device global)
         runtime_transform=runtime_transform,  # mutable joint-origin table (shared device global)

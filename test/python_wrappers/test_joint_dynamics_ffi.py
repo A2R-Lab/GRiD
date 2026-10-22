@@ -12,6 +12,10 @@ flag.
 
 Robots: iiwa14 (damping 0.5x7, no friction), fr3 (damping + friction + mimic). Fixed
 base, fp32 (jax/torch are fp32-only). Skips cleanly if jax/torch/nvcc unavailable.
+The fr3-tanh case builds with friction_model="tanh": the three surfaces still agree,
+and the second-order contract changes on purpose (idsva_so gains the smooth friction
+term on its qd-qd triple diagonal, so it differs from the bare build and matches the
+tanh oracle).
 
 Run with:
     pytest test/python_wrappers/test_joint_dynamics_ffi.py -m python_wrappers -v
@@ -61,38 +65,50 @@ def _maxabs(a, b):
     return float(np.max(np.abs(_np(a) - _np(b))))
 
 
-def _samples(nj, seed=0):
+_WIDTH = 0.03
+
+
+def _samples(nj, seed=0, model="sign"):
     rng = np.random.default_rng(seed)
-    return (rng.standard_normal((4, nj)).astype(np.float32),
-            rng.standard_normal((4, nj)).astype(np.float32),
-            rng.standard_normal((4, nj)).astype(np.float32))
+    q = rng.standard_normal((4, nj)).astype(np.float32)
+    qd = rng.standard_normal((4, nj))
+    if model == "tanh":
+        # rows at rest and inside the width: where the sign model has no slope
+        qd[0] = 0.0
+        qd[1] = rng.uniform(-0.5, 0.5, nj) * _WIDTH
+    return q, qd.astype(np.float32), rng.standard_normal((4, nj)).astype(np.float32)
 
 
-# (name, urdf) — fixed base, fp32.
-_CASES = [("iiwa14", _IIWA), ("fr3", _FR3)]
-_IDS = ["iiwa14", "fr3"]
-_URDF_BY_NAME = dict(_CASES)
+# (name, urdf, friction_model) — fixed base, fp32.
+_CASES = [("iiwa14", _IIWA, "sign"), ("fr3", _FR3, "sign"), ("fr3", _FR3, "tanh")]
+_IDS = ["iiwa14", "fr3", "fr3-tanh"]
+_URDF_BY_NAME = {name: urdf for name, urdf, _ in _CASES}
 
 
-def _reference(name, use_joint_dynamics=False):
+def _reference(name, use_joint_dynamics=False, model="sign"):
     from URDFParser import URDFParser
     from RBDReference import RBDReference
     robot = URDFParser().parse(str(_URDF_BY_NAME[name]), floating_base=False)
-    return RBDReference(robot, use_joint_dynamics=use_joint_dynamics)
+    return RBDReference(robot, use_joint_dynamics=use_joint_dynamics,
+                        friction_model=model, friction_width=_WIDTH)
 
 
 @pytest.fixture(scope="module", params=_CASES, ids=_IDS)
 def handles(request):
     """Register the SAME damped robot on numpy + jax + torch (shared cache key ->
     ONE build), plus a bare (undamped) numpy build for the bias-present check."""
-    name, urdf = request.param
+    name, urdf, model = request.param
+    tag = "" if model == "sign" else "_tanh"
     common = dict(urdf_path=str(urdf), floating_base=False, max_batch_size=8)
-    hn = _grid_rbd.register_robot(name=f"{name}_jd_ffi_pytest", use_joint_dynamics=True,
-                                  force_rebuild=True, **common)
-    hj = _gj.register_robot(name=f"{name}_jd_ffi_pytest", use_joint_dynamics=True, **common)
-    ht = _gt.register_robot(name=f"{name}_jd_ffi_pytest", use_joint_dynamics=True, **common)
+    damped = dict(use_joint_dynamics=True, friction_model=model,
+                  friction_width=(_WIDTH if model == "tanh" else None))
+    hn = _grid_rbd.register_robot(name=f"{name}_jd_ffi{tag}_pytest", force_rebuild=True,
+                                  **damped, **common)
+    hj = _gj.register_robot(name=f"{name}_jd_ffi{tag}_pytest", **damped, **common)
+    ht = _gt.register_robot(name=f"{name}_jd_ffi{tag}_pytest", **damped, **common)
     hbare = _grid_rbd.register_robot(name=f"{name}_jd_ffi_bare_pytest", force_rebuild=True, **common)
-    return name, hn, hj, ht, hbare
+    assert hn.friction_model == model and hj.friction_model == model and ht.friction_model == model
+    return name, hn, hj, ht, hbare, model
 
 
 def _torch_in(*arrs):
@@ -102,9 +118,9 @@ def _torch_in(*arrs):
 def test_value_path_numpy_jax_torch_parity(handles):
     """id / fd / aba: numpy == jax == torch on the damped build (the C5 Part-A
     cross-surface gate — the FFI handlers compute the same baked bias)."""
-    name, hn, hj, ht, _ = handles
+    name, hn, hj, ht, _, model = handles
     nj = hn.num_joints
-    q, qd, u = _samples(nj)
+    q, qd, u = _samples(nj, model=model)
     qt, qdt, ut = _torch_in(q, qd, u)
     checks = {
         "inverse_dynamics": (hn.inverse_dynamics(q, qd),
@@ -123,9 +139,9 @@ def test_value_path_numpy_jax_torch_parity(handles):
 def test_gradient_path_numpy_jax_torch_parity(handles):
     """id_gradient / fd_gradient: numpy == jax == torch on the damped build (the
     dc_dqd damping diagonal flows identically through every surface)."""
-    name, hn, hj, ht, _ = handles
+    name, hn, hj, ht, _, model = handles
     nj = hn.num_joints
-    q, qd, u = _samples(nj, seed=2)
+    q, qd, u = _samples(nj, seed=2, model=model)
     qt, qdt, ut = _torch_in(q, qd, u)
     checks = {
         "inverse_dynamics_gradient": (hn.inverse_dynamics_gradient(q, qd, u),
@@ -144,9 +160,9 @@ def test_damped_differs_from_undamped(handles):
     """The damped build must DIFFER from a bare (use_joint_dynamics=False) build by
     a non-trivial margin — guards against a silent no-op flag. (iiwa14/fr3 both have
     nonzero damping.)"""
-    name, hn, _, _, hbare = handles
+    name, hn, _, _, hbare, model = handles
     nj = hn.num_joints
-    q, qd, u = _samples(nj, seed=3)
+    q, qd, u = _samples(nj, seed=3, model=model)
     assert _maxabs(hn.inverse_dynamics(q, qd), hbare.inverse_dynamics(q, qd)) > 1e-2, \
         "damped id == undamped id (flag is a no-op?)"
     assert _maxabs(hn.forward_dynamics(q, qd, u), hbare.forward_dynamics(q, qd, u)) > 1e-2
@@ -169,21 +185,44 @@ def test_second_order_damping_contract(handles):
     fdsva_so; it was masked for weeks by the numpy-surface idsva_so launch-tier
     crash and failed the moment that was fixed (verified: damped CUDA fdsva_so
     matches the damped oracle to ~1e-4 relative and is FAR from the bare one)."""
-    name, hn, _, _, hbare = handles
+    name, hn, _, _, hbare, model = handles
     nj = hn.num_joints
-    q, qd, u = _samples(nj, seed=4)
+    nv = hn.num_vel
+    q, qd, u = _samples(nj, seed=4, model=model)
 
     on = hn.idsva_so(q, qd, u)
     off = hbare.idsva_so(q, qd, u)
-    assert _maxabs(on, off) < 1e-5, \
-        f"idsva_so: damping leaked into inverse-dynamics 2nd order ({_maxabs(on, off):.2e})"
+    if model == "sign":
+        assert _maxabs(on, off) < 1e-5, \
+            f"idsva_so: damping leaked into inverse-dynamics 2nd order ({_maxabs(on, off):.2e})"
+    else:
+        # tanh: the smooth friction term -(2f/w^2) tanh sech^2 sits on the qd-qd
+        # triple diagonal (nonzero off rest), and the damped build matches the
+        # tanh oracle on every block.
+        ref_t = _reference(name, use_joint_dynamics=True, model=model)
+        d2_on = np.asarray(on[1], np.float64) - np.asarray(off[1], np.float64)
+        for i in range(q.shape[0]):
+            so = ref_t._joint_dynamics_derivative_diag(qd[i].astype(np.float64), 2)
+            expected = np.zeros((nv, nv, nv))
+            expected[np.arange(nv), np.arange(nv), np.arange(nv)] = so
+            scale = max(1.0, float(np.max(np.abs(expected))))
+            assert np.max(np.abs(d2_on[i] - expected)) / scale < 2e-3, \
+                f"idsva_so d2tau_dqd delta != tanh triple diagonal at sample {i}"
+            if i == 1:   # inside the width, off rest: the term is present
+                assert float(np.max(np.abs(so))) > 1.0
+            blocks = ref_t.idsva_so(q[i].astype(np.float64), qd[i].astype(np.float64),
+                                    u[i].astype(np.float64), GRAVITY=-9.81)
+            for k, (c, r) in enumerate(zip(on, blocks)):
+                r = np.asarray(r, np.float64)
+                rel = np.abs(np.asarray(c[i], np.float64) - r).max() / max(1.0, np.abs(r).max())
+                assert rel < 5e-3, f"idsva_so block {k} sample {i}: tanh CUDA vs tanh oracle rel={rel:.2e}"
 
     fd_on = [np.asarray(t, np.float64) for t in hn.fdsva_so(q, qd, u)]
     fd_off = [np.asarray(t, np.float64) for t in hbare.fdsva_so(q, qd, u)]
     assert max(np.abs(a - b).max() for a, b in zip(fd_on, fd_off)) > 1e-2, \
         "fdsva_so: damped build identical to bare — Minv-mapped damping lost from FD 2nd order"
 
-    ref = _reference(name, use_joint_dynamics=True)
+    ref = _reference(name, use_joint_dynamics=True, model=model)
     for i in range(min(2, q.shape[0])):
         ref_t = [np.asarray(t, np.float64) for t in
                  ref.fdsva_so(q[i].astype(np.float64), qd[i].astype(np.float64),
@@ -205,9 +244,9 @@ def test_nle_coriolis_damping_convention(handles):
     * Consequence: the identity C(q,qd) qd + g(q) == nle holds on BARE builds;
       on damped builds the residual IS the damping bias, exactly.
     """
-    name, hn, _, _, hbare = handles
+    name, hn, _, _, hbare, model = handles
     nj = hn.num_joints
-    q, qd, _ = _samples(nj, seed=7)
+    q, qd, _ = _samples(nj, seed=7, model=model)
     qd64 = qd.astype(np.float64)
 
     nle_d = np.asarray(hn.nonlinear_effects(q, qd, gravity=-9.81), np.float64)

@@ -168,3 +168,18 @@ Build cost
   fast-robot-setup page); subset builds (``algorithm_list=``,
   ``enable_mujoco_kernels=False``) are the practical path when compile time or
   memory matters. Generated-source portability is not binary portability.
+
+Sanitizer diagnostics with JAX
+------------------------------
+
+* Running a process that initializes the JAX CUDA backend under NVIDIA Compute
+  Sanitizer reports one CUDA API warning during JAX's device-allocator query
+  (``cuDeviceGetAttribute``: fabric handle support requires IMEX channels) and,
+  for a standalone JAX reduction, a selective device-code recompilation notice.
+  Both come from JAX 0.11 and the CUDA 13 toolchain and reproduce in a process
+  that imports no GRiD; the numerical results are correct and the NumPy and
+  PyTorch surfaces pass the same sanitizer with zero errors. We record this as
+  an accepted limitation of the combined sanitizer invocation rather than a
+  defect of the wrapper: the sanitizer exit code of a JAX-initialized process is
+  nonzero, and the release checks state it so instead of suppressing the
+  warning.

@@ -185,7 +185,7 @@ class GRiDCodeGenerator:
         self._code_parts.append(text)
         self._code_cache = None
 
-    def __init__(self, robotObj, DEBUG_MODE = False, NEED_PRINT_MAT = False, FILE_NAMESPACE = "grid", USE_JOINT_DYNAMICS = False, dtype = "float", MUJOCO_OUTPUT = False, LAUNCH_CONFIG_ROBOT = None, LAUNCH_CONFIG_PROFILE = "host", runtime_joint_dynamics = False, LAUNCH_CONFIG_GPU = None):
+    def __init__(self, robotObj, DEBUG_MODE = False, NEED_PRINT_MAT = False, FILE_NAMESPACE = "grid", USE_JOINT_DYNAMICS = False, dtype = "float", MUJOCO_OUTPUT = False, LAUNCH_CONFIG_ROBOT = None, LAUNCH_CONFIG_PROFILE = "host", runtime_joint_dynamics = False, LAUNCH_CONFIG_GPU = None, FRICTION_MODEL = "sign", FRICTION_WIDTH = 0.03):
         self.robot = robotObj
         # runtime_joint_dynamics: when True, the id/fd/aba/*_gradient bias reads
         # the per-DOF damping/friction coefficients from a mutable device table
@@ -240,6 +240,29 @@ class GRiDCodeGenerator:
         # historical emit. Pair with RBDReference(use_joint_dynamics=True) to get
         # a matching oracle when the term is enabled.
         self.USE_JOINT_DYNAMICS = USE_JOINT_DYNAMICS
+        # FRICTION_MODEL: the velocity shape of the Coulomb term under
+        # USE_JOINT_DYNAMICS. "sign" (default) emits f*sign(qd), whose
+        # derivatives are zero almost everywhere, and keeps every existing header
+        # byte-identical. "tanh" emits the smooth f*tanh(qd/w) with its first
+        # derivative (f/w) sech^2(qd/w) in the inverse-dynamics gradient and its
+        # second derivative -(2f/w^2) tanh sech^2 on the qd-qd triple diagonal of
+        # idsva_so (fdsva_so and the FD gradient follow by composition). The width
+        # w (rad/s) is FRICTION_WIDTH: one scalar for every velocity slot or one
+        # value per slot; it is baked as a literal, or, under runtime_joint_dynamics,
+        # stored as the third row of the mutable table (set_joint_dynamics_params).
+        if FRICTION_MODEL not in ("sign", "tanh"):
+            raise ValueError(f"FRICTION_MODEL must be 'sign' or 'tanh', got {FRICTION_MODEL!r}")
+        self.FRICTION_MODEL = FRICTION_MODEL
+        try:
+            widths = [float(w) for w in FRICTION_WIDTH]
+        except TypeError:
+            widths = [float(FRICTION_WIDTH)] * self.robot.get_num_vel()
+        if len(widths) != self.robot.get_num_vel():
+            raise ValueError("FRICTION_WIDTH must be a scalar or one value per velocity slot "
+                             f"(length {self.robot.get_num_vel()}); got {len(widths)}")
+        if any(not (w > 0.0) for w in widths):
+            raise ValueError("FRICTION_WIDTH must be positive")
+        self.FRICTION_WIDTH = widths
         # planar joints PARSE (URDFParser groundwork) but the CUDA codegen
         # transform chain does not yet emit them — fail loudly here rather than
         # silently mis-generating. (Planar is decomposed into cardinal sub-joints
@@ -294,6 +317,21 @@ class GRiDCodeGenerator:
         """
         return self._joint_dynamics_folded_by_vslot()
 
+    def get_friction_width_baked(self):
+        """Return the per-v-slot tanh friction width (length nv) the runtime table's
+        third row is initialized with under FRICTION_MODEL="tanh"."""
+        return list(self.FRICTION_WIDTH)
+
+    def _jd_tanh_active(self):
+        """True when the emitted joint-dynamics bias uses the smooth tanh friction
+        model: USE_JOINT_DYNAMICS on, FRICTION_MODEL "tanh", and the robot declares
+        nonzero friction. Every tanh-only emit (value shape, gradient slope, second-
+        order triple diagonal, the table's third row) is gated on this, so sign-model
+        and friction-free robots stay byte-identical."""
+        return bool(getattr(self, "USE_JOINT_DYNAMICS", False)) \
+            and getattr(self, "FRICTION_MODEL", "sign") == "tanh" \
+            and bool(self.robot.robot_has_joint_friction())
+
     def _normalize_codegen_algorithms(self, codegen_profile = "all", algorithm_list = None):
         from ._algo_profiles import normalize_codegen_algorithms
         return normalize_codegen_algorithms(self, codegen_profile, algorithm_list)
@@ -341,7 +379,7 @@ class GRiDCodeGenerator:
                      runtime_joint_dynamics = None, multi_target_batch = None, collision_spec = None,
                      contact_frames = None, enable_contact_runtime = False, enable_mujoco_kernels = None,
                      emit_alloc_gating = False, fragments_dir = None,
-                     vendor_glass = True, glass_revision = None):
+                     vendor_glass = True, glass_revision = None, cost_frames = None):
         """Pure option resolution for gen_all_code (hygiene 5/9, 2026-09-24): profile/
         closure expansion, feature gates and every `self.*` build flag are decided
         HERE, emitting nothing. Returns (algorithms, include_any_kinematics,
@@ -415,7 +453,19 @@ class GRiDCodeGenerator:
         # explicit request enables the world-frame emit even on fixed-base
         # (where the kwarg default is False). Resolve the algorithm set up front
         # so the request can be OR'd into enable_idsva_so_world_frame below.
-        algorithms = self._normalize_codegen_algorithms(codegen_profile, algorithm_list)
+        if cost_frames:
+            # cost_frames (plant menu, 2026-10-21): the named-frame residuals ride on
+            # frame_jacobian_inner, so an explicit frame list pulls that family (and its
+            # closure) into the plan on top of the requested profile or list.
+            if algorithm_list is None:
+                requested = [str(codegen_profile or "all")]
+            elif isinstance(algorithm_list, str):
+                requested = [algorithm_list]
+            else:
+                requested = list(algorithm_list)
+            algorithms = self._normalize_codegen_algorithms(codegen_profile, requested + ["frame_jacobian"])
+        else:
+            algorithms = self._normalize_codegen_algorithms(codegen_profile, algorithm_list)
         # mjx twins (floating base, enable_mujoco_kernels): the MUJOCO_OUTPUT
         # epilogues of the ID gradient and fdsva_so rebuild the dense mass matrix
         # with crba_inner, a dependency the pin-only closure never sees. A
@@ -498,6 +548,10 @@ class GRiDCodeGenerator:
         # gen_ee_target_aliases (the stable end_effector_pose_target_* symbols) and
         # by _plant.py's ee_pos_cost family, so neither hard-codes a joint name.
         self._ee_target_name = fixed_target_name if fixed_target_name not in ("", "all") else ""
+        # cost frames (plant menu): the baked named frames the position, orientation and
+        # velocity residuals can address by index; frame 0 is the end-effector target.
+        from .algorithms._plant_menu import resolve_cost_frames
+        self._cost_frames = resolve_cost_frames(self, cost_frames)
         self._ee_target_sfx = ident_suffix(self._ee_target_name)
         # D.4 / Phase 5: runtime-mutable inertia table. When True, the per-link
         # spatial inertia is reconstructed on-device from a mutable d_inertia_params
@@ -577,8 +631,8 @@ class GRiDCodeGenerator:
                      runtime_joint_dynamics = None, multi_target_batch = None, collision_spec = None,
                      contact_frames = None, enable_contact_runtime = False, enable_mujoco_kernels = None,
                      emit_alloc_gating = False, fragments_dir = None,
-                     vendor_glass = True, glass_revision = None):
-        algorithms, include_any_kinematics, include_homogenous_transforms = self._resolve_emission_plan(include_base_inertia=include_base_inertia, include_homogenous_transforms=include_homogenous_transforms, fixed_target_name=fixed_target_name, output_path=output_path, codegen_profile=codegen_profile, algorithm_list=algorithm_list, enable_floating_second_order=enable_floating_second_order, enable_idsva_so_world_frame=enable_idsva_so_world_frame, enable_idsva_so_body_frame=enable_idsva_so_body_frame, runtime_inertia=runtime_inertia, runtime_transform=runtime_transform, runtime_joint_dynamics=runtime_joint_dynamics, multi_target_batch=multi_target_batch, collision_spec=collision_spec, contact_frames=contact_frames, enable_contact_runtime=enable_contact_runtime, enable_mujoco_kernels=enable_mujoco_kernels, emit_alloc_gating=emit_alloc_gating, fragments_dir=fragments_dir, vendor_glass=vendor_glass, glass_revision=glass_revision)
+                     vendor_glass = True, glass_revision = None, cost_frames = None):
+        algorithms, include_any_kinematics, include_homogenous_transforms = self._resolve_emission_plan(include_base_inertia=include_base_inertia, include_homogenous_transforms=include_homogenous_transforms, fixed_target_name=fixed_target_name, output_path=output_path, codegen_profile=codegen_profile, algorithm_list=algorithm_list, enable_floating_second_order=enable_floating_second_order, enable_idsva_so_world_frame=enable_idsva_so_world_frame, enable_idsva_so_body_frame=enable_idsva_so_body_frame, runtime_inertia=runtime_inertia, runtime_transform=runtime_transform, runtime_joint_dynamics=runtime_joint_dynamics, multi_target_batch=multi_target_batch, collision_spec=collision_spec, contact_frames=contact_frames, enable_contact_runtime=enable_contact_runtime, enable_mujoco_kernels=enable_mujoco_kernels, emit_alloc_gating=emit_alloc_gating, fragments_dir=fragments_dir, vendor_glass=vendor_glass, glass_revision=glass_revision, cost_frames=cost_frames)
         file_notes = [ "Interface is:", \
             "    __host__   robotModel<T> *d_robotModel = init_robotModel<T>()", \
             "    __host__   cudaStream_t streams = init_grid<T>()", \
@@ -1087,6 +1141,16 @@ class GRiDCodeGenerator:
         if collision_spec is not None:
             from .algorithms._collision import normalize_collision_tiers
             self.gen_collision_namespace(normalize_collision_tiers(collision_spec))
+        self.gen_add_fragment_mark("suggested_threads")
+        # Per-algorithm suggested thread counts (2026-10-21, GATO issue 19): read the
+        # widest block-parallel loop on each kernel's call tree back from the text
+        # emitted above and reopen the namespace with one constant per algorithm.
+        # Additive and last, so no kernel body changes.
+        from .suggested_threads import derive as _derive_suggested_threads, emit_block as _emit_suggested_block
+        from .algo_registry import launch_config_descriptors as _lc_descriptors
+        self._suggested_threads, self._suggested_threads_unknown = _derive_suggested_threads(
+            self.code_str, [d.key for d in _lc_descriptors()])
+        self.gen_add_code_lines(_emit_suggested_block(self.file_namespace, self._suggested_threads))
         # Host-side thread-count clamp pass (2026-08-10): every host-wrapper
         # kernel launch that takes the caller's `thread_dimms` gets it clamped
         # against the LAUNCHED kernel's own cudaFuncAttributes cap first. A

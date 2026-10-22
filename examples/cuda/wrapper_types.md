@@ -23,6 +23,19 @@ The actual RNEA. It does no memory management: every buffer (`s_vaf`,
 in, all in shared memory, and you must have already populated `s_XImats` via
 `load_update_XImats_helpers`. It does not even `extern __shared__`.
 
+The `s_topology_helpers` argument is a block of `grid::TOPOLOGY_HELPERS_COUNT`
+ints that encodes the tree and the joint axes. It is zero (pass `nullptr`) only for
+a serial chain whose joints all turn about +Z; a serial chain with any other
+cardinal or skew axis needs `n` ints and a branching tree `5n + 1` more
+(`n = max(NUM_POS, NUM_JOINTS)`), so iiwa14 needs none, a three-joint +Z, -Z, +X
+arm 3 and rizon4 7. Fill it once per block with `load_update_XImats_helpers`
+before the first `_inner` call; a `DEBUG_MODE` header asserts it is not null in
+every helper-reading `_inner`. For an arena sized in T elements, reserve
+`grid::TOPOLOGY_HELPERS_T_COUNT<T>()` for the block next to the algorithm's
+`*_SHARED_MEM_COUNT`. The header also ends with `grid::<ALGO>_SUGGESTED_THREADS`,
+the smallest multiple of 32 that covers the algorithm's widest block-parallel
+compute loop; a fused kernel takes the max over the algorithms it calls.
+
 Use `_inner` when you are writing your own fused kernel and want to share
 scratch across several algorithm calls (e.g. compute `s_XImats` once, then run
 RNEA and CRBA off it), or when you have a bespoke shared-memory layout. It
