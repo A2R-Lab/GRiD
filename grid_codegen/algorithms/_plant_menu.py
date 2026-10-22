@@ -34,34 +34,44 @@ ACTIVATIONS = (("GRID_PLANT_ACTIVATION_NONE", -1), ("GRID_PLANT_ACTIVATION_QUADR
 MENU_TERMS = ("FRAME_POS", "STATE", "INPUT", "LINEAR_X", "LINEAR_U", "ORIENTATION", "VELOCITY", "FRAME_POS_2")
 
 
+def _resolve_cost_frame(robot, nm):
+    """(jid, X_offset[16] column-major) of a named frame, or None when the name is
+    a fixed joint attached to the world root (no joint moves it). An articulated
+    joint resolves to its own id with an identity offset; a fixed joint to its
+    movable parent with the fixed transform. Unknown names raise."""
+    joint = robot.get_joint_by_name(nm)
+    if joint is not None:
+        return int(joint.get_id()), [float(v) for v in np.eye(4).flatten(order="F")]
+    fixed = robot.get_fixed_joint_by_name(nm)
+    if fixed is None:
+        raise ValueError(f"cost frame '{nm}' is neither a joint nor a fixed joint of this URDF")
+    parent_name = fixed.get_parent()
+    parent = robot.get_joint_by_name(parent_name) if parent_name else None
+    if parent is None:
+        return None
+    Xh = np.asarray(fixed.get_transformation_matrix_hom(), dtype=np.float64)
+    return int(parent.get_id()), [float(v) for v in Xh.flatten(order="F")]
+
+
 def resolve_cost_frames(self, names):
-    """[(name, jid, X_offset[16] column-major)] for the baked cost frames. An
-    articulated joint resolves to its own id with an identity offset; a fixed
-    joint to its movable parent with the fixed transform. None selects the
-    end-effector target alone (the named fixed target when one is baked, else
-    the first leaf joint), which is also always frame 0."""
+    """[(name, jid, X_offset[16] column-major)] for the baked cost frames. Frame 0
+    is the end-effector target (the named fixed target when one is baked, else the
+    first leaf joint) whenever a joint moves it; a target attached to the world
+    root bakes no default frame, and a frame the caller names that hangs off the
+    root is refused. Repeated names bake once."""
     robot = self.robot
     default = getattr(self, "_ee_target_name", "") or robot.get_joint_by_id(robot.get_leaf_nodes()[0]).get_name()
-    requested = list(names or [])
-    names = [default]
-    for n in requested:
-        if n not in names:
-            names.append(n)
     frames = []
-    for nm in names:
-        joint = robot.get_joint_by_name(nm)
-        if joint is not None:
-            frames.append((nm, int(joint.get_id()), [float(v) for v in np.eye(4).flatten(order="F")]))
+    resolved = _resolve_cost_frame(robot, default)
+    if resolved is not None:
+        frames.append((default, resolved[0], resolved[1]))
+    for nm in (names or []):
+        if any(nm == f[0] for f in frames):
             continue
-        fixed = robot.get_fixed_joint_by_name(nm)
-        if fixed is None:
-            raise ValueError(f"cost frame '{nm}' is neither a joint nor a fixed joint of this URDF")
-        parent_name = fixed.get_parent()
-        parent = robot.get_joint_by_name(parent_name) if parent_name else None
-        if parent is None:
+        resolved = _resolve_cost_frame(robot, nm)
+        if resolved is None:
             raise ValueError(f"cost frame '{nm}' hangs off the world root; a cost frame must move with a joint")
-        Xh = np.asarray(fixed.get_transformation_matrix_hom(), dtype=np.float64)
-        frames.append((nm, int(parent.get_id()), [float(v) for v in Xh.flatten(order="F")]))
+        frames.append((nm, resolved[0], resolved[1]))
     return frames
 
 
@@ -902,7 +912,9 @@ def gen_cost_menu(self, algorithms, ee_cost_ok):
     gen_activated_cost_family(self, "state")
     gen_activated_cost_family(self, "input")
     gen_linear_feature_cost(self)
-    if "frame_jacobian" in algorithms:
+    if "frame_jacobian" in algorithms and not self._cost_frames:
+        self.gen_add_code_line("// [grid_plant] frame_eval / frame_*_cost / tracking_cost_menu skipped: the end-effector target is attached to the world root and no cost_frames were given.")
+    elif "frame_jacobian" in algorithms:
         _gen_so3_helpers(self)
         gen_frame_eval(self)
         gen_frame_position_cost(self)

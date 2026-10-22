@@ -96,3 +96,27 @@ def test_activation_ids_and_term_order_match_the_oracle():
     assert ids["GRID_PLANT_ACTIVATION_RELAXED_LOG_BARRIER"] == RBDReference.ACTIVATION_RELAXED_LOG_BARRIER
     assert ids["GRID_PLANT_ACTIVATION_QUADRATIC_BARRIER"] == RBDReference.ACTIVATION_QUADRATIC_BARRIER
     assert ids["GRID_PLANT_ACTIVATION_NONE"] == -1
+
+
+def test_root_attached_named_target_bakes_no_default_frame(tmp_path):
+    """go2's imu_joint is a fixed joint on the base (the world root for the frame
+    chain): as the baked named target it yields no default cost frame and the
+    frame terms are skipped with a note, the build itself succeeding (the receipt
+    cell test_ee_named_root_attached_zero_gradient_hessian); naming it explicitly
+    as a cost frame is refused."""
+    go2 = _robot("go2", False)
+    gen, text = _gen(tmp_path, go2, fixed_target_name="imu_joint", algorithm_list=["end_effector_pose", "frame_jacobian"])
+    assert gen._cost_frames == []
+    assert "void frame_eval(" not in text and "attached to the world root" in text
+    gen2 = GRiDCodeGenerator(go2, False, False, "grid")
+    gen2._ee_target_name = "imu_joint"
+    assert resolve_cost_frames(gen2, None) == []
+    assert [f[0] for f in resolve_cost_frames(gen2, [go2.get_joint_by_id(1).get_name()])] == [go2.get_joint_by_id(1).get_name()]
+    with pytest.raises(ValueError):
+        resolve_cost_frames(gen2, ["imu_joint"])
+    # on the floating go2 the same frame hangs off the floating-base joint and bakes as frame 0 on joint 0
+    go2f = _robot("go2", True)
+    gen3 = GRiDCodeGenerator(go2f, False, False, "grid")
+    gen3._ee_target_name = "imu_joint"
+    frames = resolve_cost_frames(gen3, None)
+    assert [f[0] for f in frames] == ["imu_joint"] and frames[0][1] == 0
