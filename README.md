@@ -146,7 +146,6 @@ MIT; see [LICENSE](https://github.com/A2R-Lab/GRiD/blob/main/LICENSE).
       <td align="center" valign="top" width="20%"><a href="https://github.com/caelyasutake"><img src="https://avatars.githubusercontent.com/caelyasutake?s=100" width="100px;" alt="Cael Yasutake"/><br /><sub><b>Cael Yasutake</b></sub></a><br /></td>
     </tr>
     <tr>
-      <td align="center" valign="top" width="20%"><a href="https://github.com/the-eater"><img src="https://avatars.githubusercontent.com/the-eater?s=100" width="100px;" alt="="/><br /><sub><b>=</b></sub></a><br /></td>
       <td align="center" valign="top" width="20%"><a href="https://github.com/pruyontrarakk"><img src="https://avatars.githubusercontent.com/pruyontrarakk?s=100" width="100px;" alt="pruyontrarakk"/><br /><sub><b>pruyontrarakk</b></sub></a><br /></td>
     </tr>
   </tbody>
