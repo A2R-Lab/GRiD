@@ -95,7 +95,7 @@ def gen_id_bias_device(self, gravity_only):
 
     self.gen_device_wrapper(
         desc, func_def, _id_bias_inner_temp_mem_size(self), _inner,
-        func_params=func_params, extra_t_buffers=extra, include_linalg_scratch=True)
+        func_params=func_params, extra_t_buffers=extra)
 
 
 def _emit_id_bias_kernel_body(self, gravity_only, single_call_timing, mjx_kernel=False):
@@ -116,7 +116,7 @@ def _emit_id_bias_kernel_body(self, gravity_only, single_call_timing, mjx_kernel
     if use_qdd:
         extra.append(("s_qdd", nv))
     self.gen_XImats_helpers_temp_shared_memory_code(
-        _id_bias_inner_temp_mem_size(self), extra_t_buffers=extra, include_linalg_scratch=True)
+        _id_bias_inner_temp_mem_size(self), extra_t_buffers=extra)
     self.gen_add_code_line("T *s_q = s_q_qd; T *s_qd = &s_q_qd[" + str(n) + "];")
     if gravity_only:
         self.gen_add_code_line("(void)s_qd;")
@@ -320,10 +320,9 @@ def gen_centroidal_inner(self):
         "s_Xhom is the per-joint LOCAL homogeneous transforms",
         "d_robotModel is the GPU model helpers (for the constant body inertias)",
         "s_temp is scratch of size " + str(_centroidal_inner_temp_mem_size(self)),
-        "s_J_ext is the spilled-J band (used only when !J_IN_SMEM; pass nullptr when J_IN_SMEM)",
-        "s_linalg_smem is reserved (unused)"]
+        "s_J_ext is the spilled-J band (used only when !J_IN_SMEM; pass nullptr when J_IN_SMEM)"]
     func_def_middle = "T *s_A, T *s_com, T *s_extra, const T *s_q, const T *s_Xhom, const robotModel<T> *d_robotModel, "
-    func_def = "void centroidal_inner(" + func_def_middle + "T *s_temp, T *s_J_ext, unsigned char *s_linalg_smem) {"
+    func_def = "void centroidal_inner(" + func_def_middle + "T *s_temp, T *s_J_ext) {"
     self.gen_add_func_doc("Compute the world momentum map, composite inertia, CoM and CMM", [], func_params, None)
     # J_IN_SMEM=true (default) keeps s_J in the s_temp pool (byte-identical to the
     # original com/ccrba/energy emit). When false (DE-GATE #2: dccrba/cmm at the
@@ -334,7 +333,7 @@ def gen_centroidal_inner(self):
     self.gen_add_code_line("template <typename T, bool J_IN_SMEM = true>")
     self.gen_add_code_line("__device__")
     self.gen_add_code_line(func_def, True)
-    self.gen_add_code_line("(void)s_q; (void)s_linalg_smem; (void)s_J_ext;")
+    self.gen_add_code_line("(void)s_q; (void)s_J_ext;")
 
     # Pointer band layout. When J_IN_SMEM (default; com/ccrba/energy + dccrba/cmm
     # L0/L1) the s_J band lives in s_temp and the trailing offsets are the original
@@ -570,10 +569,10 @@ def _gen_centroidal_call(self, spill=False):
         # (in-smem tail at the J-in-smem tiers, d_workspace at the J-spilled tier), so
         # the inner is ALWAYS called with J external (J_IN_SMEM=false) and s_temp is the
         # SHRUNK no-J pool. s_J already points at the right place (smem tail or repointed).
-        self.gen_add_code_line("centroidal_inner<T, false>(s_A, s_com, s_extra, s_q, s_XmatsHom, d_robotModel, s_temp, s_J, s_linalg_smem);")
+        self.gen_add_code_line("centroidal_inner<T, false>(s_A, s_com, s_extra, s_q, s_XmatsHom, d_robotModel, s_temp, s_J);")
     else:
         # device-wrapper path: keep s_J inside s_temp (J_IN_SMEM=true) -> s_J_ext nullptr.
-        self.gen_add_code_line("centroidal_inner<T, true>(s_A, s_com, s_extra, s_q, s_XmatsHom, d_robotModel, s_temp, nullptr, s_linalg_smem);")
+        self.gen_add_code_line("centroidal_inner<T, true>(s_A, s_com, s_extra, s_q, s_XmatsHom, d_robotModel, s_temp, nullptr);")
 
 
 # ----- com (p_com + J_com) device/kernel/host -----
@@ -589,8 +588,7 @@ def gen_com_device(self):
     self.gen_add_code_line(func_def, True)
     extra = _centroidal_device_extra(self)
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
-        _centroidal_inner_temp_mem_size(self), extra_t_buffers=extra, include_linalg_scratch=True,
-        linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
+        _centroidal_inner_temp_mem_size(self), extra_t_buffers=extra)
     self.gen_load_update_XmatsHom_helpers_function_call()
     _gen_centroidal_call(self)
     self.gen_add_sync()
@@ -617,8 +615,7 @@ def gen_ccrba_device(self):
     self.gen_add_code_line(func_def, True)
     extra = _centroidal_device_extra(self)
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
-        _centroidal_inner_temp_mem_size(self), extra_t_buffers=extra, include_linalg_scratch=True,
-        linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
+        _centroidal_inner_temp_mem_size(self), extra_t_buffers=extra)
     self.gen_load_update_XmatsHom_helpers_function_call()
     _gen_centroidal_call(self)
     self.gen_add_sync()
@@ -648,8 +645,7 @@ def gen_energy_device(self):
     self.gen_add_code_line(func_def, True)
     extra = _centroidal_device_extra(self)
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
-        _centroidal_inner_temp_mem_size(self), extra_t_buffers=extra, include_linalg_scratch=True,
-        linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
+        _centroidal_inner_temp_mem_size(self), extra_t_buffers=extra)
     self.gen_load_update_XmatsHom_helpers_function_call()
     _gen_centroidal_call(self)
     self.gen_add_sync()
@@ -707,8 +703,7 @@ def _gen_kin_centroidal_kernel(self, name, out_size, has_qd, has_gravity, single
     self.gen_add_code_line("constexpr int " + SLOT + " = " + SMEM + " ? " + str(sJ) + " : 0;")
     extra = [("s_" + in_name, input_count), ("s_out", out_size)] + _centroidal_device_extra(self) + [("s_J", SLOT)]
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
-        _centroidal_inner_temp_mem_size(self, j_in_smem=False), extra_t_buffers=extra, include_linalg_scratch=True,
-        linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
+        _centroidal_inner_temp_mem_size(self, j_in_smem=False), extra_t_buffers=extra)
     if has_qd:
         self.gen_add_code_line("T *s_q = s_q_qd; T *s_qd = &s_q_qd[" + str(n) + "];")
     self.gen_add_code_line("if constexpr (" + SMEM + ") { (void)d_workspace; }")

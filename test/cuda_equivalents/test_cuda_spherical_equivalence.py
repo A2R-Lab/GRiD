@@ -433,8 +433,7 @@ def test_cuda_spherical_inverse_dynamics_gradient_matches_reference(tmp_path, fi
 
         # Oracle dc_du in reduced v-space: [dc_dq (nv x nv) | dc_dqd (nv x nv)].
         dc_du = ref.inverse_dynamics_gradient(
-            q.copy(), qd.copy(), qdd.copy(), GRAVITY=-9.81,
-            public_output=False, normalize_input=True)
+            q.copy(), qd.copy(), qdd.copy(), GRAVITY=-9.81)
         ref_dq, ref_dqd = np.hsplit(np.asarray(dc_du, dtype=np.float64), [nv])
 
         dev = np.asarray(out["inverse_dynamics_gradient"], dtype=np.float64).reshape(-1)
@@ -546,8 +545,7 @@ def test_cuda_spherical_forward_dynamics_gradient_matches_reference(tmp_path, fi
         qdd = np.asarray(ref.aba(q.copy(), qd.copy(), u.copy(), GRAVITY=-9.81),
                          dtype=np.float64).reshape(-1)
         dc_du = ref.inverse_dynamics_gradient(
-            q.copy(), qd.copy(), qdd.copy(), GRAVITY=-9.81,
-            public_output=False, normalize_input=True)
+            q.copy(), qd.copy(), qdd.copy(), GRAVITY=-9.81)
         dc_dq, dc_dqd = np.hsplit(np.asarray(dc_du, dtype=np.float64), [nv])
         minv = np.linalg.inv(np.asarray(ref.crba(q.copy()), dtype=np.float64))
         ref_dq = -minv @ dc_dq

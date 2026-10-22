@@ -4987,8 +4987,7 @@ def gen_idsva_so_device(self):
         "Computes the second order derivatives of inverse dynamics (frame picked at codegen time)",
         func_def, inner_temp_size, _emit_idsva_so_inner,
         template_line = "template <typename T, int RESOURCE_TIER = TIER_SHARED>",
-        func_notes = func_notes, func_params = func_params,
-        include_linalg_scratch = False, tier_workspace_expr = "d_workspace")
+        func_notes = func_notes, func_params = func_params, tier_workspace_expr = "d_workspace")
 
 
 def gen_idsva_so_dispatcher_host(self, mode = 0):

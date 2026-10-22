@@ -12,6 +12,76 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Floating-base cost menu. `tracking_cost_menu` and its gradient and Hessian are
+  emitted on a floating base (a free-flyer root with single-axis joints; a spherical
+  joint is refused by name) in the tangent layout: the state term is the new
+  `state_cost_tangent` on the residual `[difference(q_des, q); qd - qd_des]` under
+  any activation, with tangent-indexed bounds whose base-pose entries carry no
+  bound; the input terms, the torque barrier and the linear u feature act on the
+  `NUM_VEL - 6` actuated inputs; the position barrier bounds the joint positions,
+  the velocity barrier the tangent velocities; the linear x feature reads
+  `[q[7:]; qd]`; the gradient is `2 NUM_VEL` wide and the Hessian `2 NUM_VEL`
+  square, column-major. `GRID_PLANT_MENU_TANGENT`, `GRID_PLANT_MENU_NU` and
+  `GRID_PLANT_MENU_NLX` state the layout. Zero base weights under the quadratic
+  activation reproduce `quadratic_state_cost_tangent`. The frame terms are
+  tangent-sized on both bases (identical to the x layout on a fixed base).
+- `frame_velocity_cost` on a floating base: the configuration derivative of the
+  frame twist is taken along the tangent, the root entering as six columns under
+  the same rigid-motion rules as a joint; oracle and CUDA cell on go2.
+- The barrier families take `COUNT` and `VAR_OFFSET` templates (defaults unchanged),
+  the input family an `N` template (default `NUM_VEL`) and
+  `linear_feature_cost_hessian` a leading-dimension template `LD` (default `N`), so
+  the preset can place slices inside a larger gradient or Hessian.
+- The cuBLASDx-era linalg scratch is gone from the generated header: the
+  `grid_linalg_*` wrappers lose their ignored trailing `glass_nvidia_smem`
+  parameter, the inners that carried `unsigned char *s_linalg_smem` as a reserved
+  last argument (the end-effector pose inners, `centroidal_inner`, `dccrba_inner`,
+  the contact and multi-target inners) drop it, and the zero-returning
+  `GRID_LINALG_NVIDIA_MAX_HELPER_BYTES` and `GRID_EE_LINALG_SHARED_BYTES` sizers
+  and their arena byte region are removed. A consumer that passed `nullptr` in
+  that position removes the argument; no shared-memory size changes (the region
+  was zero bytes).
+- The orientation residual's SO(3) log map and inverse right Jacobian come from
+  the vendored GLASS (`glass::thread::so3_log`, `glass::thread::so3_right_jacobian_inv`)
+  instead of a private copy.
+- One capability constant per cost-menu piece (`GRID_PLANT_HAS_ACTIVATIONS`,
+  `GRID_PLANT_HAS_STATE_COST`, `GRID_PLANT_HAS_INPUT_COST`,
+  `GRID_PLANT_HAS_LINEAR_FEATURE_COST`, `GRID_PLANT_HAS_FRAME_EVAL`,
+  `GRID_PLANT_HAS_FRAME_POSITION_COST`, `GRID_PLANT_HAS_FRAME_ORIENTATION_COST`,
+  next to the existing `GRID_PLANT_HAS_FRAME_VELOCITY_COST`, `GRID_PLANT_HAS_COST_MENU`,
+  `GRID_PLANT_HAS_GRAVITY_TORQUE` and `GRID_PLANT_HAS_COST_FRAMES`), so an adapter
+  can `static_assert` on what the header emitted instead of reading the skip comments.
+- Smooth hinge activation (`GRID_PLANT_ACTIVATION_SMOOTH_HINGE`, id 4) in the cost
+  menu: `w (sqrt(d^2 + eps^2) - eps)` on the bound violation `d = max(0, lo - v) +
+  max(0, v - hi)`, zero inside the bounds and pseudo-Huber outside, with slope and
+  curvature on the diagonal like the other activations; oracle, CUDA cell and docs
+  (asked by Felix Mueh on GATO issue #20).
+- The Pinocchio oracle's end-effector pose gradient is analytic (frame Jacobian and
+  the roll-pitch-yaw rate map) and its pose Hessian is one central difference of
+  it. The installed Pinocchio has no kinematic-Hessian binding, so the previous
+  path differenced a differenced gradient with a noise floor near 1e-5; the fp64
+  pose-Hessian cells now pass at the fp64 tolerance class on every robot. The
+  reference drops a duplicated copy of its activation block.
+- Legacy code retired. `grid_codegen/_reference_impl.py`, an early numpy reference
+  bound into the generator as `test_*` methods, is deleted: its `mxS` dispatched
+  on a subspace entry equal to +1 and so dropped the velocity-product term of a
+  revolute joint with a negative axis (GATO issue #22, reported by Felix Mueh).
+  RBDReference is the one reference; `examples/codegen/print_reference_values.py`
+  prints its intermediate passes. The reference manifest gains
+  `signed_axis_arm` (+Z, -Z, +X and -Y revolute axes), so the signed-axis property
+  is locked against Pinocchio where the reference lives and in the CUDA receipt.
+- Clean break on compatibility knobs: `allow_fp64` (the fp32-compute, fp64-copy
+  upcast; `dtype="float64"` is the fp64 tier), the `all-dynamics` /
+  `dynamics-only` / `kinematics-only` profile aliases, the parser's
+  `alpha_tie_breaker` alias of `joint_ordering`, and the parser's
+  `floating_base_convention="legacy"` layout switch with its permutation helpers
+  (the pinocchio layout is the only one on every surface). With that switch gone
+  the identity normalize and denormalize helpers on `Robot` and `RBDReference`
+  and the `normalize_input` / `public_output` keywords on the RBDReference
+  dynamics entry points are removed as well; every call takes and returns the
+  pinocchio layout. RBDReference drops its unused `xfail_if_mimic` helper and
+  the convention test.
+
 ## [0.5.4] — 2026-10-21
 
 - Docs: the compatibility page records the JAX 0.11 CUDA initialization

@@ -586,7 +586,7 @@ def gen_coriolis_matrix_device(self):
         shared_mem_size,
         lambda: gen_coriolis_matrix_inner_function_call(self),
         func_params=func_params,
-        extra_t_buffers=None, include_linalg_scratch=True)
+        extra_t_buffers=None)
 
 
 def _emit_coriolis_matrix_kernel_body_for_flags(self, NUM_POS, nv, in_size, out_size,
@@ -603,7 +603,7 @@ def _emit_coriolis_matrix_kernel_body_for_flags(self, NUM_POS, nv, in_size, out_
     else:
         extra_t_buffers = [("s_q_qd", in_size)]
     self.gen_XImats_helpers_temp_shared_memory_code(
-        shared_mem_size, extra_t_buffers=extra_t_buffers, include_linalg_scratch=True)
+        shared_mem_size, extra_t_buffers=extra_t_buffers)
     self.gen_add_code_line("T *s_q = s_q_qd; T *s_qd = &s_q_qd[" + str(NUM_POS) + "];")
     if not coriolis_in_smem:
         self.gen_add_code_line("T *s_coriolis;  // repointed to the L2-pinned SO band (output spill) per timing branch")

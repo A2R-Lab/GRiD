@@ -206,8 +206,6 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__device__")
     self.gen_add_code_line(func_def, True)
-    temp_size = self.gen_inverse_dynamics_inner_temp_mem_size()
-    self.gen_linalg_smem_setup(temp_size)
     # Mimic-aware velocity/accel reads. Each BODY jid's joint velocity is read
     # from its reduced v-slot scaled by its mimic multiplier (alpha): a mimic
     # joint sees alpha * v_target. For non-mimic robots v_slot(jid)==jid and
@@ -527,7 +525,7 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
             self.gen_add_end_control_flow()
             self.gen_add_sync()
             # s_v[k] = X[k]*v[parent_k] (+= sign*qd[k] at S index) for all level joints at once
-            self.gen_add_code_line(f"grid_linalg_segmented_row_strided_gemv<T,6,6,6,true>({seg}, seg_a_off_{tag}, seg_v_x_off_{tag}, seg_v_y_off_{tag}, s_XImats, s_vaf, s_vaf, static_cast<T>(1), static_cast<T>(0), seg_s_off_{tag}, S_sel_{tag}, s_temp, s_linalg_smem);")
+            self.gen_add_code_line(f"grid_linalg_segmented_row_strided_gemv<T,6,6,6,true>({seg}, seg_a_off_{tag}, seg_v_x_off_{tag}, seg_v_y_off_{tag}, s_XImats, s_vaf, s_vaf, static_cast<T>(1), static_cast<T>(0), seg_s_off_{tag}, S_sel_{tag}, s_temp);")
             # a[jid] = X[jid]*a[parent] (+= sign*qdd[k] at S index if use_qdd_input)
             a_x_off = ", ".join(str(6*n + 6*p) for p in parents)
             a_y_off = ", ".join(str(6*n + 6*jid_val) for jid_val in inds)
@@ -543,7 +541,7 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
                         self.gen_add_code_line(f"s_temp[{i}] = s_qdd[{qd_idxs[i]}];")
                 self.gen_add_end_control_flow()
                 self.gen_add_sync()
-                self.gen_add_code_line(f"grid_linalg_segmented_row_strided_gemv<T,6,6,6,true>({seg}, seg_a_off_{tag}, seg_a_x_off_{tag}, seg_a_y_off_{tag}, s_XImats, s_vaf, s_vaf, static_cast<T>(1), static_cast<T>(0), seg_s_off_{tag}, S_sel_{tag}, s_temp, s_linalg_smem);")
+                self.gen_add_code_line(f"grid_linalg_segmented_row_strided_gemv<T,6,6,6,true>({seg}, seg_a_off_{tag}, seg_a_x_off_{tag}, seg_a_y_off_{tag}, s_XImats, s_vaf, s_vaf, static_cast<T>(1), static_cast<T>(0), seg_s_off_{tag}, S_sel_{tag}, s_temp);")
             else:
                 self.gen_add_code_line(f"grid_linalg_segmented_row_strided_gemv<T,6,6,6>({seg}, seg_a_off_{tag}, seg_a_x_off_{tag}, seg_a_y_off_{tag}, s_XImats, s_vaf, s_vaf, static_cast<T>(1), static_cast<T>(0));")
 
@@ -853,7 +851,7 @@ def gen_inverse_dynamics_device(self, compute_c = False, use_qdd_input = False):
         shared_mem_size,
         lambda: self.gen_inverse_dynamics_inner_function_call(compute_c, use_qdd_input),
         func_notes = func_notes, func_params = func_params,
-        extra_t_buffers = extra_t_buffers, include_linalg_scratch = True)
+        extra_t_buffers = extra_t_buffers)
 
 def gen_inverse_dynamics_kernel(self, use_qdd_input = False, single_call_timing = False):
     n = self.robot.get_num_pos()
@@ -896,7 +894,7 @@ def gen_inverse_dynamics_kernel(self, use_qdd_input = False, single_call_timing 
     if use_qdd_input:
         extra_t_buffers.append(("s_qdd", n))
     shared_mem_size = self.gen_inverse_dynamics_inner_temp_mem_size()
-    self.gen_XImats_helpers_temp_shared_memory_code(shared_mem_size, extra_t_buffers = extra_t_buffers, include_linalg_scratch=True)
+    self.gen_XImats_helpers_temp_shared_memory_code(shared_mem_size, extra_t_buffers = extra_t_buffers)
     self.gen_add_code_line("T *s_q = s_q_qd; T *s_qd = &s_q_qd[" + str(n) + "];")
     if not single_call_timing:
         # load to shared mem and loop over blocks to compute all requested comps

@@ -1173,16 +1173,14 @@ class ArenaLayout(NamedTuple):
     t_buffers: list
     temp_mem_size: int
     topology_count: int
-    extra_byte_regions: list
     ximat_size: int
 
 
 def _resolve_arena_layout(self, extra_t_buffers, temp_mem_size,
                           include_topology_helpers, ximat_size,
-                          include_linalg_scratch, linalg_scratch_bytes,
                           apply_runtime_transform_band = False):
     """Resolve the FINAL (t_buffers, temp_mem_size, topology_count,
-    extra_byte_regions, ximat_size) that gen_declare_shared_arena receives.
+    ximat_size) that gen_declare_shared_arena receives.
 
     apply_runtime_transform_band folds the XImats-flavor runtime_transform
     +36*NB temp reserve (see gen_XImats_helpers_temp_shared_memory_code's
@@ -1193,16 +1191,12 @@ def _resolve_arena_layout(self, extra_t_buffers, temp_mem_size,
     if apply_runtime_transform_band:
         temp_mem_size = int(temp_mem_size or 0) + 36 * self.robot.get_num_joints()
     topology_count = self.gen_topology_helpers_size() if include_topology_helpers else 0
-    extra_byte_regions = ([("s_linalg_smem", linalg_scratch_bytes)]
-                          if include_linalg_scratch else [])
-    return ArenaLayout(t_buffers, temp_mem_size, topology_count,
-                       extra_byte_regions, ximat_size)
+    return ArenaLayout(t_buffers, temp_mem_size, topology_count, ximat_size)
 
 
 def gen_declare_shared_arena(self, t_buffers, temp_mem_size, include_topology_helpers = True,
                              ximat_name = "s_XImats", ximat_size = 0,
                              temp_name = "s_temp", topology_name = "s_topology_helpers",
-                             extra_byte_regions = None,
                              tier_workspace_expr = None,
                              arena_base_expr = None):
     """Emit the shared-memory arena layout.
@@ -1213,7 +1207,7 @@ def gen_declare_shared_arena(self, t_buffers, temp_mem_size, include_topology_he
     pointer expression (e.g. ``"d_workspace"``) and the arena allocation
     skips the temp slot entirely, freeing that smem for the caller's outer
     kernel. The arena_offset variable accumulates conditionally so trailing
-    slots (topology, linalg, etc.) shift up at LITE+/MINIMAL.
+    slots (topology) shift up at LITE+/MINIMAL.
 
     The caller must declare ``RESOURCE_TIER`` as a template parameter and
     expose ``tier_workspace_expr`` as a function argument.
@@ -1228,8 +1222,6 @@ def gen_declare_shared_arena(self, t_buffers, temp_mem_size, include_topology_he
     Default None preserves the ``extern __shared__`` declaration verbatim, so
     every existing caller is byte-identical.
     """
-    if extra_byte_regions is None:
-        extra_byte_regions = []
     topology_count = self.gen_topology_helpers_size() if include_topology_helpers else 0
     # A t_buffer count may be a C++ constexpr expression string (e.g. a per-tier
     # slot size like "REGRESSOR_Y_OUTPUT_SLOT") rather than a Python int; such slots are
@@ -1252,7 +1244,6 @@ def gen_declare_shared_arena(self, t_buffers, temp_mem_size, include_topology_he
     t_region_count_expr = " + ".join(["0"] + [str(count) for _, count in t_buffers]
                                      + ([str(int(ximat_size))] if ximat_size else [])
                                      + ([str(temp_size_int)] if temp_size_int else []))
-    extra_byte_expr = " + ".join(str(count) for _, count in extra_byte_regions) if extra_byte_regions else "0"
     self.gen_add_code_line("// GRID shared arena layout")
     for name, count in t_buffers:
         self.gen_add_code_line("//   T " + name + "[" + str(count) + "]")
@@ -1265,8 +1256,6 @@ def gen_declare_shared_arena(self, t_buffers, temp_mem_size, include_topology_he
             self.gen_add_code_line("//   T " + temp_name + "[" + str(temp_mem_size) + "]")
     if topology_count > 0:
         self.gen_add_code_line("//   int " + topology_name + "[" + str(topology_count) + "]")
-    for name, count in extra_byte_regions:
-        self.gen_add_code_line("//   bytes " + name + "[" + str(count) + "]")
     if arena_base_expr is None:
         self.gen_add_code_line("extern __shared__ __align__(16) unsigned char s_arena[];")
     else:
@@ -1306,27 +1295,20 @@ def gen_declare_shared_arena(self, t_buffers, temp_mem_size, include_topology_he
         # Always declare the pointer (nullptr) so inner-function call sites can pass
         # it uniformly even when this robot allocates no topology helpers.
         self.gen_add_code_line("int *" + topology_name + " = nullptr;")
-    for name, count in extra_byte_regions:
-        self.gen_add_code_line("unsigned char *" + name + " = nullptr;")
-        self.gen_add_code_line("if (static_cast<size_t>(" + str(count) + ") > 0) {", True)
-        self.gen_add_code_line("s_arena_offset = grid_align_up(s_arena_offset, static_cast<size_t>(16));")
-        self.gen_add_code_line(name + " = grid_arena_ptr<unsigned char>(s_arena, s_arena_offset);")
-        self.gen_add_code_line("s_arena_offset += static_cast<size_t>(" + str(count) + ");")
-        self.gen_add_end_control_flow()
     self.gen_add_code_line("#ifdef GRID_CUDA_DEBUG_LAYOUT")
     if tier_workspace_expr is not None and temp_size_int != 0:
         # Different t_region_count per tier: PERF includes temp; LITE+ excludes it
         self.gen_add_code_line("if constexpr (RESOURCE_TIER == TIER_SHARED) {", True)
-        self.gen_add_code_line("assert(s_arena_offset == grid_shared_arena_bytes<T>(" + str(t_region_count) + ", " + str(topology_count) + ", " + extra_byte_expr + "));")
+        self.gen_add_code_line("assert(s_arena_offset == grid_shared_arena_bytes<T>(" + str(t_region_count) + ", " + str(topology_count) + "));")
         self.gen_add_end_control_flow()
         self.gen_add_code_line("else {", True)
-        self.gen_add_code_line("assert(s_arena_offset == grid_shared_arena_bytes<T>(" + str(fixed_t_region_count) + ", " + str(topology_count) + ", " + extra_byte_expr + "));")
+        self.gen_add_code_line("assert(s_arena_offset == grid_shared_arena_bytes<T>(" + str(fixed_t_region_count) + ", " + str(topology_count) + "));")
         self.gen_add_end_control_flow()
     elif has_expr_count:
         # Tier-routed slot present: the C++ slot-size expression is exact per tier.
-        self.gen_add_code_line("assert(s_arena_offset == grid_shared_arena_bytes<T>(static_cast<size_t>(" + t_region_count_expr + "), " + str(topology_count) + ", " + extra_byte_expr + "));")
+        self.gen_add_code_line("assert(s_arena_offset == grid_shared_arena_bytes<T>(static_cast<size_t>(" + t_region_count_expr + "), " + str(topology_count) + "));")
     else:
-        self.gen_add_code_line("assert(s_arena_offset == grid_shared_arena_bytes<T>(" + str(t_region_count) + ", " + str(topology_count) + ", " + extra_byte_expr + "));")
+        self.gen_add_code_line("assert(s_arena_offset == grid_shared_arena_bytes<T>(" + str(t_region_count) + ", " + str(topology_count) + "));")
     self.gen_add_code_line("#endif")
     self.gen_add_code_line("(void)s_arena_offset;")
 
@@ -1371,8 +1353,6 @@ def gen_arena_carve_struct(self, struct_name, layout, sizer_expr,
         self.gen_add_code_line("T *" + ximat_name + ";")
     self.gen_add_code_line("T *" + temp_name + ";")
     self.gen_add_code_line("int *" + topology_name + ";")
-    for name, _count in layout.extra_byte_regions:
-        self.gen_add_code_line("unsigned char *" + name + ";")
     self.gen_add_code_line("static __device__ " + struct_name + "<T> carve(void *base) {", True)
     self.gen_add_code_line("unsigned char *s_arena = reinterpret_cast<unsigned char *>(base);")
     self.gen_add_code_line("size_t s_arena_offset = 0;")
@@ -1397,13 +1377,6 @@ def gen_arena_carve_struct(self, struct_name, layout, sizer_expr,
         self.gen_add_code_line("s_arena_offset += sizeof(int) * static_cast<size_t>(" + str(layout.topology_count) + ");")
     else:
         self.gen_add_code_line("a." + topology_name + " = nullptr;")
-    for name, count in layout.extra_byte_regions:
-        self.gen_add_code_line("a." + name + " = nullptr;")
-        self.gen_add_code_line("if (static_cast<size_t>(" + str(count) + ") > 0) {", True)
-        self.gen_add_code_line("s_arena_offset = " + helper_ns + "grid_align_up(s_arena_offset, static_cast<size_t>(16));")
-        self.gen_add_code_line("a." + name + " = " + helper_ns + "grid_arena_ptr<unsigned char>(s_arena, s_arena_offset);")
-        self.gen_add_code_line("s_arena_offset += static_cast<size_t>(" + str(count) + ");")
-        self.gen_add_end_control_flow()
     self.gen_add_code_line("#ifdef GRID_CUDA_DEBUG_LAYOUT")
     self.gen_add_code_line("assert(s_arena_offset <= " + sizer_expr + ");")
     self.gen_add_code_line("#endif")
@@ -1418,10 +1391,9 @@ def gen_arena_carve_struct(self, struct_name, layout, sizer_expr,
 def gen_device_wrapper(self, func_desc, func_def, shared_mem_size, inner_call_fn,
                        template_line = "template <typename T>",
                        func_notes = None, func_params = None,
-                       extra_t_buffers = None, include_linalg_scratch = True,
+                       extra_t_buffers = None,
                        tier_workspace_expr = None, skip_floating_base_X = False,
-                       xmats_hom = False, include_gradients = False, include_hessians = False,
-                       linalg_scratch_bytes = None):
+                       xmats_hom = False, include_gradients = False, include_hessians = False):
     """Emit the shared `__device__` wrapper skeleton common to the simple
     inline-CUDA device entry points (id / fd / aba / crba / minv /
     idsva_so / integrator, and — with ``xmats_hom=True`` — the kinematics
@@ -1444,15 +1416,12 @@ def gen_device_wrapper(self, func_desc, func_def, shared_mem_size, inner_call_fn
       - `template_line`   : `<typename T>` vs the tier-aware /
                             IntegratorType variants.
       - `extra_t_buffers` : the algo's extra smem t-regions (default none).
-      - `include_linalg_scratch` : whether the algo reserves linalg scratch
-                            (True for all but idsva_so).
       - `tier_workspace_expr` : the LITE/MINIMAL whole-arena repoint target
                             (only the tier-aware device paths set this).
       - `skip_floating_base_X` : CRBA-only surgical lever on the XImats load.
-      - `xmats_hom` / `include_gradients` / `include_hessians` /
-        `linalg_scratch_bytes` : the XmatsHom-arena variant (kinematics
-                            wrappers): arena + loader come from the XmatsHom
-                            helpers, with the EE linalg scratch size.
+      - `xmats_hom` / `include_gradients` / `include_hessians` : the
+                            XmatsHom-arena variant (kinematics wrappers): arena +
+                            loader come from the XmatsHom helpers.
       - `inner_call_fn`   : a 0-arg closure that emits the per-algo inner
                             call(s) between the XImats load and the function
                             end (the irreducibly per-algo body).
@@ -1466,16 +1435,14 @@ def gen_device_wrapper(self, func_desc, func_def, shared_mem_size, inner_call_fn
     self.gen_add_code_line("__device__")
     self.gen_add_code_line(func_def, True)
     if xmats_hom:
-        kw = {} if linalg_scratch_bytes is None else {"linalg_scratch_bytes": linalg_scratch_bytes}
         self.gen_XmatsHom_helpers_temp_shared_memory_code(
             shared_mem_size, include_gradients = include_gradients, include_hessians = include_hessians,
-            extra_t_buffers = extra_t_buffers, include_linalg_scratch = include_linalg_scratch, **kw)
+            extra_t_buffers = extra_t_buffers)
         self.gen_load_update_XmatsHom_helpers_function_call(include_gradients = include_gradients,
                                                             include_hessians = include_hessians)
     else:
         self.gen_XImats_helpers_temp_shared_memory_code(
             shared_mem_size, extra_t_buffers = extra_t_buffers,
-            include_linalg_scratch = include_linalg_scratch,
             tier_workspace_expr = tier_workspace_expr)
         self.gen_load_update_XImats_helpers_function_call(skip_floating_base_X = skip_floating_base_X)
     inner_call_fn()

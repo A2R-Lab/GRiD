@@ -1290,8 +1290,6 @@ def gen_integrator_du_arena_carve_struct(self):
         include_topology_helpers = (not self.robot.is_serial_chain()
                                     or not self.robot.are_Ss_identical(list(range(nq)))),
         ximat_size = self.gen_get_XI_size(False, False),
-        include_linalg_scratch = True,
-        linalg_scratch_bytes = "GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()",
         apply_runtime_transform_band = getattr(self, "runtime_transform", False))
     self.gen_arena_carve_struct(
         "integrator_du_arena", layout,
@@ -1382,7 +1380,7 @@ def gen_integrator_gradient_kernel(self, compute_x_kp1=False, single_call_timing
         extra_t_buffers = _integrator_du_extra_t_buffers(self, nq, n, fb,
                                                          dqdd_in_smem, dab_in_smem, compute_x_kp1)
         self.gen_XImats_helpers_temp_shared_memory_code(
-            inner_temp_size, extra_t_buffers=extra_t_buffers, include_linalg_scratch=True,
+            inner_temp_size, extra_t_buffers=extra_t_buffers,
         )
         self.gen_add_code_line(
             "T *s_q = s_q_qd_u; T *s_qd = &s_q_qd_u[" + str(nq) + "]; T *s_u = &s_q_qd_u[" + str(2 * nq) + "];"

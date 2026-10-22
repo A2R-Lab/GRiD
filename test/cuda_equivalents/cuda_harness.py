@@ -1466,11 +1466,9 @@ def _has_invertible_project_mass_matrix(reference_model, q, min_singular_value=1
 
 
 def _expected_output(reference_model, project_model, sample, name: str):
-    # reference_model is the oracle (default pinocchio, exact) for every algorithm
-    # EXCEPT d2ee. `end_effector_pose_hessian` always comes from project_model
-    # (analytic pure-Python) because pinocchio's d2ee is finite-diff and invalid at
-    # rpy/atan2 wraps. EE targets are enumerated from the model-under-test `robot` so
-    # the compared set matches what CUDA emits (the same names resolve in both backends).
+    # reference_model is the oracle (default pinocchio) for every algorithm, d2ee
+    # included. EE targets are enumerated from the model-under-test `robot` so the
+    # compared set matches what CUDA emits (the same names resolve in both backends).
     robot = project_model.robot
     zeros = np.zeros(reference_model.nv, dtype=np.float64)
     if name == "inverse_dynamics":
@@ -1507,12 +1505,11 @@ def _expected_output(reference_model, project_model, sample, name: str):
             gradients.append(np.asarray(gradient, dtype=np.float64).reshape(-1, order="F"))
         return np.concatenate(gradients, axis=0).reshape(1, -1)
     if name == "end_effector_pose_hessian":
-        # d2ee uses the independent pinocchio oracle (default backend). The pinocchio
-        # backend's d2ee is the analytic getJointKinematicHessian(LOCAL_WORLD_ALIGNED)
-        # -- a valid d/dv ground truth that agrees with the project analytic
-        # chain-composition d2(pose)/dv2 to the FD-noise floor fleet-wide (A2 resolved
-        # 2026-05-31). The CUDA codegen mirrors that analytic path; this comparison is
-        # genuine (independent oracle), no buggy-vs-buggy masking.
+        # d2ee uses the independent pinocchio oracle (default backend): one central
+        # difference of pinocchio's analytic d/dv pose gradient (frame Jacobian plus
+        # the rpy rate map), which agrees with the project's closed-form d2(pose)/dv2
+        # to about 1e-10 on every manifest robot. The CUDA codegen mirrors the project's
+        # closed form, so this comparison is an independent oracle, not buggy-vs-buggy.
         hessians = []
         for jid in robot.get_leaf_nodes():
             target = robot.get_joint_by_id(jid).get_name()
@@ -1853,10 +1850,9 @@ def _run_cuda_equivalence_case(
     #    It defaults to the EXACT pinocchio backend (the C++ authority) and can be
     #    forced to the pure-Python reference via GRID_REFERENCE_BACKEND=reference (a
     #    debug fallback that re-enables buggy-vs-buggy masking, so avoid it for CI).
-    #    d2ee is now a HARD requirement (A2 resolved 2026-05-31): the pinocchio
-    #    backend's d2ee uses the analytic getJointKinematicHessian(LOCAL_WORLD_ALIGNED)
-    #    -- a valid d/dv oracle that agrees with the project analytic chain-composition
-    #    d2(pose)/dv2 fleet-wide -- so it is no longer in KNOWN_FAILING_ALGORITHMS.
+    #    d2ee is a HARD requirement: the pinocchio backend differences its analytic
+    #    d/dv pose gradient once, which agrees with the project's closed-form
+    #    d2(pose)/dv2 to about 1e-10 fleet-wide.
     project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
     oracle_backend = resolve_backend(os.environ.get("GRID_REFERENCE_BACKEND", "pinocchio"))
     reference_model = (

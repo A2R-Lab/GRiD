@@ -30,7 +30,7 @@ import numpy as np
 
 ACTIVATIONS = (("GRID_PLANT_ACTIVATION_NONE", -1), ("GRID_PLANT_ACTIVATION_QUADRATIC", 0),
                ("GRID_PLANT_ACTIVATION_PSEUDO_HUBER", 1), ("GRID_PLANT_ACTIVATION_RELAXED_LOG_BARRIER", 2),
-               ("GRID_PLANT_ACTIVATION_QUADRATIC_BARRIER", 3))
+               ("GRID_PLANT_ACTIVATION_QUADRATIC_BARRIER", 3), ("GRID_PLANT_ACTIVATION_SMOOTH_HINGE", 4))
 MENU_TERMS = ("FRAME_POS", "STATE", "INPUT", "LINEAR_X", "LINEAR_U", "ORIENTATION", "VELOCITY", "FRAME_POS_2")
 
 
@@ -83,7 +83,9 @@ def gen_cost_activations(self):
     self.gen_add_code_line("")
     self.gen_add_code_line("// ---- cost activations: value, slope and curvature per residual entry ----")
     self.gen_add_code_line("// a(r; w, eps): quadratic 1/2 w r^2; pseudo-Huber w (sqrt(r^2 + eps^2) - eps), eps > 0; the barrier kinds act on")
-    self.gen_add_code_line("// the feature value v with bounds [lo, hi] (w = mu, eps = delta for the relaxed log barrier; an infinite bound is 0).")
+    self.gen_add_code_line("// the feature value v with bounds [lo, hi] (w = mu, eps = delta for the relaxed log barrier; an infinite bound is 0;")
+    self.gen_add_code_line("// the smooth hinge is w (sqrt(d^2 + eps^2) - eps) on the bound violation d = max(0, lo - v) + max(0, v - hi), eps > 0).")
+    self.gen_add_code_line("// The bound kinds are C1 at a bound: the curvature is one-sided, 0 inside and w (quadratic barrier) or w / eps (smooth hinge) just outside.")
     self.gen_add_code_line("// Every activated term is value = sum_i a(r_i), gradient = J^T a'(r), GN Hessian = J^T diag(a''(r)) J.")
     for name, val in ACTIVATIONS:
         self.gen_add_code_line("const int " + name + " = " + str(val) + ";")
@@ -125,6 +127,12 @@ def gen_cost_activations(self):
             "    T above = (!isinf(hi) && v > hi) ? (v - hi) : static_cast<T>(0);",
             "    return static_cast<T>(0.5) * w * (below * below + above * above);",
             "}",
+            "if (kind == GRID_PLANT_ACTIVATION_SMOOTH_HINGE) {",
+            "    T below = (!isinf(lo) && v < lo) ? (lo - v) : static_cast<T>(0);",
+            "    T above = (!isinf(hi) && v > hi) ? (v - hi) : static_cast<T>(0);",
+            "    T d = below + above; T s = sqrt(d * d + eps * eps);",
+            "    return w * (s - eps);",
+            "}",
             "if (kind == GRID_PLANT_ACTIVATION_NONE) { return static_cast<T>(0); }",
             "return static_cast<T>(0.5) * w * r * r;"]),
         ("slope", [
@@ -140,6 +148,12 @@ def gen_cost_activations(self):
             "    T above = (!isinf(hi) && v > hi) ? (v - hi) : static_cast<T>(0);",
             "    return w * (above - below);",
             "}",
+            "if (kind == GRID_PLANT_ACTIVATION_SMOOTH_HINGE) {",
+            "    T below = (!isinf(lo) && v < lo) ? (lo - v) : static_cast<T>(0);",
+            "    T above = (!isinf(hi) && v > hi) ? (v - hi) : static_cast<T>(0);",
+            "    T d = below + above; T s = sqrt(d * d + eps * eps);",
+            "    return w * (above - below) / s;",
+            "}",
             "if (kind == GRID_PLANT_ACTIVATION_NONE) { return static_cast<T>(0); }",
             "return w * r;"]),
         ("curvature", [
@@ -153,6 +167,14 @@ def gen_cost_activations(self):
             "if (kind == GRID_PLANT_ACTIVATION_QUADRATIC_BARRIER) {",
             "    bool active = (!isinf(lo) && v < lo) || (!isinf(hi) && v > hi);",
             "    return active ? w : static_cast<T>(0);",
+            "}",
+            "if (kind == GRID_PLANT_ACTIVATION_SMOOTH_HINGE) {",
+            "    T below = (!isinf(lo) && v < lo) ? (lo - v) : static_cast<T>(0);",
+            "    T above = (!isinf(hi) && v > hi) ? (v - hi) : static_cast<T>(0);",
+            "    T d = below + above;",
+            "    if (d <= static_cast<T>(0)) { return static_cast<T>(0); }",
+            "    T s = sqrt(d * d + eps * eps);",
+            "    return w * eps * eps / (s * s * s);",
             "}",
             "if (kind == GRID_PLANT_ACTIVATION_NONE) { return static_cast<T>(0); }",
             "return w;"])):
@@ -190,8 +212,9 @@ def gen_activated_cost_family(self, which):
         size_doc = "NUM_POS + NUM_VEL = " + str(size)
     else:
         size, var, des, w, base = nv, "s_u", "s_u_des", "s_R", "input_cost"
-        size_doc = "NUM_VEL = " + str(size)
-    N = str(size)
+        size_doc = "N (template, default NUM_VEL = " + str(size) + "; the floating-base menu passes NUM_VEL - 6)"
+    N = str(size) if which == "state" else "N"
+    tmpl = "template <typename T, bool ACCUMULATE = false>" if which == "state" else "template <typename T, bool ACCUMULATE = false, int N = " + str(size) + ">"
     common = [var + " is the current value (size " + size_doc + ")",
               des + " is the target (size " + size_doc + ")",
               w + " is the per-entry weight (size " + size_doc + ")",
@@ -203,7 +226,7 @@ def gen_activated_cost_family(self, which):
          "ACCUMULATE=false overwrites s_out[0]; ACCUMULATE=true adds into it.",
          "Quadratic activation reproduces quadratic_" + base + " exactly; s_scratch must hold >= " + N + "."],
         ["s_out is the scalar cost output (s_out[0])"] + common + ["s_scratch is shared scratch of size >= " + N], None)
-    self.gen_add_code_line("template <typename T, bool ACCUMULATE = false>")
+    self.gen_add_code_line(tmpl)
     self.gen_add_code_line("__device__")
     self.gen_add_code_line("void " + base + "(T *s_out, const T *" + var + ", const T *" + des + ", const T *" + w + ", " + args + ", T *s_scratch) {", True)
     self.gen_add_parallel_loop("i", N)
@@ -221,7 +244,7 @@ def gen_activated_cost_family(self, which):
     self.gen_add_func_doc(base + "_gradient: g[i] = a'(" + var + "[i] - " + des + "[i]; " + w + "[i], eps)",
                           ["ACCUMULATE=false overwrites s_grad; ACCUMULATE=true adds into it."],
                           ["s_grad is the gradient output (size " + size_doc + ")"] + common, None)
-    self.gen_add_code_line("template <typename T, bool ACCUMULATE = false>")
+    self.gen_add_code_line(tmpl)
     self.gen_add_code_line("__device__")
     self.gen_add_code_line("void " + base + "_gradient(T *s_grad, const T *" + var + ", const T *" + des + ", const T *" + w + ", " + args + ") {", True)
     self.gen_add_parallel_loop("i", N)
@@ -234,10 +257,10 @@ def gen_activated_cost_family(self, which):
     self.gen_add_func_doc(base + "_hessian: Gauss-Newton Hessian = diag(a''(" + var + " - " + des + "; " + w + ", eps)), column-major " + N + " x " + N,
                           ["Off-diagonal entries are zero. ACCUMULATE=false overwrites; ACCUMULATE=true adds."],
                           ["s_hess is the dense Hessian output (size " + N + "*" + N + ", column-major)"] + common, None)
-    self.gen_add_code_line("template <typename T, bool ACCUMULATE = false>")
+    self.gen_add_code_line(tmpl)
     self.gen_add_code_line("__device__")
     self.gen_add_code_line("void " + base + "_hessian(T *s_hess, const T *" + var + ", const T *" + des + ", const T *" + w + ", " + args + ") {", True)
-    self.gen_add_parallel_loop("ind", str(size * size))
+    self.gen_add_parallel_loop("ind", str(size * size) if which == "state" else "N * N")
     self.gen_add_code_line("int row = ind % " + N + ";")
     self.gen_add_code_line("int col = ind / " + N + ";")
     self.gen_add_code_line("T h = static_cast<T>(0);")
@@ -301,9 +324,10 @@ def gen_linear_feature_cost(self):
 
     self.gen_add_func_doc("linear_feature_cost_hessian: Gauss-Newton Hessian = A^T diag(a''(r)) A  (column-major N x N)",
                           ["s_scratch (>= M) holds the per-row curvatures between the two passes.",
+                           "LD (template, default N) is the leading dimension of s_hess, so the block can land inside a larger column-major matrix.",
                            "ACCUMULATE=false overwrites s_hess; ACCUMULATE=true adds into it."],
                           ["s_hess is the dense Hessian output (size N*N, column-major)"] + doc, None)
-    self.gen_add_code_line("template <typename T, int M, int N, bool ACCUMULATE = false>")
+    self.gen_add_code_line("template <typename T, int M, int N, bool ACCUMULATE = false, int LD = N>")
     self.gen_add_code_line("__device__")
     self.gen_add_code_line("void linear_feature_cost_hessian(T *s_hess, const T *s_v, const T *s_A, const T *s_b, const T *s_target, const T *s_W, " + args + ") {", True)
     self.gen_add_parallel_loop("m", "M")
@@ -317,7 +341,7 @@ def gen_linear_feature_cost(self):
     self.gen_add_code_line("int col = ind / N;")
     self.gen_add_code_line("T h = static_cast<T>(0);")
     self.gen_add_code_line("for (int m = 0; m < M; ++m) h += s_A[m + M * row] * s_scratch[m] * s_A[m + M * col];")
-    self.gen_add_code_line("if (ACCUMULATE) { s_hess[ind] += h; } else { s_hess[ind] = h; }")
+    self.gen_add_code_line("if (ACCUMULATE) { s_hess[row + LD * col] += h; } else { s_hess[row + LD * col] = h; }")
     self.gen_add_end_control_flow()
     self.gen_add_end_function()
 
@@ -349,7 +373,7 @@ def gen_gravity_torque(self):
     self.gen_add_code_line("void gravity_torque(T *s_g, const T *s_q, T *s_scratch, const grid::robotModel<T> *d_robotModel, const T gravity) {", True)
     self.gen_add_code_line("using namespace grid;")
     layout = self.gen_XImats_helpers_temp_shared_memory_code(
-        _id_bias_inner_temp_mem_size(self), extra_t_buffers=extra, include_linalg_scratch=True, arena_base_expr="s_scratch")
+        _id_bias_inner_temp_mem_size(self), extra_t_buffers=extra, arena_base_expr="s_scratch")
     if layout.topology_count > 0:
         self.gen_add_code_line("load_topology_helpers<T>(s_topology_helpers, d_robotModel);")
     self.gen_load_update_XImats_helpers_function_call()
@@ -361,52 +385,12 @@ def gen_gravity_torque(self):
     self.gen_add_end_function()
     t_count = sum(int(sz) for _, sz in layout.t_buffers) + int(layout.ximat_size) + int(layout.temp_mem_size)
     self.gen_add_code_line("template <typename T> __host__ __device__ constexpr size_t GRAVITY_TORQUE_DYNAMIC_SHARED_MEM_BYTES() "
-                           "{ return grid::grid_shared_arena_bytes<T>(" + str(t_count) + ", grid::TOPOLOGY_HELPERS_COUNT, grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); }")
+                           "{ return grid::grid_shared_arena_bytes<T>(" + str(t_count) + ", grid::TOPOLOGY_HELPERS_COUNT); }")
 
 
 # ---------------------------------------------------------------------------
 # named cost frames: evaluator, SO(3) helpers, position / orientation / velocity
 # ---------------------------------------------------------------------------
-
-def _gen_so3_helpers(self):
-    """log(R) on the canonical branch and Jr(phi)^-1, serial 3x3 helpers (column-major)."""
-    self.gen_add_code_line("// SO(3) helpers for the orientation residual (serial, column-major 3x3)")
-    self.gen_add_code_line("template <typename T>")
-    self.gen_add_code_line("__device__ __forceinline__")
-    self.gen_add_code_line("void plant_so3_log(const T *R, T *phi) {", True)
-    self.gen_add_code_line("T c = (R[0] + R[4] + R[8] - static_cast<T>(1)) * static_cast<T>(0.5);")
-    self.gen_add_code_line("c = c > static_cast<T>(1) ? static_cast<T>(1) : (c < static_cast<T>(-1) ? static_cast<T>(-1) : c);")
-    self.gen_add_code_line("T theta = acos(c);")
-    self.gen_add_code_line("T w0 = R[5] - R[7], w1 = R[6] - R[2], w2 = R[1] - R[3];")
-    self.gen_add_code_line("if (theta < static_cast<T>(1e-6)) { phi[0] = static_cast<T>(0.5) * w0; phi[1] = static_cast<T>(0.5) * w1; phi[2] = static_cast<T>(0.5) * w2; return; }")
-    self.gen_add_code_line("if (theta < static_cast<T>(3.14159265358979323846) - static_cast<T>(1e-4)) {", True)
-    self.gen_add_code_line("T k = theta / (static_cast<T>(2) * sin(theta));")
-    self.gen_add_code_line("phi[0] = k * w0; phi[1] = k * w1; phi[2] = k * w2; return;")
-    self.gen_add_end_control_flow()
-    self.gen_add_code_line("// near pi: axis from the symmetric part (R + I)/2, sign from the antisymmetric part")
-    self.gen_add_code_line("T S0 = static_cast<T>(0.5) * (R[0] + static_cast<T>(1)), S4 = static_cast<T>(0.5) * (R[4] + static_cast<T>(1)), S8 = static_cast<T>(0.5) * (R[8] + static_cast<T>(1));")
-    self.gen_add_code_line("T a0, a1, a2;")
-    self.gen_add_code_line("if (S0 >= S4 && S0 >= S8) { T s = sqrt(S0 > static_cast<T>(1e-18) ? S0 : static_cast<T>(1e-18)); a0 = S0 / s; a1 = static_cast<T>(0.5) * (R[1] + R[3]) / s; a2 = static_cast<T>(0.5) * (R[2] + R[6]) / s; }")
-    self.gen_add_code_line("else if (S4 >= S8) { T s = sqrt(S4 > static_cast<T>(1e-18) ? S4 : static_cast<T>(1e-18)); a0 = static_cast<T>(0.5) * (R[1] + R[3]) / s; a1 = S4 / s; a2 = static_cast<T>(0.5) * (R[5] + R[7]) / s; }")
-    self.gen_add_code_line("else { T s = sqrt(S8 > static_cast<T>(1e-18) ? S8 : static_cast<T>(1e-18)); a0 = static_cast<T>(0.5) * (R[2] + R[6]) / s; a1 = static_cast<T>(0.5) * (R[5] + R[7]) / s; a2 = S8 / s; }")
-    self.gen_add_code_line("T n = sqrt(a0 * a0 + a1 * a1 + a2 * a2); a0 /= n; a1 /= n; a2 /= n;")
-    self.gen_add_code_line("if (a0 * w0 + a1 * w1 + a2 * w2 < static_cast<T>(0)) { a0 = -a0; a1 = -a1; a2 = -a2; }")
-    self.gen_add_code_line("phi[0] = theta * a0; phi[1] = theta * a1; phi[2] = theta * a2;")
-    self.gen_add_end_function()
-    self.gen_add_code_line("template <typename T>")
-    self.gen_add_code_line("__device__ __forceinline__")
-    self.gen_add_code_line("void plant_so3_right_jacobian_inv(const T *phi, T *J) {", True)
-    self.gen_add_code_line("T theta = sqrt(phi[0] * phi[0] + phi[1] * phi[1] + phi[2] * phi[2]);")
-    self.gen_add_code_line("T coef = (theta < static_cast<T>(1e-5)) ? (static_cast<T>(1) / static_cast<T>(12))")
-    self.gen_add_code_line("    : (static_cast<T>(1) / (theta * theta) - (static_cast<T>(1) + cos(theta)) / (static_cast<T>(2) * theta * sin(theta)));")
-    self.gen_add_code_line("// S = [phi]x column-major; J = I + 1/2 S + coef S^2")
-    self.gen_add_code_line("T S[9] = { static_cast<T>(0), phi[2], -phi[1], -phi[2], static_cast<T>(0), phi[0], phi[1], -phi[0], static_cast<T>(0) };")
-    self.gen_add_code_line("for (int c = 0; c < 3; ++c) for (int r = 0; r < 3; ++r) {", True)
-    self.gen_add_code_line("T s2 = S[r] * S[3 * c] + S[r + 3] * S[3 * c + 1] + S[r + 6] * S[3 * c + 2];")
-    self.gen_add_code_line("J[r + 3 * c] = ((r == c) ? static_cast<T>(1) : static_cast<T>(0)) + static_cast<T>(0.5) * S[r + 3 * c] + coef * s2;")
-    self.gen_add_end_control_flow()
-    self.gen_add_end_function()
-
 
 def gen_frame_eval(self):
     """`frame_eval`: caller-scratch evaluator of a baked cost frame: its world
@@ -437,8 +421,7 @@ def gen_frame_eval(self):
     self.gen_bake_const_array("cf_jid", [jid for _, jid, _ in frames], "int")
     self.gen_bake_const_array("cf_offset", [v for _, _, off in frames for v in off], "T")
     layout = self.gen_XmatsHom_helpers_temp_shared_memory_code(
-        _frame_jacobian_inner_temp_mem_size(self), include_linalg_scratch=True,
-        linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()", arena_base_expr="s_scratch")
+        _frame_jacobian_inner_temp_mem_size(self), arena_base_expr="s_scratch")
     self._frame_eval_t_count = sum(int(sz) for _, sz in layout.t_buffers) + int(layout.ximat_size) + int(layout.temp_mem_size)
     # s_temp (the world transforms) follows the T buffers and the transform block in the carve
     self._frame_eval_xworld_offset = sum(int(sz) for _, sz in layout.t_buffers) + int(layout.ximat_size)
@@ -456,11 +439,11 @@ def gen_frame_eval(self):
     self.gen_add_sync()
     self.gen_add_end_function()
     self.gen_add_code_line("template <typename T> __host__ __device__ constexpr size_t FRAME_EVAL_DYNAMIC_SHARED_MEM_BYTES() "
-                           "{ return grid::grid_shared_arena_bytes<T>(" + str(self._frame_eval_t_count) + ", grid::TOPOLOGY_HELPERS_COUNT, grid::GRID_EE_LINALG_SHARED_BYTES<T>()); }")
+                           "{ return grid::grid_shared_arena_bytes<T>(" + str(self._frame_eval_t_count) + ", grid::TOPOLOGY_HELPERS_COUNT); }")
 
 
 def gen_frame_position_cost(self):
-    nq = self.robot.get_num_pos(); nv = self.robot.get_num_vel(); nx = nq + nv
+    nq = self.robot.get_num_pos(); nv = self.robot.get_num_vel(); nx = 2 * nv  # tangent width: the base twist, then the joint rates (NUM_POS + NUM_VEL on a fixed base)
     NV, NX = str(nv), str(nx)
     doc = ["cf is the cost-frame index; s_q is the joint position vector (size NUM_POS)",
            "s_p_des is the desired frame position (3); s_W is the per-axis weight (3)",
@@ -522,7 +505,7 @@ def gen_frame_position_cost(self):
 
 
 def gen_frame_orientation_cost(self):
-    nq = self.robot.get_num_pos(); nv = self.robot.get_num_vel(); nx = nq + nv
+    nq = self.robot.get_num_pos(); nv = self.robot.get_num_vel(); nx = 2 * nv  # tangent width: the base twist, then the joint rates (NUM_POS + NUM_VEL on a fixed base)
     NV, NX = str(nv), str(nx)
     doc = ["cf is the cost-frame index; s_q is the joint position vector (size NUM_POS)",
            "s_R_des is the desired rotation (3x3 column-major, 9); s_W is the per-axis weight (3)",
@@ -535,8 +518,8 @@ def gen_frame_orientation_cost(self):
     serial = [
         "T R[9]; for (int c = 0; c < 3; ++c) for (int r = 0; r < 3; ++r) R[r + 3 * c] = s_X[r + 4 * c];",
         "T E[9]; for (int c = 0; c < 3; ++c) for (int r = 0; r < 3; ++r) E[r + 3 * c] = s_R_des[3 * r] * R[3 * c] + s_R_des[3 * r + 1] * R[3 * c + 1] + s_R_des[3 * r + 2] * R[3 * c + 2];  // (R_des^T R_f)[r][c]",
-        "T e[3]; plant_so3_log<T>(E, e);",
-        "T Ji[9]; plant_so3_right_jacobian_inv<T>(e, Ji);",
+        "T e[3]; grid::glass::thread::so3_log<T>(E, e);",
+        "T Ji[9]; grid::glass::thread::so3_right_jacobian_inv<T>(e, Ji);",
         "for (int vi = 0; vi < " + NV + "; ++vi) {",
         "    T *Jc = &s_J[6 * vi];",
         "    T wl0 = R[0] * Jc[3] + R[1] * Jc[4] + R[2] * Jc[5], wl1 = R[3] * Jc[3] + R[4] * Jc[4] + R[5] * Jc[5], wl2 = R[6] * Jc[3] + R[7] * Jc[4] + R[8] * Jc[5];",
@@ -607,11 +590,11 @@ def gen_frame_orientation_cost(self):
 
 def gen_frame_velocity_cost(self):
     """Frame twist residual r = J(q) qd - v_des (LOCAL_WORLD_ALIGNED, 6) with the
-    residual Jacobian [d(J qd)/dq | J] over x = [q; qd]. Fixed base: the
+    residual Jacobian [d(J qd)/dq | J] over the tangent state. The
     configuration derivative is the rigid-rotation form over the baked column
     table of frame_jacobian_inner (see RBDReference._frame_velocity_q_derivative)."""
     from ._frame_jacobian import frame_jacobian_jobs
-    nq = self.robot.get_num_pos(); nv = self.robot.get_num_vel(); nx = nq + nv
+    nq = self.robot.get_num_pos(); nv = self.robot.get_num_vel(); nx = 2 * nv  # tangent width: the base twist, then the joint rates (NUM_POS + NUM_VEL on a fixed base)
     NV, NX = str(nv), str(nx)
     jobs = frame_jacobian_jobs(self)
     self.gen_add_code_line("#define GRID_PLANT_HAS_FRAME_VELOCITY_COST 1")
@@ -625,7 +608,7 @@ def gen_frame_velocity_cost(self):
     self.gen_add_func_doc("frame_velocity_eval: frame_eval plus the twist J qd (into s_frame[0..5]) and its configuration derivative d(J qd)/dq (6 x NUM_VEL, after the Jacobian)",
                           ["Column j of the world-axis Jacobian is a_j x (p_f - p_j) (revolute) or l_j (prismatic). A joint m moves everything downstream of it rigidly: "
                            "for m an ancestor-or-self of j the axis, origin and frame point, for m downstream of j the frame point alone. Serial over the baked chain pairs.",
-                           "Fixed base only (the floating root has no single axis); the world transforms are read back from the frame_eval arena."],
+                           "On a floating base the root enters as six columns (three translations, three rotations about the base origin, axes in the base frame) under the same rules, so the derivative is taken along the tangent; the world transforms are read back from the frame_eval arena."],
                           ["s_frame / s_scratch / cf / s_q / s_qd / d_robotModel as for frame_velocity_cost"], None)
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__device__")
@@ -690,7 +673,7 @@ def gen_frame_velocity_cost(self):
     head = ["frame_velocity_eval<T>(cf, s_q, s_qd, s_frame, s_scratch, d_robotModel);",
             "const T *s_v = s_frame; const T *s_J = s_frame + 16; const T *s_dJ = s_frame + 16 + 6 * " + NV + ";"]
     self.gen_add_func_doc("frame_velocity_cost: value = sum_r a(v_r - v_des_r; W[r], eps), v = J(q) qd the frame twist [linear; angular] with world axes at the frame point",
-                          ["ACCUMULATE=false overwrites s_out[0]; true adds. Fixed base."],
+                          ["ACCUMULATE=false overwrites s_out[0]; true adds."],
                           ["s_out is the scalar cost output (s_out[0])"] + doc, None)
     self.gen_add_code_line("template <typename T, bool ACCUMULATE = false>")
     self.gen_add_code_line("__device__")
@@ -741,15 +724,107 @@ def gen_frame_velocity_cost(self):
 # the menu preset
 # ---------------------------------------------------------------------------
 
+def gen_state_cost_tangent(self):
+    """The activated state term of the floating-base menu: the tangent residual
+    r = [difference(q_des, q); qd - qd_des] (2*NUM_VEL) under an activation, with
+    the exact J_diff on the q block from quadratic_state_cost_tangent_setup. The
+    barrier kinds read the feature value [none (6); q[7:]; qd] with 2*NUM_VEL
+    bounds whose first six entries (the base pose) are ignored. The oracle is
+    RBDReference.state_cost_tangent; the quadratic activation reproduces
+    quadratic_state_cost_tangent."""
+    nq = self.robot.get_num_pos(); nv = self.robot.get_num_vel(); tn = 2 * nv
+    NQ, NV, TN = str(nq), str(nv), str(tn)
+    scratch = nv + 72 + tn
+    self.gen_add_code_line("#define GRID_PLANT_HAS_STATE_COST_TANGENT 1")
+    common = ["s_x / s_x_des are [q (NUM_POS); qd (NUM_VEL)] states",
+              "s_Q is the diagonal tangent weight (size 2*NUM_VEL = " + TN + ")",
+              "activation is a GRID_PLANT_ACTIVATION_* id; eps is its parameter",
+              "s_lower / s_upper are tangent-indexed barrier bounds (size " + TN + "; entries 0..5 ignored: the base pose carries no bound; 6..NUM_VEL-1 bound q[i + 1], NUM_VEL.. bound qd) or nullptr",
+              "s_scratch must hold >= " + str(scratch) + " elements of T"]
+    prelude = ["quadratic_state_cost_tangent_setup<T>(s_x, s_x_des, s_scratch);",
+               "const T *s_eq = s_scratch; const T *s_Ji = &s_scratch[" + NV + " + 36]; T *s_a = &s_scratch[" + NV + " + 72];"]
+    def per_entry(which):
+        self.gen_add_parallel_loop("i", TN)
+        self.gen_add_code_line("T r = (i < " + NV + ") ? s_eq[i] : (s_x[" + NQ + " + i - " + NV + "] - s_x_des[" + NQ + " + i - " + NV + "]);")
+        self.gen_add_code_line("T v = (i < 6) ? r : ((i < " + NV + ") ? s_x[i + 1] : s_x[" + NQ + " + i - " + NV + "]);")
+        self.gen_add_code_line("T lo = (i >= 6 && s_lower) ? s_lower[i] : -INFINITY; T hi = (i >= 6 && s_upper) ? s_upper[i] : INFINITY;")
+        self.gen_add_code_line("s_a[i] = activation_" + which + "<T>(activation, s_Q[i], r, eps, v, lo, hi);")
+        self.gen_add_end_control_flow()
+        self.gen_add_sync()
+    args = "const T *s_x, const T *s_x_des, const T *s_Q, const int activation, const T eps, const T *s_lower, const T *s_upper, T *s_scratch"
+    self.gen_add_func_doc("state_cost_tangent: value = sum_i a(r_i; Q_i, eps), r = [difference(q_des, q); qd - qd_des] (tangent, 2*NUM_VEL)",
+                          ["Floating base. ACCUMULATE=false overwrites s_out[0]; true adds. The quadratic activation equals quadratic_state_cost_tangent."],
+                          ["s_out is the scalar cost output (s_out[0])"] + common, None)
+    self.gen_add_code_line("template <typename T, bool ACCUMULATE = false>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void state_cost_tangent(T *s_out, " + args + ") {", True)
+    for l in prelude:
+        self.gen_add_code_line(l)
+    per_entry("value")
+    self.gen_add_serial_ops()
+    self.gen_add_code_line("T acc = static_cast<T>(0);")
+    self.gen_add_code_line("for (int i = 0; i < " + TN + "; ++i) acc += s_a[i];")
+    self.gen_add_code_line("if (ACCUMULATE) { s_out[0] += acc; } else { s_out[0] = acc; }")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+    self.gen_add_end_function()
+    self.gen_add_func_doc("state_cost_tangent_gradient: g = [Jq^T a'(r_q); a'(r_v)] (tangent, 2*NUM_VEL), Jq = blockdiag(inv(dIntegrate(q_des, eq, 'v')), I)",
+                          ["ACCUMULATE=false overwrites s_grad; true adds."],
+                          ["s_grad is the tangent gradient output (size " + TN + ")"] + common, None)
+    self.gen_add_code_line("template <typename T, bool ACCUMULATE = false>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void state_cost_tangent_gradient(T *s_grad, " + args + ") {", True)
+    for l in prelude:
+        self.gen_add_code_line(l)
+    per_entry("slope")
+    self.gen_add_parallel_loop("i", TN)
+    self.gen_add_code_line("T g;")
+    self.gen_add_code_line("if (i < 6) { g = static_cast<T>(0); for (int r = 0; r < 6; ++r) g += s_Ji[6 * r + i] * s_a[r]; } else { g = s_a[i]; }")
+    self.gen_add_code_line("if (ACCUMULATE) { s_grad[i] += g; } else { s_grad[i] = g; }")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+    self.gen_add_end_function()
+    self.gen_add_func_doc("state_cost_tangent_hessian: Gauss-Newton Hessian = Jx^T diag(a''(r)) Jx (tangent, 2*NUM_VEL square, column-major)",
+                          ["The base-pose 6x6 block is Jq6^T diag(a'') Jq6; the rest is diagonal. ACCUMULATE=false overwrites; true adds."],
+                          ["s_hess is the tangent Hessian output (size " + TN + "*" + TN + ", column-major)"] + common, None)
+    self.gen_add_code_line("template <typename T, bool ACCUMULATE = false>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void state_cost_tangent_hessian(T *s_hess, " + args + ") {", True)
+    for l in prelude:
+        self.gen_add_code_line(l)
+    per_entry("curvature")
+    self.gen_add_parallel_loop("ind", str(tn * tn))
+    self.gen_add_code_line("int row = ind % " + TN + "; int col = ind / " + TN + ";")
+    self.gen_add_code_line("T h = static_cast<T>(0);")
+    self.gen_add_code_line("if (row < 6 && col < 6) { for (int b = 0; b < 6; ++b) h += s_Ji[6 * b + row] * s_a[b] * s_Ji[6 * b + col]; } else if (row == col) { h = s_a[row]; }")
+    self.gen_add_code_line("if (ACCUMULATE) { s_hess[ind] += h; } else { s_hess[ind] = h; }")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+
 def gen_tracking_cost_menu(self):
-    nq = self.robot.get_num_pos(); nv = self.robot.get_num_vel(); nu = nv; nx = nq + nv
-    NQ, NU, NX = str(nq), str(nu), str(nx)
+    """The menu preset. Fixed base: the state is x = [q; qd] (NUM_POS == NUM_VEL)
+    and the input u is NUM_VEL wide. Floating base: the state term is the tangent
+    residual (state_cost_tangent), the gradient and Hessian are tangent-sized
+    (2*NUM_VEL), the input is the NUM_VEL - 6 actuated entries, the joint barriers
+    bound the joint positions (q[7:]), the tangent velocities and the actuated
+    inputs, the linear x feature reads [q[7:]; qd], and the base pose carries no
+    bound. The frame terms are tangent-sized on both."""
+    fb = bool(self.robot.floating_base)
+    nq = self.robot.get_num_pos(); nv = self.robot.get_num_vel(); nu = nv - 6 if fb else nv; tn = 2 * nv
+    nlx = 2 * nv - 6 if fb else nq + nv
+    NQ, NV, NU, TN, NLX = str(nq), str(nv), str(nu), str(tn), str(nlx)
     self.gen_add_code_line("#define GRID_PLANT_HAS_COST_MENU 1")
+    self.gen_add_code_line("const int GRID_PLANT_MENU_TANGENT = " + ("1" if fb else "0") + ";  // 1: the preset is in the tangent layout (gradient 2*NUM_VEL, Hessian 2*NUM_VEL square, input NUM_VEL - 6)")
+    self.gen_add_code_line("const int GRID_PLANT_MENU_NU = " + NU + ";  // the input width of the preset")
+    self.gen_add_code_line("const int GRID_PLANT_MENU_NLX = " + NLX + ";  // the variable width of the linear x feature ([q[7:]; qd] on a floating base, x on a fixed base)")
     self.gen_add_func_doc("cost_menu_params: the per-knot buffers of tracking_cost_menu (every pointer a runtime buffer; a term whose activation is GRID_PLANT_ACTIVATION_NONE is skipped)",
                           ["x_des / u_des / Q / R and the barrier bound-and-mu triples as tracking_cost; ee_des / W are the cost-frame CF position target and weight.",
                            "activation (GRID_PLANT_MENU_TERMS ints) and eps (same length) select and parameterize every term, order GRID_PLANT_MENU_*.",
                            "x_lower / x_upper, ub_lower / ub_upper, lx_lower / lx_upper, lu_lower / lu_upper, v_lower / v_upper, cf_lower / cf_upper are the barrier-activation bounds of the matching term (nullptr when unused).",
-                           "Ax / bx / tx / Wx (MX rows over NX) and Au / bu / tu / Wu (MU rows over NU) are the linear features; R_des / Wo the orientation of frame CF; v_des / Wv its twist; cf_des / Wcf the position of frame CF2."],
+                           "Ax / bx / tx / Wx (MX rows over GRID_PLANT_MENU_NLX) and Au / bu / tu / Wu (MU rows over GRID_PLANT_MENU_NU) are the linear features; R_des / Wo the orientation of frame CF; v_des / Wv its twist; cf_des / Wcf the position of frame CF2."]
+                          + (["Floating base (GRID_PLANT_MENU_TANGENT): Q and x_lower / x_upper are tangent-indexed (2*NUM_VEL, entries 0..5 ignored), u_des / R / ub_* / u_lower / u_upper / Au are over the NUM_VEL - 6 actuated inputs, q_lower / q_upper bound the NUM_POS - 7 joint positions, qd_lower / qd_upper the NUM_VEL tangent velocities."] if fb else []),
                           [], None)
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("struct cost_menu_params {", True)
@@ -765,18 +840,22 @@ def gen_tracking_cost_menu(self):
         self.gen_add_code_line(line)
     self.indent_level -= 1
     self.gen_add_code_line("};")
-    doc = ["s_x / s_u are the current state [q; qd] and control (sizes " + NX + " / " + NU + "); p holds every per-knot buffer",
+    doc = ["s_x / s_u are the current state [q; qd] (size " + str(nq + nv) + ") and control (size " + NU + "); p holds every per-knot buffer",
            "MX / MU are the linear feature row counts (0 omits the term); CF is the cost frame of the position, orientation and twist terms (0 = the end-effector target); CF2 (-1 = none) the frame of the second position term",
-           "s_frame is GRID_PLANT_FRAME_SCRATCH_COUNT scratch; s_scratch must hold the frame_eval arena (FRAME_EVAL_DYNAMIC_SHARED_MEM_BYTES) and >= max(NX, MX, MU) elements; d_robotModel is the GPU model"]
+           "s_frame is GRID_PLANT_FRAME_SCRATCH_COUNT scratch; s_scratch must hold the frame_eval arena (FRAME_EVAL_DYNAMIC_SHARED_MEM_BYTES) and >= max(" + str(max(tn, nv + 72 + tn)) + ", MX, MU) elements; d_robotModel is the GPU model"]
     tmpl = "template <typename T, int MX = 0, int MU = 0, int CF = 0, int CF2 = -1, bool ACCUMULATE = false>"
     act = lambda t: "p.activation[GRID_PLANT_MENU_" + t + "]"
     eps = lambda t: "p.eps[GRID_PLANT_MENU_" + t + "]"
     on = lambda t: "if (" + act(t) + " != GRID_PLANT_ACTIVATION_NONE) {"
+    state_fn = "state_cost_tangent" if fb else "state_cost"
+    input_tmpl = "<T, true, " + NU + ">" if fb else "<T, true>"
+    lin_x_var = "s_x + 7" if fb else "s_x"
+    base_doc = "Floating base: tangent layout, see cost_menu_params." if fb else "Fixed base."
 
     # ---- value ----
     self.gen_add_func_doc("tracking_cost_menu: frame position (CF) + state + input + the three joint barriers + linear features on x and u + frame orientation and twist (CF) + a second frame position (CF2)",
                           ["PRESET over the activated terms, chained through ACCUMULATE with a sync between terms; the first term carries the preset's ACCUMULATE.",
-                           "With quadratic activations on the first three terms, the others GRID_PLANT_ACTIVATION_NONE and MX = MU = 0, the value equals tracking_cost. Fixed base."],
+                           "With quadratic activations on the first three terms, the others GRID_PLANT_ACTIVATION_NONE and MX = MU = 0, the value equals tracking_cost" + (" with the tangent state residual (zero base weights reproduce quadratic_state_cost_tangent on the joints)." if fb else ".") + " " + base_doc],
                           ["s_out is the scalar total-cost output (s_out[0])"] + doc, None)
     self.gen_add_code_line(tmpl)
     self.gen_add_code_line("__device__")
@@ -785,21 +864,27 @@ def gen_tracking_cost_menu(self):
     self.gen_add_sync()
     terms = [
         ("FRAME_POS", "frame_position_cost<T, true>(s_out, s_x, CF, p.ee_des, p.W, " + act("FRAME_POS") + ", " + eps("FRAME_POS") + ", nullptr, nullptr, s_frame, s_scratch, d_robotModel);"),
-        ("STATE", "state_cost<T, true>(s_out, s_x, p.x_des, p.Q, " + act("STATE") + ", " + eps("STATE") + ", p.x_lower, p.x_upper, s_scratch);"),
-        ("INPUT", "input_cost<T, true>(s_out, s_u, p.u_des, p.R, " + act("INPUT") + ", " + eps("INPUT") + ", p.ub_lower, p.ub_upper, s_scratch);"),
+        ("STATE", state_fn + "<T, true>(s_out, s_x, p.x_des, p.Q, " + act("STATE") + ", " + eps("STATE") + ", p.x_lower, p.x_upper, s_scratch);"),
+        ("INPUT", "input_cost" + input_tmpl + "(s_out, s_u, p.u_des, p.R, " + act("INPUT") + ", " + eps("INPUT") + ", p.ub_lower, p.ub_upper, s_scratch);"),
     ]
-    for t, call in terms:
-        self.gen_add_code_line(on(t), True)
+    for t_, call in terms:
+        self.gen_add_code_line(on(t_), True)
         self.gen_add_code_line(call)
         self.gen_add_sync()
         self.gen_add_end_control_flow()
-    for call in ["joint_position_barrier<T>(s_out, s_x, p.q_lower, p.q_upper, p.mu_q, s_scratch);",
-                 "joint_velocity_barrier<T>(s_out, s_x, p.qd_lower, p.qd_upper, p.mu_qd, s_scratch);",
-                 "joint_torque_barrier<T>(s_out, s_u, p.u_lower, p.u_upper, p.mu_u, s_scratch);"]:
+    if fb:
+        barrier_values = ["joint_position_barrier<T, " + str(nq - 7) + ", 7>(s_out, s_x, p.q_lower, p.q_upper, p.mu_q, s_scratch);",
+                          "joint_velocity_barrier<T>(s_out, s_x, p.qd_lower, p.qd_upper, p.mu_qd, s_scratch);",
+                          "joint_torque_barrier<T, " + NU + ", 0>(s_out, s_u, p.u_lower, p.u_upper, p.mu_u, s_scratch);"]
+    else:
+        barrier_values = ["joint_position_barrier<T>(s_out, s_x, p.q_lower, p.q_upper, p.mu_q, s_scratch);",
+                          "joint_velocity_barrier<T>(s_out, s_x, p.qd_lower, p.qd_upper, p.mu_qd, s_scratch);",
+                          "joint_torque_barrier<T>(s_out, s_u, p.u_lower, p.u_upper, p.mu_u, s_scratch);"]
+    for call in barrier_values:
         self.gen_add_code_line(call)
         self.gen_add_sync()
     self.gen_add_code_line("if constexpr (MX > 0) { " + on("LINEAR_X"), True)
-    self.gen_add_code_line("linear_feature_cost<T, MX, " + NX + ", true>(s_out, s_x, p.Ax, p.bx, p.tx, p.Wx, " + act("LINEAR_X") + ", " + eps("LINEAR_X") + ", p.lx_lower, p.lx_upper, s_scratch);")
+    self.gen_add_code_line("linear_feature_cost<T, MX, " + NLX + ", true>(s_out, " + lin_x_var + ", p.Ax, p.bx, p.tx, p.Wx, " + act("LINEAR_X") + ", " + eps("LINEAR_X") + ", p.lx_lower, p.lx_upper, s_scratch);")
     self.gen_add_sync()
     self.gen_add_code_line("} }")
     self.indent_level -= 1
@@ -826,23 +911,22 @@ def gen_tracking_cost_menu(self):
     # ---- gradient and hessian share the structure: zero the blocks, then every term adds ----
     for kind in ("gradient", "hessian"):
         if kind == "gradient":
-            self.gen_add_func_doc("tracking_cost_menu_gradient: s_qk (state gradient, NX) + s_rk (input gradient, NU) of tracking_cost_menu",
-                                  ["Every term adds into the blocks after a sync; ACCUMULATE=false zeroes them first."],
-                                  ["s_qk is the state-block gradient output (size " + NX + ")", "s_rk is the input-block gradient output (size " + NU + ")"] + doc, None)
+            self.gen_add_func_doc("tracking_cost_menu_gradient: s_qk (state gradient, " + TN + ") + s_rk (input gradient, " + NU + ") of tracking_cost_menu",
+                                  ["Every term adds into the blocks after a sync; ACCUMULATE=false zeroes them first. " + base_doc],
+                                  ["s_qk is the state-block gradient output (size " + TN + ")", "s_rk is the input-block gradient output (size " + NU + ")"] + doc, None)
             self.gen_add_code_line(tmpl)
             self.gen_add_code_line("__device__")
             self.gen_add_code_line("void tracking_cost_menu_gradient(T *s_qk, T *s_rk, const T *s_x, const T *s_u, const cost_menu_params<T> &p, T *s_frame, T *s_scratch, const grid::robotModel<T> *d_robotModel) {", True)
-            nqk, nrk = NX, NU
+            nqk, nrk = TN, NU
             fn = lambda base: base + "_gradient"
-            sizes = {"q": NX, "u": NU}
         else:
-            self.gen_add_func_doc("tracking_cost_menu_hessian: s_Qk (state GN Hessian, NX*NX) + s_Rk (input Hessian, NU*NU) of tracking_cost_menu",
-                                  ["Gauss-Newton throughout; every term adds after a sync; ACCUMULATE=false zeroes the blocks first."],
-                                  ["s_Qk is the state GN Hessian output (size " + str(nx * nx) + ", column-major)", "s_Rk is the input Hessian output (size " + str(nu * nu) + ", column-major)"] + doc, None)
+            self.gen_add_func_doc("tracking_cost_menu_hessian: s_Qk (state GN Hessian, " + TN + "*" + TN + ") + s_Rk (input Hessian, " + NU + "*" + NU + ") of tracking_cost_menu",
+                                  ["Gauss-Newton throughout; every term adds after a sync; ACCUMULATE=false zeroes the blocks first. " + base_doc],
+                                  ["s_Qk is the state GN Hessian output (size " + str(tn * tn) + ", column-major)", "s_Rk is the input Hessian output (size " + str(nu * nu) + ", column-major)"] + doc, None)
             self.gen_add_code_line(tmpl)
             self.gen_add_code_line("__device__")
             self.gen_add_code_line("void tracking_cost_menu_hessian(T *s_qk, T *s_rk, const T *s_x, const T *s_u, const cost_menu_params<T> &p, T *s_frame, T *s_scratch, const grid::robotModel<T> *d_robotModel) {", True)
-            nqk, nrk = str(nx * nx), str(nu * nu)
+            nqk, nrk = str(tn * tn), str(nu * nu)
             fn = lambda base: base + "_hessian"
         self.gen_add_code_line("if (!ACCUMULATE) {", True)
         self.gen_add_parallel_loop("i", nqk)
@@ -858,26 +942,39 @@ def gen_tracking_cost_menu(self):
         self.gen_add_sync()
         self.gen_add_end_control_flow()
         self.gen_add_code_line(on("STATE"), True)
-        self.gen_add_code_line(fn("state_cost") + "<T, true>(s_qk, s_x, p.x_des, p.Q, " + act("STATE") + ", " + eps("STATE") + ", p.x_lower, p.x_upper);")
+        self.gen_add_code_line(fn(state_fn) + "<T, true>(s_qk, s_x, p.x_des, p.Q, " + act("STATE") + ", " + eps("STATE") + ", p.x_lower, p.x_upper" + (", s_scratch" if fb else "") + ");")
         self.gen_add_sync()
         self.gen_add_end_control_flow()
         self.gen_add_code_line(on("INPUT"), True)
-        self.gen_add_code_line(fn("input_cost") + "<T, true>(s_rk, s_u, p.u_des, p.R, " + act("INPUT") + ", " + eps("INPUT") + ", p.ub_lower, p.ub_upper);")
+        self.gen_add_code_line(fn("input_cost") + input_tmpl + "(s_rk, s_u, p.u_des, p.R, " + act("INPUT") + ", " + eps("INPUT") + ", p.ub_lower, p.ub_upper);")
         self.gen_add_sync()
         self.gen_add_end_control_flow()
         if kind == "gradient":
-            barriers = ["joint_position_barrier_gradient<T, 0, 0>(s_qk, s_x, p.q_lower, p.q_upper, p.mu_q);",
-                        "joint_velocity_barrier_gradient<T, " + NQ + ", " + NQ + ">(s_qk, s_x, p.qd_lower, p.qd_upper, p.mu_qd);",
-                        "joint_torque_barrier_gradient<T, 0, 0>(s_rk, s_u, p.u_lower, p.u_upper, p.mu_u);"]
+            if fb:
+                barriers = ["joint_position_barrier_gradient<T, 7, 6, " + str(nq - 7) + ">(s_qk, s_x, p.q_lower, p.q_upper, p.mu_q);",
+                            "joint_velocity_barrier_gradient<T, " + NQ + ", " + NV + ">(s_qk, s_x, p.qd_lower, p.qd_upper, p.mu_qd);",
+                            "joint_torque_barrier_gradient<T, 0, 0, " + NU + ">(s_rk, s_u, p.u_lower, p.u_upper, p.mu_u);"]
+            else:
+                barriers = ["joint_position_barrier_gradient<T, 0, 0>(s_qk, s_x, p.q_lower, p.q_upper, p.mu_q);",
+                            "joint_velocity_barrier_gradient<T, " + NQ + ", " + NQ + ">(s_qk, s_x, p.qd_lower, p.qd_upper, p.mu_qd);",
+                            "joint_torque_barrier_gradient<T, 0, 0>(s_rk, s_u, p.u_lower, p.u_upper, p.mu_u);"]
         else:
-            barriers = ["joint_position_barrier_hessian<T, " + NX + ", 0, 0>(s_qk, s_x, p.q_lower, p.q_upper, p.mu_q);",
-                        "joint_velocity_barrier_hessian<T, " + NX + ", " + NQ + ", " + NQ + ">(s_qk, s_x, p.qd_lower, p.qd_upper, p.mu_qd);",
-                        "joint_torque_barrier_hessian<T, " + NU + ", 0, 0>(s_rk, s_u, p.u_lower, p.u_upper, p.mu_u);"]
+            if fb:
+                barriers = ["joint_position_barrier_hessian<T, " + TN + ", 7, 6, " + str(nq - 7) + ">(s_qk, s_x, p.q_lower, p.q_upper, p.mu_q);",
+                            "joint_velocity_barrier_hessian<T, " + TN + ", " + NQ + ", " + NV + ">(s_qk, s_x, p.qd_lower, p.qd_upper, p.mu_qd);",
+                            "joint_torque_barrier_hessian<T, " + NU + ", 0, 0, " + NU + ">(s_rk, s_u, p.u_lower, p.u_upper, p.mu_u);"]
+            else:
+                barriers = ["joint_position_barrier_hessian<T, " + TN + ", 0, 0>(s_qk, s_x, p.q_lower, p.q_upper, p.mu_q);",
+                            "joint_velocity_barrier_hessian<T, " + TN + ", " + NQ + ", " + NQ + ">(s_qk, s_x, p.qd_lower, p.qd_upper, p.mu_qd);",
+                            "joint_torque_barrier_hessian<T, " + NU + ", 0, 0>(s_rk, s_u, p.u_lower, p.u_upper, p.mu_u);"]
         for call in barriers:
             self.gen_add_code_line(call)
             self.gen_add_sync()
         self.gen_add_code_line("if constexpr (MX > 0) { " + on("LINEAR_X"), True)
-        self.gen_add_code_line(fn("linear_feature_cost") + "<T, MX, " + NX + ", true>(s_qk, s_x, p.Ax, p.bx, p.tx, p.Wx, " + act("LINEAR_X") + ", " + eps("LINEAR_X") + ", p.lx_lower, p.lx_upper, s_scratch);")
+        if kind == "gradient":
+            self.gen_add_code_line("linear_feature_cost_gradient<T, MX, " + NLX + ", true>(" + ("s_qk + 6" if fb else "s_qk") + ", " + lin_x_var + ", p.Ax, p.bx, p.tx, p.Wx, " + act("LINEAR_X") + ", " + eps("LINEAR_X") + ", p.lx_lower, p.lx_upper, s_scratch);")
+        else:
+            self.gen_add_code_line("linear_feature_cost_hessian<T, MX, " + NLX + ", true" + (", " + TN if fb else "") + ">(" + ("s_qk + 6 + 6 * " + TN if fb else "s_qk") + ", " + lin_x_var + ", p.Ax, p.bx, p.tx, p.Wx, " + act("LINEAR_X") + ", " + eps("LINEAR_X") + ", p.lx_lower, p.lx_upper, s_scratch);")
         self.gen_add_sync()
         self.gen_add_code_line("} }")
         self.indent_level -= 1
@@ -908,24 +1005,36 @@ def gen_cost_menu(self, algorithms, ee_cost_ok):
         gen_gravity_torque(self)
     else:
         self.gen_add_code_line("// [grid_plant] gravity_torque skipped: requires 'inverse_dynamics' (grid::inverse_dynamics_inner).")
+    self.gen_add_code_line("#define GRID_PLANT_HAS_ACTIVATIONS 1")
     gen_cost_activations(self)
+    self.gen_add_code_line("#define GRID_PLANT_HAS_STATE_COST 1")
     gen_activated_cost_family(self, "state")
+    self.gen_add_code_line("#define GRID_PLANT_HAS_INPUT_COST 1")
     gen_activated_cost_family(self, "input")
+    self.gen_add_code_line("#define GRID_PLANT_HAS_LINEAR_FEATURE_COST 1")
     gen_linear_feature_cost(self)
     if "frame_jacobian" in algorithms and not self._cost_frames:
         self.gen_add_code_line("// [grid_plant] frame_eval / frame_*_cost / tracking_cost_menu skipped: the end-effector target is attached to the world root and no cost_frames were given.")
     elif "frame_jacobian" in algorithms:
-        _gen_so3_helpers(self)
+        self.gen_add_code_line("#define GRID_PLANT_HAS_FRAME_EVAL 1")
         gen_frame_eval(self)
+        self.gen_add_code_line("#define GRID_PLANT_HAS_FRAME_POSITION_COST 1")
         gen_frame_position_cost(self)
+        self.gen_add_code_line("#define GRID_PLANT_HAS_FRAME_ORIENTATION_COST 1")
         gen_frame_orientation_cost(self)
-        if not self.robot.floating_base:
-            gen_frame_velocity_cost(self)
-        else:
-            self.gen_add_code_line("// [grid_plant] frame_velocity_cost skipped: fixed base only (the floating root has no single axis).")
+        gen_frame_velocity_cost(self)
         if not self.robot.floating_base:
             gen_tracking_cost_menu(self)
+        elif getattr(self, "_tangent_state_cost_emitted", False):
+            gen_state_cost_tangent(self)
+            gen_tracking_cost_menu(self)
         else:
-            self.gen_add_code_line("// [grid_plant] tracking_cost_menu skipped: fixed-base only (NUM_POS == NUM_VEL), like tracking_cost.")
+            spherical = [self.robot.get_joint_by_id(j).get_name() for j in range(self.robot.get_num_joints())
+                         if self.robot.get_joint_type_by_id(j) == "spherical"]
+            if spherical:
+                self.gen_add_code_line("// [grid_plant] state_cost_tangent / tracking_cost_menu skipped: unsupported floating-base joint representation, spherical joint(s) "
+                                       + ", ".join(spherical) + " (the tangent state residual has no SO(3) chart block for them). Supported: a free-flyer root with single-axis joints.")
+            else:
+                self.gen_add_code_line("// [grid_plant] state_cost_tangent / tracking_cost_menu skipped: the tangent state residual needs the grid:: Lie helper bundle (emit 'integrator').")
     else:
         self.gen_add_code_line("// [grid_plant] frame_eval / frame_*_cost / tracking_cost_menu skipped: require 'frame_jacobian' (pass cost_frames= or add it to the algorithm list).")

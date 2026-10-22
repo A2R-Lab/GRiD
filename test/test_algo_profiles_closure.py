@@ -56,10 +56,12 @@ def test_profile_names_resolve_in_every_spelling(spelling):
     assert via_list == via_profile and via_list, (spelling, via_list)
 
 
-def test_aliases_still_resolve():
+def test_no_profile_aliases():
+    """Clean break: profile names have one spelling each; the old aliases are refused."""
     gen = _gen()
-    assert _closure(gen, ["all-dynamics"]) == _closure(gen, None, "dynamics")
-    assert _closure(gen, ["kinematics-only"]) == _closure(gen, None, "kinematics")
+    for stale in ("all-dynamics", "dynamics-only", "kinematics-only"):
+        with pytest.raises(ValueError):
+            _closure(gen, [stale])
 
 
 def test_closure_is_idempotent_and_order_independent():

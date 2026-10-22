@@ -45,7 +45,7 @@ def _expected_count(robot):
 
 
 def _arena_bytes(t_count, int_count, size_t):
-    """grid_shared_arena_bytes<T>(t_count, int_count) without the linalg tail."""
+    """grid_shared_arena_bytes<T>(t_count, int_count)."""
     def align(x, a):
         return (x + a - 1) // a * a
     offset = align(0, size_t) + size_t * t_count

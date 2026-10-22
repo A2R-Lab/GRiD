@@ -74,11 +74,7 @@ def normalize_codegen_algorithms(gen, codegen_profile = "all", algorithm_list = 
     # label); canonicalize() below tolerates dash-vs-underscore spelling only.
     # The only entries here are PROFILE-selection conveniences (curated algo SETS,
     # a distinct concept from algo naming) — they alias to profile_algorithms keys.
-    aliases = {
-        "all-dynamics": "dynamics",
-        "dynamics-only": "dynamics",
-        "kinematics-only": "kinematics",
-    }
+    aliases = {}
 
     def canonicalize(name):
         # Profile names are hyphenated keys of profile_algorithms ("dynamics-core");

@@ -15,7 +15,6 @@ import numpy as np
 
 from URDFParser import URDFParser
 from RBDReference import RBDReference
-from grid_codegen import GRiDCodeGenerator
 from grid_codegen.cli import parseInputs, validateRobot
 
 # The repo's test/ package must shadow the stdlib `test` package regardless of
@@ -105,28 +104,22 @@ def main():
 
     if args.debug:
         print("-------------------")
-        print("printing intermediate outputs from refactorings")
+        print("intermediate quantities from the RBDReference passes")
         print("-------------------")
-        codegen = GRiDCodeGenerator(robot, args.debug, FILE_NAMESPACE=args.namespace)
-        (c, v, a, f) = codegen.test_rnea(q, qd)
+        c, v, a, f = reference.inverse_dynamics(q, qd)
         print("v\n", v)
         print("a\n", a)
         print("f\n", f)
         print("c\n", c)
-
-        Minv = codegen.test_minv(q)
+        Minv = reference.minv(q)
         print("Minv\n", Minv)
-
         umc = u - c
         print("u-c\n", umc)
-
         qdd = np.matmul(Minv, umc)
         print("qdd\n", qdd)
-
-        dc_du = codegen.test_rnea_grad(q, qd, qdd)
+        dc_du = np.asarray(reference.inverse_dynamics_gradient(q, qd, qdd))
         print("dc/dq with qdd\n", dc_du[:, :n])
         print("dc/dqd with qdd\n", dc_du[:, n:])
-
         df_du = np.matmul(-Minv, dc_du)
         print("df/dq\n", df_du[:, :n])
         print("df/dqd\n", df_du[:, n:])

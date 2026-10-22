@@ -114,7 +114,7 @@ def gen_multi_target_position_inner(self, batch, suffix=""):
     ]
     func_def_start = "void multi_target_position" + suffix + "_inner("
     func_def_middle = "T *s_out_pos, const T *s_q, const T *s_Xhom, "
-    func_def_end = "T *s_temp, T *d_workspace, unsigned char *s_linalg_smem) {"
+    func_def_end = "T *s_temp, T *d_workspace) {"
     func_def_middle, func_params = self.gen_insert_helpers_func_def_params(
         func_def_middle, func_params, -1, NO_XI_FLAG=True)
     self.gen_add_func_doc("Batched multi-target world positions", func_notes, func_params, None)
@@ -122,7 +122,7 @@ def gen_multi_target_position_inner(self, batch, suffix=""):
     self.gen_add_code_line("__device__")
     self.gen_add_code_line(func_def_start + func_def_middle + func_def_end, True)
     self.gen_add_code_line("if constexpr (!TEMP_IN_SMEM) { s_temp = d_workspace; } else { (void)d_workspace; }")
-    self.gen_add_code_line("(void)s_q; (void)s_linalg_smem;")
+    self.gen_add_code_line("(void)s_q;")
     self.gen_add_code_line("T *s_Xworld = s_temp;   // 16 * " + str(n_joints))
 
     # --- shared FK (the committed emit_world_fk_chainup in _eepose_gradient_hessian) ---
@@ -163,16 +163,14 @@ def gen_multi_target_position_inner_function_call(self, updated_var_names=None, 
         s_q_name="s_q",
         s_topology_helpers_name="s_topology_helpers",
         s_temp_name="s_temp",
-        d_workspace_name="nullptr",
-        s_linalg_smem_name="s_linalg_smem",
-    )
+        d_workspace_name="nullptr",)
     if updated_var_names is not None:
         for key, value in updated_var_names.items():
             var_names[key] = value
     code_start = ("multi_target_position" + suffix + "_inner<T, " + temp_in_smem_expr + ">(" +
                   var_names["s_out_pos_name"] + ", " + var_names["s_q_name"] + ", ")
     code_middle = var_names["s_Xhom_name"] + ", "
-    code_end = var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ", " + var_names["s_linalg_smem_name"] + ");"
+    code_end = var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ");"
     # NO_XI: this family takes s_Xhom (not s_XImats); mirror the def's NO_XI_FLAG.
     code_middle += self.gen_insert_helpers_function_call(updated_var_names=var_names, NO_XI_FLAG=True)
     self.gen_add_code_line(code_start + code_middle + code_end)
@@ -211,8 +209,7 @@ def gen_multi_target_position_device(self, batch, suffix=""):
     # arena; at TIER_LITE/MINIMAL the whole s_temp slot is sourced from d_workspace and the
     # arena skips it, mirroring forward_dynamics_device. The inner is called with the default
     # TEMP_IN_SMEM=true because the s_temp pointer already routes per tier.
-    self.gen_XmatsHom_helpers_temp_shared_memory_code(shared_mem_size, include_linalg_scratch=True,
-                                                      linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()",
+    self.gen_XmatsHom_helpers_temp_shared_memory_code(shared_mem_size,
                                                       tier_workspace_expr="d_workspace")
     self.gen_load_update_XmatsHom_helpers_function_call()
     self.gen_multi_target_position_inner_function_call(suffix=suffix)
@@ -306,7 +303,7 @@ def gen_multi_target_position_gradient_inner(self, batch, suffix=""):
     ]
     func_def_start = "void multi_target_position_gradient" + suffix + "_inner("
     func_def_middle = "T *s_out_grad, const T *s_q, const T *s_Xhom, "
-    func_def_end = "T *s_temp, T *d_workspace, unsigned char *s_linalg_smem) {"
+    func_def_end = "T *s_temp, T *d_workspace) {"
     func_def_middle, func_params = self.gen_insert_helpers_func_def_params(
         func_def_middle, func_params, -1, NO_XI_FLAG=True)
     self.gen_add_func_doc("Batched multi-target world-position gradient", func_notes, func_params, None)
@@ -314,7 +311,7 @@ def gen_multi_target_position_gradient_inner(self, batch, suffix=""):
     self.gen_add_code_line("__device__")
     self.gen_add_code_line(func_def_start + func_def_middle + func_def_end, True)
     self.gen_add_code_line("if constexpr (!TEMP_IN_SMEM) { s_temp = d_workspace; } else { (void)d_workspace; }")
-    self.gen_add_code_line("(void)s_q; (void)s_linalg_smem;")
+    self.gen_add_code_line("(void)s_q;")
 
     off_Jv = 16 * n_xworld
     off_Jw = off_Jv + 3 * nv * n_anchor
@@ -378,16 +375,14 @@ def gen_multi_target_position_gradient_inner_function_call(self, updated_var_nam
         s_q_name="s_q",
         s_topology_helpers_name="s_topology_helpers",
         s_temp_name="s_temp",
-        d_workspace_name="nullptr",
-        s_linalg_smem_name="s_linalg_smem",
-    )
+        d_workspace_name="nullptr",)
     if updated_var_names is not None:
         for key, value in updated_var_names.items():
             var_names[key] = value
     code_start = ("multi_target_position_gradient" + suffix + "_inner<T, " + temp_in_smem_expr + ">(" +
                   var_names["s_out_grad_name"] + ", " + var_names["s_q_name"] + ", ")
     code_middle = var_names["s_Xhom_name"] + ", "
-    code_end = var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ", " + var_names["s_linalg_smem_name"] + ");"
+    code_end = var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ");"
     code_middle += self.gen_insert_helpers_function_call(updated_var_names=var_names, NO_XI_FLAG=True)
     self.gen_add_code_line(code_start + code_middle + code_end)
 
@@ -418,8 +413,7 @@ def gen_multi_target_position_gradient_device(self, batch, suffix=""):
     # Tier-aware arena: at TIER_SHARED s_temp (Xworld|Jv|Jw|ro) lives in smem; at TIER_LITE/MINIMAL
     # the whole s_temp slot is sourced from d_workspace and the arena skips it (the load-bearing
     # spill for many-sphere collision, where 3*nv*n_anchor Jacobian scratch dominates).
-    self.gen_XmatsHom_helpers_temp_shared_memory_code(shared_mem_size, include_linalg_scratch=True,
-                                                      linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()",
+    self.gen_XmatsHom_helpers_temp_shared_memory_code(shared_mem_size,
                                                       tier_workspace_expr="d_workspace")
     self.gen_load_update_XmatsHom_helpers_function_call()
     self.gen_multi_target_position_gradient_inner_function_call(suffix=suffix)

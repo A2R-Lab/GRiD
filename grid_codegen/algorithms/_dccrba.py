@@ -534,12 +534,11 @@ def _cmm_time_variation_inner(self):
         "s_Xhom is the per-joint LOCAL homogeneous transforms",
         "d_robotModel is the GPU model helpers (constant body inertias)",
         "s_temp is scratch of size " + str(_dccrba_inner_temp_mem_size(self)),
-        "s_linalg_smem is reserved (unused)",
     ]
     func_params.insert(6, "s_part is a 6*NUM_VEL*NUM_VEL qd-scaled partials scratch "
                           "(workspace-backed; the two-stage deterministic fold) = " + str(6 * nv * nv))
     func_def = ("void cmm_time_variation_inner(T *s_adot, T *s_A, T *s_com, T *s_extra, const T *s_q, const T *s_qd, const T *s_Xhom, "
-                "const robotModel<T> *d_robotModel, T *s_temp, T *s_J_ext, T *s_part, unsigned char *s_linalg_smem) {")
+                "const robotModel<T> *d_robotModel, T *s_temp, T *s_J_ext, T *s_part) {")
     self.gen_add_func_doc("Compute Adot = dA(q(t))/dt = sum_m (dA/dq_m) qd_m (analytic dCCRBA contraction, two-stage deterministic fold)",
                           [], func_params, None)
     self.gen_add_code_line("template <typename T>")
@@ -549,7 +548,7 @@ def _cmm_time_variation_inner(self):
     # The Jw sweep band lives EXTERNALLY in s_J_ext (in-smem at L0/L1, d_workspace
     # at the J-spilled tier), so centroidal_inner runs with J_IN_SMEM=false and the
     # shrunk (no-J) s_temp pool. The CoM/CMM math is a pure pointer move (DE-GATE #2).
-    self.gen_add_code_line("centroidal_inner<T, false>(s_A, s_com, s_extra, s_q, s_Xhom, d_robotModel, s_temp, s_J_ext, s_linalg_smem);")
+    self.gen_add_code_line("centroidal_inner<T, false>(s_A, s_com, s_extra, s_q, s_Xhom, d_robotModel, s_temp, s_J_ext);")
     self.gen_add_sync()
     _emit_dccrba_assembly(self, "s_adot", contract_qd=True, part_name="s_part")
     self.gen_add_end_function()
@@ -562,14 +561,14 @@ def _cmm_time_variation_inner(self):
     # which does not change fp values. Just nv-fold less parallel.
     serial_params = [p for p in func_params if not p.startswith("s_part")]
     serial_def = ("void cmm_time_variation_inner_serial(T *s_adot, T *s_A, T *s_com, T *s_extra, const T *s_q, const T *s_qd, const T *s_Xhom, "
-                  "const robotModel<T> *d_robotModel, T *s_temp, T *s_J_ext, unsigned char *s_linalg_smem) {")
+                  "const robotModel<T> *d_robotModel, T *s_temp, T *s_J_ext) {")
     self.gen_add_func_doc("Compute Adot (serial per-column fold; composite device-wrapper variant)",
                           [], serial_params, None)
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__device__")
     self.gen_add_code_line(serial_def, True)
     self.gen_add_code_line("(void)s_q;")
-    self.gen_add_code_line("centroidal_inner<T, false>(s_A, s_com, s_extra, s_q, s_Xhom, d_robotModel, s_temp, s_J_ext, s_linalg_smem);")
+    self.gen_add_code_line("centroidal_inner<T, false>(s_A, s_com, s_extra, s_q, s_Xhom, d_robotModel, s_temp, s_J_ext);")
     self.gen_add_sync()
     _emit_dccrba_assembly(self, "s_adot", contract_qd=True)
     self.gen_add_end_function()
@@ -584,10 +583,9 @@ def _dccrba_full_inner(self):
         "s_Xhom is the per-joint LOCAL homogeneous transforms",
         "d_robotModel is the GPU model helpers (constant body inertias)",
         "s_temp is scratch of size " + str(_dccrba_inner_temp_mem_size(self)),
-        "s_linalg_smem is reserved (unused)",
     ]
     func_def = ("void dccrba_inner(T *s_dccrba, T *s_A, T *s_com, T *s_extra, const T *s_q, const T *s_Xhom, "
-                "const robotModel<T> *d_robotModel, T *s_temp, T *s_J_ext, unsigned char *s_linalg_smem) {")
+                "const robotModel<T> *d_robotModel, T *s_temp, T *s_J_ext) {")
     self.gen_add_func_doc("Compute the analytic dCCRBA tensor dA_dq[:,k,m] (6 x NV x NV)",
                           [], func_params, None)
     self.gen_add_code_line("template <typename T>")
@@ -597,7 +595,7 @@ def _dccrba_full_inner(self):
     # The Jw sweep band lives EXTERNALLY in s_J_ext (in-smem at L0/L1, d_workspace
     # at the J-spilled tier), so centroidal_inner runs with J_IN_SMEM=false and the
     # shrunk (no-J) s_temp pool. Pure pointer move (DE-GATE #2).
-    self.gen_add_code_line("centroidal_inner<T, false>(s_A, s_com, s_extra, s_q, s_Xhom, d_robotModel, s_temp, s_J_ext, s_linalg_smem);")
+    self.gen_add_code_line("centroidal_inner<T, false>(s_A, s_com, s_extra, s_q, s_Xhom, d_robotModel, s_temp, s_J_ext);")
     self.gen_add_sync()
     _emit_dccrba_assembly(self, "s_dccrba", contract_qd=False)
     self.gen_add_end_function()
@@ -619,10 +617,9 @@ def gen_cmm_time_variation_device(self):
     # s_J holds the externalized Jw sweep band in smem (device wrappers don't spill).
     extra = [("s_A", 6 * nv), ("s_com", 3), ("s_extra", 4), ("s_J", _dccrba_sweep_J_count(self))]
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
-        _dccrba_inner_temp_mem_size(self), extra_t_buffers=extra, include_linalg_scratch=True,
-        linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
+        _dccrba_inner_temp_mem_size(self), extra_t_buffers=extra)
     self.gen_load_update_XmatsHom_helpers_function_call()
-    self.gen_add_code_line("cmm_time_variation_inner_serial<T>(s_adot, s_A, s_com, s_extra, s_q, s_qd, s_XmatsHom, d_robotModel, s_temp, s_J, s_linalg_smem);")
+    self.gen_add_code_line("cmm_time_variation_inner_serial<T>(s_adot, s_A, s_com, s_extra, s_q, s_qd, s_XmatsHom, d_robotModel, s_temp, s_J);")
     self.gen_add_sync()
     self.gen_add_end_function()
 
@@ -639,10 +636,9 @@ def gen_dccrba_device(self):
     # s_J holds the externalized Jw sweep band in smem (device wrappers don't spill).
     extra = [("s_A", 6 * nv), ("s_com", 3), ("s_extra", 4), ("s_J", _dccrba_sweep_J_count(self))]
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
-        _dccrba_inner_temp_mem_size(self), extra_t_buffers=extra, include_linalg_scratch=True,
-        linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
+        _dccrba_inner_temp_mem_size(self), extra_t_buffers=extra)
     self.gen_load_update_XmatsHom_helpers_function_call()
-    self.gen_add_code_line("dccrba_inner<T>(s_dccrba, s_A, s_com, s_extra, s_q, s_XmatsHom, d_robotModel, s_temp, s_J, s_linalg_smem);")
+    self.gen_add_code_line("dccrba_inner<T>(s_dccrba, s_A, s_com, s_extra, s_q, s_XmatsHom, d_robotModel, s_temp, s_J);")
     self.gen_add_sync()
     self.gen_add_end_function()
 
@@ -674,8 +670,7 @@ def gen_cmm_time_variation_kernel(self, single_call_timing=False):
     self.gen_add_code_line("constexpr int CMM_J_SLOT = CMM_J_SMEM ? " + str(sJ) + " : 0;")
     extra = [("s_q_qd", in_size), ("s_out", out_size), ("s_A", 6 * nv), ("s_com", 3), ("s_extra", 4), ("s_J", "CMM_J_SLOT")]
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
-        _dccrba_inner_temp_mem_size(self), extra_t_buffers=extra, include_linalg_scratch=True,
-        linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
+        _dccrba_inner_temp_mem_size(self), extra_t_buffers=extra)
     self.gen_add_code_line("T *s_q = s_q_qd; T *s_qd = &s_q_qd[" + str(n) + "];")
     self.gen_add_code_line("T *s_part = nullptr;  // 6*NV*NV qd-scaled partials (two-stage fold), workspace-backed at ALL tiers")
 
@@ -700,7 +695,7 @@ def gen_cmm_time_variation_kernel(self, single_call_timing=False):
             self.gen_mjx_input_convert(q_name="s_q", qd_name="s_qd")
             self.gen_add_end_control_flow()
         self.gen_load_update_XmatsHom_helpers_function_call()
-        self.gen_add_code_line("cmm_time_variation_inner<T>(s_out, s_A, s_com, s_extra, s_q, s_qd, s_XmatsHom, d_robotModel, s_temp, s_J, s_part, s_linalg_smem);")
+        self.gen_add_code_line("cmm_time_variation_inner<T>(s_out, s_A, s_com, s_extra, s_q, s_qd, s_XmatsHom, d_robotModel, s_temp, s_J, s_part);")
         self.gen_add_sync()
         # mjx OUTPUT: Adot (6 x NV col-major at s_out) column-reframes Adot . G^{-1}
         # (base-linear cols . R^T); hdot = Adot qd + A qddot is invariant (the qd
@@ -814,8 +809,7 @@ def gen_dccrba_kernel(self, single_call_timing=False):
     extra = [("s_q", in_size), ("s_A", 6 * nv), ("s_com", 3), ("s_extra", 4),
              ("s_dccrba", "DCCRBA_OUT_SLOT"), ("s_J", "DCCRBA_J_SLOT")]
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
-        _dccrba_inner_temp_mem_size(self), extra_t_buffers=extra, include_linalg_scratch=True,
-        linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
+        _dccrba_inner_temp_mem_size(self), extra_t_buffers=extra)
     self.gen_add_code_line("if constexpr (DCCRBA_OUT_IN_SMEM && DCCRBA_J_SMEM) { (void)d_workspace; }")
 
     def _repoint(in_loop):
@@ -844,7 +838,7 @@ def gen_dccrba_kernel(self, single_call_timing=False):
             self.gen_mjx_quat_reorder("s_q")
             self.gen_add_end_control_flow()
         self.gen_load_update_XmatsHom_helpers_function_call()
-        self.gen_add_code_line("dccrba_inner<T>(s_dccrba, s_A, s_com, s_extra, s_q, s_XmatsHom, d_robotModel, s_temp, s_J, s_linalg_smem);")
+        self.gen_add_code_line("dccrba_inner<T>(s_dccrba, s_A, s_com, s_extra, s_q, s_XmatsHom, d_robotModel, s_temp, s_J);")
         self.gen_add_sync()
         # mjx OUTPUT (floating only): transform the dccrba tensor (double G^{-1}
         # reframe + base-rotation frame term) in place on s_dccrba (whichever tier
@@ -861,7 +855,7 @@ def gen_dccrba_kernel(self, single_call_timing=False):
         _repoint(in_loop=False)
         self.gen_add_code_line("for (int rep = 0; rep < NUM_TIMESTEPS; rep++){", True)
         self.gen_load_update_XmatsHom_helpers_function_call()
-        self.gen_add_code_line("dccrba_inner<T>(s_dccrba, s_A, s_com, s_extra, s_q, s_XmatsHom, d_robotModel, s_temp, s_J, s_linalg_smem);")
+        self.gen_add_code_line("dccrba_inner<T>(s_dccrba, s_A, s_com, s_extra, s_q, s_XmatsHom, d_robotModel, s_temp, s_J);")
         self.gen_add_sync()
         self.gen_add_end_control_flow()
         self.gen_kernel_save_result("dccrba", str(out_size))

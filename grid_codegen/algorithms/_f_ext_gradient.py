@@ -556,7 +556,7 @@ def gen_f_ext_gradient_dq_kernel(self, single_call_timing=False):
         slab_in_smem = (pick == 0)
         scratch = _f_ext_gradient_dq_smem_count(self, slab_in_smem=slab_in_smem)
         self.gen_XImats_helpers_temp_shared_memory_code(
-            scratch, extra_t_buffers=[("s_q", n_pos)], include_linalg_scratch=True)
+            scratch, extra_t_buffers=[("s_q", n_pos)])
         if not single_call_timing:
             self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
             self.gen_kernel_load_inputs("q", str(n_pos), stride="stride_q")
@@ -678,7 +678,7 @@ def gen_f_ext_gradient_device(self):
     self.gen_add_code_line("__device__")
     self.gen_add_code_line(func_def, True)
     self.gen_XImats_helpers_temp_shared_memory_code(
-        shared_extra, extra_t_buffers=None, include_linalg_scratch=True)
+        shared_extra, extra_t_buffers=None)
     self.gen_load_update_XImats_helpers_function_call()
     # s_Minv lives at head of s_temp; the inner scratch follows.
     self.gen_add_code_line("T *s_Minv = s_temp;")
@@ -737,8 +737,7 @@ def _emit_f_ext_gradient_kernel_body_for_flags(self, pick, single_call_timing):
     self.gen_XImats_helpers_temp_shared_memory_code(
         scratch, extra_t_buffers=[("s_q", n_pos),
                                   ("s_dtau_dfext", out_each if dtau_smem else 0),
-                                  ("s_dqdd_dfext", out_each if dqdd_smem else 0)],
-        include_linalg_scratch=True)
+                                  ("s_dqdd_dfext", out_each if dqdd_smem else 0)])
     if dqdd_smem and dtau_smem:
         self.gen_add_code_line("(void)d_workspace;")
 

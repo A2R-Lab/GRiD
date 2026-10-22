@@ -610,9 +610,9 @@ def test_linalg_backend_controls_and_helpers_are_generated(tmp_path):
     # no-op on sm_120 / RTX 5090 per the dispatcher findings). The linalg layer
     # is now SIMT-only vendored GLASS. The NVIDIA macros / namespace / helper
     # functions and the GRID_CUDA_LINALG_BACKEND/GRID_LINALG_GLASS* selector
-    # macros no longer exist. The `GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()`
-    # symbol is retained ONLY as a 0-returning stub so the shared-memory arena
-    # macros keep compiling unchanged.
+    # macros no longer exist, and since 2026-10-23 neither does the 0-returning
+    # `GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()` stub nor the `s_linalg_smem`
+    # scratch argument the wrappers and inners used to carry.
     assert "#define GRID_LINALG_GLASS_NVIDIA" not in header
     assert "#ifndef GRID_CUDA_LINALG_BACKEND" not in header
     assert "namespace nvidia" not in header
@@ -631,8 +631,11 @@ def test_linalg_backend_controls_and_helpers_are_generated(tmp_path):
     assert "glass::gemm_ex" not in header
     assert "glass::gemv_ex" not in header
 
-    # The arena-sizing stub must remain (returns 0 now, but the macros call it).
-    assert "GRID_LINALG_NVIDIA_MAX_HELPER_BYTES" in header
+    # The cuBLASDx-era scratch is gone from the header: no stub, no argument.
+    assert "GRID_LINALG_NVIDIA_MAX_HELPER_BYTES" not in header
+    assert "GRID_EE_LINALG_SHARED_BYTES" not in header
+    assert "s_linalg_smem" not in header
+    assert "glass_nvidia_smem" not in header
 
     # Public grid_linalg_* SIMT wrappers (the surface kernels call).
     assert "grid_linalg_gemm" in header
@@ -657,9 +660,8 @@ def test_linalg_backend_controls_and_helpers_are_generated(tmp_path):
 def test_linalg_backend_default_cxx11_compiles_without_mathdx(tmp_path):
     header = _generate_header(tmp_path, "fr3", "fixed", codegen_profile="dynamics-core")
     # v2.0: cuBLASDx/mathDx was removed; the default header is SIMT-only GLASS and
-    # must compile under -std=c++11 with no mathDx headers present. The retained
-    # GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>() stub returns 0 (no NVIDIA helper
-    # smem) — referencing it proves the SIMT-only arena path compiles clean.
+    # must compile under -std=c++11 with no mathDx headers present; referencing
+    # the arena sizer proves the SIMT-only arena path compiles clean.
     source = r'''
 #include "grid.cuh"
 
@@ -671,7 +673,7 @@ int main() {
     (void)A;
     (void)B;
     (void)C;
-    return static_cast<int>(grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>());
+    return static_cast<int>(grid::grid_shared_arena_bytes<T>(1, 0) == 0);
 }
 '''
     _compile_header_consumer(
@@ -1127,13 +1129,12 @@ __global__ void carve_probe(unsigned char *out) {
     float *f = ia.s_q_qd_u; f = ia.s_qdd; f = ia.s_stage_qdd; f = ia.s_stage_point;
     f = ia.s_x_kp1; f = ia.s_XImats; f = ia.s_temp;
     int *ti = ia.s_topology_helpers;
-    unsigned char *lb = ia.s_linalg_smem;
     f = da.s_q_qd_u; f = da.s_dAB; f = da.s_df_du; f = da.s_dc_du; f = da.s_vaf;
     f = da.s_Minv; f = da.s_qdd; f = da.s_q_orig; f = da.s_qd_orig;
     f = da.s_stage_grad_qdd; f = da.s_D_qdd_stage;
     f = da.s_dInt_q_6x6; f = da.s_dInt_v_6x6; f = da.s_x_kp1;
     f = pa.s_x; f = pa.s_u; f = pa.s_dAB; f = pa.s_D_qdd_stage; f = pa.s_temp;
-    out[0] = static_cast<unsigned char>((f != nullptr) + (ti != nullptr) + (lb != nullptr));
+    out[0] = static_cast<unsigned char>((f != nullptr) + (ti != nullptr));
 }
 
 int main() {

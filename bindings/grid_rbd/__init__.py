@@ -173,7 +173,6 @@ def register_robot(
     force_rebuild: bool = False,
     cuda_arch: int | None = None,
     backend: str = "numpy",
-    allow_fp64: bool = False,
     dtype: str = "float32",
     runtime_inertia: bool = False,
     runtime_transform: bool = False,
@@ -198,8 +197,7 @@ def register_robot(
 
     Precision. The validated path is fp32: the ``.so`` computes in float on
     the GPU, wrapper inputs of any float dtype are cast to float32 and outputs
-    are float32. ``allow_fp64`` is the fp32-compute upcast convenience (compute
-    in fp32, cast i/o to fp64; numpy backend only). ``dtype="float64"`` selects
+    are float32. ``dtype="float64"`` selects
     the fp64 tier, an alpha feature: it builds a separate ``.so``
     (``-DGRID_WRAPPER_T_DOUBLE`` plus the codegen knob that re-derives the
     shared-memory spill tiers for 8-byte values) whose handle takes and returns
@@ -211,8 +209,7 @@ def register_robot(
     big-robot kernels that already max-spill at fp32 may be left unregistered
     and raise a clear runtime error when called. Selecting it emits one
     ``UserWarning`` per process. Full fp64 support is on the roadmap. The fp32
-    and fp64 ``.so`` coexist in the cache (dtype is in the cache key);
-    ``allow_fp64`` is ignored when ``dtype="float64"``.
+    and fp64 ``.so`` coexist in the cache (dtype is in the cache key).
 
     **Parameter groups — and what each costs.** A knob that participates in
     the ``.so`` cache key triggers a full codegen + nvcc rebuild the FIRST time
@@ -230,7 +227,7 @@ def register_robot(
     - *Cache & toolchain* (no codegen effect): ``cache_dir``,
       ``force_rebuild``, ``cuda_arch``, ``backend``.
     - *Runtime-only* (never rebuilds; not in the cache key):
-      ``output_convention``, ``allow_fp64``, ``_profile_overlay``.
+      ``output_convention``, ``_profile_overlay``.
 
     Parameters
     ----------
@@ -272,10 +269,6 @@ def register_robot(
         Compute precision of the ``.so``: ``"float32"`` (default, the validated
         path) or ``"float64"`` (the alpha fp64 tier; see the precision
         paragraph above). Re-keys the cache; the fp32 and fp64 ``.so`` coexist.
-    allow_fp64 : bool, optional
-        LEGACY fp32-compute upcast convenience: accept/return float64 arrays
-        while computing in fp32. Runtime-only (same ``.so``); ignored when
-        ``dtype="float64"``. Prefer ``dtype="float64"`` for real precision.
     enable_tool : bool, optional
         Default ``False``. Build the runtime tool/payload surface
         (:py:meth:`RobotHandle.tool_fext`, ``attach_tool``/``detach_tool``):
@@ -456,15 +449,6 @@ def register_robot(
     # FFI handlers are per-CORE-algo gated (#if GRID_HAS_<ALGO>), so a reduced profile
     # builds only the requested cores on those surfaces too, and the backend wrappers
     # map a missing-symbol AttributeError to the same clean subset error numpy raises.
-    if backend in ("jax", "torch") and allow_fp64:
-        # allow_fp64 is the legacy numpy-surface fp32-compute/fp64-io upcast; the
-        # jax/torch surfaces take framework arrays whose dtype the caller controls,
-        # so silently ignoring it would misreport precision. For real double
-        # precision on these backends use dtype="float64" (a true fp64 .so).
-        raise NotImplementedError(
-            f"allow_fp64 is not supported on the {backend!r} backend (numpy-only "
-            "legacy upcast); use dtype='float64' for a true fp64 build, or "
-            "backend='numpy'.")
     if backend == "jax":
         from . import jax as _jax_backend
         return _jax_backend.register_robot(
@@ -508,7 +492,7 @@ def register_robot(
         contact_frames=contact_frames, cost_frames=cost_frames,
         algorithm_list=algorithm_list, enable_mujoco_kernels=enable_mujoco_kernels,
     )
-    handle = RobotHandle(name, str(so_path), meta, allow_fp64=allow_fp64)
+    handle = RobotHandle(name, str(so_path), meta)
     # output_convention is a runtime IO setting (no effect on the cached .so), so it
     # is applied to the handle rather than the cache key. mjx is a no-op on fixed base.
     handle.output_convention = output_convention

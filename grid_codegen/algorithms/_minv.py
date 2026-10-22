@@ -141,8 +141,6 @@ def gen_minv_inner(self):
     # linalg_smem_setup expects the temp-region size that the function's emitted
     # body indexes into s_temp (IA/U/Dinv/Ia/IaTemp). The F-region is sliced
     # separately below.
-    temp_size = no_F_size
-    self.gen_linalg_smem_setup(temp_size)
 
     # Inner-controlled F placement: F lives at the tail of s_temp (after the
     # no_F region) when F_IN_SMEM, else in d_workspace. Keeping no_F at offset 0
@@ -501,11 +499,11 @@ def gen_minv_inner(self):
             elif len(inds) > 1:
                 for i, jid_val in enumerate(inds):
                     parent_val = self.robot.get_parent_id(jid_val)
-                    self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6>(&s_temp[{IaTempOffset + 36*i}], &s_XImats[{36*jid_val}], &s_temp[{IAOffset + 36*parent_val}], static_cast<T>(1), static_cast<T>(1), s_linalg_smem);")
+                    self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6>(&s_temp[{IaTempOffset + 36*i}], &s_XImats[{36*jid_val}], &s_temp[{IAOffset + 36*parent_val}], static_cast<T>(1), static_cast<T>(1));")
             else:
                 jid_val = inds[0]
                 parent_val = self.robot.get_parent_id(jid_val)
-                self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6>(&s_temp[{IaTempOffset}], &s_XImats[{36*jid_val}], &s_temp[{IAOffset + 36*parent_val}], static_cast<T>(1), static_cast<T>(1), s_linalg_smem);")
+                self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6>(&s_temp[{IaTempOffset}], &s_XImats[{36*jid_val}], &s_temp[{IAOffset + 36*parent_val}], static_cast<T>(1), static_cast<T>(1));")
 
             if self.DEBUG_MODE:
                 self.gen_add_sync()
@@ -689,8 +687,7 @@ def gen_minv_device(self):
     self.gen_device_wrapper(
         "Compute the inverse of the mass matrix", func_def, shared_mem_size,
         lambda: self.gen_minv_inner_function_call(f_in_smem_expr = "true"),
-        func_notes = func_notes, func_params = func_params,
-        include_linalg_scratch = True)
+        func_notes = func_notes, func_params = func_params)
 
 def _emit_minv_kernel_body_for_flags(self, n, NV, spill_F, single_call_timing):
     """Emit minv_kernel body for one tier's spill flag.
@@ -702,7 +699,7 @@ def _emit_minv_kernel_body_for_flags(self, n, NV, spill_F, single_call_timing):
         shared_mem_size = self.gen_minv_inner_no_F_size()
     else:
         shared_mem_size = self.gen_minv_inner_temp_mem_size()
-    self.gen_XImats_helpers_temp_shared_memory_code(shared_mem_size, extra_t_buffers = [("s_q", n_pos), ("s_Minv", n*n)], include_linalg_scratch=True)
+    self.gen_XImats_helpers_temp_shared_memory_code(shared_mem_size, extra_t_buffers = [("s_q", n_pos), ("s_Minv", n*n)])
     if not single_call_timing:
         self.gen_add_parallel_loop("k","NUM_TIMESTEPS",block_level = True)
         self.gen_kernel_load_inputs("q",str(n_pos),stride="stride_q")

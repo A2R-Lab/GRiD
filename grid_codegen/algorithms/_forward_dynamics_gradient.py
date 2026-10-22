@@ -443,7 +443,7 @@ def _emit_forward_dynamics_gradient_kernel_body_for_flags(self, nq, nv, use_sele
         max(self.gen_minv_inner_temp_mem_size(), self.gen_inverse_dynamics_gradient_temp_layout()["selective_shared_count"])
         if use_selective_spill else self.gen_forward_dynamics_gradient_inner_temp_mem_size()
     )
-    self.gen_XImats_helpers_temp_shared_memory_code(shared_mem_size, extra_t_buffers = extra_t_buffers, include_linalg_scratch=True)
+    self.gen_XImats_helpers_temp_shared_memory_code(shared_mem_size, extra_t_buffers = extra_t_buffers)
     if use_output_spill:
         self.gen_add_code_line("T *s_dc_du; T *s_Minv;  // repointed to the L2-pinned SO band (output spill) per timing branch")
     self.gen_add_code_line("T *d_temp_spill = nullptr; (void)d_temp_spill;")

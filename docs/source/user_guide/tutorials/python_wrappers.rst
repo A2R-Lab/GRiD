@@ -184,9 +184,6 @@ pass the same value to both for cross-validation.
        (``[xyz, quat wxyz]``); ``use_warp=True`` selects the warp-cooperative
        variant.
 
-The numeric methods also accept ``allow_fp64=True`` at ``register_robot`` for
-an fp64-in/fp64-out convenience cast (compute stays fp32).
-
 Validation against ``RBDReference`` lives at
 ``test/python_wrappers/test_iiwa14_smoke.py`` (28 tests, all numerical
 methods pass at float32 precision).
@@ -196,10 +193,7 @@ Precision
 
 GRiD computes in fp32 on the GPU. Inputs of any float dtype are cast to
 ``float32`` before the launch and outputs are ``float32``; the signed receipt
-and the release timing both ran this path. ``allow_fp64=True`` at
-``register_robot`` (numpy backend) is a convenience cast that accepts and
-returns ``float64`` arrays while the kernels still compute in fp32, so its
-accuracy is that of fp32.
+and the release timing both ran this path.
 
 ``dtype="float64"`` selects the fp64 tier, an alpha feature. It builds a
 separate ``.so`` (``-DGRID_WRAPPER_T_DOUBLE`` and the codegen knob that

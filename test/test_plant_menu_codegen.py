@@ -5,7 +5,9 @@ iiwa14 fixed: the default frame list is the end-effector joint alone; a named
 articulated joint and a fixed joint (with its offset transform) bake as frames 1
 and 2; an unknown name is refused; cost_frames pulls the frame Jacobian family
 in; the menu preset, the velocity term and the gravity inner are emitted on the
-fixed base and the velocity term and preset are skipped on the floating go2.
+fixed base; on the floating go2 the velocity term is emitted, and the tangent
+state term and the preset appear once the Lie helper bundle (the integrator) is
+in the algorithm list, in the tangent layout with its constants.
 """
 from __future__ import annotations
 
@@ -79,12 +81,31 @@ def test_frame_terms_gates(tmp_path):
     _, text = _gen(tmp_path, robot, algorithm_list=["inverse_dynamics", "end_effector_pose", "end_effector_pose_gradient"])
     assert "void frame_eval(" not in text and "frame_eval / frame_*_cost / tracking_cost_menu skipped" in text
     assert "void state_cost(" in text and "void linear_feature_cost(" in text
-    # floating go2: frame position and orientation, no velocity term, no preset
+    # one capability constant per menu piece (the adapter static_asserts on these, not on comments)
+    for name in ("ACTIVATIONS", "STATE_COST", "INPUT_COST", "LINEAR_FEATURE_COST", "GRAVITY_TORQUE"):
+        assert "#define GRID_PLANT_HAS_" + name + " 1" in text, name
+    # floating go2 without the Lie helper bundle: the frame terms including the twist are emitted,
+    # the tangent state term and the preset are skipped with the reason
     go2 = _robot("go2", True)
     _, text = _gen(tmp_path, go2, cost_frames=[go2.get_joint_by_id(1).get_name()], algorithm_list=["inverse_dynamics"])
-    assert "void frame_orientation_cost(" in text and "void frame_position_cost(" in text
-    assert "GRID_PLANT_HAS_FRAME_VELOCITY_COST" not in text and "GRID_PLANT_HAS_COST_MENU" not in text
-    assert "frame_velocity_cost skipped: fixed base only" in text
+    assert "void frame_orientation_cost(" in text and "void frame_position_cost(" in text and "void frame_velocity_cost(" in text
+    for name in ("FRAME_EVAL", "FRAME_POSITION_COST", "FRAME_ORIENTATION_COST", "FRAME_VELOCITY_COST"):
+        assert "#define GRID_PLANT_HAS_" + name + " 1" in text, name
+    assert "GRID_PLANT_HAS_COST_MENU" not in text and "void state_cost_tangent(" not in text
+    assert "state_cost_tangent / tracking_cost_menu skipped: the tangent state residual needs the grid:: Lie helper bundle" in text
+    # floating go2 with the integrator: the tangent state term and the preset in the tangent layout
+    _, text = _gen(tmp_path, go2, cost_frames=[go2.get_joint_by_id(1).get_name()], algorithm_list=["inverse_dynamics", "integrator"])
+    nv = go2.get_num_vel()
+    assert "#define GRID_PLANT_HAS_STATE_COST_TANGENT 1" in text and "#define GRID_PLANT_HAS_COST_MENU 1" in text
+    assert "void state_cost_tangent(" in text and "void tracking_cost_menu(" in text
+    assert "const int GRID_PLANT_MENU_TANGENT = 1;" in text
+    assert "const int GRID_PLANT_MENU_NU = " + str(nv - 6) + ";" in text
+    assert "const int GRID_PLANT_MENU_NLX = " + str(2 * nv - 6) + ";" in text
+    assert "state_cost_tangent<T, true>(s_out, s_x, p.x_des, p.Q" in text
+    assert "joint_position_barrier<T, " + str(go2.get_num_pos() - 7) + ", 7>(s_out, s_x" in text
+    # the fixed iiwa14 preset states the x layout
+    _, text = _gen(tmp_path, robot, cost_frames=[robot.get_joint_by_id(1).get_name()], algorithm_list=["inverse_dynamics", "end_effector_pose", "end_effector_pose_gradient", "frame_jacobian"])
+    assert "const int GRID_PLANT_MENU_TANGENT = 0;" in text and "const int GRID_PLANT_MENU_NU = " + str(robot.get_num_vel()) + ";" in text
 
 
 def test_activation_ids_and_term_order_match_the_oracle():
@@ -95,6 +116,7 @@ def test_activation_ids_and_term_order_match_the_oracle():
     assert ids["GRID_PLANT_ACTIVATION_PSEUDO_HUBER"] == RBDReference.ACTIVATION_PSEUDO_HUBER
     assert ids["GRID_PLANT_ACTIVATION_RELAXED_LOG_BARRIER"] == RBDReference.ACTIVATION_RELAXED_LOG_BARRIER
     assert ids["GRID_PLANT_ACTIVATION_QUADRATIC_BARRIER"] == RBDReference.ACTIVATION_QUADRATIC_BARRIER
+    assert ids["GRID_PLANT_ACTIVATION_SMOOTH_HINGE"] == RBDReference.ACTIVATION_SMOOTH_HINGE
     assert ids["GRID_PLANT_ACTIVATION_NONE"] == -1
 
 

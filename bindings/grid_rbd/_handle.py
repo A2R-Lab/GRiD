@@ -216,9 +216,7 @@ class RobotHandle:
     registering with ``dtype="float64"``: the handle then drives a double-
     precision .so (``_core.RunnerF64``), casts inputs to ``float64``, and returns
     ``float64`` arrays computed end-to-end in double precision (``handle.dtype ==
-    "float64"``). The legacy ``allow_fp64=True`` is only an fp32-compute upcast
-    convenience (compute in fp32, cast i/o to fp64, single-precision accuracy
-    caveat); it is off by default and ignored for a true-fp64 handle. The
+    "float64"``). The
     jax/torch handles follow the .so dtype too (``dtype="float64"`` builds carry
     fp64 jax/torch surfaces; jax additionally needs x64 mode).
 
@@ -249,8 +247,7 @@ class RobotHandle:
     use their field-standard names).
     """
 
-    def __init__(self, name: str, so_path: str, meta: dict[str, Any],
-                 *, allow_fp64: bool = False) -> None:
+    def __init__(self, name: str, so_path: str, meta: dict[str, Any]) -> None:
         from . import _core  # pybind11 extension; built at pip install time
 
         self._name = name
@@ -269,9 +266,6 @@ class RobotHandle:
         else:
             self._dt = np.float32
             self._runner = _core.Runner(so_path)
-        # fp64-in / fp64-out convenience (compute stays fp32). Off by default.
-        # Ignored for a true-fp64 build (outputs are already float64).
-        self.allow_fp64 = bool(allow_fp64) and self._dtype != "float64"
         # Output convention: "pinocchio" (default, native) or "mujoco" (mjx parity).
         # Only affects FLOATING-base robots; a no-op (byte-identical) on fixed base.
         self._output_convention = "pinocchio"
@@ -764,7 +758,7 @@ class RobotHandle:
         w = np.ascontiguousarray(wrench, dtype=self._dt)
         rc = np.ascontiguousarray(np.asarray(offset, dtype=self._dt).reshape(-1)[:3])
         raw = self._runner.tool_fext(q, w, jid, rc)     # (B, 6*num_bodies)
-        return self._cast_out(raw)
+        return raw
 
     # ─── multi-contact f_ext (contact_frames) ────────────────────────────────
 
@@ -793,7 +787,7 @@ class RobotHandle:
         q = np.ascontiguousarray(q, dtype=self._dt)
         fc = np.ascontiguousarray(f_c, dtype=self._dt)
         raw = self._runner.contact_fext(q, fc)          # (B, 6*num_bodies)
-        return self._cast_out(raw)
+        return raw
 
     def _tool_tip_default(self, ee_joint_names, ee_offsets):
         """If a tool with a tip frame is attached and the caller gave no explicit
@@ -1251,16 +1245,6 @@ class RobotHandle:
                 f"{kind}; dynamics vector outputs are nv-wide too.")
         raise ValueError(f"{kind} must be (batch, nv={nv}); got shape {arr.shape}")
 
-    def _cast_out(self, *arrays):
-        """fp64-out convenience: upcast results to float64 when ``allow_fp64``
-        is set (compute already ran in fp32; this is a pure host-side cast with
-        the obvious precision caveat). A no-op otherwise. Returns a single array
-        for one input, else a tuple — mirroring the wrapped method's return."""
-        if not self.allow_fp64:
-            return arrays[0] if len(arrays) == 1 else arrays
-        out = tuple(np.asarray(a, dtype=np.float64) for a in arrays)
-        return out[0] if len(out) == 1 else out
-
     # ─── mjx (MuJoCo) output-convention transforms (floating base only) ──────
     #
     # When ``output_convention="mujoco"`` the value methods accept and return
@@ -1310,7 +1294,7 @@ class RobotHandle:
             qd  = np.ascontiguousarray(qd,  dtype=self._dt)
             qdd_arr = np.ascontiguousarray(qdd, dtype=self._dt)
             c = self._runner.inverse_dynamics_mujoco(q, qd, qdd_arr, gravity, None)
-            return self._cast_out(c)
+            return c
 
         R = None
         if self._mjx_active(_convention):
@@ -1326,7 +1310,7 @@ class RobotHandle:
         if R is not None:
             from . import _mujoco
             c = _mujoco.id_tau_pin_to_mjx(np.asarray(c, np.float64), R, True).astype(self._dt)
-        return self._cast_out(c)
+        return c
 
     def minv(self, q, *, _convention=None) -> np.ndarray:
         """Direct mass-matrix inverse Minv(q). Returns shape (B, NV, NV).
@@ -1348,12 +1332,12 @@ class RobotHandle:
         if self._mjx_active(_convention):
             self._require_mjx_twin("minv", "minv")
             q = np.ascontiguousarray(q, dtype=self._dt)
-            return self._cast_out(self._runner.minv_mujoco(q))
+            return self._runner.minv_mujoco(q)
 
         q = np.ascontiguousarray(q, dtype=self._dt)
         # A3 slice 4: the UPPER-triangle symmetrize (M + Mᵀ − diag) now lives in
         # the shared out-layout module.
-        return self._cast_out(self._shape_out("minv", self._runner.minv(q)))
+        return self._shape_out("minv", self._runner.minv(q))
 
     def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None) -> np.ndarray:
         """Forward dynamics qdd = M⁻¹·(τ − c). ``q`` is (B, nq), ``qd``/``u`` (B, nv). Returns (B, nv).
@@ -1369,7 +1353,7 @@ class RobotHandle:
             q  = np.ascontiguousarray(q,  dtype=self._dt)
             qd = np.ascontiguousarray(qd, dtype=self._dt)
             u  = np.ascontiguousarray(u,  dtype=self._dt)
-            return self._cast_out(self._runner.forward_dynamics_mujoco(q, qd, u, gravity, None))
+            return self._runner.forward_dynamics_mujoco(q, qd, u, gravity, None)
 
         R = None; qd_pin = None
         if self._mjx_active(_convention):
@@ -1383,7 +1367,7 @@ class RobotHandle:
         if R is not None:
             from . import _mujoco
             acc = _mujoco.fd_qdd_pin_to_mjx(np.asarray(acc, np.float64), qd_pin, R, True).astype(self._dt)
-        return self._cast_out(acc)
+        return acc
 
     def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None) -> np.ndarray:
         """Recursive forward dynamics via Articulated Body Algorithm.
@@ -1398,7 +1382,7 @@ class RobotHandle:
             q  = np.ascontiguousarray(q,  dtype=self._dt)
             qd = np.ascontiguousarray(qd, dtype=self._dt)
             u  = np.ascontiguousarray(u,  dtype=self._dt)
-            return self._cast_out(self._runner.aba_mujoco(q, qd, u, gravity, None))
+            return self._runner.aba_mujoco(q, qd, u, gravity, None)
 
         R = None; qd_pin = None
         if self._mjx_active(_convention):
@@ -1412,7 +1396,7 @@ class RobotHandle:
         if R is not None:
             from . import _mujoco
             acc = _mujoco.fd_qdd_pin_to_mjx(np.asarray(acc, np.float64), qd_pin, R, True).astype(self._dt)
-        return self._cast_out(acc)
+        return acc
 
     def crba(self, q, *, gravity: float = -9.81, _convention=None) -> np.ndarray:
         """Joint-space mass matrix M(q) via Composite Rigid Body Algorithm.
@@ -1428,10 +1412,10 @@ class RobotHandle:
         if self._mjx_active(_convention):
             self._require_mjx_twin("crba", "crba")
             q = np.ascontiguousarray(q, dtype=self._dt)
-            return self._cast_out(self._runner.crba_mujoco(q, gravity))
+            return self._runner.crba_mujoco(q, gravity)
 
         q = np.ascontiguousarray(q, dtype=self._dt)
-        return self._cast_out(self._runner.crba(q, gravity))
+        return self._runner.crba(q, gravity)
 
     def end_effector_pose(self, q, *, _convention=None) -> np.ndarray:
         """End-effector pose [xyz, rpy] per EE. Returns shape (B, 6*NUM_EES).
@@ -1624,8 +1608,6 @@ class RobotHandle:
         ``out`` (optional): a caller-owned ``(B, 4*NV**3)`` array in the compute
         dtype, C-contiguous and writeable — ideally from :meth:`pinned_empty` —
         that receives the result directly; the returned tensors are views of it.
-        With ``allow_fp64`` the returned tensors are float64 upcast copies, but
-        ``out`` is still filled.
 
         With ``output_convention="mujoco"`` (floating base) ``q``/``qd``/``qdd`` are
         MuJoCo-convention and all four 2nd-order tensors are returned in the mjx frame
@@ -1648,7 +1630,7 @@ class RobotHandle:
             self._check_nv_width(qdd_arr, "qdd")
             flat = self._runner.idsva_so(q, qd, qdd_arr, 4 * NV ** 3, gravity, out)
         # 4 NV^3 slabs ("so_slabs" in the shared out-layout module).
-        return SecondOrderID(*self._cast_out(*self._shape_out("idsva_so", flat)))
+        return SecondOrderID(*self._shape_out("idsva_so", flat))
 
     def inverse_dynamics_regressor(self, q, qd, qdd=None, *, gravity: float = -9.81, _convention=None) -> np.ndarray:
         """Inverse-dynamics inertial-parameter regressor ``Y`` with
@@ -1676,7 +1658,7 @@ class RobotHandle:
             self._check_nv_width(qdd_arr, "qdd")
             flat = self._runner.inverse_dynamics_regressor(q, qd, qdd_arr, gravity)
         B = flat.shape[0]
-        return self._cast_out(flat.reshape(B, NV, ncol))  # (B, NV, 10*NUM_BODIES)
+        return flat.reshape(B, NV, ncol)  # (B, NV, 10*NUM_BODIES)
 
     def fdsva_so(self, q, qd, u, *, gravity: float = -9.81, out=None, _convention=None) -> SecondOrderFD:
         """Second-order forward dynamics. Returns a :class:`SecondOrderFD`
@@ -1704,7 +1686,7 @@ class RobotHandle:
             self._check_nv_width(qd, "qd")
             self._check_nv_width(u, "u")
             flat = self._runner.fdsva_so(q, qd, u, 4 * NV ** 3, gravity, out)
-        return SecondOrderFD(*self._cast_out(*self._shape_out("fdsva_so", flat)))
+        return SecondOrderFD(*self._shape_out("fdsva_so", flat))
 
     def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81, _convention=None):
         """One integration step x_{k+1} = integrator(x_k, u, dt).
@@ -1990,7 +1972,7 @@ class RobotHandle:
             raw = self._runner.com(q)  # (B, 3 + 3*NV): [p_com(3); J_com(3 x NV col-major)]
         # [p(3); J col-major] ("vec_then_colmajor" in the shared module).
         p_com, j_com = self._shape_out("com", raw)
-        return self._cast_out(p_com), self._cast_out(j_com)
+        return p_com, j_com
 
     def ccrba(self, q, qd, *, _convention=None):
         """Centroidal momentum matrix A (6 x NV) and momentum h = A·qd (6,).
@@ -2016,7 +1998,7 @@ class RobotHandle:
             self._check_nv_width(qd, "qd")
             raw = self._runner.ccrba(q, qd)  # (B, 6*NV + 6): [A(6 x NV col-major); h(6)]
         A, h = self._shape_out("ccrba", raw)
-        return self._cast_out(A), self._cast_out(h)
+        return A, h
 
     def energy(self, q, qd, *, gravity: float = -9.81, _convention=None):
         """Kinetic / potential / mechanical energy. Returns ``(B, 3)`` =
@@ -2032,7 +2014,7 @@ class RobotHandle:
                 "energy(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
             q = np.ascontiguousarray(q, dtype=self._dt)
             qd = np.ascontiguousarray(qd, dtype=self._dt)
-            return self._cast_out(self._runner.energy_mujoco(q, qd, float(gravity)))
+            return self._runner.energy_mujoco(q, qd, float(gravity))
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         self._check_nv_width(qd, "qd")
@@ -2092,12 +2074,12 @@ class RobotHandle:
             q = np.ascontiguousarray(q, dtype=self._dt)
             qd = np.ascontiguousarray(qd, dtype=self._dt)
             raw = self._runner.coriolis_matrix_mujoco(q, qd, float(gravity))
-            return self._cast_out(self._shape_out("coriolis_matrix", raw))
+            return self._shape_out("coriolis_matrix", raw)
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         self._check_nv_width(qd, "qd")
         raw = self._runner.coriolis_matrix(q, qd, float(gravity))  # (B, NV*NV) row-major
-        return self._cast_out(self._shape_out("coriolis_matrix", raw))
+        return self._shape_out("coriolis_matrix", raw)
 
     def kinetic_energy_regressor(self, q, qd, *, gravity: float = -9.81, _convention=None):
         """Kinetic-energy regressor y_KE, length ``10*num_bodies``, with
@@ -2112,11 +2094,11 @@ class RobotHandle:
             self._require_mjx_twin("kinetic_energy_regressor", "kinetic_energy_regressor")
             q = np.ascontiguousarray(q, dtype=self._dt)
             qd = np.ascontiguousarray(qd, dtype=self._dt)
-            return self._cast_out(self._runner.kinetic_energy_regressor_mujoco(q, qd, float(gravity)))
+            return self._runner.kinetic_energy_regressor_mujoco(q, qd, float(gravity))
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         self._check_nv_width(qd, "qd")
-        return self._cast_out(self._runner.kinetic_energy_regressor(q, qd, float(gravity)))
+        return self._runner.kinetic_energy_regressor(q, qd, float(gravity))
 
     def potential_energy_regressor(self, q, *, gravity: float = -9.81, _convention=None):
         """Potential-energy regressor y_PE, length ``10*num_bodies``, with
@@ -2130,9 +2112,9 @@ class RobotHandle:
         if self._mjx_active(_convention):
             self._require_mjx_twin("potential_energy_regressor", "potential_energy_regressor")
             q = np.ascontiguousarray(q, dtype=self._dt)
-            return self._cast_out(self._runner.potential_energy_regressor_mujoco(q, float(gravity)))
+            return self._runner.potential_energy_regressor_mujoco(q, float(gravity))
         q = np.ascontiguousarray(q, dtype=self._dt)
-        return self._cast_out(self._runner.potential_energy_regressor(q, float(gravity)))
+        return self._runner.potential_energy_regressor(q, float(gravity))
 
     def dccrba(self, q, *, _convention=None):
         """dCCRBA tensor ∂A/∂q, shape ``(B, 6, NV, NV)`` indexed
@@ -2159,7 +2141,7 @@ class RobotHandle:
             q = np.ascontiguousarray(q, dtype=self._dt)
             raw = self._runner.dccrba(q)  # (B, 6*NV*NV) flat, dA[row + 6*k + 6*NV*m]
         # flat dA[row + 6*k + 6*NV*m] -> (B, 6, NV, NV) ("dccrba" shared class).
-        return self._cast_out(self._shape_out("dccrba", raw))
+        return self._shape_out("dccrba", raw)
 
     def cmm_time_variation(self, q, qd, *, _convention=None):
         """Centroidal-momentum-matrix time variation Ȧ = dA(q(t))/dt, shape
@@ -2180,12 +2162,12 @@ class RobotHandle:
             q = np.ascontiguousarray(q, dtype=self._dt)
             qd = np.ascontiguousarray(qd, dtype=self._dt)
             raw = self._runner.cmm_time_variation_mujoco(q, qd)  # (B, 6*NV) col-major A[r + 6*c]
-            return self._cast_out(self._shape_out("cmm_time_variation", raw))
+            return self._shape_out("cmm_time_variation", raw)
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         self._check_nv_width(qd, "qd")
         raw = self._runner.cmm_time_variation(q, qd)  # (B, 6*NV) col-major A[r + 6*c]
-        return self._cast_out(self._shape_out("cmm_time_variation", raw))
+        return self._shape_out("cmm_time_variation", raw)
 
     def frame_jacobian(self, q, *, target_jid=None, reference_frame=None, _convention=None):
         """Geometric Jacobian (6 x NV, ``[linear; angular]``) of a frame.
@@ -2353,7 +2335,7 @@ class RobotHandle:
             else:
                 raw = self._runner.end_effector_pose_runtime(q, int(jid), off_arr)  # (B, 6)
             per_ee.append(raw)
-        return self._cast_out(np.stack(per_ee, axis=1))  # (B, NUM_EE, 6)
+        return np.stack(per_ee, axis=1)  # (B, NUM_EE, 6)
 
     def end_effector_pose_gradient_runtime(self, q, ee_joint_names=None, ee_offsets=None, *, _convention=None):
         """Runtime-target end-effector pose gradient ``d[xyz; rpy]/dv`` (6 x NV)
@@ -2383,7 +2365,7 @@ class RobotHandle:
             else:
                 raw = self._runner.end_effector_pose_gradient_runtime(q, int(jid), off_arr)  # (B, 6*NV) col-major
             per_ee.append(self._shape_out("end_effector_pose_gradient_runtime", raw))  # (B, 6, NV)
-        return self._cast_out(np.stack(per_ee, axis=1))  # (B, NUM_EE, 6, NV)
+        return np.stack(per_ee, axis=1)  # (B, NUM_EE, 6, NV)
 
     # ─── field-standard short aliases ────────────────────────────────────────
     # `rnea`/`fd` are the names roboticists (pinocchio / frax / bard) reach for;
@@ -2427,7 +2409,7 @@ class RobotHandle:
         pipelines on the single GPU; they are NOT a multi-GPU mechanism."""
         import weakref
         from . import _core  # noqa: F401
-        new = RobotHandle(self._name, self._so_path, self._meta, allow_fp64=self.allow_fp64)
+        new = RobotHandle(self._name, self._so_path, self._meta)
         cid = new._runner.ctx_create(0, 0, int(workspace_slots))
         # codex R3 (2026-09-24): the handle is the ONE owner of its context. A
         # dropped handle (no close(), no `with`) is finalized at garbage collection

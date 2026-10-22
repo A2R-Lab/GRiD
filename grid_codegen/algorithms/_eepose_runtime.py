@@ -137,8 +137,7 @@ def gen_end_effector_pose_runtime_device(self):
     self.gen_add_code_line("__device__")
     self.gen_add_code_line(func_def, True)
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
-        _runtime_inner_temp_mem_size(self),
-        include_linalg_scratch=True, linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
+        _runtime_inner_temp_mem_size(self))
     self.gen_load_update_XmatsHom_helpers_function_call()
     self.gen_add_code_line("end_effector_pose_runtime_inner<T>(s_eePose, target_jid, s_Xtool, s_q, s_XmatsHom, d_robotModel, s_temp);")
     self.gen_add_sync()
@@ -181,8 +180,7 @@ def gen_end_effector_pose_runtime_kernel(self, single_call_timing=False):
     self.gen_add_code_line("__shared__ T s_Xtool[16];")
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
         _runtime_inner_temp_mem_size(self),
-        extra_t_buffers=[("s_q", n), ("s_eePose", 6)],
-        include_linalg_scratch=True, linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
+        extra_t_buffers=[("s_q", n), ("s_eePose", 6)])
     self.gen_add_code_line("for (int _i = threadIdx.x + threadIdx.y*blockDim.x; _i < 16; _i += blockDim.x*blockDim.y) { s_Xtool[_i] = d_Xtool[_i]; }")
     self.gen_add_sync()
     if not single_call_timing:
@@ -465,8 +463,7 @@ def gen_end_effector_pose_gradient_runtime_device(self):
     self.gen_add_code_line("__device__")
     self.gen_add_code_line(func_def, True)
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
-        _runtime_inner_temp_mem_size(self),
-        include_linalg_scratch=True, linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
+        _runtime_inner_temp_mem_size(self))
     self.gen_load_update_XmatsHom_helpers_function_call()
     self.gen_add_code_line("end_effector_pose_gradient_runtime_inner<T>(s_grad, target_jid, s_Xtool, s_q, s_XmatsHom, d_robotModel, s_temp);")
     self.gen_add_sync()
@@ -507,8 +504,7 @@ def gen_end_effector_pose_gradient_runtime_kernel(self, single_call_timing=False
     self.gen_add_code_line("__shared__ T s_Xtool[16];")
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
         _runtime_inner_temp_mem_size(self),
-        extra_t_buffers=[("s_q", n), ("s_eePoseGrad", 6 * nv)],
-        include_linalg_scratch=True, linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
+        extra_t_buffers=[("s_q", n), ("s_eePoseGrad", 6 * nv)])
     self.gen_add_code_line("for (int _i = threadIdx.x + threadIdx.y*blockDim.x; _i < 16; _i += blockDim.x*blockDim.y) { s_Xtool[_i] = d_Xtool[_i]; }")
     self.gen_add_sync()
     if not single_call_timing:

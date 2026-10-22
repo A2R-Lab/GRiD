@@ -199,8 +199,6 @@ def gen_aba_inner_floating(self):
     self.gen_add_code_line("T *s_vcross_cold = s_temp;")
     self.gen_add_code_line("T *s_fb_cold = s_temp;")
     self.gen_add_code_line("if constexpr (TEMP_IN_SMEM && !COLD_IN_SMEM) { s_vcross_cold = d_workspace - " + str(vcrossOffset) + "; s_fb_cold = d_workspace + " + str(36 * NJ - fbUOffset) + "; }")
-    temp_size = self.gen_aba_inner_temp_mem_size()
-    self.gen_linalg_smem_setup(temp_size)
     self.gen_add_code_line("// Recursive floating ABA root-port.")
 
     self.gen_add_code_line("// Initialize IA = I and clear c")
@@ -269,7 +267,7 @@ def gen_aba_inner_floating(self):
             self.gen_add_code_line(f"s_temp[{tempMatOffset + i}] = s_qd[{dofs[i]}];")
         self.gen_add_end_control_flow()
         self.gen_add_sync()
-        self.gen_add_code_line(f"grid_linalg_segmented_row_strided_gemv<T,6,6,6,true>({seg}, seg_a_off_{tag}, seg_v_x_off_{tag}, seg_v_y_off_{tag}, s_XImats, s_va, s_va, static_cast<T>(1), static_cast<T>(0), seg_s_off_{tag}, S_sel_{tag}, &s_temp[{tempMatOffset}], s_linalg_smem);")
+        self.gen_add_code_line(f"grid_linalg_segmented_row_strided_gemv<T,6,6,6,true>({seg}, seg_a_off_{tag}, seg_v_x_off_{tag}, seg_v_y_off_{tag}, s_XImats, s_va, s_va, static_cast<T>(1), static_cast<T>(0), seg_s_off_{tag}, S_sel_{tag}, &s_temp[{tempMatOffset}]);")
         # c[k] = mxS(v[k]) * (sign*qd[dof]) for all siblings (parallel over level)
         self.gen_add_code_line("// c[k] = mxS(v[k]) * (S_sign*qd[k])")
         self.gen_add_parallel_loop("ind", str(seg))
@@ -375,8 +373,8 @@ def gen_aba_inner_floating(self):
             self.gen_add_sync()
 
             self.gen_add_code_line("// temp = X.T*IA*X")
-            self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6,false,true>(&s_XImats[{36*jid}], &s_temp[{IAOffset + 36*jid}], &s_temp[{tempVecOffset}], static_cast<T>(1), static_cast<T>(0), s_linalg_smem);")
-            self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6>(&s_temp[{tempVecOffset}], &s_XImats[{36*jid}], &s_temp[{tempMatOffset}], static_cast<T>(1), static_cast<T>(0), s_linalg_smem);")
+            self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6,false,true>(&s_XImats[{36*jid}], &s_temp[{IAOffset + 36*jid}], &s_temp[{tempVecOffset}], static_cast<T>(1), static_cast<T>(0));")
+            self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6>(&s_temp[{tempVecOffset}], &s_XImats[{36*jid}], &s_temp[{tempMatOffset}], static_cast<T>(1), static_cast<T>(0));")
             self.gen_add_parallel_loop("ind", "36")
             self.gen_add_code_line("int row = ind % 6; int col = ind / 6;")
             self.gen_add_code_line("s_temp[" + str(tempMatOffset) + " + row + 6*col] -= s_temp[" + str(UOffset + jid6) + " + row] * s_temp[" + str(UOffset + jid6) + " + col] / s_temp[" + str(dOffset + jid) + "];")
@@ -444,7 +442,7 @@ def gen_aba_inner_floating(self):
             self.gen_add_code_line("s_qdd[" + str(dof) + "] = tempval / s_temp[" + str(dOffset + jid) + "];")
             self.gen_add_end_control_flow()
             self.gen_add_sync()
-            self.gen_add_code_line(f"grid_linalg_row_strided_gemv<T,6,6,6>(&s_XImats[{36*jid}], &s_va[{6*NJ + parent6}], &s_va[{6*NJ + jid6}], static_cast<T>(1), static_cast<T>(0), s_linalg_smem);")
+            self.gen_add_code_line(f"grid_linalg_row_strided_gemv<T,6,6,6>(&s_XImats[{36*jid}], &s_va[{6*NJ + parent6}], &s_va[{6*NJ + jid6}], static_cast<T>(1), static_cast<T>(0));")
             self.gen_add_parallel_loop("row", "6")
             self.gen_add_code_line("s_va[" + str(6 * NJ + jid6) + " + row] += s_temp[" + str(cOffset + jid6) + " + row];")
             self.gen_add_end_control_flow()
@@ -553,8 +551,6 @@ def gen_aba_inner(self):
     self.gen_add_code_line("if constexpr (!TEMP_IN_SMEM) { s_temp = d_workspace; } else { (void)d_workspace; }")
     self.gen_add_code_line("T *s_cold = s_temp;")
     self.gen_add_code_line("if constexpr (TEMP_IN_SMEM && !COLD_IN_SMEM) { s_cold = d_workspace - " + str(98 * n) + "; }")
-    temp_size = self.gen_aba_inner_temp_mem_size()
-    self.gen_linalg_smem_setup(temp_size)
 
     if self.robot_has_mimic_joints():
         # Mimic ABA via algebraic decomposition (mirrors RBDReference.aba mimic
@@ -698,7 +694,7 @@ def gen_aba_inner(self):
             # per-jid row_strided_gemv for v
             for jid_val in inds:
                 parent_val = self.robot.get_parent_id(jid_val)
-                self.gen_add_code_line(f"grid_linalg_row_strided_gemv<T,6,6,6>(&s_XImats[{36*jid_val}], &s_va[{6*parent_val}], &s_va[{6*jid_val}], static_cast<T>(1), static_cast<T>(0), s_linalg_smem);")
+                self.gen_add_code_line(f"grid_linalg_row_strided_gemv<T,6,6,6>(&s_XImats[{36*jid_val}], &s_va[{6*parent_val}], &s_va[{6*jid_val}], static_cast<T>(1), static_cast<T>(0));")
                 self.gen_add_serial_ops()
                 if self.robot.joint_is_spherical(jid_val):
                     # Tier-C spherical: v[jid] += S*qd over the 3 angular columns
@@ -1085,8 +1081,8 @@ def gen_aba_inner(self):
                 for jid_val in inds:
                     parent_val = self.robot.get_parent_id(jid_val)
                     self.gen_add_code_line("// X[" + str(jid_val) + "].T*Ia[" + str(jid_val) + "]*X[" + str(jid_val) + "] -> IA[" + str(parent_val) + "]")
-                    self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6,false,true>(&s_XImats[{36*jid_val}], &s_temp[{36*(n+jid_val)}], &s_cold[{98*n + 36*jid_val}], static_cast<T>(1), static_cast<T>(0), s_linalg_smem);")
-                    self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6>(&s_cold[{98*n + 36*jid_val}], &s_XImats[{36*jid_val}], &s_temp[{36*parent_val}], static_cast<T>(1), static_cast<T>(1), s_linalg_smem);")
+                    self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6,false,true>(&s_XImats[{36*jid_val}], &s_temp[{36*(n+jid_val)}], &s_cold[{98*n + 36*jid_val}], static_cast<T>(1), static_cast<T>(0));")
+                    self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6>(&s_cold[{98*n + 36*jid_val}], &s_XImats[{36*jid_val}], &s_temp[{36*parent_val}], static_cast<T>(1), static_cast<T>(1));")
 
             # update pA of the parent (sequential GEMVs safe even for repeated parents)
             self.gen_add_code_line("// pA[parent] += X[k].T*pa[k]")
@@ -1146,7 +1142,7 @@ def gen_aba_inner(self):
             # per-jid GEMV: a[jid] = X[jid]*a[parent] + c[jid]
             for jid_val in inds:
                 parent_val = self.robot.get_parent_id(jid_val)
-                self.gen_add_code_line(f"grid_linalg_row_strided_gemv<T,6,6,6>(&s_XImats[{36*jid_val}], &s_va[{6*n + 6*parent_val}], &s_va[{6*n + 6*jid_val}], static_cast<T>(1), static_cast<T>(0), s_linalg_smem);")
+                self.gen_add_code_line(f"grid_linalg_row_strided_gemv<T,6,6,6>(&s_XImats[{36*jid_val}], &s_va[{6*n + 6*parent_val}], &s_va[{6*n + 6*jid_val}], static_cast<T>(1), static_cast<T>(0));")
                 self.gen_add_parallel_loop("row", "6")
                 self.gen_add_code_line(f"s_va[{6*n + 6*jid_val} + row] += s_temp[{72*n + 6*jid_val} + row];")
                 self.gen_add_end_control_flow()
@@ -1346,7 +1342,7 @@ def gen_aba_device(self):
         "Compute the ABA (Articulated Body Algorithm)", func_def, shared_mem_size,
         lambda: self.gen_aba_inner_function_call(),
         func_notes = func_notes, func_params = func_params,
-        extra_t_buffers = [("s_va", 12*n)], include_linalg_scratch = True)
+        extra_t_buffers = [("s_va", 12*n)])
 
 def _aba_surgical_inner_smem_size(self):
     """Float count the smem s_temp arena needs at the SURGICAL rung. The cold
@@ -1387,7 +1383,7 @@ def _emit_aba_kernel_body_for_flags(self, nq, nv, n, input_count, level, single_
         shared_mem_size = _aba_surgical_inner_smem_size(self)
     else:
         shared_mem_size = self.gen_aba_inner_temp_mem_size()
-    self.gen_XImats_helpers_temp_shared_memory_code(shared_mem_size, extra_t_buffers = [("s_qdd", nv), ("s_q_qd_tau", input_count), ("s_va", 12*n)], include_linalg_scratch=True)
+    self.gen_XImats_helpers_temp_shared_memory_code(shared_mem_size, extra_t_buffers = [("s_qdd", nv), ("s_q_qd_tau", input_count), ("s_va", 12*n)])
     # Canonical NUM_JOINTS(=nq)-wide slots: qd at nq, tau/u at 2*nq (mirrors
     # id/forward_dynamics). Using nq+nv here would point s_tau into the qd slot
     # for a floating base (nq>nv) -- the off-by-(nq-nv) tau bug.

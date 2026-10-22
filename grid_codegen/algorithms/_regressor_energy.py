@@ -150,7 +150,7 @@ def gen_kinetic_energy_regressor_device(self):
         shared_mem_size,
         lambda: self.gen_kinetic_energy_regressor_inner_function_call(),
         func_params=func_params,
-        extra_t_buffers=extra_t_buffers, include_linalg_scratch=True)
+        extra_t_buffers=extra_t_buffers)
 
 
 def gen_kinetic_energy_regressor_kernel(self, single_call_timing=False):
@@ -187,7 +187,7 @@ def gen_kinetic_energy_regressor_kernel(self, single_call_timing=False):
     extra_t_buffers = [("s_q_qd", in_size), ("s_y_ke", out_size), ("s_vaf", 18 * nb_vaf)]
     shared_mem_size = self.gen_kinetic_energy_regressor_inner_temp_mem_size()
     self.gen_XImats_helpers_temp_shared_memory_code(
-        shared_mem_size, extra_t_buffers=extra_t_buffers, include_linalg_scratch=True)
+        shared_mem_size, extra_t_buffers=extra_t_buffers)
     self.gen_add_code_line("T *s_q = s_q_qd; T *s_qd = &s_q_qd[" + str(NUM_POS) + "];")
     if not single_call_timing:
         self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
@@ -366,8 +366,7 @@ def gen_potential_energy_regressor_device(self):
     self.gen_add_code_line("__device__")
     self.gen_add_code_line(func_def, True)
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
-        _potential_energy_regressor_inner_temp_mem_size(self), extra_t_buffers=[],
-        include_linalg_scratch=True, linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
+        _potential_energy_regressor_inner_temp_mem_size(self), extra_t_buffers=[])
     self.gen_load_update_XmatsHom_helpers_function_call()
     self.gen_potential_energy_regressor_inner_function_call()
     self.gen_add_sync()
@@ -405,8 +404,7 @@ def gen_potential_energy_regressor_kernel(self, single_call_timing=False):
     self.gen_add_code_line(func_def, True)
     extra_t_buffers = [("s_q", in_size), ("s_y_pe", out_size)]
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
-        _potential_energy_regressor_inner_temp_mem_size(self), extra_t_buffers=extra_t_buffers,
-        include_linalg_scratch=True, linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
+        _potential_energy_regressor_inner_temp_mem_size(self), extra_t_buffers=extra_t_buffers)
     if not single_call_timing:
         self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
         self.gen_kernel_load_inputs("q", str(in_size), stride="stride_q")

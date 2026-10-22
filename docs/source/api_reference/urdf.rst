@@ -19,8 +19,7 @@ Usage
 The complete signature is::
 
    parse(filename, floating_base=False, using_quaternion=True,
-         alpha_tie_breaker=None, joint_ordering="pinocchio_order",
-         floating_base_convention="pinocchio", strict_inertial=False)
+         joint_ordering="pinocchio_order", strict_inertial=False)
 
 Keep ``using_quaternion=True`` for the documented floating-base GRiD paths.
 
@@ -33,24 +32,9 @@ ordered in the depth-first walk that assigns joint ids:
    joint_ordering="urdf_order"         # DFS preserving the raw URDF sibling order
    joint_ordering="alphabetical_order" # DFS sorting sibling joints by joint name
 
-The older ``alpha_tie_breaker`` argument is still accepted: ``False`` means
-``urdf_order`` and ``True`` means ``alphabetical_order``.
-When supplied, it takes precedence over ``joint_ordering``.
-
-A floating base adds a free-flyer root joint. The public input convention is
-selected with ``floating_base_convention``:
-
-.. code:: python
-
-   robot = parser.parse(urdf_filepath, floating_base=True, floating_base_convention="pinocchio")
-
-   floating_base_convention="pinocchio"  # default: q = [x, y, z, qx, qy, qz, qw], v = [vx, vy, vz, wx, wy, wz]
-   floating_base_convention="legacy"     # q = [x, y, z, qw, qx, qy, qz], v = [wx, wy, wz, vx, vy, vz]
-
-The robot's normalization helpers convert legacy vectors to the internal
-Pinocchio ordering; RBDReference uses these helpers. This parser option is
-not a legacy-layout switch for the Python/CUDA bindings: use their documented
-Pinocchio or MuJoCo interfaces and buffer layouts.
+A floating base adds a free-flyer root joint. Its layout is pinocchio's:
+``q = [x, y, z, qx, qy, qz, qw, joints]`` and ``v = [vx, vy, vz, wx, wy, wz,
+joints]`` on every surface (the parser, RBDReference and the generated code).
 
 Supported joint types
 ---------------------
