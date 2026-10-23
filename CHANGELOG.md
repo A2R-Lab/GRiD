@@ -12,6 +12,8 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+## [0.5.5] — 2026-10-23
+
 - Floating-base cost menu. `tracking_cost_menu` and its gradient and Hessian are
   emitted on a floating base (a free-flyer root with single-axis joints; a spherical
   joint is refused by name) in the tangent layout: the state term is the new
@@ -404,7 +406,8 @@ update on top of that, organised here by theme:
 - Closed kinematic loops are unsupported.
 - No Windows, macOS, Jetson or precompiled-robot wheels.
 
-[Unreleased]: https://github.com/A2R-Lab/GRiD/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/A2R-Lab/GRiD/compare/v0.5.5...HEAD
+[0.5.5]: https://github.com/A2R-Lab/GRiD/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/A2R-Lab/GRiD/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/A2R-Lab/GRiD/compare/v0.5.1...v0.5.3
 [0.5.2]: https://github.com/A2R-Lab/GRiD/compare/v0.5.1...94f4e5c
