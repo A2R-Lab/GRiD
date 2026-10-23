@@ -470,15 +470,31 @@ template <typename T> __host__ __device__ T Rdes_val(int i) {
 }
 #define MENU_MX 2
 #define MENU_MU 1
+// Tangent width TN = 2 NV (== NX on a fixed base); the menu's input width MNU and the
+// variable width NLX of its linear x feature come from the header (NV - 6 and 2 NV - 6 on a
+// floating base, NV and NX on a fixed base).
+constexpr int TN = 2 * NV;
+#if defined(GRID_PLANT_HAS_COST_MENU)
+constexpr int MNU = grid_plant::GRID_PLANT_MENU_NU;
+constexpr int NLX = grid_plant::GRID_PLANT_MENU_NLX;
+constexpr bool FBM = grid_plant::GRID_PLANT_MENU_TANGENT != 0;
+#else
+constexpr int MNU = NU;
+constexpr int NLX = NX;
+constexpr bool FBM = false;
+#endif
 #define MENU_STATE_CNT (1 + NX + NX * NX)
-#define MENU_INPUT_CNT (1 + NU + NU * NU)
-#define MENU_PRESET_CNT (1 + NX + NU + NX * NX + NU * NU)
+#define MENU_TAN_CNT (1 + TN + TN * TN)
+#define MENU_INPUT_CNT (1 + MNU + MNU * MNU)
+#define MENU_LINX_CNT (1 + NLX + NLX * NLX)
+#define MENU_PRESET_CNT (1 + TN + MNU + TN * TN + MNU * MNU)
 template <typename T>
 __global__ void cost_menu_kernel(const T *g_q, const T *g_qd, const T *g_u, const grid::robotModel<T> *d_robotModel, T gravity,
                                  T *o_as, T *o_ai, T *o_ae, T *o_lx, T *o_lu, T *o_quad, T *o_menu, T *o_grav,
-                                 T *o_or, T *o_vel, T *o_f2, T *o_rlb, T *o_qb) {
+                                 T *o_or, T *o_vel, T *o_f2, T *o_rlb, T *o_qb, T *o_hg, T *o_ts, T *o_tsh, T *o_tsx) {
     __shared__ T s_x[NX], s_u[NU], s_xdes[NX], s_udes[NU], s_eedes[3], s_Q[NX], s_R[NU], s_W[3];
-    __shared__ T s_Ax[MENU_MX * NX], s_bx[MENU_MX], s_tx[MENU_MX], s_Wx[MENU_MX];
+    __shared__ T s_Ax[MENU_MX * NLX], s_bx[MENU_MX], s_tx[MENU_MX], s_Wx[MENU_MX];
+    __shared__ T s_Qt[TN], s_xdes_t[NX], s_delta[NV], s_tlo[TN], s_thi[TN];
     __shared__ T s_Au[MENU_MU * NU], s_bu[MENU_MU], s_tu[MENU_MU], s_Wu[MENU_MU];
     __shared__ T s_Rdes[9], s_vdes[6], s_Wv[6], s_cfdes[3], s_Wcf[3], s_xlo[NX], s_xhi[NX];
     __shared__ int s_act[grid_plant::GRID_PLANT_MENU_TERMS]; __shared__ T s_eps[grid_plant::GRID_PLANT_MENU_TERMS];
@@ -493,13 +509,50 @@ __global__ void cost_menu_kernel(const T *g_q, const T *g_qd, const T *g_u, cons
     for (int r = tid; r < 3; r += nth) { s_eedes[r] = static_cast<T>(0); s_W[r] = Ww_val<T>(r); s_cfdes[r] = cfdes_val<T>(r); s_Wcf[r] = Wcf_val<T>(r); }
     for (int r = tid; r < 6; r += nth) { s_vdes[r] = vdes_val<T>(r); s_Wv[r] = Wv_val<T>(r); }
     for (int i = tid; i < 9; i += nth) { s_Rdes[i] = Rdes_val<T>(i); }
-    for (int i = tid; i < MENU_MX * NX; i += nth) { s_Ax[i] = lin_Ax_val<T>(i % MENU_MX, i / MENU_MX); }
+    for (int i = tid; i < MENU_MX * NLX; i += nth) { s_Ax[i] = lin_Ax_val<T>(i % MENU_MX, i / MENU_MX); }
+    for (int i = tid; i < TN; i += nth) { s_Qt[i] = Qw_val<T>(i); }
+    for (int i = tid; i < NV; i += nth) s_delta[i] = static_cast<T>(0.05) * static_cast<T>((i % 3) + 1) * ((i % 2) ? static_cast<T>(-1) : static_cast<T>(1));
+    for (int i = tid; i < NX; i += nth) s_xdes_t[i] = s_xdes[i];
     for (int m = tid; m < MENU_MX; m += nth) { s_bx[m] = lin_bx_val<T>(m); s_tx[m] = lin_tx_val<T>(m); s_Wx[m] = lin_Wx_val<T>(m); }
     for (int n = tid; n < MENU_MU * NU; n += nth) { s_Au[n] = lin_Au_val<T>(n); }
     for (int m = tid; m < MENU_MU; m += nth) { s_bu[m] = static_cast<T>(0.1); s_tu[m] = static_cast<T>(-0.1); s_Wu[m] = static_cast<T>(5.0); }
     for (int t = tid; t < grid_plant::GRID_PLANT_MENU_TERMS; t += nth) { s_act[t] = grid_plant::GRID_PLANT_ACTIVATION_PSEUDO_HUBER; s_eps[t] = menu_eps_val<T>(t); }
     __syncthreads();
     const int PH = grid_plant::GRID_PLANT_ACTIVATION_PSEUDO_HUBER;
+#if defined(GRID_PLANT_HAS_STATE_COST_TANGENT)
+    if (tid == 0) {
+        grid::grid_integrate_floating_q<T, NQ>(s_x, s_delta, s_xdes_t);
+        for (int i = 0; i < NV; ++i) s_xdes_t[NQ + i] = s_x[NQ + i] + static_cast<T>(0.03) * static_cast<T>(i + 1);
+    }
+    __syncthreads();
+    // tangent-indexed bounds around the target's feature value (joint positions, tangent velocities); the base pose is unbounded
+    for (int i = tid; i < TN; i += nth) {
+        T c = (i < 6) ? static_cast<T>(0) : ((i < NV) ? s_xdes_t[i + 1] : s_xdes_t[NQ + i - NV]);
+        s_tlo[i] = c - static_cast<T>(0.45); s_thi[i] = c + static_cast<T>(0.45);
+    }
+    for (int i = tid; i < NX; i += nth) o_tsx[i] = s_xdes_t[i];
+    __syncthreads();
+    grid_plant::state_cost_tangent<T>(s_out, s_x, s_xdes_t, s_Qt, PH, s_eps[1], nullptr, nullptr, s_arena);
+    __syncthreads(); if (tid == 0) o_ts[0] = s_out[0]; __syncthreads();
+    grid_plant::state_cost_tangent_gradient<T, false>(s_grad, s_x, s_xdes_t, s_Qt, PH, s_eps[1], nullptr, nullptr, s_arena);
+    __syncthreads();
+    grid_plant::state_cost_tangent_hessian<T, false>(s_hess, s_x, s_xdes_t, s_Qt, PH, s_eps[1], nullptr, nullptr, s_arena);
+    __syncthreads();
+    for (int i = tid; i < TN; i += nth) o_ts[1 + i] = s_grad[i];
+    for (int i = tid; i < TN * TN; i += nth) o_ts[1 + TN + i] = s_hess[i];
+    __syncthreads();
+    grid_plant::state_cost_tangent<T>(s_out, s_x, s_xdes_t, s_Qt, grid_plant::GRID_PLANT_ACTIVATION_SMOOTH_HINGE, static_cast<T>(0.05), s_tlo, s_thi, s_arena);
+    __syncthreads(); if (tid == 0) o_tsh[0] = s_out[0]; __syncthreads();
+    grid_plant::state_cost_tangent_gradient<T, false>(s_grad, s_x, s_xdes_t, s_Qt, grid_plant::GRID_PLANT_ACTIVATION_SMOOTH_HINGE, static_cast<T>(0.05), s_tlo, s_thi, s_arena);
+    __syncthreads();
+    grid_plant::state_cost_tangent_hessian<T, false>(s_hess, s_x, s_xdes_t, s_Qt, grid_plant::GRID_PLANT_ACTIVATION_SMOOTH_HINGE, static_cast<T>(0.05), s_tlo, s_thi, s_arena);
+    __syncthreads();
+    for (int i = tid; i < TN; i += nth) o_tsh[1 + i] = s_grad[i];
+    for (int i = tid; i < TN * TN; i += nth) o_tsh[1 + TN + i] = s_hess[i];
+    __syncthreads();
+#else
+    (void)o_ts; (void)o_tsh; (void)o_tsx; (void)s_tlo; (void)s_thi;
+#endif
 
 #if defined(GRID_PLANT_HAS_GRAVITY_TORQUE)
     grid_plant::gravity_torque<T>(s_grad, s_x, s_arena, d_robotModel, gravity);
@@ -534,79 +587,88 @@ __global__ void cost_menu_kernel(const T *g_q, const T *g_qd, const T *g_u, cons
     for (int i = tid; i < NX; i += nth) o_qb[1 + i] = s_grad[i];
     for (int i = tid; i < NX * NX; i += nth) o_qb[1 + NX + i] = s_hess[i];
     __syncthreads();
-    // activated input cost
-    grid_plant::input_cost<T>(s_out, s_u, s_udes, s_R, PH, s_eps[2], nullptr, nullptr, s_arena);
-    __syncthreads(); if (tid == 0) o_ai[0] = s_out[0]; __syncthreads();
-    grid_plant::input_cost_gradient<T, false>(s_grad, s_u, s_udes, s_R, PH, s_eps[2], nullptr, nullptr);
-    grid_plant::input_cost_hessian<T, false>(s_hess, s_u, s_udes, s_R, PH, s_eps[2], nullptr, nullptr);
+    grid_plant::state_cost<T>(s_out, s_x, s_xdes, s_Q, grid_plant::GRID_PLANT_ACTIVATION_SMOOTH_HINGE, static_cast<T>(0.05), s_xlo, s_xhi, s_arena);
+    __syncthreads(); if (tid == 0) o_hg[0] = s_out[0]; __syncthreads();
+    grid_plant::state_cost_gradient<T, false>(s_grad, s_x, s_xdes, s_Q, grid_plant::GRID_PLANT_ACTIVATION_SMOOTH_HINGE, static_cast<T>(0.05), s_xlo, s_xhi);
+    grid_plant::state_cost_hessian<T, false>(s_hess, s_x, s_xdes, s_Q, grid_plant::GRID_PLANT_ACTIVATION_SMOOTH_HINGE, static_cast<T>(0.05), s_xlo, s_xhi);
     __syncthreads();
-    for (int i = tid; i < NU; i += nth) o_ai[1 + i] = s_grad[i];
-    for (int i = tid; i < NU * NU; i += nth) o_ai[1 + NU + i] = s_hess[i];
+    for (int i = tid; i < NX; i += nth) o_hg[1 + i] = s_grad[i];
+    for (int i = tid; i < NX * NX; i += nth) o_hg[1 + NX + i] = s_hess[i];
+    __syncthreads();
+    // activated input cost
+    grid_plant::input_cost<T, false, MNU>(s_out, s_u, s_udes, s_R, PH, s_eps[2], nullptr, nullptr, s_arena);
+    __syncthreads(); if (tid == 0) o_ai[0] = s_out[0]; __syncthreads();
+    grid_plant::input_cost_gradient<T, false, MNU>(s_grad, s_u, s_udes, s_R, PH, s_eps[2], nullptr, nullptr);
+    grid_plant::input_cost_hessian<T, false, MNU>(s_hess, s_u, s_udes, s_R, PH, s_eps[2], nullptr, nullptr);
+    __syncthreads();
+    for (int i = tid; i < MNU; i += nth) o_ai[1 + i] = s_grad[i];
+    for (int i = tid; i < MNU * MNU; i += nth) o_ai[1 + MNU + i] = s_hess[i];
     __syncthreads();
     // frame 0 (the end-effector target) position cost (s_x[:NQ] is q)
     grid_plant::frame_position_cost<T>(s_out, s_x, 0, s_eedes, s_W, PH, s_eps[0], nullptr, nullptr, s_frame, s_arena, d_robotModel);
     __syncthreads(); if (tid == 0) o_ae[0] = s_out[0]; __syncthreads();
     grid_plant::frame_position_cost_gradient<T, false>(s_grad, s_x, 0, s_eedes, s_W, PH, s_eps[0], nullptr, nullptr, s_frame, s_arena, d_robotModel);
     __syncthreads();
-    for (int i = tid; i < NX; i += nth) o_ae[1 + i] = s_grad[i];
+    for (int i = tid; i < TN; i += nth) o_ae[1 + i] = s_grad[i];
     __syncthreads();
     grid_plant::frame_position_cost_hessian<T, false>(s_hess, s_x, 0, s_eedes, s_W, PH, s_eps[0], nullptr, nullptr, s_frame, s_arena, d_robotModel);
     __syncthreads();
-    for (int i = tid; i < NX * NX; i += nth) o_ae[1 + NX + i] = s_hess[i];
+    for (int i = tid; i < TN * TN; i += nth) o_ae[1 + TN + i] = s_hess[i];
     __syncthreads();
     // frame 0 orientation (log map)
     grid_plant::frame_orientation_cost<T>(s_out, s_x, 0, s_Rdes, s_W, PH, s_eps[5], s_frame, s_arena, d_robotModel);
     __syncthreads(); if (tid == 0) o_or[0] = s_out[0]; __syncthreads();
     grid_plant::frame_orientation_cost_gradient<T, false>(s_grad, s_x, 0, s_Rdes, s_W, PH, s_eps[5], s_frame, s_arena, d_robotModel);
     __syncthreads();
-    for (int i = tid; i < NX; i += nth) o_or[1 + i] = s_grad[i];
+    for (int i = tid; i < TN; i += nth) o_or[1 + i] = s_grad[i];
     __syncthreads();
     grid_plant::frame_orientation_cost_hessian<T, false>(s_hess, s_x, 0, s_Rdes, s_W, PH, s_eps[5], s_frame, s_arena, d_robotModel);
     __syncthreads();
-    for (int i = tid; i < NX * NX; i += nth) o_or[1 + NX + i] = s_hess[i];
+    for (int i = tid; i < TN * TN; i += nth) o_or[1 + TN + i] = s_hess[i];
     __syncthreads();
     // frame 1 position
     grid_plant::frame_position_cost<T>(s_out, s_x, 1, s_cfdes, s_Wcf, PH, s_eps[7], nullptr, nullptr, s_frame, s_arena, d_robotModel);
     __syncthreads(); if (tid == 0) o_f2[0] = s_out[0]; __syncthreads();
     grid_plant::frame_position_cost_gradient<T, false>(s_grad, s_x, 1, s_cfdes, s_Wcf, PH, s_eps[7], nullptr, nullptr, s_frame, s_arena, d_robotModel);
     __syncthreads();
-    for (int i = tid; i < NX; i += nth) o_f2[1 + i] = s_grad[i];
+    for (int i = tid; i < TN; i += nth) o_f2[1 + i] = s_grad[i];
     __syncthreads();
     grid_plant::frame_position_cost_hessian<T, false>(s_hess, s_x, 1, s_cfdes, s_Wcf, PH, s_eps[7], nullptr, nullptr, s_frame, s_arena, d_robotModel);
     __syncthreads();
-    for (int i = tid; i < NX * NX; i += nth) o_f2[1 + NX + i] = s_hess[i];
+    for (int i = tid; i < TN * TN; i += nth) o_f2[1 + TN + i] = s_hess[i];
     __syncthreads();
 #if defined(GRID_PLANT_HAS_FRAME_VELOCITY_COST)
     grid_plant::frame_velocity_cost<T>(s_out, s_x, s_x + NQ, 0, s_vdes, s_Wv, PH, s_eps[6], nullptr, nullptr, s_frame, s_arena, d_robotModel);
     __syncthreads(); if (tid == 0) o_vel[0] = s_out[0]; __syncthreads();
     grid_plant::frame_velocity_cost_gradient<T, false>(s_grad, s_x, s_x + NQ, 0, s_vdes, s_Wv, PH, s_eps[6], nullptr, nullptr, s_frame, s_arena, d_robotModel);
     __syncthreads();
-    for (int i = tid; i < NX; i += nth) o_vel[1 + i] = s_grad[i];
+    for (int i = tid; i < TN; i += nth) o_vel[1 + i] = s_grad[i];
     __syncthreads();
     grid_plant::frame_velocity_cost_hessian<T, false>(s_hess, s_x, s_x + NQ, 0, s_vdes, s_Wv, PH, s_eps[6], nullptr, nullptr, s_frame, s_arena, d_robotModel);
     __syncthreads();
-    for (int i = tid; i < NX * NX; i += nth) o_vel[1 + NX + i] = s_hess[i];
+    for (int i = tid; i < TN * TN; i += nth) o_vel[1 + TN + i] = s_hess[i];
     __syncthreads();
 #endif
     // linear feature on x
-    grid_plant::linear_feature_cost<T, MENU_MX, NX>(s_out, s_x, s_Ax, s_bx, s_tx, s_Wx, PH, s_eps[3], nullptr, nullptr, s_arena);
+    const T *s_lxv = (NLX == NX) ? s_x : s_x + 7;  // the feature variable: x, or [q[7:]; qd] on a floating base
+    grid_plant::linear_feature_cost<T, MENU_MX, NLX>(s_out, s_lxv, s_Ax, s_bx, s_tx, s_Wx, PH, s_eps[3], nullptr, nullptr, s_arena);
     __syncthreads(); if (tid == 0) o_lx[0] = s_out[0]; __syncthreads();
-    grid_plant::linear_feature_cost_gradient<T, MENU_MX, NX, false>(s_grad, s_x, s_Ax, s_bx, s_tx, s_Wx, PH, s_eps[3], nullptr, nullptr, s_arena);
+    grid_plant::linear_feature_cost_gradient<T, MENU_MX, NLX, false>(s_grad, s_lxv, s_Ax, s_bx, s_tx, s_Wx, PH, s_eps[3], nullptr, nullptr, s_arena);
     __syncthreads();
-    grid_plant::linear_feature_cost_hessian<T, MENU_MX, NX, false>(s_hess, s_x, s_Ax, s_bx, s_tx, s_Wx, PH, s_eps[3], nullptr, nullptr, s_arena);
+    grid_plant::linear_feature_cost_hessian<T, MENU_MX, NLX, false>(s_hess, s_lxv, s_Ax, s_bx, s_tx, s_Wx, PH, s_eps[3], nullptr, nullptr, s_arena);
     __syncthreads();
-    for (int i = tid; i < NX; i += nth) o_lx[1 + i] = s_grad[i];
-    for (int i = tid; i < NX * NX; i += nth) o_lx[1 + NX + i] = s_hess[i];
+    for (int i = tid; i < NLX; i += nth) o_lx[1 + i] = s_grad[i];
+    for (int i = tid; i < NLX * NLX; i += nth) o_lx[1 + NLX + i] = s_hess[i];
     __syncthreads();
     // linear feature on u
-    grid_plant::linear_feature_cost<T, MENU_MU, NU>(s_out, s_u, s_Au, s_bu, s_tu, s_Wu, PH, s_eps[4], nullptr, nullptr, s_arena);
+    grid_plant::linear_feature_cost<T, MENU_MU, MNU>(s_out, s_u, s_Au, s_bu, s_tu, s_Wu, PH, s_eps[4], nullptr, nullptr, s_arena);
     __syncthreads(); if (tid == 0) o_lu[0] = s_out[0]; __syncthreads();
-    grid_plant::linear_feature_cost_gradient<T, MENU_MU, NU, false>(s_grad, s_u, s_Au, s_bu, s_tu, s_Wu, PH, s_eps[4], nullptr, nullptr, s_arena);
+    grid_plant::linear_feature_cost_gradient<T, MENU_MU, MNU, false>(s_grad, s_u, s_Au, s_bu, s_tu, s_Wu, PH, s_eps[4], nullptr, nullptr, s_arena);
     __syncthreads();
-    grid_plant::linear_feature_cost_hessian<T, MENU_MU, NU, false>(s_hess, s_u, s_Au, s_bu, s_tu, s_Wu, PH, s_eps[4], nullptr, nullptr, s_arena);
+    grid_plant::linear_feature_cost_hessian<T, MENU_MU, MNU, false>(s_hess, s_u, s_Au, s_bu, s_tu, s_Wu, PH, s_eps[4], nullptr, nullptr, s_arena);
     __syncthreads();
-    for (int i = tid; i < NU; i += nth) o_lu[1 + i] = s_grad[i];
-    for (int i = tid; i < NU * NU; i += nth) o_lu[1 + NU + i] = s_hess[i];
+    for (int i = tid; i < MNU; i += nth) o_lu[1 + i] = s_grad[i];
+    for (int i = tid; i < MNU * MNU; i += nth) o_lu[1 + MNU + i] = s_hess[i];
     __syncthreads();
     // the quadratic activation reproduces the quadratic terms
     grid_plant::state_cost<T>(s_out, s_x, s_xdes, s_Q, grid_plant::GRID_PLANT_ACTIVATION_QUADRATIC, s_eps[1], nullptr, nullptr, s_arena);
@@ -616,16 +678,22 @@ __global__ void cost_menu_kernel(const T *g_q, const T *g_qd, const T *g_u, cons
 
 #if defined(GRID_PLANT_HAS_COST_MENU)
     // ===== menu PRESET (every term pseudo-Huber, both linear features, frame 1 as the second position) vs the composition of the blocks above =====
+    // Fixed base: x layout (TN == NX, MNU == NU). Floating base (FBM): tangent layout, the state term is
+    // state_cost_tangent, the joint barriers bound q[7:] / the tangent velocities / the MNU inputs.
+    constexpr int NQB = FBM ? NQ - 7 : NQ;   // bounded joint positions
+    constexpr int QOFF = FBM ? 7 : 0;        // their offset in q
+    constexpr int QGRAD = FBM ? 6 : 0;       // their rows in the (tangent) gradient
+    constexpr int VGRAD = FBM ? NV : NQ;     // the velocity rows
     __shared__ T s_lo_q[NQ], s_hi_q[NQ], s_lo_v[NV], s_hi_v[NV], s_lo_u[NU], s_hi_u[NU];
-    __shared__ T s_qk[NX], s_rk[NU], s_Qk[NX * NX], s_Rk[NU * NU];
-    __shared__ T s_rv[1], s_tv[1], s_tg[NX], s_th[NX * NX];
+    __shared__ T s_qk[TN], s_rk[MNU], s_Qk[TN * TN], s_Rk[MNU * MNU];
+    __shared__ T s_rv[1], s_tv[1], s_tg[TN], s_th[TN * TN];
     __shared__ grid_plant::cost_menu_params<T> s_p;
     const T mu = static_cast<T>(0.1);
-    for (int i = tid; i < NQ; i += nth) { s_lo_q[i] = g_q[i] - static_cast<T>(1); s_hi_q[i] = g_q[i] + static_cast<T>(1); if (i == 0) { s_lo_q[i] = -HUGE_VALF; s_hi_q[i] = HUGE_VALF; } }
+    for (int i = tid; i < NQB; i += nth) { s_lo_q[i] = g_q[QOFF + i] - static_cast<T>(1); s_hi_q[i] = g_q[QOFF + i] + static_cast<T>(1); if (i == 0) { s_lo_q[i] = -HUGE_VALF; s_hi_q[i] = HUGE_VALF; } }
     for (int i = tid; i < NV; i += nth) { s_lo_v[i] = g_qd[i] - static_cast<T>(1); s_hi_v[i] = g_qd[i] + static_cast<T>(1); }
-    for (int i = tid; i < NU; i += nth) { s_lo_u[i] = g_u[i] - static_cast<T>(1); s_hi_u[i] = g_u[i] + static_cast<T>(1); }
+    for (int i = tid; i < MNU; i += nth) { s_lo_u[i] = g_u[i] - static_cast<T>(1); s_hi_u[i] = g_u[i] + static_cast<T>(1); }
     if (tid == 0) {
-        s_p.x_des = s_xdes; s_p.u_des = s_udes; s_p.ee_des = s_eedes; s_p.Q = s_Q; s_p.R = s_R; s_p.W = s_W;
+        s_p.x_des = FBM ? s_xdes_t : s_xdes; s_p.u_des = s_udes; s_p.ee_des = s_eedes; s_p.Q = s_Qt; s_p.R = s_R; s_p.W = s_W;
         s_p.q_lower = s_lo_q; s_p.q_upper = s_hi_q; s_p.mu_q = mu; s_p.qd_lower = s_lo_v; s_p.qd_upper = s_hi_v; s_p.mu_qd = mu; s_p.u_lower = s_lo_u; s_p.u_upper = s_hi_u; s_p.mu_u = mu;
         s_p.activation = s_act; s_p.eps = s_eps;
         s_p.x_lower = nullptr; s_p.x_upper = nullptr; s_p.ub_lower = nullptr; s_p.ub_upper = nullptr;
@@ -642,45 +710,53 @@ __global__ void cost_menu_kernel(const T *g_q, const T *g_qd, const T *g_u, cons
     __syncthreads();
     grid_plant::tracking_cost_menu_hessian<T, MENU_MX, MENU_MU, 0, 1>(s_Qk, s_Rk, s_x, s_u, s_p, s_frame, s_arena, d_robotModel);
     __syncthreads();
-    for (int i = tid; i < NX; i += nth) o_menu[1 + i] = s_qk[i];
-    for (int i = tid; i < NU; i += nth) o_menu[1 + NX + i] = s_rk[i];
-    for (int i = tid; i < NX * NX; i += nth) o_menu[1 + NX + NU + i] = s_Qk[i];
-    for (int i = tid; i < NU * NU; i += nth) o_menu[1 + NX + NU + NX * NX + i] = s_Rk[i];
+    for (int i = tid; i < TN; i += nth) o_menu[1 + i] = s_qk[i];
+    for (int i = tid; i < MNU; i += nth) o_menu[1 + TN + i] = s_rk[i];
+    for (int i = tid; i < TN * TN; i += nth) o_menu[1 + TN + MNU + i] = s_Qk[i];
+    for (int i = tid; i < MNU * MNU; i += nth) o_menu[1 + TN + MNU + TN * TN + i] = s_Rk[i];
     __syncthreads();
     // reference: the standalone blocks (written by this block), plus the barriers
-    if (tid == 0) s_rv[0] = o_ae[0] + o_as[0] + o_ai[0] + o_lx[0] + o_lu[0] + o_or[0] + o_vel[0] + o_f2[0];
-    for (int i = tid; i < NX; i += nth) s_qk[i] = o_ae[1 + i] + o_as[1 + i] + o_lx[1 + i] + o_or[1 + i] + o_vel[1 + i] + o_f2[1 + i];
-    for (int i = tid; i < NU; i += nth) s_rk[i] = o_ai[1 + i] + o_lu[1 + i];
-    for (int i = tid; i < NX * NX; i += nth) s_Qk[i] = o_ae[1 + NX + i] + o_as[1 + NX + i] + o_lx[1 + NX + i] + o_or[1 + NX + i] + o_vel[1 + NX + i] + o_f2[1 + NX + i];
-    for (int i = tid; i < NU * NU; i += nth) s_Rk[i] = o_ai[1 + NU + i] + o_lu[1 + NU + i];
+    const T *o_st = FBM ? o_ts : o_as;  // the state term: tangent on a floating base
+    if (tid == 0) s_rv[0] = o_ae[0] + o_st[0] + o_ai[0] + o_lx[0] + o_lu[0] + o_or[0] + o_vel[0] + o_f2[0];
+    for (int i = tid; i < TN; i += nth) {
+        T lx = FBM ? ((i >= 6) ? o_lx[1 + i - 6] : static_cast<T>(0)) : o_lx[1 + i];
+        s_qk[i] = o_ae[1 + i] + o_st[1 + i] + lx + o_or[1 + i] + o_vel[1 + i] + o_f2[1 + i];
+    }
+    for (int i = tid; i < MNU; i += nth) s_rk[i] = o_ai[1 + i] + o_lu[1 + i];
+    for (int i = tid; i < TN * TN; i += nth) {
+        const int r = i % TN, c = i / TN;
+        T lx = FBM ? ((r >= 6 && c >= 6) ? o_lx[1 + NLX + (r - 6) + NLX * (c - 6)] : static_cast<T>(0)) : o_lx[1 + NLX + i];
+        s_Qk[i] = o_ae[1 + TN + i] + o_st[1 + TN + i] + lx + o_or[1 + TN + i] + o_vel[1 + TN + i] + o_f2[1 + TN + i];
+    }
+    for (int i = tid; i < MNU * MNU; i += nth) s_Rk[i] = o_ai[1 + MNU + i] + o_lu[1 + MNU + i];
     if (tid == 0) s_tv[0] = static_cast<T>(0);
     __syncthreads();
-    grid_plant::joint_position_barrier<T>(s_tv, s_x, s_lo_q, s_hi_q, mu, s_th);
+    grid_plant::joint_position_barrier<T, NQB, QOFF>(s_tv, s_x, s_lo_q, s_hi_q, mu, s_th);
     __syncthreads(); if (tid == 0) { s_rv[0] += s_tv[0]; s_tv[0] = static_cast<T>(0); } __syncthreads();
     grid_plant::joint_velocity_barrier<T>(s_tv, s_x, s_lo_v, s_hi_v, mu, s_th);
     __syncthreads(); if (tid == 0) { s_rv[0] += s_tv[0]; s_tv[0] = static_cast<T>(0); } __syncthreads();
-    grid_plant::joint_torque_barrier<T>(s_tv, s_u, s_lo_u, s_hi_u, mu, s_th);
+    grid_plant::joint_torque_barrier<T, MNU, 0>(s_tv, s_u, s_lo_u, s_hi_u, mu, s_th);
     __syncthreads(); if (tid == 0) { s_rv[0] += s_tv[0]; } __syncthreads();
-    for (int i = tid; i < NX; i += nth) s_tg[i] = static_cast<T>(0); __syncthreads();
-    grid_plant::joint_position_barrier_gradient<T, 0, 0>(s_tg, s_x, s_lo_q, s_hi_q, mu);
-    __syncthreads(); for (int i = tid; i < NX; i += nth) { s_qk[i] += s_tg[i]; s_tg[i] = static_cast<T>(0); } __syncthreads();
-    grid_plant::joint_velocity_barrier_gradient<T, NQ, NQ>(s_tg, s_x, s_lo_v, s_hi_v, mu);
-    __syncthreads(); for (int i = tid; i < NX; i += nth) { s_qk[i] += s_tg[i]; s_tg[i] = static_cast<T>(0); } __syncthreads();
-    grid_plant::joint_torque_barrier_gradient<T, 0, 0>(s_tg, s_u, s_lo_u, s_hi_u, mu);
-    __syncthreads(); for (int i = tid; i < NU; i += nth) { s_rk[i] += s_tg[i]; } __syncthreads();
-    for (int i = tid; i < NX * NX; i += nth) s_th[i] = static_cast<T>(0); __syncthreads();
-    grid_plant::joint_position_barrier_hessian<T, NX, 0, 0>(s_th, s_x, s_lo_q, s_hi_q, mu);
-    __syncthreads(); for (int i = tid; i < NX * NX; i += nth) { s_Qk[i] += s_th[i]; s_th[i] = static_cast<T>(0); } __syncthreads();
-    grid_plant::joint_velocity_barrier_hessian<T, NX, NQ, NQ>(s_th, s_x, s_lo_v, s_hi_v, mu);
-    __syncthreads(); for (int i = tid; i < NX * NX; i += nth) { s_Qk[i] += s_th[i]; s_th[i] = static_cast<T>(0); } __syncthreads();
-    grid_plant::joint_torque_barrier_hessian<T, NU, 0, 0>(s_th, s_u, s_lo_u, s_hi_u, mu);
-    __syncthreads(); for (int i = tid; i < NU * NU; i += nth) { s_Rk[i] += s_th[i]; } __syncthreads();
+    for (int i = tid; i < TN; i += nth) s_tg[i] = static_cast<T>(0); __syncthreads();
+    grid_plant::joint_position_barrier_gradient<T, QOFF, QGRAD, NQB>(s_tg, s_x, s_lo_q, s_hi_q, mu);
+    __syncthreads(); for (int i = tid; i < TN; i += nth) { s_qk[i] += s_tg[i]; s_tg[i] = static_cast<T>(0); } __syncthreads();
+    grid_plant::joint_velocity_barrier_gradient<T, NQ, VGRAD>(s_tg, s_x, s_lo_v, s_hi_v, mu);
+    __syncthreads(); for (int i = tid; i < TN; i += nth) { s_qk[i] += s_tg[i]; s_tg[i] = static_cast<T>(0); } __syncthreads();
+    grid_plant::joint_torque_barrier_gradient<T, 0, 0, MNU>(s_tg, s_u, s_lo_u, s_hi_u, mu);
+    __syncthreads(); for (int i = tid; i < MNU; i += nth) { s_rk[i] += s_tg[i]; } __syncthreads();
+    for (int i = tid; i < TN * TN; i += nth) s_th[i] = static_cast<T>(0); __syncthreads();
+    grid_plant::joint_position_barrier_hessian<T, TN, QOFF, QGRAD, NQB>(s_th, s_x, s_lo_q, s_hi_q, mu);
+    __syncthreads(); for (int i = tid; i < TN * TN; i += nth) { s_Qk[i] += s_th[i]; s_th[i] = static_cast<T>(0); } __syncthreads();
+    grid_plant::joint_velocity_barrier_hessian<T, TN, NQ, VGRAD>(s_th, s_x, s_lo_v, s_hi_v, mu);
+    __syncthreads(); for (int i = tid; i < TN * TN; i += nth) { s_Qk[i] += s_th[i]; s_th[i] = static_cast<T>(0); } __syncthreads();
+    grid_plant::joint_torque_barrier_hessian<T, MNU, 0, 0, MNU>(s_th, s_u, s_lo_u, s_hi_u, mu);
+    __syncthreads(); for (int i = tid; i < MNU * MNU; i += nth) { s_Rk[i] += s_th[i]; } __syncthreads();
     const int ro = MENU_PRESET_CNT;
     if (tid == 0) o_menu[ro] = s_rv[0];
-    for (int i = tid; i < NX; i += nth) o_menu[ro + 1 + i] = s_qk[i];
-    for (int i = tid; i < NU; i += nth) o_menu[ro + 1 + NX + i] = s_rk[i];
-    for (int i = tid; i < NX * NX; i += nth) o_menu[ro + 1 + NX + NU + i] = s_Qk[i];
-    for (int i = tid; i < NU * NU; i += nth) o_menu[ro + 1 + NX + NU + NX * NX + i] = s_Rk[i];
+    for (int i = tid; i < TN; i += nth) o_menu[ro + 1 + i] = s_qk[i];
+    for (int i = tid; i < MNU; i += nth) o_menu[ro + 1 + TN + i] = s_rk[i];
+    for (int i = tid; i < TN * TN; i += nth) o_menu[ro + 1 + TN + MNU + i] = s_Qk[i];
+    for (int i = tid; i < MNU * MNU; i += nth) o_menu[ro + 1 + TN + MNU + TN * TN + i] = s_Rk[i];
 #endif  // GRID_PLANT_HAS_COST_MENU
 }
 #endif  // GRID_PLANT_HAS_COST_FRAMES
@@ -844,12 +920,13 @@ void run() {
 
 #if defined(GRID_PLANT_HAS_COST_FRAMES)
     // Cost menu: activated terms, barrier activations, linear features, frame residuals (+ the preset on fixed base).
-    T *o_mas = dmalloc<T>(MENU_STATE_CNT), *o_mai = dmalloc<T>(MENU_INPUT_CNT), *o_mae = dmalloc<T>(MENU_STATE_CNT);
-    T *o_mlx = dmalloc<T>(MENU_STATE_CNT), *o_mlu = dmalloc<T>(MENU_INPUT_CNT), *o_mq = dmalloc<T>(2);
+    T *o_mas = dmalloc<T>(MENU_STATE_CNT), *o_mai = dmalloc<T>(MENU_INPUT_CNT), *o_mae = dmalloc<T>(MENU_TAN_CNT);
+    T *o_mlx = dmalloc<T>(MENU_LINX_CNT), *o_mlu = dmalloc<T>(MENU_INPUT_CNT), *o_mq = dmalloc<T>(2);
     T *o_mm = dmalloc<T>(2 * MENU_PRESET_CNT), *o_mg = dmalloc<T>(NV);
-    T *o_mor = dmalloc<T>(MENU_STATE_CNT), *o_mvel = dmalloc<T>(MENU_STATE_CNT), *o_mf2 = dmalloc<T>(MENU_STATE_CNT);
-    T *o_mrlb = dmalloc<T>(MENU_STATE_CNT), *o_mqb = dmalloc<T>(MENU_STATE_CNT);
-    cudaMemset(o_mvel, 0, MENU_STATE_CNT * sizeof(T));
+    T *o_mor = dmalloc<T>(MENU_TAN_CNT), *o_mvel = dmalloc<T>(MENU_TAN_CNT), *o_mf2 = dmalloc<T>(MENU_TAN_CNT);
+    T *o_mrlb = dmalloc<T>(MENU_STATE_CNT), *o_mqb = dmalloc<T>(MENU_STATE_CNT), *o_mhg = dmalloc<T>(MENU_STATE_CNT);
+    T *o_mts = dmalloc<T>(MENU_TAN_CNT), *o_mtsh = dmalloc<T>(MENU_TAN_CNT), *o_mtsx = dmalloc<T>(NX);
+    cudaMemset(o_mvel, 0, MENU_TAN_CNT * sizeof(T));
     size_t menu_dyn = plant_dyn;
     if (grid_plant::FRAME_EVAL_DYNAMIC_SHARED_MEM_BYTES<T>() > menu_dyn) menu_dyn = grid_plant::FRAME_EVAL_DYNAMIC_SHARED_MEM_BYTES<T>();
 #if defined(GRID_PLANT_HAS_GRAVITY_TORQUE)
@@ -857,7 +934,7 @@ void run() {
 #endif
     cudaFuncSetAttribute(cost_menu_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)menu_dyn);
     cost_menu_kernel<T><<<1, nthreads, menu_dyn>>>(g_q, g_qd, g_u, d_robotModel, gravity, o_mas, o_mai, o_mae, o_mlx, o_mlu, o_mq, o_mm, o_mg,
-                                                  o_mor, o_mvel, o_mf2, o_mrlb, o_mqb);
+                                                  o_mor, o_mvel, o_mf2, o_mrlb, o_mqb, o_mhg, o_mts, o_mtsh, o_mtsx);
     gpuErrchkKernel();
 #endif
 
@@ -981,19 +1058,25 @@ void run() {
 #if defined(GRID_PLANT_HAS_COST_FRAMES)
     dcopy_out("menu_state", o_mas, 1, MENU_STATE_CNT);
     dcopy_out("menu_input", o_mai, 1, MENU_INPUT_CNT);
-    dcopy_out("menu_ee", o_mae, 1, MENU_STATE_CNT);
-    dcopy_out("menu_linx", o_mlx, 1, MENU_STATE_CNT);
+    dcopy_out("menu_ee", o_mae, 1, MENU_TAN_CNT);
+    dcopy_out("menu_linx", o_mlx, 1, MENU_LINX_CNT);
     dcopy_out("menu_linu", o_mlu, 1, MENU_INPUT_CNT);
     dcopy_out("menu_quad", o_mq, 1, 2);
-    dcopy_out("menu_orient", o_mor, 1, MENU_STATE_CNT);
-    dcopy_out("menu_frame2", o_mf2, 1, MENU_STATE_CNT);
+    dcopy_out("menu_orient", o_mor, 1, MENU_TAN_CNT);
+    dcopy_out("menu_frame2", o_mf2, 1, MENU_TAN_CNT);
+#if defined(GRID_PLANT_HAS_STATE_COST_TANGENT)
+    dcopy_out("menu_tstate", o_mts, 1, MENU_TAN_CNT);
+    dcopy_out("menu_tstate_hinge", o_mtsh, 1, MENU_TAN_CNT);
+    dcopy_out("menu_tstate_xdes", o_mtsx, 1, NX);
+#endif
     dcopy_out("menu_rlb_state", o_mrlb, 1, MENU_STATE_CNT);
     dcopy_out("menu_qb_state", o_mqb, 1, MENU_STATE_CNT);
+    dcopy_out("menu_hinge_state", o_mhg, 1, MENU_STATE_CNT);
 #if defined(GRID_PLANT_HAS_GRAVITY_TORQUE)
     dcopy_out("menu_gravity", o_mg, 1, NV);
 #endif
 #if defined(GRID_PLANT_HAS_FRAME_VELOCITY_COST)
-    dcopy_out("menu_vel", o_mvel, 1, MENU_STATE_CNT);
+    dcopy_out("menu_vel", o_mvel, 1, MENU_TAN_CNT);
 #endif
 #if defined(GRID_PLANT_HAS_COST_MENU)
     dcopy_out("menu_preset", o_mm, 1, 2 * MENU_PRESET_CNT);

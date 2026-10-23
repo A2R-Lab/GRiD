@@ -262,7 +262,7 @@ def numpy_go2_mjx():
                                 algorithm_list=["inverse_dynamics", "inverse_dynamics_gradient",
                                                 "end_effector_pose", "end_effector_pose_gradient"],
                                 enable_mujoco_kernels=True, output_convention="mujoco",
-                                dtype="float64", allow_fp64=True)
+                                dtype="float64")
     yield h
     h.close()
 

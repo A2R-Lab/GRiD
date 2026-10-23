@@ -36,7 +36,7 @@ class GRiDCodeGenerator:
                          gen_get_Xhom_size, gen_load_update_XmatsHom_helpers, gen_load_update_XmatsHom_helpers_function_call, gen_XmatsHom_helpers_temp_shared_memory_code, gen_load_topology_helpers, \
                          gen_topology_sparsity_helpers_python, gen_init_topology_helpers, gen_topology_helpers_pointers_for_cpp, _s_inds_stride, \
                          gen_topology_S_sign_for_cpp, gen_insert_helpers_function_call, gen_insert_helpers_func_def_params, gen_init_robotModel, gen_free_robotModel, gen_joint_limits_size, gen_init_joint_limits, gen_checked_table_tail, gen_legacy_init_wrapper, gen_checked_host_alloc, _robotModel_members, \
-                         gen_grid_linalg_backend_helpers, _gen_vendored_glass, _gen_linalg_wrappers, gen_linalg_smem_setup, gen_invert_matrix, gen_matmul, gen_matmul_trans, gen_crm_mul, gen_crm, gen_mxS_general, custom_is_constant, \
+                         gen_grid_linalg_backend_helpers, _gen_vendored_glass, _gen_linalg_wrappers, gen_invert_matrix, gen_matmul, gen_matmul_trans, gen_crm_mul, gen_crm, gen_mxS_general, custom_is_constant, \
                          gen_mjx_input_convert, gen_mjx_quat_reorder, gen_mjx_base_rotate, gen_mjx_symmetrize_full, gen_mjx_accel_out, gen_mjx_congruence, gen_mjx_column_reframe, gen_mjx_retract, \
                          robot_has_mimic_joints, _v_slot_cpp, _alpha_for_jid, _id_S_desc, gen_add_fragment_mark
 
@@ -158,10 +158,6 @@ class GRiDCodeGenerator:
                                 gen_init_close_grid)
     from .helpers._gpu_err import gen_add_gpu_err, gen_library_safe_init_contract
     from .algorithms._dccrba import _dccrba_inner_temp_mem_size, _dccrba_sweep_J_count, gen_cmm_time_variation, gen_dccrba
-
-    # finally import the test code
-    from ._reference_impl import test_rnea_fpass, test_rnea_bpass, test_rnea, test_minv_bpass, test_minv_fpass, test_densify_Minv, test_minv, test_rnea_grad_inner, \
-                      test_rnea_grad, mx0, mx1, mx2, mx3, mx4, mx5, mxS, fxv
 
     # initialize the object
     # Emitted-code buffer (hygiene 10, 2026-09-24): gen_add_code_line appends to a
@@ -675,7 +671,7 @@ class GRiDCodeGenerator:
             "    __global__ forward_dynamics_gradient_kernel<T>(T *d_df_du, const T *d_q_qd, const T *d_qdd, const T *d_Minv, const robotModel<T> *d_robotModel, const T gravity, const int NUM_TIMESTEPS)", \
             "    __host__   forward_dynamics_gradient<T,USE_QDD_MINV_FLAG=false>(gridData<T> *hd_data, const robotModel<T> *d_robotModel, const T gravity, const int num_timesteps, const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams)", \
             "",\
-            "    __device__ end_effector_pose_inner<T,TEMP_IN_SMEM=true>(T *s_end_effector_pose, const T *s_q, const T *s_Xhom, int *s_topology_helpers, T *s_temp, T *d_workspace, unsigned char *s_linalg_smem)", \
+            "    __device__ end_effector_pose_inner<T,TEMP_IN_SMEM=true>(T *s_end_effector_pose, const T *s_q, const T *s_Xhom, int *s_topology_helpers, T *s_temp, T *d_workspace)", \
             "    __device__ end_effector_pose_device<T>(T *s_end_effector_pose, const T *s_q, const robotModel<T> *d_robotModel)", \
             "    __global__ end_effector_pose_kernel<T>(T *d_end_effector_pose, const T *d_q, const robotModel<T> *d_robotModel, const int NUM_TIMESTEPS)", \
             "    __host__   end_effector_pose<T,USE_COMPRESSED_MEM=false>(gridData<T> *hd_data, const robotModel<T> *d_robotModel, const int num_timesteps, const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams)", \
@@ -1028,7 +1024,7 @@ class GRiDCodeGenerator:
             self.gen_add_code_line(
                 "template <typename T> __host__ __device__ constexpr size_t FRAME_JACOBIAN_DYNAMIC_SHARED_MEM_BYTES() "
                 "{ return grid_shared_arena_bytes<T>(" + str(fj_t_count) +
-                ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }")
+                ", TOPOLOGY_HELPERS_COUNT); }")
             # S1: surface-presence marker so host runners/bindings can detect the
             # launchable frame_jacobian host surface (kernel + 3-mode host).
             self.gen_add_code_line("#define GRID_HAS_FRAME_JACOBIAN 1")
@@ -1044,7 +1040,7 @@ class GRiDCodeGenerator:
                 self.gen_add_code_line(
                     "template <typename T> __host__ __device__ constexpr size_t FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES() "
                     "{ return grid_shared_arena_bytes<T>(" + str(fjd_t_count) +
-                    ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }")
+                    ", TOPOLOGY_HELPERS_COUNT); }")
                 self.gen_add_code_line("#define GRID_HAS_FRAME_JACOBIAN_DOT 1")
                 # Floating-base Jdot integrates q on the SE(3) group; emit the Lie
                 # helpers if no other kinematics path already did.
@@ -1076,7 +1072,7 @@ class GRiDCodeGenerator:
                 _osc_per = self.osc_inertia_t_count_per_tier
                 _osc_F_in_smem = tuple(p == 0 for p in self.osc_inertia_spill_tier_3way)
                 from ._constants_arena import _tier_bytes_lines
-                self.gen_add_code_lines(_tier_bytes_lines("OSC_INERTIA_DYNAMIC_SHARED_MEM_BYTES", _osc_per, ", GRID_EE_LINALG_SHARED_BYTES<T>()"))
+                self.gen_add_code_lines(_tier_bytes_lines("OSC_INERTIA_DYNAMIC_SHARED_MEM_BYTES", _osc_per))
                 self.gen_add_code_line(
                     "template <int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr bool OSC_INERTIA_F_IN_SMEM() { return (TIER == TIER_SHARED) ? "
                     + ("true" if _osc_F_in_smem[0] else "false") + " : (TIER == TIER_LITE) ? "
@@ -1112,7 +1108,7 @@ class GRiDCodeGenerator:
                 self.gen_add_code_line(
                     "template <typename T> __host__ __device__ constexpr size_t END_EFFECTOR_POSE_RUNTIME_DYNAMIC_SHARED_MEM_BYTES() "
                     "{ return grid_shared_arena_bytes<T>(" + str(eprt_t_count) +
-                    ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }")
+                    ", TOPOLOGY_HELPERS_COUNT); }")
                 self.gen_add_code_line("#define GRID_HAS_END_EFFECTOR_POSE_RUNTIME 1")
                 self.gen_end_effector_pose_runtime()
             if "end_effector_pose_gradient_runtime" in algorithms:
@@ -1120,7 +1116,7 @@ class GRiDCodeGenerator:
                 self.gen_add_code_line(
                     "template <typename T> __host__ __device__ constexpr size_t END_EFFECTOR_POSE_GRADIENT_RUNTIME_DYNAMIC_SHARED_MEM_BYTES() "
                     "{ return grid_shared_arena_bytes<T>(" + str(epgrt_t_count) +
-                    ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }")
+                    ", TOPOLOGY_HELPERS_COUNT); }")
                 self.gen_add_code_line("#define GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME 1")
                 self.gen_end_effector_pose_gradient_runtime()
         self.gen_add_fragment_mark("combinations")

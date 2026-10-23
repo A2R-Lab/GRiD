@@ -686,8 +686,6 @@ def _helpers_sincos_temp_floor(self):
 
 def gen_XImats_helpers_temp_shared_memory_code(self, temp_mem_size = 0, include_base_inertia = False,
                                                include_homogenous_transforms = False, extra_t_buffers = None,
-                                               include_linalg_scratch = False,
-                                               linalg_scratch_bytes = "GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()",
                                                tier_workspace_expr = None, arena_base_expr = None):
     """Carve the XImats-domain arena. ``arena_base_expr`` (default None: the
     kernel's own ``extern __shared__`` arena) names a caller pointer to carve
@@ -725,8 +723,6 @@ def gen_XImats_helpers_temp_shared_memory_code(self, temp_mem_size = 0, include_
         extra_t_buffers, temp_mem_size,
         include_topology_helpers = (not self.robot.is_serial_chain() or not self.robot.are_Ss_identical(list(range(n)))),
         ximat_size = XI_size,
-        include_linalg_scratch = include_linalg_scratch,
-        linalg_scratch_bytes = linalg_scratch_bytes,
         apply_runtime_transform_band = (getattr(self, "runtime_transform", False) and not include_homogenous_transforms))
     self.gen_declare_shared_arena(layout.t_buffers, layout.temp_mem_size,
                                   include_topology_helpers = (layout.topology_count > 0),
@@ -734,7 +730,6 @@ def gen_XImats_helpers_temp_shared_memory_code(self, temp_mem_size = 0, include_
                                   ximat_size = layout.ximat_size,
                                   temp_name = "s_temp",
                                   topology_name = "s_topology_helpers",
-                                  extra_byte_regions = (layout.extra_byte_regions or None),
                                   tier_workspace_expr = tier_workspace_expr,
                                   arena_base_expr = arena_base_expr)
     return layout
@@ -1160,8 +1155,6 @@ def gen_XmatsHom_helpers_temp_shared_memory_code(self, temp_mem_size = 0, includ
                                                  include_hessians = False, extra_t_buffers = None,
                                                  include_dxhom_shared = True,
                                                  include_d2xhom_shared = True,
-                                                 include_linalg_scratch = False,
-                                                 linalg_scratch_bytes = "GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()",
                                                  arena_base_expr = None,
                                                  tier_workspace_expr = None):
     n = self.robot.get_num_pos()
@@ -1184,16 +1177,13 @@ def gen_XmatsHom_helpers_temp_shared_memory_code(self, temp_mem_size = 0, includ
     layout = self._resolve_arena_layout(
         extra_t_buffers + hom_buffers, temp_mem_size,
         include_topology_helpers = True,
-        ximat_size = 0,
-        include_linalg_scratch = include_linalg_scratch,
-        linalg_scratch_bytes = linalg_scratch_bytes)
+        ximat_size = 0)
     self.gen_declare_shared_arena(layout.t_buffers, layout.temp_mem_size,
                                   include_topology_helpers = (layout.topology_count > 0),
                                   ximat_name = "",
                                   ximat_size = layout.ximat_size,
                                   temp_name = "s_temp",
                                   topology_name = "s_topology_helpers",
-                                  extra_byte_regions = (layout.extra_byte_regions or None),
                                   tier_workspace_expr = tier_workspace_expr,
                                   arena_base_expr = arena_base_expr)
     return layout

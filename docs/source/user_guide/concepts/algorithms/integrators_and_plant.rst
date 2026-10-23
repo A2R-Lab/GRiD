@@ -146,8 +146,12 @@ value as ``eps`` goes to zero, quadratic for ``|r|`` small against ``eps``);
 the relaxed log barrier of Grandia et al. on the feature value ``v`` in
 ``[lo, hi]`` (``w`` is ``mu``, ``eps`` the relaxation ``delta``: the log
 barrier above ``delta`` and its quadratic extension below, so an infeasible
-iterate keeps a finite value and slope); and the one-sided quadratic barrier
-``1/2 w (max(0, lo - v)^2 + max(0, v - hi)^2)``. An infinite bound
+iterate keeps a finite value and slope); the one-sided quadratic barrier
+``1/2 w (max(0, lo - v)^2 + max(0, v - hi)^2)``; and the smooth hinge
+``w (sqrt(d^2 + eps^2) - eps)`` on the bound violation ``d = max(0, lo - v)
++ max(0, v - hi)`` with ``eps > 0``, which is zero inside the bounds and
+pseudo-Huber in the violation (a smooth form of the bound-violation norm of
+STORM; its curvature is zero inside and ``w eps^2 / s^3`` outside). An infinite bound
 contributes nothing; every activated term takes per-entry bound buffers that
 may be null when the activation is not a barrier. ``GRID_PLANT_ACTIVATION_NONE``
 skips a term in the preset.
@@ -175,7 +179,28 @@ quadratic activations on the first three terms and the rest off it is
 ``tracking_cost``. The reference is ``RBDReference.state_cost``,
 ``input_cost``, ``linear_feature_cost``, ``frame_position_cost``,
 ``frame_orientation_cost``, ``frame_velocity_cost`` and ``gravity_torque``.
-The floating-base preset composition is a later phase.
+
+On a floating base (a free-flyer root with single-axis joints; a spherical
+joint is refused by name in the header) the preset is in the tangent layout:
+the state term is ``state_cost_tangent`` on the residual
+``[difference(q_des, q); qd - qd_des]`` under any activation, with
+tangent-indexed bounds whose six base-pose entries carry no bound; the input
+terms, the torque barrier and the linear u feature act on the ``NUM_VEL - 6``
+actuated inputs; the position barrier bounds the joint positions and the
+velocity barrier the tangent velocities; the linear x feature reads
+``[q[7:]; qd]``; the gradient is ``2 NUM_VEL`` wide and the Hessian
+``2 NUM_VEL`` square, column-major. The frame terms use the same tangent
+layout on both bases, and ``frame_velocity_cost`` takes its configuration
+derivative along the tangent, the root entering as six columns under the
+same rigid-motion rules as a joint. ``GRID_PLANT_MENU_TANGENT``,
+``GRID_PLANT_MENU_NU`` and ``GRID_PLANT_MENU_NLX`` state the layout, and one
+``GRID_PLANT_HAS_*`` constant per emitted piece (``ACTIVATIONS``,
+``STATE_COST``, ``STATE_COST_TANGENT``, ``INPUT_COST``,
+``LINEAR_FEATURE_COST``, ``FRAME_EVAL``, ``FRAME_POSITION_COST``,
+``FRAME_ORIENTATION_COST``, ``FRAME_VELOCITY_COST``, ``COST_MENU``,
+``GRAVITY_TORQUE``, ``COST_FRAMES``) lets a consumer assert on what the
+header emitted. With zero base weights under the quadratic activation the
+tangent state term is ``quadratic_state_cost_tangent``.
 
 Select ``integrator`` / ``integrator_gradient`` for step values / gradients
 and ``fdsva_so`` for the step Hessian dependency; the plant generator only

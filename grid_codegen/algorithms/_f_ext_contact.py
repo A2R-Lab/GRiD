@@ -186,7 +186,7 @@ def gen_f_ext_body_inner(self, contacts):
     ]
     func_def_start = "void f_ext_body_inner("
     func_def_middle = "T *s_f_ext, const T *s_f_c, const T *s_q, const T *s_Xhom, "
-    func_def_end = "T *s_temp, T *d_workspace, unsigned char *s_linalg_smem) {"
+    func_def_end = "T *s_temp, T *d_workspace) {"
     func_def_middle, func_params = self.gen_insert_helpers_func_def_params(
         func_def_middle, func_params, -1, NO_XI_FLAG=True)
     self.gen_add_func_doc("Contact-frame wrenches -> joint-local f_ext", func_notes, func_params, None)
@@ -194,7 +194,7 @@ def gen_f_ext_body_inner(self, contacts):
     self.gen_add_code_line("__device__")
     self.gen_add_code_line(func_def_start + func_def_middle + func_def_end, True)
     self.gen_add_code_line("if constexpr (!TEMP_IN_SMEM) { s_temp = d_workspace; } else { (void)d_workspace; }")
-    self.gen_add_code_line("(void)s_q; (void)s_linalg_smem;")
+    self.gen_add_code_line("(void)s_q;")
     self.gen_add_code_line("T *s_Xworld = s_temp;   // 16 * " + str(n_joints))
 
     from ._eepose_gradient_hessian import emit_world_fk_chainup
@@ -267,7 +267,7 @@ def gen_f_ext_body_jacobian_dq_inner(self, contacts):
     ]
     func_def_start = "void f_ext_body_jacobian_dq_inner("
     func_def_middle = ("T *s_dfext_dq, const T *s_f_c, const T *s_dtau_dfext, const T *s_q, const T *s_Xhom, ")
-    func_def_end = "T *s_temp, T *d_workspace, unsigned char *s_linalg_smem) {"
+    func_def_end = "T *s_temp, T *d_workspace) {"
     func_def_middle, func_params = self.gen_insert_helpers_func_def_params(
         func_def_middle, func_params, -1, NO_XI_FLAG=True)
     self.gen_add_func_doc("d(f_ext)/dq at fixed contact wrench", func_notes, func_params, None)
@@ -275,7 +275,7 @@ def gen_f_ext_body_jacobian_dq_inner(self, contacts):
     self.gen_add_code_line("__device__")
     self.gen_add_code_line(func_def_start + func_def_middle + func_def_end, True)
     self.gen_add_code_line("if constexpr (!TEMP_IN_SMEM) { s_temp = d_workspace; } else { (void)d_workspace; }")
-    self.gen_add_code_line("(void)s_q; (void)s_linalg_smem;")
+    self.gen_add_code_line("(void)s_q;")
     self.gen_add_code_line("T *s_Xworld = s_temp;   // 16 * " + str(n_joints))
 
     from ._eepose_gradient_hessian import emit_world_fk_chainup
@@ -367,15 +367,14 @@ def _emit_device(self, contacts, which):
         sig += "const T *s_dtau_dfext, "
     sig += "const T *s_q, const robotModel<T> *d_robotModel, T *d_workspace = nullptr) {"
     self.gen_add_code_line(sig, True)
-    self.gen_XmatsHom_helpers_temp_shared_memory_code(scratch, include_linalg_scratch=True,
-                                                      linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()",
+    self.gen_XmatsHom_helpers_temp_shared_memory_code(scratch,
                                                       tier_workspace_expr="d_workspace")
     self.gen_load_update_XmatsHom_helpers_function_call()
     inner = {"value": "f_ext_body_inner<T>(s_f_ext, s_f_c, s_q, s_XmatsHom, ",
              "dq":    "f_ext_body_jacobian_dq_inner<T>(s_dfext_dq, s_f_c, s_dtau_dfext, s_q, s_XmatsHom, ",
              "dfc":   "f_ext_body_jacobian_dfc_inner<T>(s_dfext_dfc, s_q, s_XmatsHom, "}[which]
     inner += self.gen_insert_helpers_function_call(NO_XI_FLAG=True)
-    inner += "s_temp, nullptr, s_linalg_smem);"
+    inner += "s_temp, nullptr);"
     self.gen_add_code_line(inner)
     self.gen_add_end_function()
 
@@ -412,7 +411,7 @@ def gen_f_ext_body_jacobian_dfc_inner(self, contacts):
     ]
     func_def_start = "void f_ext_body_jacobian_dfc_inner("
     func_def_middle = "T *s_dfext_dfc, const T *s_q, const T *s_Xhom, "
-    func_def_end = "T *s_temp, T *d_workspace, unsigned char *s_linalg_smem) {"
+    func_def_end = "T *s_temp, T *d_workspace) {"
     func_def_middle, func_params = self.gen_insert_helpers_func_def_params(
         func_def_middle, func_params, -1, NO_XI_FLAG=True)
     self.gen_add_func_doc("d(f_ext)/d(contact wrench) -- f_c-independent", func_notes, func_params, None)
@@ -420,7 +419,7 @@ def gen_f_ext_body_jacobian_dfc_inner(self, contacts):
     self.gen_add_code_line("__device__")
     self.gen_add_code_line(func_def_start + func_def_middle + func_def_end, True)
     self.gen_add_code_line("if constexpr (!TEMP_IN_SMEM) { s_temp = d_workspace; } else { (void)d_workspace; }")
-    self.gen_add_code_line("(void)s_q; (void)s_linalg_smem;")
+    self.gen_add_code_line("(void)s_q;")
     self.gen_add_code_line("T *s_Xworld = s_temp;   // 16 * " + str(n_joints))
 
     from ._eepose_gradient_hessian import emit_world_fk_chainup
@@ -499,7 +498,7 @@ def _emit_gh_runtime(self):
 
 def _emit_runtime_fk_prefix(self, n_joints):
     self.gen_add_code_line("if constexpr (!TEMP_IN_SMEM) { s_temp = d_workspace; } else { (void)d_workspace; }")
-    self.gen_add_code_line("(void)s_q; (void)s_linalg_smem;")
+    self.gen_add_code_line("(void)s_q;")
     self.gen_add_code_line("T *s_Xworld = s_temp;   // 16 * " + str(n_joints))
     from ._eepose_gradient_hessian import emit_world_fk_chainup
     emit_world_fk_chainup(
@@ -529,7 +528,7 @@ def gen_f_ext_body_runtime_inner(self):
     ]
     func_def_start = "void f_ext_body_runtime_inner("
     func_def_middle = "T *s_f_ext, const T *s_f_c, const int b, const T *s_rc, const T *s_q, const T *s_Xhom, "
-    func_def_end = "T *s_temp, T *d_workspace, unsigned char *s_linalg_smem) {"
+    func_def_end = "T *s_temp, T *d_workspace) {"
     func_def_middle, func_params = self.gen_insert_helpers_func_def_params(
         func_def_middle, func_params, -1, NO_XI_FLAG=True)
     self.gen_add_func_doc("Runtime-target contact wrench -> joint-local f_ext", func_notes, func_params, None)
@@ -581,7 +580,7 @@ def gen_f_ext_body_jacobian_dfc_runtime_inner(self):
     ]
     func_def_start = "void f_ext_body_jacobian_dfc_runtime_inner("
     func_def_middle = "T *s_dfext_dfc, const int b, const T *s_rc, const T *s_q, const T *s_Xhom, "
-    func_def_end = "T *s_temp, T *d_workspace, unsigned char *s_linalg_smem) {"
+    func_def_end = "T *s_temp, T *d_workspace) {"
     func_def_middle, func_params = self.gen_insert_helpers_func_def_params(
         func_def_middle, func_params, -1, NO_XI_FLAG=True)
     self.gen_add_func_doc("Runtime-target d(f_ext)/d(contact wrench) -- f_c-independent", func_notes, func_params, None)
@@ -648,7 +647,7 @@ def gen_f_ext_body_jacobian_dq_runtime_inner(self):
     func_def_start = "void f_ext_body_jacobian_dq_runtime_inner("
     func_def_middle = ("T *s_dfext_dq, const T *s_f_c, const int b, const T *s_rc, const T *s_dtau_dfext, "
                        "const T *s_q, const T *s_Xhom, ")
-    func_def_end = "T *s_temp, T *d_workspace, unsigned char *s_linalg_smem) {"
+    func_def_end = "T *s_temp, T *d_workspace) {"
     func_def_middle, func_params = self.gen_insert_helpers_func_def_params(
         func_def_middle, func_params, -1, NO_XI_FLAG=True)
     self.gen_add_func_doc("Runtime-target d(f_ext)/dq at fixed contact wrench", func_notes, func_params, None)
@@ -726,15 +725,14 @@ def _emit_device_runtime(self, which):
         sig += "const T *s_dtau_dfext, "
     sig += "const T *s_q, const robotModel<T> *d_robotModel, T *d_workspace = nullptr) {"
     self.gen_add_code_line(sig, True)
-    self.gen_XmatsHom_helpers_temp_shared_memory_code(scratch, include_linalg_scratch=True,
-                                                      linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()",
+    self.gen_XmatsHom_helpers_temp_shared_memory_code(scratch,
                                                       tier_workspace_expr="d_workspace")
     self.gen_load_update_XmatsHom_helpers_function_call()
     inner = {"value": "f_ext_body_runtime_inner<T>(s_f_ext, s_f_c, b, s_rc, s_q, s_XmatsHom, ",
              "dq":    "f_ext_body_jacobian_dq_runtime_inner<T>(s_dfext_dq, s_f_c, b, s_rc, s_dtau_dfext, s_q, s_XmatsHom, ",
              "dfc":   "f_ext_body_jacobian_dfc_runtime_inner<T>(s_dfext_dfc, b, s_rc, s_q, s_XmatsHom, "}[which]
     inner += self.gen_insert_helpers_function_call(NO_XI_FLAG=True)
-    inner += "s_temp, nullptr, s_linalg_smem);"
+    inner += "s_temp, nullptr);"
     self.gen_add_code_line(inner)
     self.gen_add_end_function()
 

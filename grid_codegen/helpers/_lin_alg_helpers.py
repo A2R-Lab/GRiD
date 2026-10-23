@@ -140,28 +140,11 @@ def _emit_glass_source_file(self, relative_path):
     self.gen_add_code_line("")
 
 
-def gen_linalg_smem_setup(self, temp_size):
-    """Emit ``unsigned char *s_linalg_smem = nullptr;``.
-
-    Historically set up an aligned smem pointer for cuBLASDx scratch.
-    cuBLASDx was removed in v2.0 (see
-    ``docs/design_history/cublasdx_removal_design.rst``);
-    the SIMT linalg path needs no scratch. The function (and the
-    ``s_linalg_smem`` local) are kept so the ~100 callsites that pass
-    it as the last ``grid_linalg_*`` argument continue to compile
-    without per-callsite edits.
-    """
-    del temp_size  # unused; kept in signature for caller compatibility
-    self.gen_add_code_line("unsigned char *s_linalg_smem = nullptr;")
-
-
 def gen_grid_linalg_backend_helpers(self):
     """Emit the GRiD linear-algebra adapter.
 
     SIMT GLASS is vendored at codegen time, plus thin
-    ``grid_linalg_*`` wrappers that delegate to it. The wrappers
-    accept (and ignore) a trailing ``glass_nvidia_smem`` argument so
-    pre-v2.0 callsites continue to compile without edits.
+    ``grid_linalg_*`` wrappers that delegate to it.
     """
     glass_commit = _glass_commit(getattr(self, "glass_revision", None))
     self.glass_revision_source = getattr(_glass_commit, "source", "unknown")
@@ -211,19 +194,10 @@ def _gen_vendored_glass(self, glass_commit):
 def _gen_linalg_wrappers(self):
     self.gen_add_func_doc("Linear algebra wrappers (SIMT GLASS)")
     self.gen_add_code_lines([
-        "// SIMT-only linalg. The `glass_nvidia_smem` parameter on each wrapper is",
-        "// retained for caller compatibility and is always ignored; the stub",
-        "// `GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()` below returns 0 so",
-        "// shared-memory arena calculations continue to compile unchanged.",
-        "",
-        "template <typename T>",
-        "__host__ __device__ constexpr size_t GRID_LINALG_NVIDIA_MAX_HELPER_BYTES() {",
-        "    return static_cast<size_t>(0);",
-        "}",
+        "// SIMT-only linalg over the vendored GLASS.",
         "",
         "template <typename T, int M, int N, int K, bool TRANSPOSE_B = false, bool ROW_MAJOR_A = false, bool ROW_MAJOR_B = false, bool ROW_MAJOR_C = false>",
-        "__device__ void grid_linalg_gemm(const T *A, const T *B, T *C, T alpha, T beta, unsigned char *glass_nvidia_smem = nullptr) {",
-        "    (void)glass_nvidia_smem;",
+        "__device__ void grid_linalg_gemm(const T *A, const T *B, T *C, T alpha, T beta) {",
         "    T *A_mut = const_cast<T *>(A);",
         "    T *B_mut = const_cast<T *>(B);",
         "    // GLASS v2 gemm: contraction is the LAST template dim, so the old (M,N,K)",
@@ -235,8 +209,7 @@ def _gen_linalg_wrappers(self):
         "}",
         "",
         "template <typename T, int M, int N, bool TRANSPOSE = false, bool ROW_MAJOR_A = false>",
-        "__device__ void grid_linalg_gemv(const T *A, const T *x, T *y, T alpha, T beta, unsigned char *glass_nvidia_smem = nullptr) {",
-        "    (void)glass_nvidia_smem;",
+        "__device__ void grid_linalg_gemv(const T *A, const T *x, T *y, T alpha, T beta) {",
         "    T *A_mut = const_cast<T *>(A);",
         "    T *x_mut = const_cast<T *>(x);",
         "    // GLASS v2: gemv keeps its per-operand ROW_MAJOR flag (TRANSPOSE selects the math",
@@ -246,15 +219,13 @@ def _gen_linalg_wrappers(self):
         "}",
         "",
         "template <typename T, int M, int N, int ROW_STRIDE>",
-        "__device__ void grid_linalg_row_strided_gemv(const T *A, const T *x, T *y, T alpha, T beta, unsigned char *glass_nvidia_smem = nullptr) {",
-        "    (void)glass_nvidia_smem;",
+        "__device__ void grid_linalg_row_strided_gemv(const T *A, const T *x, T *y, T alpha, T beta) {",
         "    glass::gemv_strided<T, M, N, ROW_STRIDE>(alpha, A, x, beta, y);",
         "    __syncthreads();",
         "}",
         "",
         "template <typename T, int M, int N, int K, int A_RS, int B_RS>",
-        "__device__ void grid_linalg_row_strided_gemm(const T *A, const T *B, T *C, T alpha, T beta, unsigned char *glass_nvidia_smem = nullptr) {",
-        "    (void)glass_nvidia_smem;",
+        "__device__ void grid_linalg_row_strided_gemm(const T *A, const T *B, T *C, T alpha, T beta) {",
         "    glass::gemm_strided<T, M, K, N, A_RS, B_RS>(alpha, A, B, beta, C);",
         "    __syncthreads();",
         "}",
@@ -268,8 +239,7 @@ def _gen_linalg_wrappers(self):
         "// block-cooperative pass, base offsets per segment via the descriptor arrays. With",
         "// FUSE_SCALED_ADD, folds a per-segment y += S*scalar add into the single y store.",
         "template <typename T, int M, int N, int ROW_STRIDE = M, bool FUSE_SCALED_ADD = false>",
-        "__device__ void grid_linalg_segmented_row_strided_gemv(unsigned int segments, const int *seg_a_off, const int *seg_x_off, const int *seg_y_off, const T *A, const T *x, T *y, T alpha, T beta, const int *seg_s_off = nullptr, const T *S = nullptr, const T *scalar = nullptr, unsigned char *glass_nvidia_smem = nullptr) {",
-        "    (void)glass_nvidia_smem;",
+        "__device__ void grid_linalg_segmented_row_strided_gemv(unsigned int segments, const int *seg_a_off, const int *seg_x_off, const int *seg_y_off, const T *A, const T *x, T *y, T alpha, T beta, const int *seg_s_off = nullptr, const T *S = nullptr, const T *scalar = nullptr) {",
         "    glass::gemv_segmented<T, M, N, ROW_STRIDE, FUSE_SCALED_ADD>(segments, seg_a_off, seg_x_off, seg_y_off, A, x, y, alpha, beta, seg_s_off, S, scalar);",
         "    __syncthreads();",
         "}",
@@ -277,8 +247,7 @@ def _gen_linalg_wrappers(self):
         "// Indexed batched DIMxDIM (col-major) GEMM: C[c_idx[p]] = A[a_idx[p]] * B[b_idx[p]]",
         "// over a flat in-chain index list (e.g. compacted (ancestor,ee) pairs).",
         "template <typename T, int DIM = 4>",
-        "__device__ void grid_linalg_indexed_batched_gemm(unsigned int pairs, const int *a_idx, const int *b_idx, const int *c_idx, const T *A_base, const T *B_base, T *C_base, unsigned char *glass_nvidia_smem = nullptr) {",
-        "    (void)glass_nvidia_smem;",
+        "__device__ void grid_linalg_indexed_batched_gemm(unsigned int pairs, const int *a_idx, const int *b_idx, const int *c_idx, const T *A_base, const T *B_base, T *C_base) {",
         "    glass::gemm_batched_indexed<T, DIM>(pairs, a_idx, b_idx, c_idx, A_base, B_base, C_base);",
         "    __syncthreads();",
         "}",

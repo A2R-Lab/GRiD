@@ -23,14 +23,13 @@ def gen_end_effector_pose_inner_function_call(self, updated_var_names = None, fi
         s_topology_helpers_name = "s_topology_helpers", \
         s_temp_name = "s_temp", \
         d_workspace_name = "nullptr", \
-        s_linalg_smem_name = "s_linalg_smem", \
     )
     if updated_var_names is not None:
         for key,value in updated_var_names.items():
             var_names[key] = value
     code_start = "end_effector_pose_inner" + ident_suffix(fixed_target_name) + "<T, " + temp_in_smem_expr + ">(" + var_names["s_end_effector_pose_name"] + ", " + var_names["s_q_name"] + ", "
     code_middle = var_names["s_Xhom_name"] + ", "
-    code_end =  var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ", " + var_names["s_linalg_smem_name"] + ");"
+    code_end =  var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ");"
     # account for thread group and serial chains
     # Canonical: append the shared topology-helper arg via the central helper
     # (NO_XI: the ee_pose family takes s_Xhom, not s_XImats). Mirrors the def's
@@ -52,12 +51,11 @@ def gen_end_effector_pose_inner(self, fixed_target_name = ""):
                    "s_Xhom is the pointer to the homogenous transformation matricies ", \
                    "s_temp is a pointer to helper shared memory of size " + \
                             str(self.gen_end_effector_pose_inner_temp_mem_size(fixed_target_name)), \
-                   "d_workspace is the global-memory chain workspace used in place of s_temp when !TEMP_IN_SMEM", \
-                   "s_linalg_smem is optional byte-addressed shared memory (reserved; unused by this inner)"]
+                   "d_workspace is the global-memory chain workspace used in place of s_temp when !TEMP_IN_SMEM"]
     func_notes = ["Assumes the Xhom matricies have already been updated for the given q", "Defaults to all leave nodes if fixed_target_name is not provided"]
     func_def_start = "void end_effector_pose_inner" + ident_suffix(fixed_target_name) + "("
     func_def_middle = "T *s_end_effector_pose, const T *s_q, const T *s_Xhom, "
-    func_def_end = "T *s_temp, T *d_workspace, unsigned char *s_linalg_smem) {"
+    func_def_end = "T *s_temp, T *d_workspace) {"
     func_def_middle, func_params = self.gen_insert_helpers_func_def_params(func_def_middle, func_params, -1, NO_XI_FLAG = True)
     func_def = func_def_start + func_def_middle + func_def_end
     # now generate the code
@@ -244,7 +242,7 @@ def gen_end_effector_pose_device(self, fixed_target_name = ""):
         self.gen_end_effector_pose_inner_temp_mem_size(fixed_target_name),
         lambda: self.gen_end_effector_pose_inner_function_call(fixed_target_name = fixed_target_name),
         func_notes = func_notes, func_params = func_params,
-        xmats_hom = True, linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()")
+        xmats_hom = True)
 
 def gen_end_effector_pose_kernel(self, single_call_timing = False, fixed_target_name = ""):
     n = self.robot.get_num_pos()
@@ -276,9 +274,7 @@ def gen_end_effector_pose_kernel(self, single_call_timing = False, fixed_target_
     self.gen_add_code_line(func_def, True)
     # add shared memory variables
     shared_mem_size = self.gen_end_effector_pose_inner_temp_mem_size(fixed_target_name)
-    self.gen_XmatsHom_helpers_temp_shared_memory_code(shared_mem_size, extra_t_buffers = [("s_q", n), ("s_end_effector_pose", 6*num_ees)],
-                                                      include_linalg_scratch = True,
-                                                      linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()")
+    self.gen_XmatsHom_helpers_temp_shared_memory_code(shared_mem_size, extra_t_buffers = [("s_q", n), ("s_end_effector_pose", 6*num_ees)])
     if not single_call_timing:
         # load to shared mem and loop over blocks to compute all requested comps
         self.gen_add_parallel_loop("k","NUM_TIMESTEPS",block_level = True)
@@ -408,14 +404,13 @@ def gen_end_effector_pose_gradient_inner_function_call(self, updated_var_names =
         s_topology_helpers_name = "s_topology_helpers", \
         s_temp_name = "s_temp", \
         d_workspace_name = "nullptr", \
-        s_linalg_smem_name = "s_linalg_smem", \
     )
     if updated_var_names is not None:
         for key,value in updated_var_names.items():
             var_names[key] = value
     code_start = "end_effector_pose_gradient_inner" + ident_suffix(fixed_target_name) + "<T, " + temp_in_smem_expr + ">(" + var_names["s_end_effector_pose_gradient_name"] + ", " + var_names["s_q_name"] + ", "
     code_middle = var_names["s_Xhom_name"] + ", " + var_names["s_dXhom_name"] + ", "
-    code_end =  var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ", " + var_names["s_linalg_smem_name"] + ");"
+    code_end =  var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ");"
     # account for thread group
     # Canonical: append the shared topology-helper arg via the central helper
     # (NO_XI: the ee_pose family takes s_Xhom, not s_XImats). Mirrors the def's
@@ -731,13 +726,12 @@ def gen_end_effector_pose_gradient_inner(self, fixed_target_name = ""):
                    "s_dXhom is the pointer to the LOCAL d-transforms (unused by the geometric-Jacobian path; kept for signature compatibility)", \
                    "s_temp is a pointer to helper shared memory of size " + \
                             str(self.gen_end_effector_pose_gradient_inner_temp_mem_size()), \
-                   "d_workspace is the global-memory chain workspace used in place of s_temp when !TEMP_IN_SMEM", \
-                   "s_linalg_smem is optional byte-addressed shared memory (reserved; unused)"]
+                   "d_workspace is the global-memory chain workspace used in place of s_temp when !TEMP_IN_SMEM"]
     func_notes = ["Assumes s_Xhom has been populated with the per-joint LOCAL transforms for the given q.",
                   "Output d/dv (TANGENT) is 6 x nv per ee (was 6 x nq for d/dq) -- matches pinocchio."]
     func_def_start = "void end_effector_pose_gradient_inner" + ident_suffix(fixed_target_name) + "("
     func_def_middle = "T *s_end_effector_pose_gradient, const T *s_q, const T *s_Xhom, const T *s_dXhom, "
-    func_def_end = "T *s_temp, T *d_workspace, unsigned char *s_linalg_smem) {"
+    func_def_end = "T *s_temp, T *d_workspace) {"
     func_def_middle, func_params = self.gen_insert_helpers_func_def_params(func_def_middle, func_params, -1, NO_XI_FLAG = True)
     func_def = func_def_start + func_def_middle + func_def_end
     self.gen_add_func_doc("Computes the Gradient of the End Effector Pose with respect to generalized velocity (d/dv tangent, pinocchio convention)",
@@ -746,7 +740,7 @@ def gen_end_effector_pose_gradient_inner(self, fixed_target_name = ""):
     self.gen_add_code_line("__device__")
     self.gen_add_code_line(func_def, True)
     self.gen_add_code_line("if constexpr (!TEMP_IN_SMEM) { s_temp = d_workspace; } else { (void)d_workspace; }")
-    self.gen_add_code_line("(void)s_q; (void)s_dXhom; (void)s_linalg_smem;")
+    self.gen_add_code_line("(void)s_q; (void)s_dXhom;")
 
     if root_attached:
         # Zero-fill body: the target welds to the world root, so d(pose)/dv == 0.
@@ -871,7 +865,7 @@ def gen_end_effector_pose_gradient_device(self, fixed_target_name = ""):
         lambda: self.gen_end_effector_pose_gradient_inner_function_call(fixed_target_name = fixed_target_name,
                                                                         updated_var_names = {"s_dXhom_name": "nullptr"}),
         func_notes = func_notes, func_params = func_params,
-        xmats_hom = True, linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()")
+        xmats_hom = True)
 
 _EE_GRAD_PICK_FLAGS = [
     # (use_workspace_temp, use_workspace_dxhom). The geometric-Jacobian gradient inner
@@ -916,9 +910,7 @@ def _emit_eepose_grad_kernel_body_for_flags(self, n, num_ees, fixed_target_name,
     extra_t_buffers = [("s_q", n)] if use_workspace_temp else [("s_q", n), ("s_end_effector_pose_gradient", 6*nv*num_ees)]
     # Geometric-Jacobian inner doesn't use s_dXhom -> skip its allocation/computation entirely.
     self.gen_XmatsHom_helpers_temp_shared_memory_code(shared_mem_size, include_gradients = False,
-                                                      extra_t_buffers = extra_t_buffers,
-                                                      include_linalg_scratch = True,
-                                                      linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()")
+                                                      extra_t_buffers = extra_t_buffers)
     if not use_workspace_temp:
         self.gen_add_code_line("(void)d_workspace;")
     # Per-tier eegrad_temp byte offset. The shared GRID_END_EFFECTOR_POSE_GRADIENT_WORKSPACE_TEMP_OFFSET_BYTES
@@ -1148,14 +1140,13 @@ def gen_end_effector_pose_hessian_inner_function_call(self, updated_var_names = 
         s_temp_name = "s_temp", \
         d_workspace_name = "nullptr", \
         d_robotModel_name = "d_robotModel", \
-        s_linalg_smem_name = "s_linalg_smem", \
     )
     if updated_var_names is not None:
         for key,value in updated_var_names.items():
             var_names[key] = value
     code_start = "end_effector_pose_hessian_inner" + ident_suffix(fixed_target_name) + "<T, " + out_in_smem_expr + ">(" + var_names["s_end_effector_pose_hessian_name"] + ", " + var_names["s_end_effector_pose_gradient_name"] + ", " + var_names["s_q_name"] + ", "
     code_middle = var_names["s_Xhom_name"] + ", "
-    code_end = var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ", " + var_names["d_robotModel_name"] + ", " + var_names["s_linalg_smem_name"] + ");"
+    code_end = var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ", " + var_names["d_robotModel_name"] + ");"
     # account for thread group
     # Canonical: append the shared topology-helper arg via the central helper
     # (NO_XI: the ee_pose family takes s_Xhom, not s_XImats). Mirrors the def's
@@ -1307,7 +1298,6 @@ def gen_end_effector_pose_hessian_inner(self, fixed_target_name = ""):
             " (s_Xworld | s_Sworld | s_E_sc; always kept in smem)",
         "d_workspace is the global spill arena s_end_effector_pose_hessian is repointed at when !OUT_IN_SMEM (else unused)",
         "d_robotModel is the model-specific helper struct (kept for signature compatibility, unused by the analytic path)",
-        "s_linalg_smem is optional byte-addressed shared memory (reserved; unused by this inner)",
     ]
     func_notes = [
         "Closed-form analytic d2(pose)/dv2; matches RBDReference.end_effector_pose_hessian_analytic (which agrees with pinocchio getJointKinematicHessian(LOCAL_WORLD_ALIGNED) to the FD floor fleet-wide; CUDA confirmed on iiwa14-fixed + go2-floating).",
@@ -1315,7 +1305,7 @@ def gen_end_effector_pose_hessian_inner(self, fixed_target_name = ""):
     ]
     func_def_start = "void end_effector_pose_hessian_inner" + ident_suffix(fixed_target_name) + "("
     func_def_middle = "T *s_end_effector_pose_hessian, T *s_end_effector_pose_gradient, const T *s_q, T *s_Xhom, "
-    func_def_end = "T *s_temp, T *d_workspace, const robotModel<T> *d_robotModel, unsigned char *s_linalg_smem) {"
+    func_def_end = "T *s_temp, T *d_workspace, const robotModel<T> *d_robotModel) {"
     func_def_middle, func_params = self.gen_insert_helpers_func_def_params(func_def_middle, func_params, -1, NO_XI_FLAG = True)
     func_def = func_def_start + func_def_middle + func_def_end
     self.gen_add_func_doc(
@@ -1328,7 +1318,7 @@ def gen_end_effector_pose_hessian_inner(self, fixed_target_name = ""):
     # d_workspace when !OUT_IN_SMEM. Reassigning s_end_effector_pose_hessian here keeps every
     # s_end_effector_pose_hessian[...] reference below unchanged.
     self.gen_add_code_line("if constexpr (!OUT_IN_SMEM) { s_end_effector_pose_hessian = d_workspace; } else { (void)d_workspace; }")
-    self.gen_add_code_line("(void)s_q; (void)d_robotModel; (void)s_linalg_smem;")
+    self.gen_add_code_line("(void)s_q; (void)d_robotModel;")
     if root_attached:
         # Zero-fill body: target welds to the world root -> hessian and gradient == 0.
         self.gen_add_code_line("// Root-attached fixed target: pose has no joint dependence -> hessian and gradient are identically zero.")
@@ -2440,7 +2430,7 @@ def gen_end_effector_pose_hessian_device(self, fixed_target_name = ""):
             out_in_smem_expr = "D2EE_OUT_IN_SMEM<RESOURCE_TIER>()", fixed_target_name = fixed_target_name),
         template_line = "template <typename T, int RESOURCE_TIER = TIER_SHARED>",
         func_notes = func_notes, func_params = func_params,
-        xmats_hom = True, linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()")
+        xmats_hom = True)
 
 _D2EE_PICK_FLAGS = [
     # use_workspace_output (s_end_effector_pose_hessian lives in d_workspace?)
@@ -2471,9 +2461,7 @@ def _emit_d2ee_kernel_body_for_flags(self, n, num_ees, use_workspace_output,
     inner_temp_size = self.gen_end_effector_pose_hessian_inner_temp_mem_size(fixed_target_name)
     extra_t_buffers = [("s_q", n)] if use_workspace_output else [("s_q", n), ("s_end_effector_pose_hessian", output_count), ("s_end_effector_pose_gradient", 6*nv*num_ees)]
     self.gen_XmatsHom_helpers_temp_shared_memory_code(inner_temp_size, include_gradients = False, include_hessians = False,
-                                                      extra_t_buffers = extra_t_buffers,
-                                                      include_linalg_scratch = True,
-                                                      linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()")
+                                                      extra_t_buffers = extra_t_buffers)
     out_in_smem_expr = "false" if use_workspace_output else "true"
     # The Hessian output buffer the inner actually fills: smem `s_end_effector_pose_hessian`
     # at TIER_SHARED, or the spilled `s_end_effector_pose_hessian_ws` (== the global output

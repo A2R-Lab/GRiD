@@ -194,8 +194,7 @@ def gen_forward_dynamics_device(self):
             minv_f_in_smem_expr = "true",
             updated_var_names = dict(d_workspace_name = "nullptr")),
         template_line = "template <typename T, int RESOURCE_TIER = TIER_SHARED>",
-        func_notes = func_notes, func_params = func_params,
-        include_linalg_scratch = True, tier_workspace_expr = "d_workspace")
+        func_notes = func_notes, func_params = func_params, tier_workspace_expr = "d_workspace")
 
 def _emit_fd_kernel_body_for_flags(self, nq, nv, spill_minv_F, single_call_timing):
     """Emit forward_dynamics_kernel body for one tier's Minv-F spill flag.
@@ -212,7 +211,7 @@ def _emit_fd_kernel_body_for_flags(self, nq, nv, spill_minv_F, single_call_timin
     # layout would read a misaligned u (off by nq-nv) even at slot 0 and shifted
     # inputs for k>=1 -- the floating B=1 tau + batch bug.
     input_count = 3 * nq
-    self.gen_XImats_helpers_temp_shared_memory_code(shared_mem_size, extra_t_buffers = [("s_q_qd_u", input_count), ("s_qdd", nv)], include_linalg_scratch=True)
+    self.gen_XImats_helpers_temp_shared_memory_code(shared_mem_size, extra_t_buffers = [("s_q_qd_u", input_count), ("s_qdd", nv)])
     self.gen_add_code_line("T *s_q = s_q_qd_u; T *s_qd = &s_q_qd_u[" + str(nq) + "]; T *s_u = &s_q_qd_u[" + str(2*nq) + "];")
     minv_f_expr = "false" if spill_minv_F else "true"
     if not single_call_timing:

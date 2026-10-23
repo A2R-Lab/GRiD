@@ -240,7 +240,7 @@ tangent width / body count).
 
 The jax/torch surfaces are strictly fp32 (compute and I/O). The numpy
 handle defaults to fp32 too but supports a true fp64 tier via `dtype="float64"` (separate `.so`)
-or the legacy `allow_fp64=True` fp32-compute-with-fp64-cast convenience.
+(the fp32 compute path is the validated one).
 
 ## Gradients are analytic
 

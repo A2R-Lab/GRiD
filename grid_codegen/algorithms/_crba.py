@@ -207,8 +207,8 @@ def _gen_crba_inner_spherical_fixed(self, NB, n_bfs_levels):
         self.gen_add_code_line("//     joints: " + ", ".join(joint_names))
         for jid in inds:
             parent_ind = self.robot.get_parent_id(jid)
-            self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6,false,true>(&s_XImats[{36*jid}], &alpha[{36*jid}], &s_temp[{36*NB}], static_cast<T>(1), static_cast<T>(0), s_linalg_smem);")
-            self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6>(&s_temp[{36*NB}], &s_XImats[{36*jid}], &alpha[{36*parent_ind}], static_cast<T>(1), static_cast<T>(1), s_linalg_smem);")
+            self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6,false,true>(&s_XImats[{36*jid}], &alpha[{36*jid}], &s_temp[{36*NB}], static_cast<T>(1), static_cast<T>(0));")
+            self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6>(&s_temp[{36*NB}], &s_XImats[{36*jid}], &alpha[{36*parent_ind}], static_cast<T>(1), static_cast<T>(1));")
 
     # Phase 2 — S projection, serial per body. fh / fh2 hold up to 3 columns.
     self.gen_add_code_line("//")
@@ -300,8 +300,6 @@ def gen_crba_inner(self):
     # d_workspace when !TEMP_IN_SMEM. Reassigning s_temp at the top keeps every
     # s_temp[...] reference below unchanged.
     self.gen_add_code_line("if constexpr (!TEMP_IN_SMEM) { s_temp = d_workspace; } else { (void)d_workspace; }")
-    temp_size = self.gen_crba_inner_temp_mem_size()
-    self.gen_linalg_smem_setup(temp_size)
 
     if self.robot_has_mimic_joints():
         _gen_crba_inner_mimic_fixed(self, n)
@@ -344,20 +342,20 @@ def gen_crba_inner(self):
         if len(inds) > 1 and has_linear_axis:
             for jid in inds:
                 parent_ind = self.robot.get_parent_id(jid)
-                self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6,false,true>(&s_XImats[{36*jid}], &s_XImats[{36*(jid+n)}], &alpha[{36*jid}], static_cast<T>(1), static_cast<T>(0), s_linalg_smem);")
-                self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6>(&alpha[{36*jid}], &s_XImats[{36*jid}], &s_XImats[{36*(parent_ind+n)}], static_cast<T>(1), static_cast<T>(1), s_linalg_smem);")
+                self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6,false,true>(&s_XImats[{36*jid}], &s_XImats[{36*(jid+n)}], &alpha[{36*jid}], static_cast<T>(1), static_cast<T>(0));")
+                self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6>(&alpha[{36*jid}], &s_XImats[{36*jid}], &s_XImats[{36*(parent_ind+n)}], static_cast<T>(1), static_cast<T>(1));")
 
         elif len(inds) > 1:
             for jid in inds:
                 parent_ind = self.robot.get_parent_id(jid)
-                self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6,false,true>(&s_XImats[{36*jid}], &s_XImats[{36*(jid+n)}], &alpha[{36*jid}], static_cast<T>(1), static_cast<T>(0), s_linalg_smem);")
-                self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6>(&alpha[{36*jid}], &s_XImats[{36*jid}], &s_XImats[{36*(parent_ind+n)}], static_cast<T>(1), static_cast<T>(1), s_linalg_smem);")
+                self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6,false,true>(&s_XImats[{36*jid}], &s_XImats[{36*(jid+n)}], &alpha[{36*jid}], static_cast<T>(1), static_cast<T>(0));")
+                self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6>(&alpha[{36*jid}], &s_XImats[{36*jid}], &s_XImats[{36*(parent_ind+n)}], static_cast<T>(1), static_cast<T>(1));")
 
         else:
             jid = inds[0]
             parent_ind = self.robot.get_parent_id(jid)
-            self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6,false,true>(&s_XImats[{36*jid}], &s_XImats[{36*(jid+n)}], &alpha[{36*jid}], static_cast<T>(1), static_cast<T>(0), s_linalg_smem);")
-            self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6>(&alpha[{36*jid}], &s_XImats[{36*jid}], &s_XImats[{36*(parent_ind+n)}], static_cast<T>(1), static_cast<T>(1), s_linalg_smem);")
+            self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6,false,true>(&s_XImats[{36*jid}], &s_XImats[{36*(jid+n)}], &alpha[{36*jid}], static_cast<T>(1), static_cast<T>(0));")
+            self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6>(&alpha[{36*jid}], &s_XImats[{36*jid}], &s_XImats[{36*(parent_ind+n)}], static_cast<T>(1), static_cast<T>(1));")
 
     if HAS_SKEW:
         # Tier B (skew axis) H-assembly: dense motion subspace columns. The
@@ -498,8 +496,6 @@ def gen_crba_inner_floating(self):
     # d_workspace when !TEMP_IN_SMEM. Reassigning s_temp at the top keeps every
     # s_temp[...] reference below unchanged.
     self.gen_add_code_line("if constexpr (!TEMP_IN_SMEM) { s_temp = d_workspace; } else { (void)d_workspace; }")
-    temp_size = self.gen_crba_inner_temp_mem_size()
-    self.gen_linalg_smem_setup(temp_size)
 
     self.gen_add_code_line("// Initialize IC = I and clear H")
     self.gen_add_parallel_loop("ind", str(36 * NJ + nv * nv))
@@ -532,8 +528,8 @@ def gen_crba_inner_floating(self):
             # falls entirely here (BFS levels 1..7 each have exactly one jid).
             jid = inds[0]
             parent = self.robot.get_parent_id(jid)
-            self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6,false,true>(&s_XImats[{36*jid}], &s_temp[{ICOffset + 36*jid}], &s_temp[{alphaOffset}], static_cast<T>(1), static_cast<T>(0), s_linalg_smem);")
-            self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6>(&s_temp[{alphaOffset}], &s_XImats[{36*jid}], &s_temp[{ICOffset + 36*parent}], static_cast<T>(1), static_cast<T>(1), s_linalg_smem);")
+            self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6,false,true>(&s_XImats[{36*jid}], &s_temp[{ICOffset + 36*jid}], &s_temp[{alphaOffset}], static_cast<T>(1), static_cast<T>(0));")
+            self.gen_add_code_line(f"grid_linalg_gemm<T,6,6,6>(&s_temp[{alphaOffset}], &s_XImats[{36*jid}], &s_temp[{ICOffset + 36*parent}], static_cast<T>(1), static_cast<T>(1));")
             continue
 
         # k siblings ≥ 2 — fused per-level forward + backward. Wrap in a block
@@ -814,8 +810,7 @@ def gen_crba_device(self):
     self.gen_device_wrapper(
         "Compute the CRBA (Composite Rigid Body Algorithm)", func_def, shared_mem_size,
         lambda: self.gen_crba_inner_function_call(),
-        func_notes = func_notes, func_params = func_params,
-        include_linalg_scratch = True, skip_floating_base_X = True)
+        func_notes = func_notes, func_params = func_params, skip_floating_base_X = True)
 
 def _emit_crba_kernel_body_for_flags(self, nq, nv, input_count, use_workspace_temp, m_in_smem, single_call_timing):
     """Emit crba_kernel body for one tier's spill flags.
@@ -830,7 +825,7 @@ def _emit_crba_kernel_body_for_flags(self, nq, nv, input_count, use_workspace_te
         extra_t_buffers = [("s_M", nv*nv), ("s_q_qd", input_count)]
     else:
         extra_t_buffers = [("s_q_qd", input_count)]
-    self.gen_XImats_helpers_temp_shared_memory_code(shared_mem_size, extra_t_buffers = extra_t_buffers, include_linalg_scratch=True)
+    self.gen_XImats_helpers_temp_shared_memory_code(shared_mem_size, extra_t_buffers = extra_t_buffers)
     self.gen_add_code_line("T *s_q = s_q_qd; T *s_qd = &s_q_qd[" + str(nq) + "];")
     if not m_in_smem:
         self.gen_add_code_line("T *s_M;  // repointed to the L2-pinned SO band (output spill) per timing branch")

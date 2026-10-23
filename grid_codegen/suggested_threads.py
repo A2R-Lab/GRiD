@@ -46,6 +46,9 @@ MIN_THREADS = 32
 MAX_THREADS = 1024
 
 
+_TEMPLATE_DEFAULT_RE = re.compile(r"\bint\s+([A-Za-z_]\w*)\s*=\s*(\d+)")
+
+
 def _strip_comment(line: str) -> str:
     i = line.find("//")
     return line if i < 0 else line[:i]
@@ -69,6 +72,13 @@ def index_functions(text: str) -> dict[str, list[str]]:
         depth = raw.count("{") - raw.count("}")
         j = i + 1
         chunk = [raw]
+        # keep the template line in front of the body: a loop bound may be a
+        # template parameter whose default is the width to read
+        k = i - 1
+        while k >= 0 and k >= i - 3 and _strip_comment(lines[k]).strip() in ("__device__", "__host__", "__host__ __device__", "__device__ __forceinline__", "__forceinline__"):
+            k -= 1
+        if k >= 0 and _strip_comment(lines[k]).lstrip().startswith("template"):
+            chunk.insert(0, _strip_comment(lines[k]))
         while j < n and depth > 0:
             l = _strip_comment(lines[j])
             depth += l.count("{") - l.count("}")
@@ -173,6 +183,12 @@ def body_loop_widths(body: str, consts: dict[str, int], compute_only: bool = Tru
     striding over a few more elements per thread costs nothing against the
     serial compute of the loops that do arithmetic."""
     local = dict(consts)
+    # a template parameter with an integer default (`int COUNT = 12`) reads as
+    # its default: the widest instantiation the header itself emits
+    head = body.split("\n", 1)[0]
+    if head.lstrip().startswith("template"):
+        for mm in _TEMPLATE_DEFAULT_RE.finditer(head):
+            local.setdefault(mm.group(1), int(mm.group(2)))
     # a constexpr table read `t[i]` is bounded by the table's largest entry
     arrays = {mm.group(1): max(int(x) for x in re.findall(r"-?\d+", mm.group(2)) or [0])
               for mm in _CONST_ARRAY_RE.finditer(body)}

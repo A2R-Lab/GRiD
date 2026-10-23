@@ -662,11 +662,13 @@ def _unpack_term(blk, n):
 )
 def test_cuda_cost_menu_matches_reference(tmp_path, robot_id, base_mode):
     """The cost menu against RBDReference: gravity_torque; state_cost under pseudo-Huber and
-    under both barrier activations with bounds; input_cost; the frame 0 (end-effector) and
-    frame 1 position, the frame 0 log-map orientation and, on fixed base, the frame 0 twist;
-    the linear features on x and u; the quadratic activation reproducing the quadratic
-    terms; and, on fixed base, the tracking_cost_menu preset equal to the independent
-    composition of its terms."""
+    under the barrier activations with bounds; on a floating base the tangent state term
+    (pseudo-Huber and the smooth hinge with tangent-indexed bounds); input_cost over the menu's
+    input width; the frame 0 (end-effector) and frame 1 position, the frame 0 log-map
+    orientation and twist; the linear features on x (or [q[7:]; qd]) and u; the quadratic
+    activation reproducing the quadratic terms; and the tracking_cost_menu preset equal to the
+    independent composition of its terms, in the x layout on a fixed base and the tangent
+    layout on a floating base."""
     spec = _robot_spec(robot_id, base_mode)
     try:
         resolved = resolve_robot_spec(spec)
@@ -681,6 +683,10 @@ def test_cuda_cost_menu_matches_reference(tmp_path, robot_id, base_mode):
 
     nq, nv = project_model.nq, project_model.nv
     nx, nu = nq + nv, nv
+    floating = base_mode == "floating"
+    tn = 2 * nv                           # the tangent width of the frame terms and the preset (== nx on a fixed base)
+    mnu = nv - 6 if floating else nv      # the menu's input width
+    nlx = 2 * nv - 6 if floating else nx  # the linear x feature's variable: [q[7:]; qd] or x
     samples = _build_cuda_samples(project_model, random_count=3, include_corner_samples=True)
     rtol, atol = 2e-3, 2e-3
 
@@ -723,41 +729,67 @@ def test_cuda_cost_menu_matches_reference(tmp_path, robot_id, base_mode):
         away = (np.abs(x - lo) > 1e-5) & (np.abs(x - hi) > 1e-5)
         close(np.diag(hess)[away], np.diag(rh)[away], f"{tag} quadratic barrier hess (entries away from a bound)")
         assert np.count_nonzero(hess - np.diag(np.diag(hess))) == 0, f"{tag} quadratic barrier hess must be diagonal"
+        # smooth hinge (eps = 0.05): zero inside the bounds, pseudo-Huber in the violation outside; its
+        # curvature steps from 0 to w / eps at the bound, so the Hessian is compared away from the bounds
+        val, grad, hess = _unpack_term(out["menu_hinge_state"], nx)
+        rv, rg, rh = ref.state_cost(x, _x_des(nx), _Qw(nx), 4, 0.05, lo, hi)
+        close(val, rv, f"{tag} smooth hinge value"); close(grad, rg, f"{tag} smooth hinge grad")
+        close(np.diag(hess)[away], np.diag(rh)[away], f"{tag} smooth hinge hess (entries away from a bound)")
+        assert np.count_nonzero(hess - np.diag(np.diag(hess))) == 0, f"{tag} smooth hinge hess must be diagonal"
 
-        val, grad, hess = _unpack_term(out["menu_input"], nu)
-        rv, rg, rh = ref.input_cost(u, _u_des(nu), _Rw(nu), _PSEUDO_HUBER, _menu_eps(2))
+        val, grad, hess = _unpack_term(out["menu_input"], mnu)
+        rv, rg, rh = ref.input_cost(u[:mnu], _u_des(mnu), _Rw(mnu), _PSEUDO_HUBER, _menu_eps(2))
         close(val, rv, f"{tag} input value"); close(grad, rg, f"{tag} input grad"); close(hess, rh, f"{tag} input hess")
 
+        if floating:
+            # the tangent state term: residual [difference(q_des, q); qd - qd_des] with the on-device
+            # target (a valid quaternion by construction, dumped for the oracle); pseudo-Huber, then the
+            # smooth hinge with tangent-indexed bounds (base pose unbounded, Hessian compared away from them)
+            assert "menu_tstate" in out, f"{tag}: the floating menu must emit state_cost_tangent"
+            x_des_t = np.asarray(out["menu_tstate_xdes"], dtype=np.float64).reshape(-1)
+            val, grad, hess = _unpack_term(out["menu_tstate"], tn)
+            rv, rg, rh = ref.state_cost_tangent(x, x_des_t, _Qw(tn), _PSEUDO_HUBER, _menu_eps(1))
+            close(val, rv, f"{tag} tangent state value"); close(grad, rg, f"{tag} tangent state grad"); close(hess, rh, f"{tag} tangent state hess")
+            feat = np.concatenate([np.zeros(6), x_des_t[7:nq], x_des_t[nq:]])
+            tlo, thi = feat - 0.45, feat + 0.45
+            val, grad, hess = _unpack_term(out["menu_tstate_hinge"], tn)
+            rv, rg, rh = ref.state_cost_tangent(x, x_des_t, _Qw(tn), 4, 0.05, tlo, thi)
+            close(val, rv, f"{tag} tangent hinge value"); close(grad, rg, f"{tag} tangent hinge grad")
+            cur = np.concatenate([np.zeros(6), q[7:], qd])
+            away = np.concatenate([np.ones(6, bool), (np.abs(cur[6:] - tlo[6:]) > 1e-5) & (np.abs(cur[6:] - thi[6:]) > 1e-5)])
+            close(hess[np.ix_(away, away)], rh[np.ix_(away, away)], f"{tag} tangent hinge hess (away from a bound)")
+        else:
+            assert "menu_tstate" not in out
+
         # frame 0 position: the end-effector target
-        val, grad, hess = _unpack_term(out["menu_ee"], nx)
+        val, grad, hess = _unpack_term(out["menu_ee"], tn)
         rv, rg, rh = ref.frame_position_cost(q, frames[0], np.zeros(3), _Ww(), _PSEUDO_HUBER, _menu_eps(0))
         close(val, rv, f"{tag} frame 0 position value"); close(grad, rg, f"{tag} frame 0 position grad"); close(hess, rh, f"{tag} frame 0 position hess")
         assert np.count_nonzero(grad[nv:]) == 0, f"{tag} frame position grad qd-block must be zero"
 
         # frame 0 orientation: log-map residual against R_des = Rz(0.3) Ry(0.2) Rx(0.1)
-        val, grad, hess = _unpack_term(out["menu_orient"], nx)
+        val, grad, hess = _unpack_term(out["menu_orient"], tn)
         rv, rg, rh = ref.frame_orientation_cost(q, frames[0], _R_des().flatten(order="F"), _Ww(), _PSEUDO_HUBER, _menu_eps(5))
         close(val, rv, f"{tag} orientation value"); close(grad, rg, f"{tag} orientation grad"); close(hess, rh, f"{tag} orientation hess")
 
         # frame 1 position
-        val, grad, hess = _unpack_term(out["menu_frame2"], nx)
+        val, grad, hess = _unpack_term(out["menu_frame2"], tn)
         rv, rg, rh = ref.frame_position_cost(q, frames[1], _cf_des(), _Wcf(), _PSEUDO_HUBER, _menu_eps(7))
         close(val, rv, f"{tag} frame 1 position value"); close(grad, rg, f"{tag} frame 1 position grad"); close(hess, rh, f"{tag} frame 1 position hess")
 
-        # frame 0 twist (fixed base only)
-        if "menu_vel" in out:
-            val, grad, hess = _unpack_term(out["menu_vel"], nx)
-            rv, rg, rh = ref.frame_velocity_cost(q, qd, frames[0], _v_des(), _Wv(), _PSEUDO_HUBER, _menu_eps(6))
-            close(val, rv, f"{tag} twist value"); close(grad, rg, f"{tag} twist grad"); close(hess, rh, f"{tag} twist hess")
-        else:
-            assert base_mode == "floating"
+        # frame 0 twist (both bases; the configuration derivative is taken along the tangent)
+        assert "menu_vel" in out, f"{tag}: frame_velocity_cost must be emitted"
+        val, grad, hess = _unpack_term(out["menu_vel"], tn)
+        rv, rg, rh = ref.frame_velocity_cost(q, qd, frames[0], _v_des(), _Wv(), _PSEUDO_HUBER, _menu_eps(6))
+        close(val, rv, f"{tag} twist value"); close(grad, rg, f"{tag} twist grad"); close(hess, rh, f"{tag} twist hess")
 
-        val, grad, hess = _unpack_term(out["menu_linx"], nx)
-        rv, rg, rh = ref.linear_feature_cost(x, _lin_Ax(nx), _lin_bx(), _lin_tx(), _lin_Wx(), _PSEUDO_HUBER, _menu_eps(3))
+        vx = np.concatenate([q[7:], qd]) if floating else x
+        val, grad, hess = _unpack_term(out["menu_linx"], nlx)
+        rv, rg, rh = ref.linear_feature_cost(vx, _lin_Ax(nlx), _lin_bx(), _lin_tx(), _lin_Wx(), _PSEUDO_HUBER, _menu_eps(3))
         close(val, rv, f"{tag} linear x value"); close(grad, rg, f"{tag} linear x grad"); close(hess, rh, f"{tag} linear x hess")
 
-        val, grad, hess = _unpack_term(out["menu_linu"], nu)
-        rv, rg, rh = ref.linear_feature_cost(u, _lin_Au(nu), [0.1], [-0.1], [5.0], _PSEUDO_HUBER, _menu_eps(4))
+        val, grad, hess = _unpack_term(out["menu_linu"], mnu)
+        rv, rg, rh = ref.linear_feature_cost(u[:mnu], _lin_Au(mnu), [0.1], [-0.1], [5.0], _PSEUDO_HUBER, _menu_eps(4))
         close(val, rv, f"{tag} linear u value"); close(grad, rg, f"{tag} linear u grad"); close(hess, rh, f"{tag} linear u hess")
 
         # the quadratic activation is the quadratic term: bit for bit for the state cost
@@ -769,16 +801,14 @@ def test_cuda_cost_menu_matches_reference(tmp_path, robot_id, base_mode):
         ee_val = np.asarray(out["ee_cost_value"], dtype=np.float64).reshape(-1)[0]
         assert abs(quad[1] - ee_val) <= 4e-7 * max(1.0, abs(ee_val)), f"{tag} quadratic activation != ee_pos_cost ({quad[1]} vs {ee_val})"
 
-        if "menu_preset_skipped" not in out:
-            blk = np.asarray(out["menu_preset"], dtype=np.float64).reshape(-1)
-            cnt = 1 + nx + nu + nx * nx + nu * nu
-            preset, reference = blk[:cnt], blk[cnt:]
-            close(preset[0], reference[0], f"{tag} menu preset value == composition")
-            close(preset[1:1 + nx], reference[1:1 + nx], f"{tag} menu preset s_qk == composition")
-            close(preset[1 + nx:1 + nx + nu], reference[1 + nx:1 + nx + nu], f"{tag} menu preset s_rk == composition")
-            close(preset[1 + nx + nu:1 + nx + nu + nx * nx], reference[1 + nx + nu:1 + nx + nu + nx * nx], f"{tag} menu preset s_Qk == composition")
-            close(preset[1 + nx + nu + nx * nx:], reference[1 + nx + nu + nx * nx:], f"{tag} menu preset s_Rk == composition")
-        else:
-            assert base_mode == "floating"
+        assert "menu_preset_skipped" not in out, f"{tag}: the preset must be emitted on both bases"
+        blk = np.asarray(out["menu_preset"], dtype=np.float64).reshape(-1)
+        cnt = 1 + tn + mnu + tn * tn + mnu * mnu
+        preset, reference = blk[:cnt], blk[cnt:]
+        close(preset[0], reference[0], f"{tag} menu preset value == composition")
+        close(preset[1:1 + tn], reference[1:1 + tn], f"{tag} menu preset s_qk == composition")
+        close(preset[1 + tn:1 + tn + mnu], reference[1 + tn:1 + tn + mnu], f"{tag} menu preset s_rk == composition")
+        close(preset[1 + tn + mnu:1 + tn + mnu + tn * tn], reference[1 + tn + mnu:1 + tn + mnu + tn * tn], f"{tag} menu preset s_Qk == composition")
+        close(preset[1 + tn + mnu + tn * tn:], reference[1 + tn + mnu + tn * tn:], f"{tag} menu preset s_Rk == composition")
         checked += 1
     assert checked >= 3

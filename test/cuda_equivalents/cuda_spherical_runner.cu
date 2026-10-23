@@ -359,8 +359,7 @@ void run() {
     // for these small fixtures); extra dynamic smem is harmless (kernel uses a
     // prefix), and over-allocation keeps the runner robot-independent.
     const size_t crba_smem = grid::grid_shared_arena_bytes<T>(
-        72 * grid::NUM_BODIES + 512, grid::TOPOLOGY_HELPERS_COUNT,
-        grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>());
+        72 * grid::NUM_BODIES + 512, grid::TOPOLOGY_HELPERS_COUNT);
     gpuErrchk(cudaFuncSetAttribute(spherical_crba_device_runner<T>,
                                    cudaFuncAttributeMaxDynamicSharedMemorySize,
                                    static_cast<int>(crba_smem)));
@@ -393,8 +392,7 @@ void run() {
     gpuErrchk(cudaMalloc((void **)&d_Minv, nv * nv * sizeof(T)));
     std::vector<T> h_Minv_dev(nv * nv);
     const size_t minv_smem = grid::grid_shared_arena_bytes<T>(
-        72 * grid::NUM_BODIES + 6 * nv * nv + 512, grid::TOPOLOGY_HELPERS_COUNT,
-        grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>());
+        72 * grid::NUM_BODIES + 6 * nv * nv + 512, grid::TOPOLOGY_HELPERS_COUNT);
     gpuErrchk(cudaFuncSetAttribute(spherical_minv_device_runner<T>,
                                    cudaFuncAttributeMaxDynamicSharedMemorySize,
                                    static_cast<int>(minv_smem)));
@@ -452,7 +450,7 @@ void run() {
     std::vector<T> h_qdd_aba_dev(nv);
     const size_t aba_smem = grid::grid_shared_arena_bytes<T>(
         12 * grid::NUM_BODIES + grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>() / sizeof(T) + 512,
-        grid::TOPOLOGY_HELPERS_COUNT, grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>());
+        grid::TOPOLOGY_HELPERS_COUNT);
     gpuErrchk(cudaFuncSetAttribute(spherical_aba_device_runner<T>,
                                    cudaFuncAttributeMaxDynamicSharedMemorySize,
                                    static_cast<int>(aba_smem)));

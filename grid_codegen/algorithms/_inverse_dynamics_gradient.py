@@ -1654,7 +1654,7 @@ def _emit_inverse_dynamics_gradient_kernel_body_for_flags(self, NUM_POS, n, use_
         _selective_shared
         if use_selective_spill else self.gen_inverse_dynamics_gradient_inner_temp_mem_size()
     )
-    self.gen_XImats_helpers_temp_shared_memory_code(shared_mem_size, extra_t_buffers = extra_t_buffers, include_linalg_scratch=True)
+    self.gen_XImats_helpers_temp_shared_memory_code(shared_mem_size, extra_t_buffers = extra_t_buffers)
     self.gen_add_code_line("T *d_temp_spill = nullptr; (void)d_temp_spill;")
     self.gen_add_code_line("T *s_q = s_q_qd; T *s_qd = &s_q_qd[" + str(NUM_POS) + "];")
     if not single_call_timing:

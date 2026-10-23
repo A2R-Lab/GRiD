@@ -270,8 +270,7 @@ def gen_frame_jacobian_device(self):
     # s_J is caller-provided (function param); the arena only holds the XmatsHom
     # world-transform machinery + inner scratch.
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
-        _frame_jacobian_inner_temp_mem_size(self),
-        include_linalg_scratch=True, linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
+        _frame_jacobian_inner_temp_mem_size(self))
     self.gen_load_update_XmatsHom_helpers_function_call()
     self.gen_add_code_line("frame_jacobian_inner<T>(s_J, target_jid, reference_frame, s_q, s_XmatsHom, d_robotModel, s_temp);")
     self.gen_add_sync()
@@ -312,8 +311,7 @@ def gen_frame_jacobian_kernel(self, single_call_timing=False):
     # arena: world-transform machinery + inner scratch + s_q + s_frame_jacobian.
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
         _frame_jacobian_inner_temp_mem_size(self),
-        extra_t_buffers=[("s_q", n), ("s_frame_jacobian", 6 * nv)],
-        include_linalg_scratch=True, linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
+        extra_t_buffers=[("s_q", n), ("s_frame_jacobian", 6 * nv)])
     if not single_call_timing:
         self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
         self.gen_kernel_load_inputs("q", str(n), stride="stride_q")
@@ -465,8 +463,7 @@ def gen_frame_jacobian_dot_device(self):
     # the caller-provided output.
     extra = [("s_wvel", 3 * NJ), ("s_vvel", 3 * NJ), ("s_Jval", 6 * nv)]
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
-        _frame_jacobian_inner_temp_mem_size(self), extra_t_buffers=extra,
-        include_linalg_scratch=True, linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
+        _frame_jacobian_inner_temp_mem_size(self), extra_t_buffers=extra)
 
     # ---- Step 1: build local homogeneous transforms for s_q, then world chain-up ----
     self.gen_load_update_XmatsHom_helpers_function_call()
@@ -838,8 +835,7 @@ def gen_osc_inertia_device(self):
     extra = [("s_XmatsHom", Xhom_size), ("s_Minv", nv * nv), ("s_F", "OSC_F_SLOT"),
              ("s_Jfj", 6 * nv), ("s_MJt", nv * 6), ("s_task", 36), ("s_taskinv", 36)]
     self.gen_XImats_helpers_temp_shared_memory_code(
-        temp_size, extra_t_buffers=extra,
-        include_linalg_scratch=True, linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
+        temp_size, extra_t_buffers=extra)
     # spill-F: route s_F to the L2-pinned minv-F workspace offset (d_workspace is the
     # per-timestep base, sliced by the kernel). Disjoint from any concurrent kernel —
     # osc_inertia is a standalone kinematics launch.

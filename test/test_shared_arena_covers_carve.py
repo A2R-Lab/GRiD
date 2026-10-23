@@ -63,7 +63,7 @@ _T_REGION = re.compile(r"^//\s+T\s+(\w+)\[([^\]]+)\]")
 _ARENA_START = re.compile(r"^//\s*GRID shared arena layout\s*$")
 _KERNEL_DEF = re.compile(r"\b__global__\b")
 _FUNC_NAME = re.compile(r"\bvoid\s+(\w+)\s*\(")
-# grid_shared_arena_bytes<T>(<T_COUNT>, TOPOLOGY_HELPERS_COUNT, <linalg bytes>)
+# grid_shared_arena_bytes<T>(<T_COUNT>, TOPOLOGY_HELPERS_COUNT)
 _MACRO_DEF = re.compile(r"\b(\w+)_DYNAMIC_SHARED_MEM_BYTES\s*\(\)")
 _ARENA_BYTES_CALL = re.compile(r"grid_shared_arena_bytes<T>\(\s*([0-9]+)\s*,")
 

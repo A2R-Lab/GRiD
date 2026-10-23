@@ -324,7 +324,7 @@ def gen_inverse_dynamics_regressor_device(self):
         shared_mem_size,
         lambda: self.gen_inverse_dynamics_regressor_inner_function_call(),
         func_params=func_params,
-        extra_t_buffers=extra_t_buffers, include_linalg_scratch=True)
+        extra_t_buffers=extra_t_buffers)
 
 
 def gen_inverse_dynamics_regressor_kernel(self, single_call_timing=False):
@@ -387,7 +387,7 @@ def gen_inverse_dynamics_regressor_kernel(self, single_call_timing=False):
     extra_t_buffers = [("s_q_qd_qdd", in_size), ("s_vaf", 18 * nb_vaf), ("s_Y", "REGRESSOR_Y_SLOT")]
     shared_mem_size = self.gen_inverse_dynamics_regressor_inner_temp_mem_size()
     self.gen_XImats_helpers_temp_shared_memory_code(
-        shared_mem_size, extra_t_buffers=extra_t_buffers, include_linalg_scratch=True)
+        shared_mem_size, extra_t_buffers=extra_t_buffers)
     self.gen_add_code_line("if constexpr (REGRESSOR_Y_IN_SMEM) { (void)d_workspace; }")
     self.gen_add_code_line("T *s_q = s_q_qd_qdd; T *s_qd = &s_q_qd_qdd[" + str(NUM_POS) +
                            "]; T *s_qdd = &s_q_qd_qdd[" + str(2 * NUM_POS) + "];")

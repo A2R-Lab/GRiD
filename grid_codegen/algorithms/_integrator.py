@@ -982,7 +982,7 @@ def gen_integrator_device(self):
             updated_var_names=dict(d_f_ext_name="d_f_ext")),
         template_line = "template <typename T, IntegratorType IT = IntegratorType::EULER>",
         func_notes = [], func_params = func_params,
-        extra_t_buffers = extra_t_buffers, include_linalg_scratch = True)
+        extra_t_buffers = extra_t_buffers)
 
 
 def _integrator_kernel_extra_t_buffers(self, nq, nv):
@@ -1017,8 +1017,6 @@ def gen_integrator_arena_carve_struct(self):
         include_topology_helpers = (not self.robot.is_serial_chain()
                                     or not self.robot.are_Ss_identical(list(range(nq)))),
         ximat_size = self.gen_get_XI_size(False, False),
-        include_linalg_scratch = True,
-        linalg_scratch_bytes = "GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()",
         apply_runtime_transform_band = getattr(self, "runtime_transform", False))
     self.gen_arena_carve_struct(
         "integrator_arena", layout,
@@ -1047,7 +1045,7 @@ def _emit_integrator_kernel_body_for_flags(self, nq, nv, spill_minv_F, single_ca
     # genuinely nq+nv wide (q is nq, qd is nv), so out_count stays nq+nv.
     input_count = 3 * nq
     extra_t_buffers = _integrator_kernel_extra_t_buffers(self, nq, nv)
-    self.gen_XImats_helpers_temp_shared_memory_code(shared_mem_size, extra_t_buffers=extra_t_buffers, include_linalg_scratch=True)
+    self.gen_XImats_helpers_temp_shared_memory_code(shared_mem_size, extra_t_buffers=extra_t_buffers)
     self.gen_add_code_line(
         "T *s_q = s_q_qd_u; T *s_qd = &s_q_qd_u[" + str(nq) + "]; T *s_u = &s_q_qd_u[" + str(2 * nq) + "];"
     )

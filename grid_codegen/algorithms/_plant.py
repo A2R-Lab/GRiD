@@ -58,12 +58,11 @@ def _emit_momentum_jacobian(self):
              ("s_J", f"(J_SMEM ? {_dccrba_sweep_J_count(self)} : 0)")]
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
         _dccrba_inner_temp_mem_size(self), extra_t_buffers=extra,
-        include_linalg_scratch=True, linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()",
         arena_base_expr="s_scratch")
     self.gen_add_code_line("if constexpr (!OUT_SMEM) s_dccrba = reinterpret_cast<T *>(d_workspace + GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>());")
     self.gen_add_code_line("if constexpr (!J_SMEM) s_J = reinterpret_cast<T *>(d_workspace + GRID_DCCRBA_J_OFFSET_BYTES<T>());")
     self.gen_load_update_XmatsHom_helpers_function_call()
-    self.gen_add_code_line("dccrba_inner<T>(s_dccrba, s_A, s_com, s_extra, s_q, s_XmatsHom, d_robotModel, s_temp, s_J, s_linalg_smem);")
+    self.gen_add_code_line("dccrba_inner<T>(s_dccrba, s_A, s_com, s_extra, s_q, s_XmatsHom, d_robotModel, s_temp, s_J);")
     self.gen_add_sync()
     self.gen_add_code_line(f"__shared__ T s_Jh[{12*nv}];")
     self.gen_add_parallel_loop("ind", str(6*nv))
@@ -100,7 +99,6 @@ def _emit_centroidal_caller_scratch(self):
     self.gen_add_code_line("using namespace grid;")
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
         _centroidal_inner_temp_mem_size(self), extra_t_buffers=_centroidal_device_extra(self),
-        include_linalg_scratch=True, linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()",
         arena_base_expr="s_scratch")
     self.gen_load_update_XmatsHom_helpers_function_call()
     _gen_centroidal_call(self)
@@ -903,8 +901,7 @@ def gen_ee_raw_evaluators(self, with_gradient = True):
                            "T *s_scratch, const grid::robotModel<T> *d_robotModel) {", True)
     self.gen_add_code_line("using namespace grid;")
     _ee_scratch = self.gen_end_effector_pose_inner_temp_mem_size(_tgt)
-    self.gen_XmatsHom_helpers_temp_shared_memory_code(_ee_scratch, include_linalg_scratch = True,
-                                                      linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()",
+    self.gen_XmatsHom_helpers_temp_shared_memory_code(_ee_scratch,
                                                       arena_base_expr = "s_scratch")
     self.gen_load_update_XmatsHom_helpers_function_call()
     self.gen_end_effector_pose_inner_function_call(fixed_target_name = _tgt)
@@ -937,8 +934,7 @@ def gen_ee_raw_evaluators(self, with_gradient = True):
     self.gen_add_code_line("using namespace grid;")
     _ee_scratch = max(self.gen_end_effector_pose_inner_temp_mem_size(_tgt),
                       self.gen_end_effector_pose_gradient_inner_temp_mem_size(_tgt))
-    self.gen_XmatsHom_helpers_temp_shared_memory_code(_ee_scratch, include_linalg_scratch = True,
-                                                      linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()",
+    self.gen_XmatsHom_helpers_temp_shared_memory_code(_ee_scratch,
                                                       arena_base_expr = "s_scratch")
     self.gen_load_update_XmatsHom_helpers_function_call()
     self.gen_end_effector_pose_inner_function_call(fixed_target_name = _tgt)
@@ -998,8 +994,7 @@ def _gen_raw_multi_target_evaluators(self, batch, suffix, name, count_sym, smem_
                            "const grid::robotModel<T> *d_robotModel) {", True)
     self.gen_add_code_line("using namespace grid;")
     _scratch = self.gen_multi_target_position_inner_temp_mem_size(batch)
-    self.gen_XmatsHom_helpers_temp_shared_memory_code(_scratch, include_linalg_scratch = True,
-                                                      linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()",
+    self.gen_XmatsHom_helpers_temp_shared_memory_code(_scratch,
                                                       arena_base_expr = "s_scratch")
     self.gen_load_update_XmatsHom_helpers_function_call()
     self.gen_multi_target_position_inner_function_call(updated_var_names = {"s_out_pos_name": "s_pos"},
@@ -1026,8 +1021,7 @@ def _gen_raw_multi_target_evaluators(self, batch, suffix, name, count_sym, smem_
     self.gen_add_code_line("using namespace grid;")
     _scratch = max(self.gen_multi_target_position_inner_temp_mem_size(batch),
                    self.gen_multi_target_position_gradient_inner_temp_mem_size(batch))
-    self.gen_XmatsHom_helpers_temp_shared_memory_code(_scratch, include_linalg_scratch = True,
-                                                      linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()",
+    self.gen_XmatsHom_helpers_temp_shared_memory_code(_scratch,
                                                       arena_base_expr = "s_scratch")
     self.gen_load_update_XmatsHom_helpers_function_call()
     self.gen_multi_target_position_inner_function_call(updated_var_names = {"s_out_pos_name": "s_pos"},
@@ -1103,8 +1097,7 @@ def gen_ee_pos_cost(self, with_d2ee = False):
     # shared XmatsHom/load/inner emit helpers resolve unqualified (same pattern as plant_step_gradient_kernel).
     self.gen_add_code_line("using namespace grid;")
     _ee_scratch = self.gen_end_effector_pose_inner_temp_mem_size(_tgt)
-    self.gen_XmatsHom_helpers_temp_shared_memory_code(_ee_scratch, include_linalg_scratch = True,
-                                                      linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()",
+    self.gen_XmatsHom_helpers_temp_shared_memory_code(_ee_scratch,
                                                       arena_base_expr = "s_scratch")
     self.gen_load_update_XmatsHom_helpers_function_call()
     self.gen_end_effector_pose_inner_function_call(fixed_target_name = _tgt)
@@ -1146,8 +1139,7 @@ def gen_ee_pos_cost(self, with_d2ee = False):
     self.gen_add_code_line("using namespace grid;")
     _ee_scratch = max(self.gen_end_effector_pose_inner_temp_mem_size(_tgt),
                       self.gen_end_effector_pose_gradient_inner_temp_mem_size(_tgt))
-    self.gen_XmatsHom_helpers_temp_shared_memory_code(_ee_scratch, include_linalg_scratch = True,
-                                                      linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()",
+    self.gen_XmatsHom_helpers_temp_shared_memory_code(_ee_scratch,
                                                       arena_base_expr = "s_scratch")
     self.gen_load_update_XmatsHom_helpers_function_call()
     self.gen_end_effector_pose_inner_function_call(fixed_target_name = _tgt)
@@ -1235,8 +1227,7 @@ def gen_ee_pos_cost(self, with_d2ee = False):
         self.gen_add_code_line("if constexpr (!GAUSS_NEWTON) {", True)
         _ee_scratch_newton = max(self.gen_end_effector_pose_inner_temp_mem_size(_tgt),
                                  self.gen_end_effector_pose_hessian_inner_temp_mem_size(_tgt))
-        self.gen_XmatsHom_helpers_temp_shared_memory_code(_ee_scratch_newton, include_linalg_scratch = True,
-                                                          linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()",
+        self.gen_XmatsHom_helpers_temp_shared_memory_code(_ee_scratch_newton,
                                                           arena_base_expr = "s_scratch")
         self.gen_load_update_XmatsHom_helpers_function_call()
         self.gen_end_effector_pose_inner_function_call(fixed_target_name = _tgt)
@@ -1249,8 +1240,7 @@ def gen_ee_pos_cost(self, with_d2ee = False):
     # GN path (the ONLY path when with_d2ee is False): lay out the EE-pose-gradient arena
     # from s_scratch, load XmatsHom, call the geometric-Jacobian inner (s_dXhom = nullptr).
     _ee_scratch = self.gen_end_effector_pose_gradient_inner_temp_mem_size(_tgt)
-    self.gen_XmatsHom_helpers_temp_shared_memory_code(_ee_scratch, include_linalg_scratch = True,
-                                                      linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()",
+    self.gen_XmatsHom_helpers_temp_shared_memory_code(_ee_scratch,
                                                       arena_base_expr = "s_scratch")
     self.gen_load_update_XmatsHom_helpers_function_call()
     self.gen_end_effector_pose_gradient_inner_function_call(fixed_target_name = _tgt,
@@ -1849,24 +1839,25 @@ def _gen_one_barrier(self, base, doc_target, count, slice_offset):
         base + ": value += -mu * sum_i ( log(x_i - lo_i) + log(hi_i - x_i) ) over " + doc_target,
         ["Block-cooperative reduction into s_scratch then a serial add into s_out[0].",
          "s_lower / s_upper are explicit bound vectors (size " + N + "); an inf entry skips that side (isfinite guard).",
-         "s_scratch must hold at least " + N + " elements."],
+         "COUNT and VAR_OFFSET (templates, defaults " + N + " and " + str(slice_offset) + ") select the bounded slice s_var[VAR_OFFSET .. VAR_OFFSET + COUNT); the floating-base menu bounds the joint positions alone this way.",
+         "s_scratch must hold at least COUNT elements."],
         ["s_out is the scalar barrier cost (added into s_out[0])",
          "s_var is the variable vector (this barrier reads s_var[" + str(slice_offset) + " + i])",
          "s_lower / s_upper are the per-DOF bounds (size " + N + ")",
          "mu is the barrier weight",
          "s_scratch is shared scratch of size >= " + N],
         None)
-    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("template <typename T, int COUNT = " + N + ", int VAR_OFFSET = " + str(slice_offset) + ">")
     self.gen_add_code_line("__device__")
     self.gen_add_code_line("void " + base + "(T *s_out, const T *s_var, const T *s_lower, const T *s_upper, "
                            "const T mu, T *s_scratch) {", True)
-    self.gen_add_parallel_loop("i", N)
-    self.gen_add_code_line("s_scratch[i] = grid_plant_log_barrier<T>(s_var[" + str(slice_offset) + " + i], s_lower[i], s_upper[i], mu);")
+    self.gen_add_parallel_loop("i", "COUNT")
+    self.gen_add_code_line("s_scratch[i] = grid_plant_log_barrier<T>(s_var[VAR_OFFSET + i], s_lower[i], s_upper[i], mu);")
     self.gen_add_end_control_flow()
     self.gen_add_sync()
     self.gen_add_serial_ops()
     self.gen_add_code_line("T acc = static_cast<T>(0);")
-    self.gen_add_code_line("for (int i = 0; i < " + N + "; ++i) acc += s_scratch[i];")
+    self.gen_add_code_line("for (int i = 0; i < COUNT; ++i) acc += s_scratch[i];")
     self.gen_add_code_line("s_out[0] += acc;")
     self.gen_add_end_control_flow()
     self.gen_add_end_function()
@@ -1879,10 +1870,10 @@ def _gen_one_barrier(self, base, doc_target, count, slice_offset):
         ["s_grad is the packed gradient output (added into)",
          "s_var / s_lower / s_upper / mu as in the value function"],
         None)
-    self.gen_add_code_line("template <typename T, int VAR_OFFSET = " + str(slice_offset) + ", int GRAD_OFFSET = 0>")
+    self.gen_add_code_line("template <typename T, int VAR_OFFSET = " + str(slice_offset) + ", int GRAD_OFFSET = 0, int COUNT = " + N + ">")
     self.gen_add_code_line("__device__")
     self.gen_add_code_line("void " + base + "_gradient(T *s_grad, const T *s_var, const T *s_lower, const T *s_upper, const T mu) {", True)
-    self.gen_add_parallel_loop("i", N)
+    self.gen_add_parallel_loop("i", "COUNT")
     self.gen_add_code_line("s_grad[GRAD_OFFSET + i] += grid_plant_log_barrier_grad<T>(s_var[VAR_OFFSET + i], s_lower[i], s_upper[i], mu);")
     self.gen_add_end_control_flow()
     self.gen_add_end_function()
@@ -1896,10 +1887,10 @@ def _gen_one_barrier(self, base, doc_target, count, slice_offset):
         ["s_hess is the dense column-major hessian (added into)",
          "s_var / s_lower / s_upper / mu as above"],
         None)
-    self.gen_add_code_line("template <typename T, int HESS_STRIDE, int VAR_OFFSET = " + str(slice_offset) + ", int HESS_OFFSET = 0>")
+    self.gen_add_code_line("template <typename T, int HESS_STRIDE, int VAR_OFFSET = " + str(slice_offset) + ", int HESS_OFFSET = 0, int COUNT = " + N + ">")
     self.gen_add_code_line("__device__")
     self.gen_add_code_line("void " + base + "_hessian(T *s_hess, const T *s_var, const T *s_lower, const T *s_upper, const T mu) {", True)
-    self.gen_add_parallel_loop("i", N)
+    self.gen_add_parallel_loop("i", "COUNT")
     self.gen_add_code_line("int d = HESS_OFFSET + i;")
     self.gen_add_code_line("s_hess[d * HESS_STRIDE + d] += grid_plant_log_barrier_hess<T>(s_var[VAR_OFFSET + i], s_lower[i], s_upper[i], mu);")
     self.gen_add_end_control_flow()
@@ -2052,8 +2043,6 @@ def gen_plant_step_gradient_arena_carve_struct(self):
         include_topology_helpers = (not self.robot.is_serial_chain()
                                     or not self.robot.are_Ss_identical(list(range(self.robot.get_num_pos())))),
         ximat_size = self.gen_get_XI_size(False, False),
-        include_linalg_scratch = True,
-        linalg_scratch_bytes = "grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()",
         apply_runtime_transform_band = getattr(self, "runtime_transform", False))
     self.gen_arena_carve_struct(
         "plant_step_gradient_arena", layout,
@@ -2123,7 +2112,7 @@ def gen_plant_step_gradient_kernel(self):
     # FD-grad bands, the dAB output, and the multi-stage scratch all live here.
     extra_t_buffers = _plant_step_gradient_extra_t_buffers(self)
     self.gen_XImats_helpers_temp_shared_memory_code(
-        inner_temp_full, extra_t_buffers=extra_t_buffers, include_linalg_scratch=True)
+        inner_temp_full, extra_t_buffers=extra_t_buffers)
     self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
     # stage x (q;qd) + u into smem (plant_step_gradient mutates q/qd across stages).
     self.gen_add_parallel_loop("ind", str(nx))
@@ -2209,7 +2198,7 @@ def _emit_plant_step_hessian_kernel_body_for_flags(self, n, nx, d2ab_count,
     extra_t_buffers.append(("s_df_du", 2 * n * n))
     extra_t_buffers.append(("s_qdd", n))
     self.gen_XImats_helpers_temp_shared_memory_code(
-        shared_temp_size, extra_t_buffers=extra_t_buffers, include_linalg_scratch=True)
+        shared_temp_size, extra_t_buffers=extra_t_buffers)
     # Floating mjx always needs d_workspace (the dedicated d_mjx_ws band), even at the
     # SHARED tier where no other band spills.
     needs_workspace = spill_d2AB or spill_tensors or spill_fdsva_pool or self.robot.floating_base
@@ -2381,9 +2370,9 @@ def gen_plant_step_hessian_kernel(self):
         "INTEGRATOR_HESSIAN_DYNAMIC_SHARED_MEM_BYTES() { "
         # ONE return (nested ternary): constexpr under the runners' -std=c++11
         # (same tier values as the if-constexpr chain it replaced, 2026-09-23).
-        "return (TIER == grid::TIER_SHARED) ? grid::grid_shared_arena_bytes<T>(" + str(t0) + ", grid::TOPOLOGY_HELPERS_COUNT, grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()) "
-        ": (TIER == grid::TIER_LITE) ? grid::grid_shared_arena_bytes<T>(" + str(t1) + ", grid::TOPOLOGY_HELPERS_COUNT, grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()) "
-        ": grid::grid_shared_arena_bytes<T>(" + str(t2) + ", grid::TOPOLOGY_HELPERS_COUNT, grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
+        "return (TIER == grid::TIER_SHARED) ? grid::grid_shared_arena_bytes<T>(" + str(t0) + ", grid::TOPOLOGY_HELPERS_COUNT) "
+        ": (TIER == grid::TIER_LITE) ? grid::grid_shared_arena_bytes<T>(" + str(t1) + ", grid::TOPOLOGY_HELPERS_COUNT) "
+        ": grid::grid_shared_arena_bytes<T>(" + str(t2) + ", grid::TOPOLOGY_HELPERS_COUNT); "
         "}")
     # 1 when any tier spills (so the launcher knows it must allocate d_workspace).
     spills_any = 1 if any(p >= 1 for p in picks) else 0
@@ -2735,6 +2724,7 @@ def gen_grid_plant(self, algorithms):
         if getattr(self, "_lie_helpers_emitted", False) and not self.robot.robot_has_spherical():
             gen_quadratic_state_cost_tangent(self)
             self.gen_add_code_line("#define GRID_PLANT_HAS_TANGENT_STATE_COST 1")
+            self._tangent_state_cost_emitted = True
         elif self.robot.robot_has_spherical():
             self.gen_add_code_line("// [grid_plant] quadratic_state_cost_tangent skipped: floating base WITH spherical joints needs per-joint SO(3) chart blocks in J_diff (follow-up).")
         else:
