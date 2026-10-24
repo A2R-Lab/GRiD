@@ -41,6 +41,16 @@ repository. Everything below describes the packaged A2R-Lab releases.
   header generated for kinematics alone (`kinematics`, `dynamics-core`, a bare `end_effector_pose`
   list) no longer carries the barrier families, the activations and the menu presets; a comment
   names the rule. The bindings always carry the block; every `all` header is byte-identical.
+- Environment ownership (HJCD-IK ask G8a). `grid_collision::make_host_environment` builds a
+  validated `HostEnvironment` from plain rows (spheres `x y z r`, capsules endpoints and
+  radius, cuboids centre, unit quaternion `w x y z` and full dimensions, planes normal and
+  offset), throwing `std::invalid_argument` with the row on a non-finite number, a non-positive
+  radius or dimension, a zero quaternion or normal; `HostEnvironment::view()` feeds the host
+  primitives. `DeviceEnvironment` deep-copies the lists to the current device, records it, hands
+  out the `Environment<T>` kernels take by value, frees on destruction and is move-only;
+  `make_device_environment` does both in one call; `grid_cc_cuboid_from_quaternion` is the
+  shared host and device box conversion. Gated against a hand upload (identical verdicts and
+  clearances), host against device primitives, move semantics and returned device memory.
 
 ## [0.5.5] — 2026-10-23
 

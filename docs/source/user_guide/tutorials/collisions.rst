@@ -67,6 +67,18 @@ both tiers, which keeps the broad-to-fine covering argument intact. The gate run
 block paths against the distance surfaces at 0, 5 mm and 2 cm, with and without the self pairs,
 and sweeps each configuration's own minimum clearance from just below to just above the threshold.
 
+The obstacle set itself comes from plain arrays. ``grid_collision::make_host_environment``
+takes one row per obstacle (spheres as ``x y z r``, capsules as the two endpoints and a
+radius, cuboids as centre, unit quaternion ``w x y z`` and full dimensions, planes as a
+normal and offset), validates every row and returns a ``HostEnvironment`` whose ``view()``
+feeds the host instantiations of the primitives. ``DeviceEnvironment`` copies those lists to
+the current device, records it, hands out the ``Environment`` kernels take by value, frees on
+destruction and can be moved but not copied; ``make_device_environment`` does both in one
+call. The gate compares the owned view with a hand upload of the same lists (identical
+verdicts and clearances), the host primitives with the device ones, and the free device
+memory before construction and after destruction
+(``test/cuda_equivalents/test_cuda_collision_environment.py``).
+
 Geometry coverage and correctness
 ---------------------------------
 

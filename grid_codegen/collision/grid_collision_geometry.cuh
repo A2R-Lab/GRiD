@@ -14,6 +14,11 @@
 #pragma once
 #include <cuda_runtime.h>
 #include <cmath>   // sqrtf/sqrt for the differentiable (true-distance + normal) path
+#include <limits>
+#include <stdexcept>   // the host-side environment builders throw on bad geometry
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace grid_collision {
 
@@ -752,6 +757,205 @@ __host__ __device__ __forceinline__ T grid_cc_nearest_obstacle_capsule(
     }
     *nx = bnx; *ny = bny; *nz = bnz; *t_out = bt;
     return best;
+}
+
+
+// ================================================================== environment ownership (G8a, 2026-10-23)
+// Host-side builders from plain arrays and an owning device environment, so a consumer does not
+// carry its own upload code (HJCD-IK and GATO each had one). Row layouts, one row per obstacle:
+//   spheres  (M, 4):  x y z r
+//   capsules (M, 7):  ax ay az bx by bz r          (segment endpoints and radius)
+//   cuboids  (M, 10): cx cy cz qw qx qy qz dx dy dz (centre, unit quaternion w x y z, FULL dims)
+//   planes   (M, 4):  nx ny nz d                    (half-space n.p >= d; n is normalized here)
+// make_host_environment validates every row (finite numbers, positive radii and dimensions, a
+// non-zero quaternion and normal) and throws std::invalid_argument naming the row; the host
+// vectors feed the host primitives through HostEnvironment::view() (host pointers) and the
+// device through DeviceEnvironment (deep copy, device recorded, freed on destruction, movable,
+// not copyable). DeviceEnvironment::view() is the Environment<T> kernels take by value.
+
+// Oriented box from a centre, a unit quaternion (w, x, y, z; normalized here) and FULL dimensions:
+// the box axes are the columns of the rotation matrix, the half-extents half the dimensions.
+template <typename T>
+__host__ __device__ inline Cuboid<T> grid_cc_cuboid_from_quaternion(
+        T cx, T cy, T cz, T qw, T qx, T qy, T qz, T dx, T dy, T dz) {
+    const T n = grid_cc_sqrt<T>(qw * qw + qx * qx + qy * qy + qz * qz);
+    const T inv = static_cast<T>(1) / n;
+    qw *= inv; qx *= inv; qy *= inv; qz *= inv;
+    const T two = static_cast<T>(2), one = static_cast<T>(1), half = static_cast<T>(0.5);
+    Cuboid<T> b;
+    b.cx = cx; b.cy = cy; b.cz = cz;
+    b.ux = one - two * (qy * qy + qz * qz); b.uy = two * (qx * qy + qz * qw);       b.uz = two * (qx * qz - qy * qw);       b.hu = half * dx;
+    b.vx = two * (qx * qy - qz * qw);       b.vy = one - two * (qx * qx + qz * qz); b.vz = two * (qy * qz + qx * qw);       b.hv = half * dy;
+    b.wx = two * (qx * qz + qy * qw);       b.wy = two * (qy * qz - qx * qw);       b.wz = one - two * (qx * qx + qy * qy); b.hw = half * dz;
+    return b;
+}
+
+template <typename T>
+struct HostEnvironment {
+    std::vector<Sphere<T>>  spheres;
+    std::vector<Capsule<T>> capsules;
+    std::vector<Cuboid<T>>  cuboids;
+    std::vector<Plane<T>>   planes;
+    int size() const { return int(spheres.size() + capsules.size() + cuboids.size() + planes.size()); }
+    bool empty() const { return size() == 0; }
+    // Host-pointer view for the host instantiations of the primitives (tests, CPU references).
+    Environment<T> view() const {
+        return Environment<T>{ spheres.data(),  int(spheres.size()),
+                               capsules.data(), int(capsules.size()),
+                               cuboids.data(),  int(cuboids.size()),
+                               planes.data(),   int(planes.size()) };
+    }
+};
+
+namespace detail {
+template <typename T>
+inline T grid_cc_checked_finite(T v, const char *what, int row) {
+    if (!(v == v) || v > std::numeric_limits<T>::max() || v < -std::numeric_limits<T>::max())
+        throw std::invalid_argument(std::string("grid_collision: ") + what + " row " + std::to_string(row) + " is not finite");
+    return v;
+}
+template <typename T>
+inline T grid_cc_checked_positive(T v, const char *what, int row) {
+    if (!(grid_cc_checked_finite<T>(v, what, row) > static_cast<T>(0)))
+        throw std::invalid_argument(std::string("grid_collision: ") + what + " row " + std::to_string(row) + " needs a positive radius or dimension");
+    return v;
+}
+inline void grid_cc_check_rows(const void *p, int n, const char *what) {
+    if (n < 0 || (n > 0 && p == nullptr))
+        throw std::invalid_argument(std::string("grid_collision: ") + what + " count " + std::to_string(n) + " with no data");
+}
+}  // namespace detail
+
+template <typename T>
+inline HostEnvironment<T> make_host_environment(const T *spheres, int n_spheres,
+                                                const T *capsules, int n_capsules,
+                                                const T *cuboids, int n_cuboids,
+                                                const T *planes = nullptr, int n_planes = 0) {
+    using namespace detail;
+    grid_cc_check_rows(spheres, n_spheres, "spheres");
+    grid_cc_check_rows(capsules, n_capsules, "capsules");
+    grid_cc_check_rows(cuboids, n_cuboids, "cuboids");
+    grid_cc_check_rows(planes, n_planes, "planes");
+    HostEnvironment<T> env;
+    env.spheres.reserve(n_spheres); env.capsules.reserve(n_capsules);
+    env.cuboids.reserve(n_cuboids); env.planes.reserve(n_planes);
+    for (int i = 0; i < n_spheres; ++i) {
+        const T *s = spheres + 4 * i;
+        env.spheres.push_back(Sphere<T>{ grid_cc_checked_finite<T>(s[0], "spheres", i), grid_cc_checked_finite<T>(s[1], "spheres", i),
+                                         grid_cc_checked_finite<T>(s[2], "spheres", i), grid_cc_checked_positive<T>(s[3], "spheres", i) });
+    }
+    for (int i = 0; i < n_capsules; ++i) {
+        const T *c = capsules + 7 * i;
+        env.capsules.push_back(Capsule<T>{ grid_cc_checked_finite<T>(c[0], "capsules", i), grid_cc_checked_finite<T>(c[1], "capsules", i),
+                                           grid_cc_checked_finite<T>(c[2], "capsules", i), grid_cc_checked_finite<T>(c[3], "capsules", i),
+                                           grid_cc_checked_finite<T>(c[4], "capsules", i), grid_cc_checked_finite<T>(c[5], "capsules", i),
+                                           grid_cc_checked_positive<T>(c[6], "capsules", i) });
+    }
+    for (int i = 0; i < n_cuboids; ++i) {
+        const T *b = cuboids + 10 * i;
+        for (int k = 0; k < 7; ++k) grid_cc_checked_finite<T>(b[k], "cuboids", i);
+        if (!(b[3] * b[3] + b[4] * b[4] + b[5] * b[5] + b[6] * b[6] > static_cast<T>(0)))
+            throw std::invalid_argument("grid_collision: cuboids row " + std::to_string(i) + " has a zero quaternion");
+        env.cuboids.push_back(grid_cc_cuboid_from_quaternion<T>(
+            b[0], b[1], b[2], b[3], b[4], b[5], b[6],
+            grid_cc_checked_positive<T>(b[7], "cuboids", i), grid_cc_checked_positive<T>(b[8], "cuboids", i),
+            grid_cc_checked_positive<T>(b[9], "cuboids", i)));
+    }
+    for (int i = 0; i < n_planes; ++i) {
+        const T *p = planes + 4 * i;
+        for (int k = 0; k < 4; ++k) grid_cc_checked_finite<T>(p[k], "planes", i);
+        const T n = grid_cc_sqrt<T>(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+        if (!(n > static_cast<T>(0)))
+            throw std::invalid_argument("grid_collision: planes row " + std::to_string(i) + " has a zero normal");
+        env.planes.push_back(Plane<T>{ p[0] / n, p[1] / n, p[2] / n, p[3] / n });
+    }
+    return env;
+}
+
+template <typename T>
+class DeviceEnvironment {
+public:
+    DeviceEnvironment() = default;
+    explicit DeviceEnvironment(const HostEnvironment<T> &host) {
+        if (cudaGetDevice(&device_) != cudaSuccess)
+            throw std::runtime_error("grid_collision: no current CUDA device for the environment upload");
+        try {
+            d_spheres_  = upload(host.spheres);
+            d_capsules_ = upload(host.capsules);
+            d_cuboids_  = upload(host.cuboids);
+            d_planes_   = upload(host.planes);
+        } catch (...) {
+            release();
+            throw;
+        }
+        view_ = Environment<T>{ d_spheres_,  int(host.spheres.size()),  d_capsules_, int(host.capsules.size()),
+                                d_cuboids_,  int(host.cuboids.size()),  d_planes_,   int(host.planes.size()) };
+    }
+    ~DeviceEnvironment() { release(); }
+    DeviceEnvironment(const DeviceEnvironment &) = delete;
+    DeviceEnvironment &operator=(const DeviceEnvironment &) = delete;
+    DeviceEnvironment(DeviceEnvironment &&o) noexcept { take(o); }
+    DeviceEnvironment &operator=(DeviceEnvironment &&o) noexcept {
+        if (this != &o) { release(); take(o); }
+        return *this;
+    }
+    // The device-pointer view kernels take by value; valid while this object lives.
+    const Environment<T> &view() const { return view_; }
+    int device() const { return device_; }
+    int size() const { return view_.n_spheres + view_.n_capsules + view_.n_cuboids + view_.n_planes; }
+    bool empty() const { return size() == 0; }
+    // Free the device lists on the device that holds them; idempotent, never throws.
+    void release() noexcept {
+        if (device_ < 0) { view_ = Environment<T>{}; return; }
+        int current = -1;
+        const bool switch_device = (cudaGetDevice(&current) == cudaSuccess && current != device_);
+        if (switch_device) cudaSetDevice(device_);
+        if (d_spheres_)  cudaFree(d_spheres_);
+        if (d_capsules_) cudaFree(d_capsules_);
+        if (d_cuboids_)  cudaFree(d_cuboids_);
+        if (d_planes_)   cudaFree(d_planes_);
+        if (switch_device) cudaSetDevice(current);
+        d_spheres_ = nullptr; d_capsules_ = nullptr; d_cuboids_ = nullptr; d_planes_ = nullptr;
+        view_ = Environment<T>{};
+        device_ = -1;
+    }
+private:
+    template <typename S>
+    static S *upload(const std::vector<S> &v) {
+        if (v.empty()) return nullptr;
+        S *d = nullptr;
+        cudaError_t e = cudaMalloc(&d, sizeof(S) * v.size());
+        if (e != cudaSuccess)
+            throw std::runtime_error(std::string("grid_collision: environment upload failed: ") + cudaGetErrorString(e));
+        e = cudaMemcpy(d, v.data(), sizeof(S) * v.size(), cudaMemcpyHostToDevice);
+        if (e != cudaSuccess) {
+            cudaFree(d);
+            throw std::runtime_error(std::string("grid_collision: environment upload failed: ") + cudaGetErrorString(e));
+        }
+        return d;
+    }
+    void take(DeviceEnvironment &o) noexcept {
+        d_spheres_ = o.d_spheres_; d_capsules_ = o.d_capsules_; d_cuboids_ = o.d_cuboids_; d_planes_ = o.d_planes_;
+        view_ = o.view_; device_ = o.device_;
+        o.d_spheres_ = nullptr; o.d_capsules_ = nullptr; o.d_cuboids_ = nullptr; o.d_planes_ = nullptr;
+        o.view_ = Environment<T>{}; o.device_ = -1;
+    }
+    Sphere<T>  *d_spheres_  = nullptr;
+    Capsule<T> *d_capsules_ = nullptr;
+    Cuboid<T>  *d_cuboids_  = nullptr;
+    Plane<T>   *d_planes_   = nullptr;
+    Environment<T> view_{};
+    int device_ = -1;
+};
+
+// One call from arrays to the device: validates, uploads, owns.
+template <typename T>
+inline DeviceEnvironment<T> make_device_environment(const T *spheres, int n_spheres,
+                                                    const T *capsules, int n_capsules,
+                                                    const T *cuboids, int n_cuboids,
+                                                    const T *planes = nullptr, int n_planes = 0) {
+    return DeviceEnvironment<T>(make_host_environment<T>(spheres, n_spheres, capsules, n_capsules,
+                                                         cuboids, n_cuboids, planes, n_planes));
 }
 
 }  // namespace grid_collision

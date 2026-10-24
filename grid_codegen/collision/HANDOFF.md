@@ -144,6 +144,27 @@ same margin, so the covering-sphere argument (broad clear implies fine clear) is
 `check_self = false` (G10) skips the self-pair scans on the combined checkers; `collision_distance`
 is environment-only already and has no flag.
 
+Environment ownership (G8a, 2026-10-23), in the same header:
+
+```cpp
+// rows: spheres (M,4) x y z r | capsules (M,7) ax ay az bx by bz r
+//       cuboids (M,10) cx cy cz qw qx qy qz dx dy dz (unit quaternion, FULL dims) | planes (M,4) nx ny nz d
+gc::HostEnvironment<T>   host  = gc::make_host_environment<T>(spheres, n_s, capsules, n_c, cuboids, n_b, planes, n_p);
+gc::DeviceEnvironment<T> owned(host);          // deep copy to the current device; freed on destruction; move-only
+kernel<<<...>>>(..., owned.view(), ...);        // Environment<T> by value, valid while `owned` lives
+gc::Environment<T> hview = host.view();        // host pointers for the host instantiations of the primitives
+gc::DeviceEnvironment<T> one_call = gc::make_device_environment<T>(spheres, n_s, capsules, n_c, cuboids, n_b);
+```
+
+`make_host_environment` validates every row (finite numbers, positive radii and dimensions, a
+non-zero quaternion and plane normal; the normal is normalized with `d` scaled to keep the same
+half-space) and throws `std::invalid_argument` naming the row. `grid_cc_cuboid_from_quaternion`
+is the host and device conversion from centre, quaternion and full dimensions to the oriented
+box the primitives read. `DeviceEnvironment` records the device it uploaded to and frees there
+even if the current device changed; `release()` is explicit and idempotent. Gate:
+`test_cuda_collision_environment.py` (parity with a hand upload, host versus device primitives,
+move semantics, memory returned after destruction).
+
 Sizing:
 - `gc::NUM_COLLISION_SPHERES` — finest/public sphere count (== `grid::NUM_MULTI_TARGETS`). Coarse
   tiers are `gc::NUM_COLLISION_SPHERES_BROAD` etc. (== `grid::NUM_MULTI_TARGETS_BROAD`).
