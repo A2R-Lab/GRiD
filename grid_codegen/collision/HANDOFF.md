@@ -113,7 +113,9 @@ __device__ bool gc::config_free(
     const gc::Environment<T> &env,
     T *s_sphere_pos,                           // caller scratch, 3*NUM_COLLISION_SPHERES
     T *s_sphere_r,                             // caller scratch,   NUM_COLLISION_SPHERES (filled here)
-    T *d_workspace = nullptr);                 // FK spill at TIER_LITE+ (nullptr at TIER_SHARED)
+    T *d_workspace = nullptr,                  // FK spill at TIER_LITE+ (nullptr at TIER_SHARED)
+    T margin = 0,                              // a hit iff any raw clearance is below the margin (metres)
+    bool check_self = true);                   // false: environment only, the self-pair ranges are skipped
 
 // MULTI-tier (2+ densities): same verdict, broad-reject/fine-confirm. Signature takes BOTH tiers'
 // scratch (the coarse tier is named — e.g. _BROAD; the finest keeps the unsuffixed public names):
@@ -122,8 +124,25 @@ __device__ bool gc::config_free(
     const T *s_q, const grid::robotModel<T> *d_robotModel, const gc::Environment<T> &env,
     T *s_broad_pos, T *s_broad_r,              // caller scratch, 3*NUM_COLLISION_SPHERES_BROAD / _BROAD
     T *s_fine_pos,  T *s_fine_r,               // caller scratch, 3*NUM_COLLISION_SPHERES / (finest)
-    T *d_workspace = nullptr);
+    T *d_workspace = nullptr,
+    int *dbg_fine_rechecked = nullptr,         // optional: how many fine spheres the broad mask kept
+    T margin = 0, bool check_self = true);
+
+// Warp-scoped twin over caller-held joint world transforms (one IK candidate per warp):
+template <typename T>
+__device__ bool gc::warp::config_free(const T *s_Xworld, const gc::Environment<float> &env,
+                                      float *w_scratch, float margin = 0.0f, bool check_self = true);
 ```
+
+Margin semantics (G7, 2026-10-23): robot spheres (rows on the capsule path) are tested at `r + margin`
+against the environment and, for the self pairs, the margin is added to one side only, so a pair is a
+hit iff its clearance is below the margin; exact contact at the margin is free, and at `margin = 0`
+the verdict is the one the zero-margin checkers always gave. `collision_distance`, its normals and
+the cost derivatives never see the margin: they return the geometric signed clearance, and
+`collision_cost(env, margin, weight)` applies its own. On a two-tier model both tiers inflate by the
+same margin, so the covering-sphere argument (broad clear implies fine clear) is unchanged.
+`check_self = false` (G10) skips the self-pair scans on the combined checkers; `collision_distance`
+is environment-only already and has no flag.
 
 Sizing:
 - `gc::NUM_COLLISION_SPHERES` — finest/public sphere count (== `grid::NUM_MULTI_TARGETS`). Coarse

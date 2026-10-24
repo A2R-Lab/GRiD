@@ -55,6 +55,18 @@ Two device entry points share the same baked sphere batch (``NUM_COLLISION_SPHER
   ``T = double``. The two surfaces are gated against each other on random configurations and
   environments (``test/cuda_equivalents/test_cuda_collision_warp.py``).
 
+Both checkers take two trailing optional arguments. ``margin`` (metres, default 0) makes the
+verdict a hit as soon as any raw clearance is below the margin: robot spheres are tested at
+``r + margin`` against the environment and the margin is added to one side of every self pair, so
+exact contact at the margin is free and the default reproduces the zero-margin rule exactly.
+``collision_distance`` and the cost derivatives are untouched by it; they keep returning the
+geometric signed clearance, and ``collision_cost`` applies its own margin. ``check_self`` (default
+``true``) set to ``false`` skips the self-pair ranges so the verdict reflects the environment
+alone; ``collision_distance`` is environment-only already. On a two-tier model the margin inflates
+both tiers, which keeps the broad-to-fine covering argument intact. The gate runs the warp and
+block paths against the distance surfaces at 0, 5 mm and 2 cm, with and without the self pairs,
+and sweeps each configuration's own minimum clearance from just below to just above the threshold.
+
 Geometry coverage and correctness
 ---------------------------------
 

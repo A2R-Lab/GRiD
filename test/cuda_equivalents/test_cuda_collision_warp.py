@@ -10,6 +10,14 @@ G2  grid_collision::warp::config_free / collision_distance from caller-held join
     sizes (cuda_collision_warp_runner.cu).
 G3  with a 2-tier spherizer spec the warp verdict runs the broad->fine cascade; the verdict must
     still equal the block (fine-equivalent) one.
+G7  config_free(..., margin): a hit iff any raw clearance is below the margin, exact contact free,
+    verdict-identical at zero; collision_distance untouched. Gated at 0, 5 mm and 2 cm against the
+    distance surfaces (block == warp == the clearance rule outside a 1e-5 rounding band) and by a
+    boundary sweep at c - 1e-4 (free), c (block == warp) and c + 1e-4 (hit) around every config's
+    own minimum clearance c, plus the primitive rule at exactly representable values
+    (HJCD asks 2026-10-13, amended 2026-10-23).
+G10 config_free(..., check_self = false) skips the self-pair ranges; the reference then takes the
+    environment clearance alone.
 """
 from __future__ import annotations
 import contextlib
@@ -79,15 +87,24 @@ def _compile(build_dir):
     return exe
 
 
-def _run(exe, threads, n_cfg, seed, amplitude=None):
-    args = [str(exe), str(threads), str(n_cfg), str(seed)] + ([str(amplitude)] if amplitude is not None else [])
+def _run(exe, threads, n_cfg, seed, amplitude=None, margin=0.0, check_self=True, boundary=False):
+    args = [str(exe), str(threads), str(n_cfg), str(seed),
+            str(amplitude if amplitude is not None else 3.14159265), "0",
+            repr(float(margin)), "1" if check_self else "0", "1" if boundary else "0"]
     run = subprocess.run(args, capture_output=True, text=True)
-    assert run.returncode == 0, f"warp runner FAILED (threads={threads}):\nstdout:\n{run.stdout[-3000:]}\nstderr:\n{run.stderr}"
+    assert run.returncode == 0, f"warp runner FAILED (threads={threads}, margin={margin}, check_self={check_self}):\nstdout:\n{run.stdout[-3000:]}\nstderr:\n{run.stderr}"
     summary = [l for l in run.stdout.splitlines() if l.startswith("SUMMARY")][0]
-    hits = int(re.search(r"hits=(\d+)", summary).group(1))
-    configs = int(re.search(r"configs=(\d+)", summary).group(1))
+    field = lambda k: int(re.search(k + r"=(\d+)", summary).group(1))
+    hits, configs = field("hits"), field("configs")
     # the batch must exercise both branches of the verdict
     assert 0 < hits < configs, summary
+    assert field("mismatches") == 0 and field("ref_mismatches") == 0 and field("boundary_fail") == 0, summary
+    # the rounding band must stay the exception, not the rule
+    assert field("band") * 10 < configs, summary
+    if boundary:
+        # the sweep covers every configuration whose clearance is positive (the hits have none)
+        assert field("boundary") >= 20 and field("boundary") * 10 >= 8 * (configs - hits), summary
+    assert "BOUNDARY_EXACT PASS" in run.stdout
     return summary
 
 
@@ -153,3 +170,39 @@ def test_warp_matches_block_two_tier_cascade(tmp_path, threads):
     assert _ints(_baked(header, "sphere_anchor_broad")) == spec["tiers"][0]["anchor"]
     exe = _compile(build_dir)
     print(_run(exe, threads, 300, 11))
+
+
+MARGINS = (0.0, 0.005, 0.02)
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.robot_smoke
+def test_margin_and_self_toggle_single_tier(tmp_path):
+    """G7/G10 on the single-tier emission: at 0, 5 mm and 2 cm, with and without the self pairs,
+    block == warp == the clearance rule; then the boundary sweep around each config's clearance."""
+    robot = _robot()
+    build_dir = tmp_path / "warp_margin_single"
+    _gen_header(robot, build_dir, _mixed_spec(robot))
+    exe = _compile(build_dir)
+    for margin in MARGINS:
+        for check_self in (True, False):
+            print(_run(exe, 64, 200, 7, margin=margin, check_self=check_self))
+    print(_run(exe, 64, 120, 13, margin=0.005, check_self=True, boundary=True))
+    print(_run(exe, 64, 120, 17, margin=0.02, check_self=False, boundary=True))
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.robot_smoke
+def test_margin_and_self_toggle_two_tier_cascade(tmp_path):
+    """G7/G10 through the broad->fine cascade: the margin inflates both tiers, so the covering
+    argument holds and the verdict equals the fine-only clearance rule at every margin."""
+    robot = _robot()
+    build_dir = tmp_path / "warp_margin_tiers"
+    _gen_header(robot, build_dir, _two_tier_spec(robot))
+    exe = _compile(build_dir)
+    for margin in MARGINS:
+        for check_self in (True, False):
+            print(_run(exe, 128, 200, 11, margin=margin, check_self=check_self))
+    print(_run(exe, 128, 120, 19, margin=0.005, check_self=True, boundary=True))

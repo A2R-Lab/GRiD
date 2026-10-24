@@ -12,6 +12,18 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Margin-aware collision checking (HJCD-IK ask G7). `grid_collision::config_free` on the block,
+  warp and capsule-row paths and the header drivers `grid_cc_config_free` and
+  `grid_cc_config_free_capsule` take a trailing `margin` (metres, default 0): a configuration is a
+  hit as soon as any raw clearance is below the margin, robot spheres being tested at `r + margin`
+  against the environment and the margin added to one side of each self pair, so exact contact at
+  the margin is free and the default verdict is unchanged. `collision_distance`, the normals and
+  the cost derivatives keep the geometric signed clearance; no margin-adjusted clearance is
+  emitted. Gated warp against block and against the distance surfaces at 0, 5 mm and 2 cm, with a
+  sweep from just below to just above each configuration's own threshold.
+- Self-collision toggle (HJCD-IK ask G10). The combined checkers take `check_self` (default true);
+  false skips the baked self-pair ranges so the verdict reflects the environment alone.
+
 ## [0.5.5] — 2026-10-23
 
 - Floating-base cost menu. `tracking_cost_menu` and its gradient and Hessian are

@@ -290,15 +290,17 @@ __host__ __device__ __forceinline__ bool grid_cc_sphere_in_environment(
 // self_cc_ranges is the per-robot generated table (grid_collision namespace, Component D):
 // each row {sphere_i, start_j, end_j} => check sphere i against spheres [start_j..end_j].
 // s_sphere_pos = the batched extractor output (N x 3 world xyz); s_sphere_r = baked radii.
+// margin (default 0): a pair is a hit iff its clearance is below the margin; the margin is added to
+// sphere i's radius only, so every pair sees it once (G7, 2026-10-23).
 template <typename T>
 __host__ __device__ __forceinline__ bool grid_cc_self_collision(
         const T *s_sphere_pos, const T *s_sphere_r,
-        const int *self_cc_ranges, int n_ranges) {
+        const int *self_cc_ranges, int n_ranges, T margin = static_cast<T>(0)) {
     for (int k = 0; k < n_ranges; ++k) {
         int i  = self_cc_ranges[3 * k + 0];
         int j0 = self_cc_ranges[3 * k + 1];
         int j1 = self_cc_ranges[3 * k + 2];
-        T ix = s_sphere_pos[3 * i], iy = s_sphere_pos[3 * i + 1], iz = s_sphere_pos[3 * i + 2], ir = s_sphere_r[i];
+        T ix = s_sphere_pos[3 * i], iy = s_sphere_pos[3 * i + 1], iz = s_sphere_pos[3 * i + 2], ir = s_sphere_r[i] + margin;
         for (int j = j0; j <= j1; ++j) {
             if (grid_cc_sphere_sphere<T>(ix, iy, iz, ir,
                     s_sphere_pos[3 * j], s_sphere_pos[3 * j + 1], s_sphere_pos[3 * j + 2], s_sphere_r[j])
@@ -316,11 +318,12 @@ __host__ __device__ __forceinline__ bool grid_cc_self_collision(
 // batched extractor as TWO consecutive targets, so s_seg_pos[6i..6i+2] = a_i and [6i+3..6i+5] = b_i
 // in world. a == b degenerates to a sphere (seg-seg closest-point math is point-safe), so one row
 // type serves spherized and native links alike. Same squared_gap convention throughout.
+// inflate (default 0) is added to the row radius: the margin-aware checkers test rows at r + margin.
 template <typename T>
 __host__ __device__ __forceinline__ Capsule<T> grid_cc_row_capsule(
-        const T *s_seg_pos, const T *s_row_r, int i) {
+        const T *s_seg_pos, const T *s_row_r, int i, T inflate = static_cast<T>(0)) {
     return Capsule<T>{ s_seg_pos[6*i],     s_seg_pos[6*i + 1], s_seg_pos[6*i + 2],
-                       s_seg_pos[6*i + 3], s_seg_pos[6*i + 4], s_seg_pos[6*i + 5], s_row_r[i] };
+                       s_seg_pos[6*i + 3], s_seg_pos[6*i + 4], s_seg_pos[6*i + 5], s_row_r[i] + inflate };
 }
 
 // One robot capsule row vs ALL obstacle lists; early-out on first collision.
@@ -346,12 +349,12 @@ __host__ __device__ __forceinline__ bool grid_cc_capsule_in_environment(
 template <typename T>
 __host__ __device__ __forceinline__ bool grid_cc_self_collision_capsules(
         const T *s_seg_pos, const T *s_row_r,
-        const int *self_cc_ranges, int n_ranges) {
+        const int *self_cc_ranges, int n_ranges, T margin = static_cast<T>(0)) {
     for (int k = 0; k < n_ranges; ++k) {
         int i  = self_cc_ranges[3 * k + 0];
         int j0 = self_cc_ranges[3 * k + 1];
         int j1 = self_cc_ranges[3 * k + 2];
-        Capsule<T> ci = grid_cc_row_capsule<T>(s_seg_pos, s_row_r, i);
+        Capsule<T> ci = grid_cc_row_capsule<T>(s_seg_pos, s_row_r, i, margin);
         for (int j = j0; j <= j1; ++j)
             if (grid_cc_capsule_capsule<T>(ci, grid_cc_row_capsule<T>(s_seg_pos, s_row_r, j))
                 < static_cast<T>(0)) return true;
@@ -503,13 +506,16 @@ __host__ __device__ bool grid_cc_config_free(
         const T *s_broad_pos, const T *s_broad_r, const int *broad_self_ranges, int n_broad_ranges, int n_broad,
         const int *broad_sphere_link,
         const T *s_fine_pos,  const T *s_fine_r,  const int *fine_self_ranges,  int n_fine_ranges,  int n_fine,
-        const int *fine_sphere_link, int *dbg_fine_rechecked = nullptr) {
+        const int *fine_sphere_link, int *dbg_fine_rechecked = nullptr,
+        T margin = static_cast<T>(0), bool check_self = true) {
+    // margin: a hit iff a raw clearance is below it (robot spheres tested at r + margin on both tiers,
+    // which keeps the covering argument); check_self = false skips both self-range scans (G7/G10).
     unsigned long long hit_mask = 0ull;
     // Broad self-collision: full scan (NO early-out — the mask needs every hit), flag BOTH endpoints'
     // links of each hit range (a self-pair's two spheres may sit on different links).
-    for (int k = 0; k < n_broad_ranges; ++k) {
+    if (check_self) for (int k = 0; k < n_broad_ranges; ++k) {
         int i = broad_self_ranges[3*k], j0 = broad_self_ranges[3*k+1], j1 = broad_self_ranges[3*k+2];
-        T ix = s_broad_pos[3*i], iy = s_broad_pos[3*i+1], iz = s_broad_pos[3*i+2], ir = s_broad_r[i];
+        T ix = s_broad_pos[3*i], iy = s_broad_pos[3*i+1], iz = s_broad_pos[3*i+2], ir = s_broad_r[i] + margin;
         for (int j = j0; j <= j1; ++j)
             if (grid_cc_sphere_sphere<T>(ix, iy, iz, ir,
                     s_broad_pos[3*j], s_broad_pos[3*j+1], s_broad_pos[3*j+2], s_broad_r[j]) < static_cast<T>(0)) {
@@ -519,7 +525,7 @@ __host__ __device__ bool grid_cc_config_free(
     }
     // Broad vs environment: full scan, flag each hit sphere's link.
     for (int i = 0; i < n_broad; ++i)
-        if (grid_cc_sphere_in_environment<T>(env, s_broad_pos[3*i], s_broad_pos[3*i+1], s_broad_pos[3*i+2], s_broad_r[i]))
+        if (grid_cc_sphere_in_environment<T>(env, s_broad_pos[3*i], s_broad_pos[3*i+1], s_broad_pos[3*i+2], s_broad_r[i] + margin))
             hit_mask |= (1ull << broad_sphere_link[i]);
 
     // Narrowing measure (non-vacuous-gate hook): fine spheres surviving the mask. Written before the
@@ -535,10 +541,10 @@ __host__ __device__ bool grid_cc_config_free(
     // Fine pass, NARROWED. self-range {i, j0..j1}: skip the whole range if link(i) is unflagged — by
     // the covering property no j can truly collide with i then (a real i-j hit would have broad-flagged
     // link(i)). If link(i) IS flagged we still scan all its j (conservative, and cheap).
-    for (int k = 0; k < n_fine_ranges; ++k) {
+    if (check_self) for (int k = 0; k < n_fine_ranges; ++k) {
         int i = fine_self_ranges[3*k], j0 = fine_self_ranges[3*k+1], j1 = fine_self_ranges[3*k+2];
         if (((hit_mask >> fine_sphere_link[i]) & 1ull) == 0ull) continue;
-        T ix = s_fine_pos[3*i], iy = s_fine_pos[3*i+1], iz = s_fine_pos[3*i+2], ir = s_fine_r[i];
+        T ix = s_fine_pos[3*i], iy = s_fine_pos[3*i+1], iz = s_fine_pos[3*i+2], ir = s_fine_r[i] + margin;
         for (int j = j0; j <= j1; ++j)
             if (grid_cc_sphere_sphere<T>(ix, iy, iz, ir,
                     s_fine_pos[3*j], s_fine_pos[3*j+1], s_fine_pos[3*j+2], s_fine_r[j]) < static_cast<T>(0)) return false;
@@ -546,7 +552,7 @@ __host__ __device__ bool grid_cc_config_free(
     // Fine vs environment: skip spheres on unflagged links.
     for (int i = 0; i < n_fine; ++i) {
         if (((hit_mask >> fine_sphere_link[i]) & 1ull) == 0ull) continue;
-        if (grid_cc_sphere_in_environment<T>(env, s_fine_pos[3*i], s_fine_pos[3*i+1], s_fine_pos[3*i+2], s_fine_r[i]))
+        if (grid_cc_sphere_in_environment<T>(env, s_fine_pos[3*i], s_fine_pos[3*i+1], s_fine_pos[3*i+2], s_fine_r[i] + margin))
             return false;
     }
     return true;
@@ -565,11 +571,12 @@ __host__ __device__ bool grid_cc_config_free_capsule(
         const T *s_broad_pos, const T *s_broad_r, const int *broad_self_ranges, int n_broad_ranges, int n_broad,
         const int *broad_sphere_link,
         const T *s_fine_seg,  const T *s_fine_r,  const int *fine_self_ranges,  int n_fine_ranges,  int n_fine,
-        const int *fine_row_link, int *dbg_fine_rechecked = nullptr) {
+        const int *fine_row_link, int *dbg_fine_rechecked = nullptr,
+        T margin = static_cast<T>(0), bool check_self = true) {
     unsigned long long hit_mask = 0ull;
-    for (int k = 0; k < n_broad_ranges; ++k) {
+    if (check_self) for (int k = 0; k < n_broad_ranges; ++k) {
         int i = broad_self_ranges[3*k], j0 = broad_self_ranges[3*k+1], j1 = broad_self_ranges[3*k+2];
-        T ix = s_broad_pos[3*i], iy = s_broad_pos[3*i+1], iz = s_broad_pos[3*i+2], ir = s_broad_r[i];
+        T ix = s_broad_pos[3*i], iy = s_broad_pos[3*i+1], iz = s_broad_pos[3*i+2], ir = s_broad_r[i] + margin;
         for (int j = j0; j <= j1; ++j)
             if (grid_cc_sphere_sphere<T>(ix, iy, iz, ir,
                     s_broad_pos[3*j], s_broad_pos[3*j+1], s_broad_pos[3*j+2], s_broad_r[j]) < static_cast<T>(0)) {
@@ -578,7 +585,7 @@ __host__ __device__ bool grid_cc_config_free_capsule(
             }
     }
     for (int i = 0; i < n_broad; ++i)
-        if (grid_cc_sphere_in_environment<T>(env, s_broad_pos[3*i], s_broad_pos[3*i+1], s_broad_pos[3*i+2], s_broad_r[i]))
+        if (grid_cc_sphere_in_environment<T>(env, s_broad_pos[3*i], s_broad_pos[3*i+1], s_broad_pos[3*i+2], s_broad_r[i] + margin))
             hit_mask |= (1ull << broad_sphere_link[i]);
 
     if (dbg_fine_rechecked != nullptr) {
@@ -589,17 +596,17 @@ __host__ __device__ bool grid_cc_config_free_capsule(
     }
     if (hit_mask == 0ull) return true;
 
-    for (int k = 0; k < n_fine_ranges; ++k) {
+    if (check_self) for (int k = 0; k < n_fine_ranges; ++k) {
         int i = fine_self_ranges[3*k], j0 = fine_self_ranges[3*k+1], j1 = fine_self_ranges[3*k+2];
         if (((hit_mask >> fine_row_link[i]) & 1ull) == 0ull) continue;
-        Capsule<T> ci = grid_cc_row_capsule<T>(s_fine_seg, s_fine_r, i);
+        Capsule<T> ci = grid_cc_row_capsule<T>(s_fine_seg, s_fine_r, i, margin);
         for (int j = j0; j <= j1; ++j)
             if (grid_cc_capsule_capsule<T>(ci, grid_cc_row_capsule<T>(s_fine_seg, s_fine_r, j))
                 < static_cast<T>(0)) return false;
     }
     for (int i = 0; i < n_fine; ++i) {
         if (((hit_mask >> fine_row_link[i]) & 1ull) == 0ull) continue;
-        if (grid_cc_capsule_in_environment<T>(env, grid_cc_row_capsule<T>(s_fine_seg, s_fine_r, i)))
+        if (grid_cc_capsule_in_environment<T>(env, grid_cc_row_capsule<T>(s_fine_seg, s_fine_r, i, margin)))
             return false;
     }
     return true;
