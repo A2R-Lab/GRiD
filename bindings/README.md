@@ -28,7 +28,7 @@ The full reference (gravity convention, cache layout, EE-target selection,
 JAX FFI) lives in the
 [main docs](https://a2r-lab.org/GRiD/).
 
-## Status: 0.5.1 (on PyPI as `grid-rbd`)
+## Status (on PyPI as `grid-rbd`; the version is the one in `pyproject.toml`)
 
 The full method surface is bound and validated against
 [`RBDReference`](https://github.com/A2R-Lab/RBDReference) at float32 precision,

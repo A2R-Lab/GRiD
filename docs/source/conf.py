@@ -9,7 +9,10 @@
 project = 'GRiD'
 copyright = '2026, A²R Lab'
 author = 'Kwamena Awotwi, Zachary Pestrikov, Danelle Tuchman, Abhinav Sharma, Brian Plancher'
-release = '0.5.1'
+# The release is the package version in pyproject.toml, so the docs never lag a bump.
+import re as _re
+from pathlib import Path as _Path
+release = _re.search(r'^version = "([^"]+)"', (_Path(__file__).resolve().parents[2] / "pyproject.toml").read_text(), _re.M).group(1)
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

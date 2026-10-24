@@ -12,6 +12,8 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-10-24
+
 - Margin-aware collision checking (HJCD-IK ask G7). `grid_collision::config_free` on the block,
   warp and capsule-row paths and the header drivers `grid_cc_config_free` and
   `grid_cc_config_free_capsule` take a trailing `margin` (metres, default 0): a configuration is a
@@ -467,7 +469,8 @@ update on top of that, organised here by theme:
 - Closed kinematic loops are unsupported.
 - No Windows, macOS, Jetson or precompiled-robot wheels.
 
-[Unreleased]: https://github.com/A2R-Lab/GRiD/compare/v0.5.5...HEAD
+[Unreleased]: https://github.com/A2R-Lab/GRiD/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/A2R-Lab/GRiD/compare/v0.5.5...v0.6.0
 [0.5.5]: https://github.com/A2R-Lab/GRiD/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/A2R-Lab/GRiD/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/A2R-Lab/GRiD/compare/v0.5.1...v0.5.3
