@@ -1125,8 +1125,18 @@ def load_robot(
 
 from .gc_cache import gc_cache  # noqa: E402  (store GC; python -m grid_rbd.gc_cache)
 
+from ._artifacts import (ArtifactIncompatibleError, ArtifactNotFoundError, ConsumerArtifact,  # noqa: E402
+                         ConsumerArtifactError, build_artifact, list_artifacts, load_artifact)
+
 __all__ = [
     "gc_cache",
+    "build_artifact",
+    "load_artifact",
+    "list_artifacts",
+    "ConsumerArtifact",
+    "ConsumerArtifactError",
+    "ArtifactNotFoundError",
+    "ArtifactIncompatibleError",
     "RobotHandle",
     "SecondOrderID",
     "SecondOrderFD",

@@ -51,6 +51,27 @@ repository. Everything below describes the packaged A2R-Lab releases.
   `make_device_environment` does both in one call; `grid_cc_cuboid_from_quaternion` is the
   shared host and device box conversion. Gated against a hand upload (identical verdicts and
   clearances), host against device primitives, move semantics and returned device memory.
+- Consumer artifact build (HJCD-IK ask G9, with G8b folded in). `grid_rbd.build_artifact(consumer,
+  name, urdf, sources=..., headers=..., include_dirs=..., defines=..., ...)` compiles a caller's
+  translation units against the `grid.cuh` generated for the robot (the codegen keywords of
+  `register_robot`, plus `emit_plant` and the collision options `collision`, `collision_res`,
+  `collision_native` and `spherized_urdf`, the sphere model validated against the URDF) and
+  links them into an artifact under `<cache_dir>/consumers/<consumer>/`, with the store's rules:
+  an identity over the URDF, options, codegen tree, sources and headers by content, defines,
+  flags, toolchain, CUDA architecture and package version; a request pointer honoured only when
+  the recorded identity matches; a content key that skips `nvcc` when the bytes were built
+  before; per-unit object reuse; atomic publish; a manifest under a lock. `load_artifact`
+  returns a prepared artifact without a toolchain and refuses one recorded for another device;
+  `list_artifacts` and `plan_only=True` inspect without building. GRiD never binds the
+  consumer's symbols. `register_robot` gains no collision flag: the runtime wrapper has no
+  surface for the checkers.
+- `grid-spherize --rebind-to kinematic.urdf spheres.urdf --out rebound.urdf` (HJCD-IK ask V1).
+  Re-attaches a sphere model to another URDF of the same robot by link name, each sphere keeping
+  its offset in its link's frame so its placement follows the target's kinematics; the result
+  is validated strictly against the target and opens with a provenance comment (source and
+  target digests, fidelity against the target's collision geometry when its meshes resolve,
+  content hash of the body). A link the target lacks is an error. Strict validation stays the
+  default for every robot.
 
 ## [0.5.5] — 2026-10-23
 

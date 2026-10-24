@@ -93,6 +93,39 @@ keyed apart from the single-arch build and carrying the launch configs of its
 `cuda_arch` (see the build knobs in `bindings/README.md`);
 `python -m grid_rbd.gc_cache` lists (`--execute` deletes) store entries no name
 binds any more.
+
+### Consumer artifacts: your kernels against our header, under the store's rules
+
+A solver that writes its own kernels over `grid.cuh` (an IK solver, a trajectory optimizer)
+builds one translation unit per robot. `grid_rbd.build_artifact` runs that build the way
+`register_robot` builds its wrapper, in a namespace of the cache directory that belongs to
+the consumer:
+
+```python
+import ctypes, grid_rbd
+art = grid_rbd.build_artifact(
+    "hjcd", "panda", "/path/to/panda.urdf",
+    sources=["csrc/kernel/ik_kernel.cu"],        # each unit compiled -c against grid.cuh, then linked --shared
+    headers=["csrc/kernel/ik_kernel.cuh"],       # folded into the identity by content
+    include_dirs=["csrc"], defines={"HJCD_BATCH": 64},
+    algorithm_list=["end_effector_pose"],        # the codegen keywords of register_robot
+    collision=True, collision_res=[0.10, 0.06],  # or spherized_urdf=<validated sphere model>, collision_native=True
+    emit_plant=None)                             # the generator's rule: a kinematics header carries no plant block
+lib = ctypes.CDLL(str(art.path))                 # art.header is the grid.cuh it was compiled against
+```
+
+The identity covers the URDF, the codegen options and the codegen tree, the sources and
+headers by content, the defines and flags, the toolchain, the CUDA architecture and the
+package version. A second call with the same inputs is a pointer hit (no generation, no
+`nvcc`); a changed define or source re-keys the artifact, and a unit whose exact inputs were
+compiled before links from the per-consumer object cache. The artifact, its `grid.cuh`,
+`meta.json`, `build_inputs.json` and `build.log` are published atomically under
+`consumers/<consumer>/store/<content_key>/`, and the consumer's manifest binds the name under
+a lock. `grid_rbd.load_artifact("hjcd", "panda")` returns a prepared artifact without a
+toolchain, refusing one recorded for another device or key schema;
+`build_artifact(..., plan_only=True)` reports what a build would use and whether it is
+already there; `grid_rbd.list_artifacts("hjcd")` lists the manifest. The gate is
+`test/python_wrappers/test_consumer_artifact.py`.
 Ship the cache dir (`grid_rbd.default_cache_dir()`, default `~/.cache/grid-rbd/` or
 `$GRID_RBD_CACHE_DIR`) and every later run starts in well under a second.
 

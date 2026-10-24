@@ -41,6 +41,29 @@ Cache tools
 
 .. autofunction:: grid_rbd.gc_cache
 
+Consumer artifacts
+------------------
+
+A consumer's own CUDA sources compiled against the header GRiD generates for a
+robot, under the store's rules, in a namespace of the cache directory that
+belongs to the consumer (``<cache_dir>/consumers/<consumer>/``). GRiD never
+binds the consumer's symbols; the caller loads the artifact itself.
+
+.. autofunction:: grid_rbd.build_artifact
+
+.. autofunction:: grid_rbd.load_artifact
+
+.. autofunction:: grid_rbd.list_artifacts
+
+.. autoclass:: grid_rbd.ConsumerArtifact
+   :members:
+
+.. autoexception:: grid_rbd.ConsumerArtifactError
+
+.. autoexception:: grid_rbd.ArtifactNotFoundError
+
+.. autoexception:: grid_rbd.ArtifactIncompatibleError
+
 The numpy handle
 ----------------
 
