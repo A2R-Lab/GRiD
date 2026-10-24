@@ -3260,3 +3260,11 @@ Symptom: the first 0.6.0 release receipt failed all 36 cells of `test_cuda_momen
 Diagnosis: the emission rule from ask E1 emits the `grid_plant` block when the resolved algorithm set carries a plant algorithm, and the list named `ccrba` but not `dccrba`. The momentum cost is the plant's full-state cost and is built on `dccrba`, so the contract runner, which generates with `algorithm_list=["dccrba"]`, received a header without the block. The CPU lane cannot see this: it checks which headers carry the block, not whether a runner that needs the block compiles, and the runners that do compile against `grid_plant` all use profiles that trigger it.
 
 Fix: `dccrba` joins `PLANT_TRIGGER_ALGORITHMS`, with the docs, the changelog and the emission test following. The lesson for any opt-out rule: enumerate the consumers of the thing being dropped (here `grep grid_plant:: test/**/*.cu` and the sibling tests' codegen calls) and run one compile of each before the receipt, because a receipt-only discovery costs a full re-run when the fix lands in a fingerprinted path.
+
+### 7.z62 Every runner probes the device architecture; a fixed default only works on the box it was written on (2026-10-24, Orin sm_87 receipt at v0.5.4)
+
+Symptom: the last shard of the Orin receipt failed both cells of `test_cuda_mjx_tier_invariance` with `no kernel image is available for execution on the device`, after the other thirty-six shards passed.
+
+Diagnosis: the test read `GRID_CUDA_ARCH` with a default of 120 and passed `-arch sm_120` to nvcc, while the sixty-one other compile sites go through `detect_cuda_arch`, which probes the first GPU and lets the variable override it. The test dates from July and had only ever run on the 5090; the sm_87 table row had no earlier receipt to catch it.
+
+Fix: the test probes like the others. For the v0.5.4 receipt, whose tree cannot change, the shard is resumed with `GRID_CUDA_ARCH=87` in the environment, which is the override the test documents and gives the harness sites the same answer as the probe. Audit before any new architecture row: `grep -n '"-arch"' test/cuda_equivalents/test_*.py test/python_wrappers/test_*.py | grep -v 'sm_{arch}\|cuda_arch()'` must come back empty.

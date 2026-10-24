@@ -37,7 +37,13 @@ _ALGOS = [
     "inverse_dynamics_gradient", "forward_dynamics_gradient", "aba",
     "idsva_so_world_frame", "fdsva_so", "integrator", "integrator_gradient",
 ]
-_ARCH = os.environ.get("GRID_CUDA_ARCH", "120")
+
+
+def _arch() -> str:
+    """Compute capability digits of the device under test, GRID_CUDA_ARCH winning when set,
+    the same probe the other CUDA runners use (a fixed default compiles for the wrong part)."""
+    from grid_codegen.cuda_env import detect_cuda_arch
+    return detect_cuda_arch(os.environ.get("GRID_CUDA_ARCH"))
 
 
 def _has_cuda() -> bool:
@@ -65,7 +71,7 @@ def _compile(build_dir: Path, fdsva: int) -> Path:
     shutil.copyfile(_RUNNER, build_dir / "runner.cu")
     glass = _ROOT / "external" / "GLASS" / "include"
     exe = build_dir / f"runner_{'fdsva' if fdsva else 'idsva'}.exe"
-    cmd = [nvcc, "-std=c++17", "-O2", "-arch", f"sm_{_ARCH}",
+    cmd = [nvcc, "-std=c++17", "-O2", "-arch", f"sm_{_arch()}",
            f"-DMJX_ALGO_FDSVA={fdsva}", "-diag-suppress", "177", "-diag-suppress", "174",
            f"-I{glass}", f"-I{build_dir}", "-o", str(exe), str(build_dir / "runner.cu")]
     res = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
