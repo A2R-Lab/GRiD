@@ -122,7 +122,10 @@ of continuous mesh coverage or a certified bulge bound. Primitive meshes
 used for this report are tessellated. Inspect the report alongside the model.
 
 ``--spherized-urdf`` rejects missing collision links, non-sphere geometry,
-invalid spheres, and mismatched joint frames. It cannot prove that an
+invalid spheres, and mismatched joint frames. The one tolerance is the base
+chain: a link with no movable ancestor may be absent from the sphere model or
+carry no collision element, with a warning naming it, because spheres on such
+a link never move and the generator drops them at bake time. It cannot prove that an
 arbitrary supplied sphere model covers its source mesh. The sole named
 lookup is ``foam``; it requires an optional local
 ``external/foam/assets/panda/smaller_panda_spherized.urdf``. GRiD does not

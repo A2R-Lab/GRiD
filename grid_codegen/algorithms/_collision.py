@@ -20,6 +20,8 @@ the single source of truth.
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import warnings
+
 import numpy as np
 
 
@@ -63,9 +65,33 @@ MARGIN_NOTE = ("A hit iff any raw clearance is below T margin (exact contact at 
                "zero-margin rule at margin 0; collision_distance and the cost derivatives are untouched.")
 
 
+def base_chain_links(urdf_root):
+    """Links with no movable ancestor: every root link (the child of no joint) and whatever hangs
+    from a root through fixed joints only. Spheres on these links never move, and the generator
+    drops them at bake time (sphere_anchor_frames returns the SKIP sentinel for them)."""
+    joints = urdf_root.findall('joint')
+    children = {j.find('child').get('link') for j in joints}
+    base = {l.get('name') for l in urdf_root.findall('link')} - children
+    grew = True
+    while grew:
+        grew = False
+        for j in joints:
+            if j.get('type') == 'fixed' and j.find('parent').get('link') in base \
+                    and j.find('child').get('link') not in base:
+                base.add(j.find('child').get('link'))
+                grew = True
+    return base
+
+
 def validate_sphere_model(source, spheres):
-    """Reject omitted links, non-spheres and mismatched kinematic frames."""
+    """Reject omitted links, non-spheres and mismatched kinematic frames.
+
+    A link with no movable ancestor (the base chain) may be left out of the spherized file or
+    carry no collision element; the validator warns and accepts, because the generator drops
+    base spheres at bake time anyway (V2, HJCD-IK 2026-10-13). Every other link keeps the strict
+    rule: present, same kinematic frame, spheres only, not empty when the source has geometry."""
     a, b = ET.parse(source).getroot(), ET.parse(spheres).getroot()
+    base = base_chain_links(a)
     def joints(root):
         def vector(j, tag, attr, default):
             e = j.find(tag)
@@ -75,11 +101,18 @@ def validate_sphere_model(source, spheres):
                 vector(j, 'origin', 'rpy', '0 0 0'), vector(j, 'axis', 'xyz', '1 0 0'),
                 tuple(sorted(j.find('mimic').attrib.items())) if j.find('mimic') is not None else ())
                 for j in root.findall('joint')}
-    if joints(a) != joints(b):
+    ja, jb = joints(a), joints(b)
+    # a fixed joint inside the base chain may be absent with its link; every joint present must match
+    tolerated = {n for n, v in ja.items() if v[0] == 'fixed' and v[2] in base}
+    if set(jb) - set(ja) or any(jb.get(n, ja[n] if n in tolerated else None) != ja[n] for n in ja):
         raise ValueError('Spherized URDF kinematic frames do not match the source URDF')
     names = {l.get('name') for l in a.findall('link')}
-    if names != {l.get('name') for l in b.findall('link')}:
+    b_names = {l.get('name') for l in b.findall('link')}
+    if (b_names - names) or (names - b_names) - base:
         raise ValueError('Spherized URDF link set does not match source URDF')
+    for name in sorted((names - b_names) & base):
+        warnings.warn(f"Spherized URDF leaves out {name}; it has no movable ancestor and its spheres "
+                      "would be dropped at bake time", UserWarning, stacklevel=2)
     for link in b.findall('link'):
         for col in link.findall('collision'):
             geom = col.find('geometry')
@@ -87,8 +120,13 @@ def validate_sphere_model(source, spheres):
                 raise ValueError('Spherized URDF must contain sphere-only collision geometry')
     parsed = parse_spherized_urdf(spheres)
     for link in a.findall('link'):
-        if link.findall('collision') and not parsed.get(link.get('name')):
-            raise ValueError(f"Spherized URDF omits collision geometry for {link.get('name')}")
+        name = link.get('name')
+        if link.findall('collision') and not parsed.get(name) and name in b_names:
+            if name in base:
+                warnings.warn(f"Spherized URDF carries no spheres for {name}; it has no movable ancestor "
+                              "and its spheres would be dropped at bake time", UserWarning, stacklevel=2)
+            else:
+                raise ValueError(f"Spherized URDF omits collision geometry for {name}")
     for rows in parsed.values():
         if any(not np.isfinite(row).all() or row[3] <= 0 for row in rows):
             raise ValueError('Spherized URDF contains invalid spheres')

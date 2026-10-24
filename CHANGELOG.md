@@ -23,6 +23,11 @@ repository. Everything below describes the packaged A2R-Lab releases.
   sweep from just below to just above each configuration's own threshold.
 - Self-collision toggle (HJCD-IK ask G10). The combined checkers take `check_self` (default true);
   false skips the baked self-pair ranges so the verdict reflects the environment alone.
+- Sphere-model validation tolerates the base chain (HJCD-IK ask V2). A link with no movable
+  ancestor (a root link, or one reached from a root through fixed joints only) may be absent from
+  the spherized URDF or carry no collision element; the validator warns and names it, because
+  the generator drops base-chain spheres at bake time. Every other link keeps the strict rule:
+  present, identical kinematic frame, spheres only, not empty when the source has geometry.
 
 ## [0.5.5] — 2026-10-23
 

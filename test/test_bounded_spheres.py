@@ -149,3 +149,90 @@ def test_missing_optional_preset_reports_explicit_path(monkeypatch):
         str(p).endswith('external/foam/assets/panda/smaller_panda_spherized.urdf') else is_file(p))
     with pytest.raises(ValueError, match='explicit path'):
         resolve_spherized_urdf('foam', 'unused-until-preset-resolves.urdf')
+
+
+def _three_link_source(tmp_path):
+    """base (fixed to mount) -> mount (revolute to tip) -> tip; base and mount have no movable
+    ancestor, tip does. Every link carries collision geometry in the source."""
+    source = tmp_path / 'source.urdf'
+    source.write_text(
+        '<robot name="r">'
+        '<link name="base"><collision><geometry><sphere radius=".03"/></geometry></collision></link>'
+        '<link name="mount"><collision><geometry><sphere radius=".02"/></geometry></collision></link>'
+        '<link name="tip"><collision><geometry><sphere radius=".02"/></geometry></collision></link>'
+        '<joint name="weld" type="fixed"><parent link="base"/><child link="mount"/><origin xyz="0 0 .1"/></joint>'
+        '<joint name="j1" type="revolute"><parent link="mount"/><child link="tip"/><origin xyz="0 0 .1"/>'
+        '<axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="1" velocity="1"/></joint>'
+        '</robot>')
+    return source
+
+
+def test_sphere_model_tolerates_base_chain_omission_with_a_warning(tmp_path):
+    """V2 (HJCD-IK): a link with no movable ancestor may be empty or absent; the validator warns
+    and names it. A movable link keeps the strict rule."""
+    import warnings
+    source = _three_link_source(tmp_path)
+    spheres = tmp_path / 'spheres.urdf'
+    spherize_urdf(source, 0.05, spheres)
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        validate_sphere_model(source, spheres)          # complete model: silent
+    tree = ET.parse(spheres)
+    root = tree.getroot()
+    mount = next(l for l in root.findall('link') if l.get('name') == 'mount')
+    for col in mount.findall('collision'):
+        mount.remove(col)                               # mount: present, no spheres
+    base = next(l for l in root.findall('link') if l.get('name') == 'base')
+    root.remove(base)                                   # base: absent, with its fixed joint
+    root.remove(next(j for j in root.findall('joint') if j.get('name') == 'weld'))
+    tree.write(spheres)
+    with pytest.warns(UserWarning) as record:
+        validate_sphere_model(source, spheres)
+    messages = ' '.join(str(w.message) for w in record)
+    assert 'leaves out base' in messages and 'no spheres for mount' in messages
+    tip = next(l for l in root.findall('link') if l.get('name') == 'tip')
+    for col in tip.findall('collision'):
+        tip.remove(col)                                 # tip has a movable ancestor: still an error
+    tree.write(spheres)
+    with pytest.raises(ValueError, match='omits collision geometry for tip'):
+        validate_sphere_model(source, spheres)
+
+
+def test_sphere_model_still_rejects_a_missing_movable_link(tmp_path):
+    source = _three_link_source(tmp_path)
+    spheres = tmp_path / 'spheres.urdf'
+    spherize_urdf(source, 0.05, spheres)
+    tree = ET.parse(spheres)
+    root = tree.getroot()
+    root.remove(next(l for l in root.findall('link') if l.get('name') == 'tip'))
+    root.remove(next(j for j in root.findall('joint') if j.get('name') == 'j1'))
+    tree.write(spheres)
+    with pytest.raises(ValueError, match='kinematic frames'):
+        validate_sphere_model(source, spheres)
+
+
+def test_base_chain_omission_flows_through_the_spec_builder(tmp_path):
+    """The tolerated omission reaches codegen unchanged: the spec builder skips base-chain
+    spheres anyway, so a model without its base link yields the same rows as a complete one."""
+    import warnings
+    from URDFParser import URDFParser
+    from grid_codegen.algorithms._collision import build_sphere_tiers
+    source = _three_link_source(tmp_path)
+    full = tmp_path / 'full.urdf'
+    spherize_urdf(source, 0.05, full)
+    robot = URDFParser().parse(str(source))
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        reference = build_sphere_tiers(robot, {'fine': resolve_spherized_urdf(str(full), source)})['fine']
+    trimmed = tmp_path / 'trimmed.urdf'
+    tree = ET.parse(full)
+    root = tree.getroot()
+    root.remove(next(l for l in root.findall('link') if l.get('name') == 'base'))
+    root.remove(next(j for j in root.findall('joint') if j.get('name') == 'weld'))
+    tree.write(trimmed)
+    with pytest.warns(UserWarning, match='leaves out base'):
+        path = resolve_spherized_urdf(str(trimmed), source)
+    tier = build_sphere_tiers(robot, {'fine': path})['fine']
+    assert tier['n'] == reference['n'] > 0
+    assert tier['anchor'] == reference['anchor'] and tier['offset'] == reference['offset']
+    assert tier['radius'] == reference['radius']
