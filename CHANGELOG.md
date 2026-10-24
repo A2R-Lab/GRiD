@@ -34,6 +34,13 @@ repository. Everything below describes the packaged A2R-Lab releases.
   collision hulls sit well outside the links. The header line names the geometry source; a visual
   mesh that does not resolve to a local file is named and its link skipped. Generation still reads
   the collision elements only.
+- Plant block emission scope (HJCD-IK ask E1). `gen_all_code` emits the `grid_plant` namespace
+  for the `all` profile, for any request that carries a plant algorithm (the integrators,
+  `fdsva_so`, the end-effector pose derivatives, `com`, `ccrba`), baked cost or contact frames,
+  or a multi-target batch, and whenever `emit_plant=True` (`grid-generate --plant`) is passed. A
+  header generated for kinematics alone (`kinematics`, `dynamics-core`, a bare `end_effector_pose`
+  list) no longer carries the barrier families, the activations and the menu presets; a comment
+  names the rule. The bindings always carry the block; every `all` header is byte-identical.
 
 ## [0.5.5] — 2026-10-23
 

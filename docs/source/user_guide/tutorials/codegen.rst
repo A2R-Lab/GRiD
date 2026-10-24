@@ -48,7 +48,7 @@ expanded with its dependencies before emission. The profiles, from
    * - ``dynamics``
      - inverse / forward dynamics, ``minv``, ``aba``, ``crba``, both
        first-order gradients, the second-order pair, and the integrator
-       family (aliases: ``all-dynamics``, ``dynamics-only``)
+       family
    * - ``dynamics-core``
      - ``inverse_dynamics``, ``minv``, ``forward_dynamics``
    * - ``dynamics-gradients``
@@ -78,6 +78,14 @@ expanded with its dependencies before emission. The profiles, from
        ``forward_dynamics_parameter_gradient``
    * - ``f-ext-gradient``
      - ``inverse_dynamics``, ``minv``, ``f_ext_gradient``
+
+The ``grid_plant`` block (costs, barriers, the plant step and the cost menu)
+rides on the request: it is emitted for ``all``, for any request that carries
+a plant algorithm (the integrators, ``fdsva_so``, the end-effector pose
+derivatives, ``com``, ``ccrba``), baked cost or contact frames, or a
+multi-target batch, and whenever ``--plant`` (``emit_plant=True`` in Python)
+is given. ``kinematics`` and ``dynamics-core`` headers carry no plant block
+unless asked.
 
 Fewer kernels in the header means a smaller header, a faster ``nvcc`` and
 less RAM; see *Compile time and footprint* below.

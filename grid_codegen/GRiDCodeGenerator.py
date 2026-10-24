@@ -18,6 +18,33 @@ from .launch_config import (LAUNCH_CONFIG_DEFAULT_GPU, LAUNCH_CONFIG_TIER_SYMBOL
 
 
 
+# Algorithms whose presence in a request means the caller wants the grid_plant block (E1): the
+# plant step composes the integrators, the cost terms compose the pose derivatives and the
+# centroidal kinematics. A header generated for kinematics alone (end_effector_pose, the frame
+# Jacobians) carries no plant block unless emit_plant=True.
+PLANT_TRIGGER_ALGORITHMS = frozenset({
+    "integrator", "integrator_gradient", "integrator_with_gradient", "fdsva_so",
+    "end_effector_pose_gradient", "end_effector_pose_hessian", "com", "ccrba"})
+
+
+def plant_block_requested(emit_plant, codegen_profile, algorithm_list, algorithms,
+                          cost_frames, contact_frames, multi_target_batch):
+    """Whether gen_all_code emits the grid_plant namespace. An explicit emit_plant wins; the 'all'
+    profile (the default) always carries it; otherwise it rides on a plant algorithm in the
+    resolved set, on baked cost or contact frames, or on a multi-target batch."""
+    if emit_plant is not None:
+        return bool(emit_plant)
+    requested = algorithm_list if algorithm_list is not None else codegen_profile
+    if requested is None:
+        return True
+    names = [requested] if isinstance(requested, str) else list(requested)
+    if any(str(n).strip().lower() == "all" for n in names):
+        return True
+    if cost_frames or contact_frames or multi_target_batch is not None:
+        return True
+    return bool(PLANT_TRIGGER_ALGORITHMS & set(algorithms))
+
+
 class GRiDCodeGenerator:
     # first import helpers to write code generation, spatial algebra, and opology helpers (parent, child, Sind, XImats) and the robotModel object wrapepr
     from .helpers import gen_add_code_line, gen_add_code_lines, gen_bake_const_array, gen_add_end_control_flow, gen_add_end_function, \
@@ -627,7 +654,7 @@ class GRiDCodeGenerator:
                      runtime_joint_dynamics = None, multi_target_batch = None, collision_spec = None,
                      contact_frames = None, enable_contact_runtime = False, enable_mujoco_kernels = None,
                      emit_alloc_gating = False, fragments_dir = None,
-                     vendor_glass = True, glass_revision = None, cost_frames = None):
+                     vendor_glass = True, glass_revision = None, cost_frames = None, emit_plant = None):
         algorithms, include_any_kinematics, include_homogenous_transforms = self._resolve_emission_plan(include_base_inertia=include_base_inertia, include_homogenous_transforms=include_homogenous_transforms, fixed_target_name=fixed_target_name, output_path=output_path, codegen_profile=codegen_profile, algorithm_list=algorithm_list, enable_floating_second_order=enable_floating_second_order, enable_idsva_so_world_frame=enable_idsva_so_world_frame, enable_idsva_so_body_frame=enable_idsva_so_body_frame, runtime_inertia=runtime_inertia, runtime_transform=runtime_transform, runtime_joint_dynamics=runtime_joint_dynamics, multi_target_batch=multi_target_batch, collision_spec=collision_spec, contact_frames=contact_frames, enable_contact_runtime=enable_contact_runtime, enable_mujoco_kernels=enable_mujoco_kernels, emit_alloc_gating=emit_alloc_gating, fragments_dir=fragments_dir, vendor_glass=vendor_glass, glass_revision=glass_revision, cost_frames=cost_frames)
         file_notes = [ "Interface is:", \
             "    __host__   robotModel<T> *d_robotModel = init_robotModel<T>()", \
@@ -1129,7 +1156,19 @@ class GRiDCodeGenerator:
         # T6: emit the sibling `grid_plant` namespace (cost/constraint/plant-step
         # primitives composed over the grid:: surface). Additive: this runs AFTER
         # the grid namespace closes and makes ZERO edits to any grid:: emit path.
-        self.gen_grid_plant(algorithms)
+        # Emission scope (HJCD-IK ask E1, 2026-10-23): the block is emitted for the
+        # 'all' profile, for any request that carries a plant algorithm (the
+        # integrators, fdsva_so, the end-effector pose derivatives, com, ccrba), cost
+        # frames, contact frames or a multi-target batch, and whenever the caller
+        # passes emit_plant=True; a kinematics-only header carries no plant block.
+        if plant_block_requested(emit_plant, codegen_profile, algorithm_list, algorithms,
+                                 cost_frames, contact_frames, multi_target_batch):
+            self.gen_grid_plant(algorithms)
+        else:
+            self.gen_add_code_line("")
+            self.gen_add_code_line("// [grid_plant] namespace not emitted: the request carries no plant algorithm (integrator, "
+                                   "integrator_gradient, fdsva_so, end_effector_pose_gradient, com, ccrba), no cost or contact "
+                                   "frames and no multi-target batch, and the profile is not 'all'. Pass emit_plant=True to force it.")
         self.gen_add_fragment_mark("collision")
         # W3: sibling `grid_collision` namespace (baked sphere radii + self_cc_ranges + config_free
         # over grid::multi_target_position + the static SDF header). Emitted like grid_plant, after

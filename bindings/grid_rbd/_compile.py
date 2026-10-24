@@ -321,6 +321,10 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
             runtime_joint_dynamics=runtime_joint_dynamics,
             enable_contact_runtime=bool(options.get("enable_contact_runtime", False)),
             contact_frames=contact_frame_specs,
+            # The wrapper units compile against the plant block whatever the algorithm
+            # list says, so a bindings header always carries it (E1 keeps the
+            # kinematics-only drop to generator and CLI headers).
+            emit_plant=True,
         )
 
     if not out_path.exists():
