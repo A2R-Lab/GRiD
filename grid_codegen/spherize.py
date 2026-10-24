@@ -7,7 +7,10 @@ against the collision geometry by default; `--geometry visual` measures against
 the `<visual>` meshes instead, for comparison with fidelity tables published
 against visual meshes (collision hulls of some robots sit well outside the
 visible links). A visual mesh that does not resolve to a local file is reported
-as such and its link skipped.
+as such and its link skipped. `--rebind-to kinematic.urdf spheres.urdf --out
+rebound.urdf` re-attaches an existing sphere model to another URDF of the same
+robot by link name (each sphere keeps its offset in its link's frame), validates
+the result strictly and records the provenance in a leading comment.
 """
 import argparse
 from pathlib import Path
@@ -16,7 +19,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 
 from .algorithms._spherize import spherize_urdf, _load_mesh, _origin_of, _collision_geometry, _resolve_mesh_path
-from .algorithms._collision import parse_spherized_urdf, validate_sphere_model
+from .algorithms._collision import parse_spherized_urdf, rebind_sphere_model, validate_sphere_model
 
 
 def fidelity_report(source, spheres, geometry='collision'):
@@ -70,7 +73,22 @@ def main():
                         help='Report the generated model, or an existing sphere URDF')
     parser.add_argument('--geometry', choices=('collision', 'visual'), default='collision',
                         help='Geometry the report measures against (generation always uses collision)')
+    parser.add_argument('--rebind-to', type=Path, metavar='KINEMATIC_URDF',
+                        help='Treat the positional URDF as a sphere model and re-attach its spheres, by link '
+                             'name and in each link frame, to this URDF; writes --out and validates it')
     args = parser.parse_args()
+    if args.rebind_to is not None:
+        if not args.out:
+            parser.error('--rebind-to needs --out REBOUND_URDF')
+        provenance = rebind_sphere_model(args.urdf, args.rebind_to, args.out)
+        print(f"Rebound {provenance['spheres']} spheres on {provenance['links']} links of {args.rebind_to.name} "
+              f"into {args.out}; {provenance['fidelity']}; content sha256 {provenance['content_sha256']}")
+        if args.report is not None:
+            args.report = str(args.out)
+            args.urdf = args.rebind_to
+            args.out = None
+        else:
+            return
     if not args.out and not args.report:
         parser.error('Specify --out or --report SPHERE_URDF')
     if args.out:

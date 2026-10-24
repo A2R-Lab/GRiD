@@ -139,6 +139,21 @@ links); the header line names the geometry source, and a visual mesh that does
 not resolve to a local file is named and its link skipped. Generation always
 reads the collision elements.
 
+A sphere model built on another URDF of the same robot (foam's Panda model
+places the finger joints differently from the kinematic URDF most consumers
+use) does not pass the frame check. ``--rebind-to`` re-attaches it instead of
+loosening the check::
+
+   python -m grid_codegen.spherize spheres.urdf --rebind-to kinematic.urdf --out rebound.urdf --report
+
+Each sphere keeps its offset in its parent link's frame and is attached to the
+target's link of the same name, so its placement follows the target's
+kinematics (the source's world placements are not preserved). The result is
+validated strictly against the target and opens with a provenance comment: the
+source and target digests, the fidelity against the target's collision geometry
+when its meshes resolve, and the content hash of the body that follows. A link
+that carries spheres in the source but is absent from the target is an error.
+
 ``--spherized-urdf`` rejects missing collision links, non-sphere geometry,
 invalid spheres, and mismatched joint frames. The one tolerance is the base
 chain: a link with no movable ancestor may be absent from the sphere model or

@@ -132,6 +132,73 @@ def validate_sphere_model(source, spheres):
             raise ValueError('Spherized URDF contains invalid spheres')
 
 
+def rebind_sphere_model(spheres, target, out_path, fidelity=True):
+    """Re-attach a sphere model to another URDF of the same robot (V1, HJCD-IK 2026-10-13).
+
+    Each sphere keeps its offset in its parent link's frame and is attached to the target
+    URDF's link of the same name, so its world placement follows the target's kinematics;
+    the source model's world placements are not preserved. The result replaces the target's
+    `<collision>` elements, is validated strictly against the target, and carries a provenance
+    comment: the source and target digests, a fidelity line against the target's collision
+    geometry (when its meshes resolve) and the content hash of the body that follows it.
+    A link that carries spheres in the source but does not exist in the target is an error.
+    Returns the provenance as a dict."""
+    import hashlib
+    spheres, target, out_path = Path(spheres), Path(target), Path(out_path)
+    if out_path.resolve() in (spheres.resolve(), target.resolve()):
+        raise ValueError('rebind: --out must be a new file')
+    model = parse_spherized_urdf(spheres)
+    tree = ET.parse(target)
+    root = tree.getroot()
+    links = {l.get('name'): l for l in root.findall('link')}
+    missing = sorted(set(model) - set(links))
+    if missing:
+        raise ValueError(f"rebind: the sphere model carries spheres for links the target URDF does not have: {missing}")
+    total = 0
+    for name, link in links.items():
+        for col in link.findall('collision'):
+            link.remove(col)
+        for (x, y, z, r) in model.get(name, []):
+            col = ET.SubElement(link, 'collision')
+            o = ET.SubElement(col, 'origin')
+            o.set('xyz', '{:.9g} {:.9g} {:.9g}'.format(x, y, z))
+            o.set('rpy', '0 0 0')
+            g = ET.SubElement(col, 'geometry')
+            sp = ET.SubElement(g, 'sphere')
+            sp.set('radius', '{:.9g}'.format(r))
+            total += 1
+    body = ET.tostring(root, encoding='unicode')
+    out_path.write_text(body)
+    validate_sphere_model(target, out_path)
+    provenance = {
+        'source': spheres.name, 'source_sha256': hashlib.sha256(spheres.read_bytes()).hexdigest(),
+        'target': target.name, 'target_sha256': hashlib.sha256(target.read_bytes()).hexdigest(),
+        'spheres': total, 'links': sum(1 for n in links if model.get(n)),
+        'content_sha256': hashlib.sha256(body.encode()).hexdigest(),
+    }
+    line = 'fidelity: not measured'
+    if fidelity:
+        try:
+            from ..spherize import fidelity_report
+            rows = [r for r in fidelity_report(target, out_path) if 'unresolved' not in r]
+            if rows:
+                provenance['bulge_max_m'] = max(r['bulge_max_m'] for r in rows)
+                provenance['uncovered_surface_fraction_max'] = max(r['uncovered_surface_fraction'] for r in rows)
+                line = ('fidelity against the target collision geometry: bulge_max {:.4f} m, '
+                        'uncovered_surface_max {:.2%} over {} links'.format(
+                            provenance['bulge_max_m'], provenance['uncovered_surface_fraction_max'], len(rows)))
+            else:
+                line = 'fidelity: no target collision geometry resolved'
+        except Exception as exc:   # the report needs trimesh and resolvable meshes; the rebind does not
+            line = f'fidelity: not measured ({type(exc).__name__}: {exc})'
+    provenance['fidelity'] = line
+    header = ('<!-- grid-spherize rebind: spheres of {source} (sha256 {source_sha256}) re-attached by link name to '
+              '{target} (sha256 {target_sha256}); {spheres} spheres on {links} links; {fidelity}; '
+              'content sha256 {content_sha256} -->\n').format(**provenance)
+    out_path.write_text(header + body)
+    return provenance
+
+
 def parse_spherized_urdf(path):
     """foam output: per link, one `<collision><geometry><sphere radius/></geometry>
     <origin xyz/></collision>` per sphere (center in the LINK frame; rpy irrelevant for a

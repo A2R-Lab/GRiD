@@ -271,3 +271,46 @@ def test_report_geometry_source_switch(tmp_path, monkeypatch, capsys):
     assert uncovered(visual, 'base') > 50.0
     assert 'tip visual mesh not resolved: package://nowhere/tip.obj' in visual
     assert uncovered(collision, 'tip') == 0.0
+
+
+def test_rebind_reattaches_spheres_by_link_name(tmp_path, monkeypatch, capsys):
+    """V1 (HJCD-IK): a sphere model built on a URDF whose joint origins differ (the foam Panda
+    finger case) is re-attached to the kinematic URDF by link name; each sphere keeps its
+    offset in its link frame, the result validates strictly against the target, carries the
+    provenance comment, and a link the target lacks is an error."""
+    from grid_codegen.algorithms._collision import parse_spherized_urdf, rebind_sphere_model
+    from grid_codegen.spherize import main
+    kinematic = _three_link_source(tmp_path)
+    shifted = tmp_path / 'shifted.urdf'
+    shifted.write_text(kinematic.read_text().replace('<origin xyz="0 0 .1"/></joint><joint name="j1"',
+                                                     '<origin xyz="0 0 .165"/></joint><joint name="j1"'))
+    assert shifted.read_text() != kinematic.read_text()
+    spheres = tmp_path / 'spheres_on_shifted.urdf'
+    spherize_urdf(shifted, 0.05, spheres)
+    with pytest.raises(ValueError, match='kinematic frames'):
+        validate_sphere_model(kinematic, spheres)          # the raw model does not fit the kinematic URDF
+    out = tmp_path / 'rebound.urdf'
+    provenance = rebind_sphere_model(spheres, kinematic, out)
+    validate_sphere_model(kinematic, out)                  # strict, and it passes
+    assert parse_spherized_urdf(out) == parse_spherized_urdf(spheres)   # offsets kept, per link
+    text = out.read_text()
+    assert text.startswith('<!-- grid-spherize rebind:') and provenance['content_sha256'] in text
+    assert 'fidelity' in provenance and provenance['spheres'] > 0
+    import hashlib
+    body = text.split('-->\n', 1)[1]
+    assert hashlib.sha256(body.encode()).hexdigest() == provenance['content_sha256']
+    # the CLI form, with a report on the rebound model
+    monkeypatch.setattr('sys.argv', ['grid-spherize', str(spheres), '--rebind-to', str(kinematic),
+                                     '--out', str(tmp_path / 'cli_rebound.urdf'), '--report'])
+    main()
+    printed = capsys.readouterr().out
+    assert 'Rebound' in printed and 'against collision geometry' in printed
+    # a link the target does not have
+    tree = ET.parse(spheres)
+    root = tree.getroot()
+    extra = ET.SubElement(root, 'link'); extra.set('name', 'ghost')
+    col = ET.SubElement(extra, 'collision'); ET.SubElement(col, 'origin').set('xyz', '0 0 0')
+    ET.SubElement(ET.SubElement(col, 'geometry'), 'sphere').set('radius', '0.01')
+    tree.write(spheres)
+    with pytest.raises(ValueError, match="does not have: \\['ghost'\\]"):
+        rebind_sphere_model(spheres, kinematic, tmp_path / 'again.urdf')
