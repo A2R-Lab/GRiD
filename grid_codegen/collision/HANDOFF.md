@@ -113,7 +113,9 @@ __device__ bool gc::config_free(
     const gc::Environment<T> &env,
     T *s_sphere_pos,                           // caller scratch, 3*NUM_COLLISION_SPHERES
     T *s_sphere_r,                             // caller scratch,   NUM_COLLISION_SPHERES (filled here)
-    T *d_workspace = nullptr);                 // FK spill at TIER_LITE+ (nullptr at TIER_SHARED)
+    T *d_workspace = nullptr,                  // FK spill at TIER_LITE+ (nullptr at TIER_SHARED)
+    T margin = 0,                              // a hit iff any raw clearance is below the margin (metres)
+    bool check_self = true);                   // false: environment only, the self-pair ranges are skipped
 
 // MULTI-tier (2+ densities): same verdict, broad-reject/fine-confirm. Signature takes BOTH tiers'
 // scratch (the coarse tier is named — e.g. _BROAD; the finest keeps the unsuffixed public names):
@@ -122,8 +124,46 @@ __device__ bool gc::config_free(
     const T *s_q, const grid::robotModel<T> *d_robotModel, const gc::Environment<T> &env,
     T *s_broad_pos, T *s_broad_r,              // caller scratch, 3*NUM_COLLISION_SPHERES_BROAD / _BROAD
     T *s_fine_pos,  T *s_fine_r,               // caller scratch, 3*NUM_COLLISION_SPHERES / (finest)
-    T *d_workspace = nullptr);
+    T *d_workspace = nullptr,
+    int *dbg_fine_rechecked = nullptr,         // optional: how many fine spheres the broad mask kept
+    T margin = 0, bool check_self = true);
+
+// Warp-scoped twin over caller-held joint world transforms (one IK candidate per warp):
+template <typename T>
+__device__ bool gc::warp::config_free(const T *s_Xworld, const gc::Environment<float> &env,
+                                      float *w_scratch, float margin = 0.0f, bool check_self = true);
 ```
+
+Margin semantics (G7, 2026-10-23): robot spheres (rows on the capsule path) are tested at `r + margin`
+against the environment and, for the self pairs, the margin is added to one side only, so a pair is a
+hit iff its clearance is below the margin; exact contact at the margin is free, and at `margin = 0`
+the verdict is the one the zero-margin checkers always gave. `collision_distance`, its normals and
+the cost derivatives never see the margin: they return the geometric signed clearance, and
+`collision_cost(env, margin, weight)` applies its own. On a two-tier model both tiers inflate by the
+same margin, so the covering-sphere argument (broad clear implies fine clear) is unchanged.
+`check_self = false` (G10) skips the self-pair scans on the combined checkers; `collision_distance`
+is environment-only already and has no flag.
+
+Environment ownership (G8a, 2026-10-23), in the same header:
+
+```cpp
+// rows: spheres (M,4) x y z r | capsules (M,7) ax ay az bx by bz r
+//       cuboids (M,10) cx cy cz qw qx qy qz dx dy dz (unit quaternion, FULL dims) | planes (M,4) nx ny nz d
+gc::HostEnvironment<T>   host  = gc::make_host_environment<T>(spheres, n_s, capsules, n_c, cuboids, n_b, planes, n_p);
+gc::DeviceEnvironment<T> owned(host);          // deep copy to the current device; freed on destruction; move-only
+kernel<<<...>>>(..., owned.view(), ...);        // Environment<T> by value, valid while `owned` lives
+gc::Environment<T> hview = host.view();        // host pointers for the host instantiations of the primitives
+gc::DeviceEnvironment<T> one_call = gc::make_device_environment<T>(spheres, n_s, capsules, n_c, cuboids, n_b);
+```
+
+`make_host_environment` validates every row (finite numbers, positive radii and dimensions, a
+non-zero quaternion and plane normal; the normal is normalized with `d` scaled to keep the same
+half-space) and throws `std::invalid_argument` naming the row. `grid_cc_cuboid_from_quaternion`
+is the host and device conversion from centre, quaternion and full dimensions to the oriented
+box the primitives read. `DeviceEnvironment` records the device it uploaded to and frees there
+even if the current device changed; `release()` is explicit and idempotent. Gate:
+`test_cuda_collision_environment.py` (parity with a hand upload, host versus device primitives,
+move semantics, memory returned after destruction).
 
 Sizing:
 - `gc::NUM_COLLISION_SPHERES` — finest/public sphere count (== `grid::NUM_MULTI_TARGETS`). Coarse

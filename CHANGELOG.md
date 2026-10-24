@@ -12,6 +12,70 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-10-24
+
+- Margin-aware collision checking (HJCD-IK ask G7). `grid_collision::config_free` on the block,
+  warp and capsule-row paths and the header drivers `grid_cc_config_free` and
+  `grid_cc_config_free_capsule` take a trailing `margin` (metres, default 0): a configuration is a
+  hit as soon as any raw clearance is below the margin, robot spheres being tested at `r + margin`
+  against the environment and the margin added to one side of each self pair, so exact contact at
+  the margin is free and the default verdict is unchanged. `collision_distance`, the normals and
+  the cost derivatives keep the geometric signed clearance; no margin-adjusted clearance is
+  emitted. Gated warp against block and against the distance surfaces at 0, 5 mm and 2 cm, with a
+  sweep from just below to just above each configuration's own threshold.
+- Self-collision toggle (HJCD-IK ask G10). The combined checkers take `check_self` (default true);
+  false skips the baked self-pair ranges so the verdict reflects the environment alone.
+- Sphere-model validation tolerates the base chain (HJCD-IK ask V2). A link with no movable
+  ancestor (a root link, or one reached from a root through fixed joints only) may be absent from
+  the spherized URDF or carry no collision element; the validator warns and names it, because
+  the generator drops base-chain spheres at bake time. Every other link keeps the strict rule:
+  present, identical kinematic frame, spheres only, not empty when the source has geometry.
+- `grid-spherize --report --geometry collision|visual` (HJCD-IK ask V3). The fidelity report
+  measures the sphere model against the collision geometry by default, or against the `<visual>`
+  shapes, whose numbers compare with fidelity tables published against visual meshes where the
+  collision hulls sit well outside the links. The header line names the geometry source; a visual
+  mesh that does not resolve to a local file is named and its link skipped. Generation still reads
+  the collision elements only.
+- Plant block emission scope (HJCD-IK ask E1). `gen_all_code` emits the `grid_plant` namespace
+  for the `all` profile, for any request that carries a plant algorithm (the integrators,
+  `fdsva_so`, the end-effector pose derivatives, `com`, `ccrba`, `dccrba`), baked cost or contact
+  frames, or a multi-target batch, and whenever `emit_plant=True` (`grid-generate --plant`) is
+  passed. A
+  header generated for kinematics alone (`kinematics`, `dynamics-core`, a bare `end_effector_pose`
+  list) no longer carries the barrier families, the activations and the menu presets; a comment
+  names the rule. The bindings always carry the block; every `all` header is byte-identical.
+- Environment ownership (HJCD-IK ask G8a). `grid_collision::make_host_environment` builds a
+  validated `HostEnvironment` from plain rows (spheres `x y z r`, capsules endpoints and
+  radius, cuboids centre, unit quaternion `w x y z` and full dimensions, planes normal and
+  offset), throwing `std::invalid_argument` with the row on a non-finite number, a non-positive
+  radius or dimension, a zero quaternion or normal; `HostEnvironment::view()` feeds the host
+  primitives. `DeviceEnvironment` deep-copies the lists to the current device, records it, hands
+  out the `Environment<T>` kernels take by value, frees on destruction and is move-only;
+  `make_device_environment` does both in one call; `grid_cc_cuboid_from_quaternion` is the
+  shared host and device box conversion. Gated against a hand upload (identical verdicts and
+  clearances), host against device primitives, move semantics and returned device memory.
+- Consumer artifact build (HJCD-IK ask G9, with G8b folded in). `grid_rbd.build_artifact(consumer,
+  name, urdf, sources=..., headers=..., include_dirs=..., defines=..., ...)` compiles a caller's
+  translation units against the `grid.cuh` generated for the robot (the codegen keywords of
+  `register_robot`, plus `emit_plant` and the collision options `collision`, `collision_res`,
+  `collision_native` and `spherized_urdf`, the sphere model validated against the URDF) and
+  links them into an artifact under `<cache_dir>/consumers/<consumer>/`, with the store's rules:
+  an identity over the URDF, options, codegen tree, sources and headers by content, defines,
+  flags, toolchain, CUDA architecture and package version; a request pointer honoured only when
+  the recorded identity matches; a content key that skips `nvcc` when the bytes were built
+  before; per-unit object reuse; atomic publish; a manifest under a lock. `load_artifact`
+  returns a prepared artifact without a toolchain and refuses one recorded for another device;
+  `list_artifacts` and `plan_only=True` inspect without building. GRiD never binds the
+  consumer's symbols. `register_robot` gains no collision flag: the runtime wrapper has no
+  surface for the checkers.
+- `grid-spherize --rebind-to kinematic.urdf spheres.urdf --out rebound.urdf` (HJCD-IK ask V1).
+  Re-attaches a sphere model to another URDF of the same robot by link name, each sphere keeping
+  its offset in its link's frame so its placement follows the target's kinematics; the result
+  is validated strictly against the target and opens with a provenance comment (source and
+  target digests, fidelity against the target's collision geometry when its meshes resolve,
+  content hash of the body). A link the target lacks is an error. Strict validation stays the
+  default for every robot.
+
 ## [0.5.5] — 2026-10-23
 
 - Floating-base cost menu. `tracking_cost_menu` and its gradient and Hessian are
@@ -406,7 +470,8 @@ update on top of that, organised here by theme:
 - Closed kinematic loops are unsupported.
 - No Windows, macOS, Jetson or precompiled-robot wheels.
 
-[Unreleased]: https://github.com/A2R-Lab/GRiD/compare/v0.5.5...HEAD
+[Unreleased]: https://github.com/A2R-Lab/GRiD/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/A2R-Lab/GRiD/compare/v0.5.5...v0.6.0
 [0.5.5]: https://github.com/A2R-Lab/GRiD/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/A2R-Lab/GRiD/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/A2R-Lab/GRiD/compare/v0.5.1...v0.5.3

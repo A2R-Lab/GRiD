@@ -301,11 +301,35 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     if contact_frame_names:
         from grid_codegen.algorithms._f_ext_contact import contact_frames_from_urdf
         contact_frame_specs = contact_frames_from_urdf(robot, list(contact_frame_names))
+    # Collision geometry (G8b, 2026-10-23): a consumer artifact may ask for the generated
+    # grid_collision namespace. `collision=True` spherizes the URDF's own collision
+    # geometry at `collision_res` (one spacing or a coarse-to-fine list), `spherized_urdf`
+    # names a sphere model that must pass validate_sphere_model against the URDF, and
+    # `collision_native` uses the URDF's native primitives as capsule rows. The caller
+    # folds the sphere model's bytes into the options (build_artifact does), so the key
+    # follows the model's content. register_robot never sets these.
+    collision_spec = None
+    if options.get("spherized_urdf"):
+        from grid_codegen.algorithms._collision import resolve_spherized_urdf, build_sphere_tiers
+        path = resolve_spherized_urdf(str(options["spherized_urdf"]), str(urdf_path))
+        tier = build_sphere_tiers(robot, {"fine": path})["fine"]
+        collision_spec = {key: tier[key] for key in ("anchor", "offset", "radius", "self_cc_ranges")}
+    elif options.get("collision_native"):
+        from grid_codegen.algorithms._collision import native_collision_spec_from_urdf
+        res = options.get("collision_res", 0.05)
+        res = list(res)[-1] if isinstance(res, (list, tuple)) else float(res)
+        collision_spec = native_collision_spec_from_urdf(robot, str(urdf_path), res)
+    elif options.get("collision"):
+        from grid_codegen.algorithms._collision import multi_tier_collision_spec_from_urdf
+        res = options.get("collision_res", 0.05)
+        res = list(res) if isinstance(res, (list, tuple)) else [float(res)]
+        collision_spec = multi_tier_collision_spec_from_urdf(robot, str(urdf_path), res)
     with contextlib.redirect_stdout(io.StringIO()):
         cg.gen_all_code(
             output_path=str(out_path),
             fixed_target_name=fixed_target_name,
             algorithm_list=algorithm_list,
+            collision_spec=collision_spec,
             enable_floating_second_order=True,
             enable_mujoco_kernels=enable_mujoco_kernels,
             # Defer the world-frame emission decision to gen_all_code's default
@@ -321,6 +345,10 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
             runtime_joint_dynamics=runtime_joint_dynamics,
             enable_contact_runtime=bool(options.get("enable_contact_runtime", False)),
             contact_frames=contact_frame_specs,
+            # The wrapper units compile against the plant block whatever the algorithm
+            # list says, so a bindings header always carries it (register_robot never
+            # sets the option); a consumer artifact passes its own choice (E1).
+            emit_plant=options.get("emit_plant", True),
         )
 
     if not out_path.exists():

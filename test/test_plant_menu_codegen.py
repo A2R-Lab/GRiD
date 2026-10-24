@@ -127,7 +127,8 @@ def test_root_attached_named_target_bakes_no_default_frame(tmp_path):
     cell test_ee_named_root_attached_zero_gradient_hessian); naming it explicitly
     as a cost frame is refused."""
     go2 = _robot("go2", False)
-    gen, text = _gen(tmp_path, go2, fixed_target_name="imu_joint", algorithm_list=["end_effector_pose", "frame_jacobian"])
+    gen, text = _gen(tmp_path, go2, fixed_target_name="imu_joint", algorithm_list=["end_effector_pose", "frame_jacobian"],
+                     emit_plant=True)   # a kinematics-only request drops the block (E1); the note under test lives in it
     assert gen._cost_frames == []
     assert "void frame_eval(" not in text and "attached to the world root" in text
     gen2 = GRiDCodeGenerator(go2, False, False, "grid")

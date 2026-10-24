@@ -55,6 +55,9 @@ def parseInputs(NO_ARG_OPTION=False):
                         help="Enable debug mode")
     parser.add_argument("-f", "--floating-base", default=False, action="store_true",
                         help="Add a floating base")
+    parser.add_argument("--plant", default=False, action="store_true",
+                        help="Emit the grid_plant block even when the request carries no plant algorithm, "
+                             "cost frames or contact frames (a kinematics-only header drops it by default)")
     parser.add_argument("-c", "--collision", default=False, action="store_true",
                         help="Spherize the URDF collision geometry and emit the grid_collision "
                              "namespace (config_free)")
@@ -202,6 +205,7 @@ def main():
         algorithm_list=args.algorithm_list,
         enable_mujoco_kernels=(False if args.no_mujoco_kernels else None),
         output_path=args.output,
+        emit_plant=(True if args.plant else None),
     )
     print("New code generated and saved to %s!" % args.output)
 

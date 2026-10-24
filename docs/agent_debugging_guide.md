@@ -3236,3 +3236,35 @@ Symptom: the waiter for the release pull request merged it seconds after the pus
 Diagnosis: the GraphQL status rollup reports an in-progress check run with an empty-string conclusion, not a null one. jq's `//` operator replaces only `null` and `false`, so a filter of the form `.conclusion // "PENDING"` passed the empty string through, the pending sentinel never appeared, and a unique list of `""` and `SUCCESS` read as green. The head had one commit over a fully green parent, the receipt commit, so no bad code reached main, but the rule is merge on green and the tag waited for the merge commit's own CI before it was pushed.
 
 Fix: a waiter decides on `.status == "COMPLETED"` for every check (and on the `status` column of `gh run list` for workflows), treats an empty check list as pending, and only then reads conclusions, with `SKIPPED` and `NEUTRAL` accepted and anything else red. The companion rule is 7.z42: a waiter that cannot name what it is waiting for is not a gate.
+
+### 7.z59 A kernel that calls a generated device function launches with that function's dynamic arena (2026-10-24, consumer kernels and the collision runners)
+
+Symptom: two runners written in one night failed the same way, an illegal memory access on the first synchronize. One evaluated `config_free` next to `collision_distance` from a kernel launched with no dynamic shared memory; the other was a consumer unit that evaluated the end-effector pose and, in a second build, the collision verdict, launched with the pose's arena.
+
+Diagnosis: every generated `_device` function that runs a batched pass (the multi-target extractor inside `config_free`, the pose chain-up, the dynamics passes) carves its scratch from the kernel's dynamic shared arena, `extern __shared__`, and the header states each function's requirement as `<ALGO>_DYNAMIC_SHARED_MEM_BYTES<T>()`. A launch that omits the third launch parameter, or sizes it for a smaller function, hands the device code an arena that ends before its scratch does; the fault lands on the first write past the end, far from the call that sized the launch.
+
+Fix: a kernel that calls several generated functions launches with the maximum of their arena sizes, after `cudaFuncSetAttribute(..., cudaFuncAttributeMaxDynamicSharedMemorySize, ...)` when that maximum exceeds the default. The collision runners take `MULTI_TARGET_POSITION_DYNAMIC_SHARED_MEM_BYTES<T>()` for the checkers; the consumer unit takes the larger of that and the pose's. The rule for a consumer author is in the integration guide: read the `_DYNAMIC_SHARED_MEM_BYTES` of every generated function the kernel calls, launch with the maximum.
+
+### 7.z60 A float boundary test needs offsets the arithmetic can represent, not the next float (2026-10-24, margin-aware checking)
+
+Symptom: the exact-boundary check of the margin rule, built from `nextafterf`, reported a hit at the margin plus one ulp as free.
+
+Diagnosis: the checker tests `d^2 - (r + margin + r_obstacle)^2 < 0`. With radii 0.25 and 0.25 and a margin of 0.5 the sum is exactly 1; one ulp of 0.5 is 2^-24, which survives the first addition (0.75 has ulp 2^-24) and is then rounded away by the second (1 has ulp 2^-23, and the tie rounds to even), so the sum is exactly 1 again and the verdict is free, correctly for the number the arithmetic saw.
+
+Fix: perturb by an amount every intermediate can represent, here 2^-21, four ulps of a metre, so the sum lands on a representable value above or below the threshold. The generated-code gate does not rely on such cases: it compares the warp and block verdicts with the distance surfaces outside a stated rounding band, and sweeps each configuration's own clearance from 1e-4 below to 1e-4 above, which is where a user's margin lives.
+
+### 7.z61 A plant trigger list has to name the algorithm the plant actually consumes (2026-10-24, release receipt at 3afb7b3)
+
+Symptom: the first 0.6.0 release receipt failed all 36 cells of `test_cuda_momentum_contract` with an nvcc error, `grid_plant` is not a namespace, while the CPU lane, the byte gate and the plant emission tests were green.
+
+Diagnosis: the emission rule from ask E1 emits the `grid_plant` block when the resolved algorithm set carries a plant algorithm, and the list named `ccrba` but not `dccrba`. The momentum cost is the plant's full-state cost and is built on `dccrba`, so the contract runner, which generates with `algorithm_list=["dccrba"]`, received a header without the block. The CPU lane cannot see this: it checks which headers carry the block, not whether a runner that needs the block compiles, and the runners that do compile against `grid_plant` all use profiles that trigger it.
+
+Fix: `dccrba` joins `PLANT_TRIGGER_ALGORITHMS`, with the docs, the changelog and the emission test following. The lesson for any opt-out rule: enumerate the consumers of the thing being dropped (here `grep grid_plant:: test/**/*.cu` and the sibling tests' codegen calls) and run one compile of each before the receipt, because a receipt-only discovery costs a full re-run when the fix lands in a fingerprinted path.
+
+### 7.z62 Every runner probes the device architecture; a fixed default only works on the box it was written on (2026-10-24, Orin sm_87 receipt at v0.5.4)
+
+Symptom: the last shard of the Orin receipt failed both cells of `test_cuda_mjx_tier_invariance` with `no kernel image is available for execution on the device`, after the other thirty-six shards passed.
+
+Diagnosis: the test read `GRID_CUDA_ARCH` with a default of 120 and passed `-arch sm_120` to nvcc, while the sixty-one other compile sites go through `detect_cuda_arch`, which probes the first GPU and lets the variable override it. The test dates from July and had only ever run on the 5090; the sm_87 table row had no earlier receipt to catch it.
+
+Fix: the test probes like the others. For the v0.5.4 receipt, whose tree cannot change, the shard is resumed with `GRID_CUDA_ARCH=87` in the environment, which is the override the test documents and gives the harness sites the same answer as the probe. Audit before any new architecture row: `grep -n '"-arch"' test/cuda_equivalents/test_*.py test/python_wrappers/test_*.py | grep -v 'sm_{arch}\|cuda_arch()'` must come back empty.

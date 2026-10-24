@@ -173,4 +173,4 @@ Algorithm catalog
 - Contact-frame wrench mapping (``f_ext_contact``): maps a contact-frame wrench to the joint-local ``f_ext`` layout, with the ``∂/∂f_c`` and ``∂/∂q`` derivatives
 - Runtime multi-target positions (``multi_target_position`` / ``multi_target_position_gradient``): batched runtime-target position queries and their gradients
 - The integrator Hessian (``integrator_hessian``): the second-order sensitivity of the discrete integrator step
-- The collision family: two-tier ``config_free`` collision checking over spherized collision geometry
+- The collision family: two-tier ``config_free`` collision checking over spherized collision geometry (a clearance margin and a self-collision toggle on every checker since 0.6.0), the signed clearance primitives and costs, and the owning device environment built from plain obstacle arrays

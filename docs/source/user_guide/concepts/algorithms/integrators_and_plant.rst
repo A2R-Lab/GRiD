@@ -11,7 +11,15 @@ constraints of the problem, all batched over the knot points. GRiD generates
 these alongside the dynamics so that a whole shooting or collocation
 iteration can stay on the GPU. The integrator family lives in the ``grid``
 namespace; the costs and barriers are emitted as a sibling ``grid_plant``
-namespace and mirrored on the Python handles.
+namespace and mirrored on the Python handles. The block is emitted for the
+default ``all`` profile, for any request that carries a plant algorithm (the
+integrators, ``fdsva_so``, the end-effector pose derivatives, ``com``,
+``ccrba``, ``dccrba``), baked cost or contact frames, or a multi-target batch,
+and whenever
+``emit_plant=True`` (``--plant`` on the command line) is passed; a header
+generated for kinematics alone carries no plant block, so a kinematics consumer
+does not compile the barrier families, the activations and the menu presets it
+never instantiates. The Python bindings always carry the block.
 
 Signature
 ---------

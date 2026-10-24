@@ -55,6 +55,30 @@ Two device entry points share the same baked sphere batch (``NUM_COLLISION_SPHER
   ``T = double``. The two surfaces are gated against each other on random configurations and
   environments (``test/cuda_equivalents/test_cuda_collision_warp.py``).
 
+Both checkers take two trailing optional arguments. ``margin`` (metres, default 0) makes the
+verdict a hit as soon as any raw clearance is below the margin: robot spheres are tested at
+``r + margin`` against the environment and the margin is added to one side of every self pair, so
+exact contact at the margin is free and the default reproduces the zero-margin rule exactly.
+``collision_distance`` and the cost derivatives are untouched by it; they keep returning the
+geometric signed clearance, and ``collision_cost`` applies its own margin. ``check_self`` (default
+``true``) set to ``false`` skips the self-pair ranges so the verdict reflects the environment
+alone; ``collision_distance`` is environment-only already. On a two-tier model the margin inflates
+both tiers, which keeps the broad-to-fine covering argument intact. The gate runs the warp and
+block paths against the distance surfaces at 0, 5 mm and 2 cm, with and without the self pairs,
+and sweeps each configuration's own minimum clearance from just below to just above the threshold.
+
+The obstacle set itself comes from plain arrays. ``grid_collision::make_host_environment``
+takes one row per obstacle (spheres as ``x y z r``, capsules as the two endpoints and a
+radius, cuboids as centre, unit quaternion ``w x y z`` and full dimensions, planes as a
+normal and offset), validates every row and returns a ``HostEnvironment`` whose ``view()``
+feeds the host instantiations of the primitives. ``DeviceEnvironment`` copies those lists to
+the current device, records it, hands out the ``Environment`` kernels take by value, frees on
+destruction and can be moved but not copied; ``make_device_environment`` does both in one
+call. The gate compares the owned view with a hand upload of the same lists (identical
+verdicts and clearances), the host primitives with the device ones, and the free device
+memory before construction and after destruction
+(``test/cuda_equivalents/test_cuda_collision_environment.py``).
+
 Geometry coverage and correctness
 ---------------------------------
 
@@ -108,9 +132,33 @@ and the uncovered fraction of 2,000 seeded mesh-surface samples. Bulge uses
 400 samples per sphere. These are reproducible diagnostics, not a proof
 of continuous mesh coverage or a certified bulge bound. Primitive meshes
 used for this report are tessellated. Inspect the report alongside the model.
+``--geometry visual`` measures against the ``<visual>`` shapes instead of the
+collision geometry, for comparison with fidelity tables published against
+visual meshes (on some robots the collision hulls sit well outside the visible
+links); the header line names the geometry source, and a visual mesh that does
+not resolve to a local file is named and its link skipped. Generation always
+reads the collision elements.
+
+A sphere model built on another URDF of the same robot (foam's Panda model
+places the finger joints differently from the kinematic URDF most consumers
+use) does not pass the frame check. ``--rebind-to`` re-attaches it instead of
+loosening the check::
+
+   python -m grid_codegen.spherize spheres.urdf --rebind-to kinematic.urdf --out rebound.urdf --report
+
+Each sphere keeps its offset in its parent link's frame and is attached to the
+target's link of the same name, so its placement follows the target's
+kinematics (the source's world placements are not preserved). The result is
+validated strictly against the target and opens with a provenance comment: the
+source and target digests, the fidelity against the target's collision geometry
+when its meshes resolve, and the content hash of the body that follows. A link
+that carries spheres in the source but is absent from the target is an error.
 
 ``--spherized-urdf`` rejects missing collision links, non-sphere geometry,
-invalid spheres, and mismatched joint frames. It cannot prove that an
+invalid spheres, and mismatched joint frames. The one tolerance is the base
+chain: a link with no movable ancestor may be absent from the sphere model or
+carry no collision element, with a warning naming it, because spheres on such
+a link never move and the generator drops them at bake time. It cannot prove that an
 arbitrary supplied sphere model covers its source mesh. The sole named
 lookup is ``foam``; it requires an optional local
 ``external/foam/assets/panda/smaller_panda_spherized.urdf``. GRiD does not

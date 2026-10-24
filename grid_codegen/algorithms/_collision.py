@@ -20,6 +20,8 @@ the single source of truth.
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import warnings
+
 import numpy as np
 
 
@@ -54,9 +56,42 @@ def resolve_spherized_urdf(value, source_urdf):
     return path
 
 
+# Shared wording for the margin and self-toggle parameters of every config_free (G7/G10, HJCD asks
+# 2026-10-13, shipped 0.6.0). The margin never touches collision_distance, normals or the cost
+# gradients: those keep the geometric signed clearance, and collision_cost applies its own margin.
+MARGIN_PARAM_DOC = "margin is the clearance below which a sphere counts as a hit (metres, default 0): robot radii are tested at r + margin"
+CHECK_SELF_PARAM_DOC = "check_self = false skips the baked self-pair ranges (environment only; default true)"
+MARGIN_NOTE = ("A hit iff any raw clearance is below T margin (exact contact at the margin is free); verdict-identical to the "
+               "zero-margin rule at margin 0; collision_distance and the cost derivatives are untouched.")
+
+
+def base_chain_links(urdf_root):
+    """Links with no movable ancestor: every root link (the child of no joint) and whatever hangs
+    from a root through fixed joints only. Spheres on these links never move, and the generator
+    drops them at bake time (sphere_anchor_frames returns the SKIP sentinel for them)."""
+    joints = urdf_root.findall('joint')
+    children = {j.find('child').get('link') for j in joints}
+    base = {l.get('name') for l in urdf_root.findall('link')} - children
+    grew = True
+    while grew:
+        grew = False
+        for j in joints:
+            if j.get('type') == 'fixed' and j.find('parent').get('link') in base \
+                    and j.find('child').get('link') not in base:
+                base.add(j.find('child').get('link'))
+                grew = True
+    return base
+
+
 def validate_sphere_model(source, spheres):
-    """Reject omitted links, non-spheres and mismatched kinematic frames."""
+    """Reject omitted links, non-spheres and mismatched kinematic frames.
+
+    A link with no movable ancestor (the base chain) may be left out of the spherized file or
+    carry no collision element; the validator warns and accepts, because the generator drops
+    base spheres at bake time anyway (V2, HJCD-IK 2026-10-13). Every other link keeps the strict
+    rule: present, same kinematic frame, spheres only, not empty when the source has geometry."""
     a, b = ET.parse(source).getroot(), ET.parse(spheres).getroot()
+    base = base_chain_links(a)
     def joints(root):
         def vector(j, tag, attr, default):
             e = j.find(tag)
@@ -66,11 +101,18 @@ def validate_sphere_model(source, spheres):
                 vector(j, 'origin', 'rpy', '0 0 0'), vector(j, 'axis', 'xyz', '1 0 0'),
                 tuple(sorted(j.find('mimic').attrib.items())) if j.find('mimic') is not None else ())
                 for j in root.findall('joint')}
-    if joints(a) != joints(b):
+    ja, jb = joints(a), joints(b)
+    # a fixed joint inside the base chain may be absent with its link; every joint present must match
+    tolerated = {n for n, v in ja.items() if v[0] == 'fixed' and v[2] in base}
+    if set(jb) - set(ja) or any(jb.get(n, ja[n] if n in tolerated else None) != ja[n] for n in ja):
         raise ValueError('Spherized URDF kinematic frames do not match the source URDF')
     names = {l.get('name') for l in a.findall('link')}
-    if names != {l.get('name') for l in b.findall('link')}:
+    b_names = {l.get('name') for l in b.findall('link')}
+    if (b_names - names) or (names - b_names) - base:
         raise ValueError('Spherized URDF link set does not match source URDF')
+    for name in sorted((names - b_names) & base):
+        warnings.warn(f"Spherized URDF leaves out {name}; it has no movable ancestor and its spheres "
+                      "would be dropped at bake time", UserWarning, stacklevel=2)
     for link in b.findall('link'):
         for col in link.findall('collision'):
             geom = col.find('geometry')
@@ -78,11 +120,83 @@ def validate_sphere_model(source, spheres):
                 raise ValueError('Spherized URDF must contain sphere-only collision geometry')
     parsed = parse_spherized_urdf(spheres)
     for link in a.findall('link'):
-        if link.findall('collision') and not parsed.get(link.get('name')):
-            raise ValueError(f"Spherized URDF omits collision geometry for {link.get('name')}")
+        name = link.get('name')
+        if link.findall('collision') and not parsed.get(name) and name in b_names:
+            if name in base:
+                warnings.warn(f"Spherized URDF carries no spheres for {name}; it has no movable ancestor "
+                              "and its spheres would be dropped at bake time", UserWarning, stacklevel=2)
+            else:
+                raise ValueError(f"Spherized URDF omits collision geometry for {name}")
     for rows in parsed.values():
         if any(not np.isfinite(row).all() or row[3] <= 0 for row in rows):
             raise ValueError('Spherized URDF contains invalid spheres')
+
+
+def rebind_sphere_model(spheres, target, out_path, fidelity=True):
+    """Re-attach a sphere model to another URDF of the same robot (V1, HJCD-IK 2026-10-13).
+
+    Each sphere keeps its offset in its parent link's frame and is attached to the target
+    URDF's link of the same name, so its world placement follows the target's kinematics;
+    the source model's world placements are not preserved. The result replaces the target's
+    `<collision>` elements, is validated strictly against the target, and carries a provenance
+    comment: the source and target digests, a fidelity line against the target's collision
+    geometry (when its meshes resolve) and the content hash of the body that follows it.
+    A link that carries spheres in the source but does not exist in the target is an error.
+    Returns the provenance as a dict."""
+    import hashlib
+    spheres, target, out_path = Path(spheres), Path(target), Path(out_path)
+    if out_path.resolve() in (spheres.resolve(), target.resolve()):
+        raise ValueError('rebind: --out must be a new file')
+    model = parse_spherized_urdf(spheres)
+    tree = ET.parse(target)
+    root = tree.getroot()
+    links = {l.get('name'): l for l in root.findall('link')}
+    missing = sorted(set(model) - set(links))
+    if missing:
+        raise ValueError(f"rebind: the sphere model carries spheres for links the target URDF does not have: {missing}")
+    total = 0
+    for name, link in links.items():
+        for col in link.findall('collision'):
+            link.remove(col)
+        for (x, y, z, r) in model.get(name, []):
+            col = ET.SubElement(link, 'collision')
+            o = ET.SubElement(col, 'origin')
+            o.set('xyz', '{:.9g} {:.9g} {:.9g}'.format(x, y, z))
+            o.set('rpy', '0 0 0')
+            g = ET.SubElement(col, 'geometry')
+            sp = ET.SubElement(g, 'sphere')
+            sp.set('radius', '{:.9g}'.format(r))
+            total += 1
+    body = ET.tostring(root, encoding='unicode')
+    out_path.write_text(body)
+    validate_sphere_model(target, out_path)
+    provenance = {
+        'source': spheres.name, 'source_sha256': hashlib.sha256(spheres.read_bytes()).hexdigest(),
+        'target': target.name, 'target_sha256': hashlib.sha256(target.read_bytes()).hexdigest(),
+        'spheres': total, 'links': sum(1 for n in links if model.get(n)),
+        'content_sha256': hashlib.sha256(body.encode()).hexdigest(),
+    }
+    line = 'fidelity: not measured'
+    if fidelity:
+        try:
+            from ..spherize import fidelity_report
+            rows = [r for r in fidelity_report(target, out_path) if 'unresolved' not in r]
+            if rows:
+                provenance['bulge_max_m'] = max(r['bulge_max_m'] for r in rows)
+                provenance['uncovered_surface_fraction_max'] = max(r['uncovered_surface_fraction'] for r in rows)
+                line = ('fidelity against the target collision geometry: bulge_max {:.4f} m, '
+                        'uncovered_surface_max {:.2%} over {} links'.format(
+                            provenance['bulge_max_m'], provenance['uncovered_surface_fraction_max'], len(rows)))
+            else:
+                line = 'fidelity: no target collision geometry resolved'
+        except Exception as exc:   # the report needs trimesh and resolvable meshes; the rebind does not
+            line = f'fidelity: not measured ({type(exc).__name__}: {exc})'
+    provenance['fidelity'] = line
+    header = ('<!-- grid-spherize rebind: spheres of {source} (sha256 {source_sha256}) re-attached by link name to '
+              '{target} (sha256 {target_sha256}); {spheres} spheres on {links} links; {fidelity}; '
+              'content sha256 {content_sha256} -->\n').format(**provenance)
+    out_path.write_text(header + body)
+    return provenance
 
 
 def parse_spherized_urdf(path):
@@ -746,9 +860,11 @@ def gen_collision_namespace(self, tiers):
             "env is the runtime obstacle set (grid_collision::Environment<T>)",
             "s_sphere_pos is caller scratch of size 3*NUM_COLLISION_SPHERES (smem for small N, global for many)",
             "s_sphere_r is caller scratch of size NUM_COLLISION_SPHERES (filled here from the baked radii)",
-            "d_workspace is the multi_target FK scratch at TIER_LITE+ (nullptr at TIER_SHARED)"]
+            "d_workspace is the multi_target FK scratch at TIER_LITE+ (nullptr at TIER_SHARED)",
+            MARGIN_PARAM_DOC, CHECK_SELF_PARAM_DOC]
         func_notes = [
             "Returns true iff the current configuration q is COLLISION-FREE (self + environment).",
+            MARGIN_NOTE,
             "Sphere world positions via the W1b batched extractor; SDF self/env checks via the static header.",
             "Block-parallel (G4, 2026-10-04): thread-per-self-range + thread-per-sphere env checks OR-ed into a",
             "shared flag; every thread returns the same verdict; thread-count invariant; single block."]
@@ -756,21 +872,24 @@ def gen_collision_namespace(self, tiers):
         self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
         self.gen_add_code_line("__device__")
         self.gen_add_code_line("bool config_free(const T *s_q, const grid::robotModel<T> *d_robotModel, "
-                               "const Environment<T> &env, T *s_sphere_pos, T *s_sphere_r, T *d_workspace = nullptr) {", True)
+                               "const Environment<T> &env, T *s_sphere_pos, T *s_sphere_r, T *d_workspace = nullptr, "
+                               "T margin = static_cast<T>(0), bool check_self = true) {", True)
         self.gen_add_code_line("__shared__ int s_cc_hit;")
         self.gen_add_code_line("if (threadIdx.x == 0 && threadIdx.y == 0) s_cc_hit = 0;   // published by the extractor's barriers")
         self.gen_add_code_line("grid::multi_target_position_device<T, RESOURCE_TIER>(s_sphere_pos, s_q, d_robotModel, d_workspace);")
         self.gen_add_code_line("load_collision_radii<T>(s_sphere_r);")
         self.gen_add_sync()
+        self.gen_add_code_line("if (check_self) {", True)
         self.gen_add_parallel_loop("k", "NUM_COLLISION_SELF_CC_RANGES")
         self.gen_add_code_line("const int i = g_collision_self_cc_ranges[3*k], j0 = g_collision_self_cc_ranges[3*k+1], j1 = g_collision_self_cc_ranges[3*k+2];")
-        self.gen_add_code_line("const T ix = s_sphere_pos[3*i], iy = s_sphere_pos[3*i+1], iz = s_sphere_pos[3*i+2], ir = s_sphere_r[i];")
+        self.gen_add_code_line("const T ix = s_sphere_pos[3*i], iy = s_sphere_pos[3*i+1], iz = s_sphere_pos[3*i+2], ir = s_sphere_r[i] + margin;")
         self.gen_add_code_line("for (int j = j0; j <= j1; ++j) {", True)
         self.gen_add_code_line("if (grid_cc_sphere_sphere<T>(ix, iy, iz, ir, s_sphere_pos[3*j], s_sphere_pos[3*j+1], s_sphere_pos[3*j+2], s_sphere_r[j]) < static_cast<T>(0)) { atomicExch(&s_cc_hit, 1); break; }")
         self.gen_add_end_control_flow()
         self.gen_add_end_control_flow()
+        self.gen_add_end_control_flow()
         self.gen_add_parallel_loop("i", "NUM_COLLISION_SPHERES")
-        self.gen_add_code_line("if (grid_cc_sphere_in_environment<T>(env, s_sphere_pos[3*i], s_sphere_pos[3*i+1], s_sphere_pos[3*i+2], s_sphere_r[i])) atomicExch(&s_cc_hit, 1);")
+        self.gen_add_code_line("if (grid_cc_sphere_in_environment<T>(env, s_sphere_pos[3*i], s_sphere_pos[3*i+1], s_sphere_pos[3*i+2], s_sphere_r[i] + margin)) atomicExch(&s_cc_hit, 1);")
         self.gen_add_end_control_flow()
         self.gen_add_sync()
         self.gen_add_code_line("const bool is_free = (s_cc_hit == 0);")
@@ -794,11 +913,15 @@ def gen_collision_namespace(self, tiers):
             "s_broad_r is caller scratch of size NUM_COLLISION_SPHERES" + bcap + " (filled here from broad baked radii)",
             "s_fine_pos is caller scratch of size 3*NUM_COLLISION_SPHERES (fine sphere positions)",
             "s_fine_r is caller scratch of size NUM_COLLISION_SPHERES (filled here from fine baked radii)",
-            "d_workspace is the multi_target FK scratch at TIER_LITE+ (nullptr at TIER_SHARED)"]
+            "d_workspace is the multi_target FK scratch at TIER_LITE+ (nullptr at TIER_SHARED)",
+            "dbg_fine_rechecked (optional) receives the count of fine spheres the broad mask kept",
+            MARGIN_PARAM_DOC, CHECK_SELF_PARAM_DOC]
         func_notes = [
             "Returns true iff the current configuration q is COLLISION-FREE (self + environment).",
+            MARGIN_NOTE,
             "Broad tier '" + broad["name"] + "' rejects clear configs; only possible collisions run the fine tier '" +
-            fine["name"] + "'. Verdict == fine-only (covering spheres make the broad reject conservative).",
+            fine["name"] + "'. Verdict == fine-only (covering spheres make the broad reject conservative; a margin",
+            "inflates broad and fine robot spheres alike, so the covering argument is unchanged).",
             "Block-parallel (G4, 2026-10-04): thread-per-range / thread-per-sphere for both tiers, the broad",
             "link hit-mask OR-reduced through shared memory (same mask semantics as grid_cc_config_free);",
             "every thread returns the same verdict; thread-count invariant; single block."]
@@ -808,7 +931,7 @@ def gen_collision_namespace(self, tiers):
         self.gen_add_code_line("bool config_free(const T *s_q, const grid::robotModel<T> *d_robotModel, "
                                "const Environment<T> &env, T *s_broad_pos, T *s_broad_r, "
                                "T *s_fine_pos, T *s_fine_r, T *d_workspace = nullptr, "
-                               "int *dbg_fine_rechecked = nullptr) {", True)
+                               "int *dbg_fine_rechecked = nullptr, T margin = static_cast<T>(0), bool check_self = true) {", True)
         self.gen_add_code_line("// Optional debug output is one block-shared destination, written by thread zero.")
         self.gen_add_code_line("__shared__ int s_cc_hit;")
         self.gen_add_code_line("__shared__ unsigned long long s_cc_mask;")
@@ -821,15 +944,17 @@ def gen_collision_namespace(self, tiers):
         self.gen_add_sync()
         self.gen_add_code_line("// broad tier in FULL (no early-out: the mask needs every hit), thread-per-range / thread-per-sphere")
         self.gen_add_code_line("unsigned long long my_mask = 0ull;")
+        self.gen_add_code_line("if (check_self) {", True)
         self.gen_add_parallel_loop("k", "NUM_COLLISION_SELF_CC_RANGES" + bcap)
         self.gen_add_code_line("const int i = g_collision_self_cc_ranges" + bsfx + "[3*k], j0 = g_collision_self_cc_ranges" + bsfx + "[3*k+1], j1 = g_collision_self_cc_ranges" + bsfx + "[3*k+2];")
-        self.gen_add_code_line("const T ix = s_broad_pos[3*i], iy = s_broad_pos[3*i+1], iz = s_broad_pos[3*i+2], ir = s_broad_r[i];")
+        self.gen_add_code_line("const T ix = s_broad_pos[3*i], iy = s_broad_pos[3*i+1], iz = s_broad_pos[3*i+2], ir = s_broad_r[i] + margin;")
         self.gen_add_code_line("for (int j = j0; j <= j1; ++j) {", True)
         self.gen_add_code_line("if (grid_cc_sphere_sphere<T>(ix, iy, iz, ir, s_broad_pos[3*j], s_broad_pos[3*j+1], s_broad_pos[3*j+2], s_broad_r[j]) < static_cast<T>(0)) my_mask |= (1ull << g_collision_sphere_link" + bsfx + "[i]) | (1ull << g_collision_sphere_link" + bsfx + "[j]);")
         self.gen_add_end_control_flow()
         self.gen_add_end_control_flow()
+        self.gen_add_end_control_flow()
         self.gen_add_parallel_loop("i", "NUM_COLLISION_SPHERES" + bcap)
-        self.gen_add_code_line("if (grid_cc_sphere_in_environment<T>(env, s_broad_pos[3*i], s_broad_pos[3*i+1], s_broad_pos[3*i+2], s_broad_r[i])) my_mask |= 1ull << g_collision_sphere_link" + bsfx + "[i];")
+        self.gen_add_code_line("if (grid_cc_sphere_in_environment<T>(env, s_broad_pos[3*i], s_broad_pos[3*i+1], s_broad_pos[3*i+2], s_broad_r[i] + margin)) my_mask |= 1ull << g_collision_sphere_link" + bsfx + "[i];")
         self.gen_add_end_control_flow()
         self.gen_add_code_line("if (my_mask) atomicOr(&s_cc_mask, my_mask);")
         self.gen_add_sync()
@@ -843,17 +968,19 @@ def gen_collision_namespace(self, tiers):
         self.gen_add_sync()   # publish the single-writer optional debug output before return
         self.gen_add_code_line("if (hit_mask == 0ull) return true;                 // uniform: no link flagged -> definitely free")
         self.gen_add_code_line("// fine tier, NARROWED to flagged links (same rule as grid_cc_config_free)")
+        self.gen_add_code_line("if (check_self) {", True)
         self.gen_add_parallel_loop("k", "NUM_COLLISION_SELF_CC_RANGES")
         self.gen_add_code_line("const int i = g_collision_self_cc_ranges[3*k], j0 = g_collision_self_cc_ranges[3*k+1], j1 = g_collision_self_cc_ranges[3*k+2];")
         self.gen_add_code_line("if (((hit_mask >> g_collision_sphere_link[i]) & 1ull) == 0ull) continue;")
-        self.gen_add_code_line("const T ix = s_fine_pos[3*i], iy = s_fine_pos[3*i+1], iz = s_fine_pos[3*i+2], ir = s_fine_r[i];")
+        self.gen_add_code_line("const T ix = s_fine_pos[3*i], iy = s_fine_pos[3*i+1], iz = s_fine_pos[3*i+2], ir = s_fine_r[i] + margin;")
         self.gen_add_code_line("for (int j = j0; j <= j1; ++j) {", True)
         self.gen_add_code_line("if (grid_cc_sphere_sphere<T>(ix, iy, iz, ir, s_fine_pos[3*j], s_fine_pos[3*j+1], s_fine_pos[3*j+2], s_fine_r[j]) < static_cast<T>(0)) { atomicExch(&s_cc_hit, 1); break; }")
         self.gen_add_end_control_flow()
         self.gen_add_end_control_flow()
+        self.gen_add_end_control_flow()
         self.gen_add_parallel_loop("i", "NUM_COLLISION_SPHERES")
         self.gen_add_code_line("if (((hit_mask >> g_collision_sphere_link[i]) & 1ull) == 0ull) continue;")
-        self.gen_add_code_line("if (grid_cc_sphere_in_environment<T>(env, s_fine_pos[3*i], s_fine_pos[3*i+1], s_fine_pos[3*i+2], s_fine_r[i])) atomicExch(&s_cc_hit, 1);")
+        self.gen_add_code_line("if (grid_cc_sphere_in_environment<T>(env, s_fine_pos[3*i], s_fine_pos[3*i+1], s_fine_pos[3*i+2], s_fine_r[i] + margin)) atomicExch(&s_cc_hit, 1);")
         self.gen_add_end_control_flow()
         self.gen_add_sync()
         self.gen_add_code_line("const bool is_free = (s_cc_hit == 0);")
@@ -1123,22 +1250,33 @@ def _gen_collision_warp_namespace(self, tiers):
         self.gen_add_end_control_flow()
 
     # --- config_free ---
+    self.gen_add_func_doc("config_free: warp-uniform collision-free verdict from caller-held joint world transforms",
+                          [MARGIN_NOTE.replace("T margin", "float margin"),
+                           "check_self = false skips the baked self-pair ranges (environment only); identical verdict at true."],
+                          ["s_Xworld is the column-major 4x4 world transform per movable joint",
+                           "env is the runtime obstacle set (float)",
+                           "w_scratch is the per-warp float scratch of W_SCRATCH_FLOATS",
+                           "margin is the clearance below which a sphere counts as a hit (metres, default 0)",
+                           "check_self = false skips the self-pair ranges (default true)"], None)
     self.gen_add_code_line("template <typename T>")
-    self.gen_add_code_line("__device__ bool config_free(const T *s_Xworld, const Environment<float> &env, float *w_scratch) {", True)
+    self.gen_add_code_line("__device__ bool config_free(const T *s_Xworld, const Environment<float> &env, float *w_scratch, "
+                           "float margin = 0.0f, bool check_self = true) {", True)
     self.gen_add_code_line("const int lane = threadIdx.x & 31;")
     self.gen_add_code_line("float *w_pos = w_scratch;")
     self.gen_add_code_line("bool hit = false;")
     if broad is None:
         emit_place("", "", "w_pos")
         self.gen_add_code_line("for (int s = lane; s < NUM_SPHERES; s += 32) {", True)
-        self.gen_add_code_line("hit |= grid_cc_sphere_in_environment<float>(env, w_pos[3*s], w_pos[3*s+1], w_pos[3*s+2], sphere_radius[s]);")
+        self.gen_add_code_line("hit |= grid_cc_sphere_in_environment<float>(env, w_pos[3*s], w_pos[3*s+1], w_pos[3*s+2], sphere_radius[s] + margin);")
         self.gen_add_end_control_flow()
         self.gen_add_code_line("__syncwarp(FULL_MASK);")
+        self.gen_add_code_line("if (check_self) {", True)
         self.gen_add_code_line("for (int k = lane; k < NUM_COLLISION_SELF_CC_RANGES; k += 32) {", True)
         self.gen_add_code_line("const int i = g_collision_self_cc_ranges[3*k], j0 = g_collision_self_cc_ranges[3*k+1], j1 = g_collision_self_cc_ranges[3*k+2];")
-        self.gen_add_code_line("const float ix = w_pos[3*i], iy = w_pos[3*i+1], iz = w_pos[3*i+2], ir = sphere_radius[i];")
+        self.gen_add_code_line("const float ix = w_pos[3*i], iy = w_pos[3*i+1], iz = w_pos[3*i+2], ir = sphere_radius[i] + margin;")
         self.gen_add_code_line("for (int j = j0; j <= j1 && !hit; ++j) {", True)
         self.gen_add_code_line("hit |= grid_cc_sphere_sphere<float>(ix, iy, iz, ir, w_pos[3*j], w_pos[3*j+1], w_pos[3*j+2], sphere_radius[j]) < 0.0f;")
+        self.gen_add_end_control_flow()
         self.gen_add_end_control_flow()
         self.gen_add_end_control_flow()
     else:
@@ -1151,14 +1289,16 @@ def _gen_collision_warp_namespace(self, tiers):
         emit_place(bsfx, bcap, "w_broad")
         self.gen_add_code_line("unsigned long long flagged = 0ull;")
         self.gen_add_code_line("for (int s = lane; s < NUM_SPHERES" + bcap + "; s += 32) {", True)
-        self.gen_add_code_line("if (grid_cc_sphere_in_environment<float>(env, w_broad[3*s], w_broad[3*s+1], w_broad[3*s+2], sphere_radius" + bsfx + "[s])) flagged |= 1ull << sphere_anchor" + bsfx + "[s];")
+        self.gen_add_code_line("if (grid_cc_sphere_in_environment<float>(env, w_broad[3*s], w_broad[3*s+1], w_broad[3*s+2], sphere_radius" + bsfx + "[s] + margin)) flagged |= 1ull << sphere_anchor" + bsfx + "[s];")
         self.gen_add_end_control_flow()
         self.gen_add_code_line("__syncwarp(FULL_MASK);")
+        self.gen_add_code_line("if (check_self) {", True)
         self.gen_add_code_line("for (int k = lane; k < NUM_COLLISION_SELF_CC_RANGES" + bcap + "; k += 32) {", True)
         self.gen_add_code_line("const int i = g_collision_self_cc_ranges" + bsfx + "[3*k], j0 = g_collision_self_cc_ranges" + bsfx + "[3*k+1], j1 = g_collision_self_cc_ranges" + bsfx + "[3*k+2];")
-        self.gen_add_code_line("const float ix = w_broad[3*i], iy = w_broad[3*i+1], iz = w_broad[3*i+2], ir = sphere_radius" + bsfx + "[i];")
+        self.gen_add_code_line("const float ix = w_broad[3*i], iy = w_broad[3*i+1], iz = w_broad[3*i+2], ir = sphere_radius" + bsfx + "[i] + margin;")
         self.gen_add_code_line("for (int j = j0; j <= j1; ++j) {", True)
         self.gen_add_code_line("if (grid_cc_sphere_sphere<float>(ix, iy, iz, ir, w_broad[3*j], w_broad[3*j+1], w_broad[3*j+2], sphere_radius" + bsfx + "[j]) < 0.0f) flagged |= (1ull << sphere_anchor" + bsfx + "[i]) | (1ull << sphere_anchor" + bsfx + "[j]);")
+        self.gen_add_end_control_flow()
         self.gen_add_end_control_flow()
         self.gen_add_end_control_flow()
         self.gen_add_code_line("// warp-OR the per-lane masks (butterfly; every lane ends with the full mask)")
@@ -1175,15 +1315,17 @@ def _gen_collision_warp_namespace(self, tiers):
         self.gen_add_code_line("const float py = static_cast<float>(X[1]*ox + X[5]*oy + X[9]*oz  + X[13]);")
         self.gen_add_code_line("const float pz = static_cast<float>(X[2]*ox + X[6]*oy + X[10]*oz + X[14]);")
         self.gen_add_code_line("w_pos[3*s] = px; w_pos[3*s+1] = py; w_pos[3*s+2] = pz;")
-        self.gen_add_code_line("if ((flagged >> a) & 1ull) hit |= grid_cc_sphere_in_environment<float>(env, px, py, pz, sphere_radius[s]);")
+        self.gen_add_code_line("if ((flagged >> a) & 1ull) hit |= grid_cc_sphere_in_environment<float>(env, px, py, pz, sphere_radius[s] + margin);")
         self.gen_add_end_control_flow()
         self.gen_add_code_line("__syncwarp(FULL_MASK);")
+        self.gen_add_code_line("if (check_self) {", True)
         self.gen_add_code_line("for (int k = lane; k < NUM_COLLISION_SELF_CC_RANGES; k += 32) {", True)
         self.gen_add_code_line("const int i = g_collision_self_cc_ranges[3*k], j0 = g_collision_self_cc_ranges[3*k+1], j1 = g_collision_self_cc_ranges[3*k+2];")
         self.gen_add_code_line("if (!((flagged >> sphere_anchor[i]) & 1ull)) continue;")
-        self.gen_add_code_line("const float ix = w_pos[3*i], iy = w_pos[3*i+1], iz = w_pos[3*i+2], ir = sphere_radius[i];")
+        self.gen_add_code_line("const float ix = w_pos[3*i], iy = w_pos[3*i+1], iz = w_pos[3*i+2], ir = sphere_radius[i] + margin;")
         self.gen_add_code_line("for (int j = j0; j <= j1 && !hit; ++j) {", True)
         self.gen_add_code_line("hit |= grid_cc_sphere_sphere<float>(ix, iy, iz, ir, w_pos[3*j], w_pos[3*j+1], w_pos[3*j+2], sphere_radius[j]) < 0.0f;")
+        self.gen_add_end_control_flow()
         self.gen_add_end_control_flow()
         self.gen_add_end_control_flow()
     self.gen_add_code_line("const bool any_hit = __any_sync(FULL_MASK, hit);")
@@ -1305,22 +1447,25 @@ def _gen_collision_namespace_capsule(self, tiers):
             "env is the runtime obstacle set (grid_collision::Environment<T>)",
             "s_seg_pos is caller scratch of size 6*NUM_COLLISION_ROWS (both endpoints per row)",
             "s_row_r is caller scratch of size NUM_COLLISION_ROWS (filled here from the baked radii)",
-            "d_workspace is the multi_target FK scratch at TIER_LITE+ (nullptr at TIER_SHARED)"]
+            "d_workspace is the multi_target FK scratch at TIER_LITE+ (nullptr at TIER_SHARED)",
+            MARGIN_PARAM_DOC.replace("a sphere", "a row"), CHECK_SELF_PARAM_DOC]
         func_notes = [
             "Returns true iff the current configuration q is COLLISION-FREE (self + environment).",
+            MARGIN_NOTE,
             "Row endpoint world positions via the W1b batched extractor; capsule SDF checks via the static header.",
             "Every thread computes the same verdict; the self/env range loops are serial (parallelize = W3 perf TODO)."]
         self.gen_add_func_doc("Collision-free test for configuration q (self + environment, capsule rows)", func_notes, func_params, None)
         self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
         self.gen_add_code_line("__device__")
         self.gen_add_code_line("bool config_free(const T *s_q, const grid::robotModel<T> *d_robotModel, "
-                               "const Environment<T> &env, T *s_seg_pos, T *s_row_r, T *d_workspace = nullptr) {", True)
+                               "const Environment<T> &env, T *s_seg_pos, T *s_row_r, T *d_workspace = nullptr, "
+                               "T margin = static_cast<T>(0), bool check_self = true) {", True)
         self.gen_add_code_line("grid::multi_target_position_device<T, RESOURCE_TIER>(s_seg_pos, s_q, d_robotModel, d_workspace);")
         self.gen_add_code_line("load_collision_row_radii<T>(s_row_r);")
         self.gen_add_sync()
-        self.gen_add_code_line("if (grid_cc_self_collision_capsules<T>(s_seg_pos, s_row_r, g_collision_self_cc_ranges, NUM_COLLISION_SELF_CC_RANGES)) return false;")
+        self.gen_add_code_line("if (check_self && grid_cc_self_collision_capsules<T>(s_seg_pos, s_row_r, g_collision_self_cc_ranges, NUM_COLLISION_SELF_CC_RANGES, margin)) return false;")
         self.gen_add_code_line("for (int i = 0; i < NUM_COLLISION_ROWS; ++i) {", True)
-        self.gen_add_code_line("if (grid_cc_capsule_in_environment<T>(env, grid_cc_row_capsule<T>(s_seg_pos, s_row_r, i))) return false;")
+        self.gen_add_code_line("if (grid_cc_capsule_in_environment<T>(env, grid_cc_row_capsule<T>(s_seg_pos, s_row_r, i, margin))) return false;")
         self.gen_add_end_control_flow()
         self.gen_add_code_line("return true;")
         self.gen_add_end_function()
@@ -1335,9 +1480,12 @@ def _gen_collision_namespace_capsule(self, tiers):
             "s_broad_r is caller scratch of size NUM_COLLISION_SPHERES" + bcap + " (filled here from broad baked radii)",
             "s_seg_pos is caller scratch of size 6*NUM_COLLISION_ROWS (both endpoints per fine row)",
             "s_row_r is caller scratch of size NUM_COLLISION_ROWS (filled here from fine baked radii)",
-            "d_workspace is the multi_target FK scratch at TIER_LITE+ (nullptr at TIER_SHARED)"]
+            "d_workspace is the multi_target FK scratch at TIER_LITE+ (nullptr at TIER_SHARED)",
+            "dbg_fine_rechecked (optional) receives the count of fine rows the broad mask kept",
+            MARGIN_PARAM_DOC.replace("a sphere", "a row"), CHECK_SELF_PARAM_DOC]
         func_notes = [
             "Returns true iff the current configuration q is COLLISION-FREE (self + environment).",
+            MARGIN_NOTE,
             "Broad tier '" + broad["name"] + "' (covering spheres derived from the rows) rejects clear configs; "
             "only possible collisions run the fine capsule rows. Verdict == fine-only.",
             "Every thread computes the same verdict; the self/env range loops are serial (parallelize = W3 perf TODO)."]
@@ -1347,7 +1495,7 @@ def _gen_collision_namespace_capsule(self, tiers):
         self.gen_add_code_line("bool config_free(const T *s_q, const grid::robotModel<T> *d_robotModel, "
                                "const Environment<T> &env, T *s_broad_pos, T *s_broad_r, "
                                "T *s_seg_pos, T *s_row_r, T *d_workspace = nullptr, "
-                               "int *dbg_fine_rechecked = nullptr) {", True)
+                               "int *dbg_fine_rechecked = nullptr, T margin = static_cast<T>(0), bool check_self = true) {", True)
         self.gen_add_code_line("grid::multi_target_position" + bsfx + "_device<T, RESOURCE_TIER>(s_broad_pos, s_q, d_robotModel, d_workspace);")
         self.gen_add_code_line("load_collision_radii" + bsfx + "<T>(s_broad_r);")
         self.gen_add_sync()
@@ -1356,7 +1504,7 @@ def _gen_collision_namespace_capsule(self, tiers):
         self.gen_add_sync()
         self.gen_add_code_line("return grid_cc_config_free_capsule<T>(env,")
         self.gen_add_code_line("    s_broad_pos, s_broad_r, g_collision_self_cc_ranges" + bsfx + ", NUM_COLLISION_SELF_CC_RANGES" + bcap + ", NUM_COLLISION_SPHERES" + bcap + ", g_collision_sphere_link" + bsfx + ",")
-        self.gen_add_code_line("    s_seg_pos, s_row_r, g_collision_self_cc_ranges, NUM_COLLISION_SELF_CC_RANGES, NUM_COLLISION_ROWS, g_collision_row_link, dbg_fine_rechecked);")
+        self.gen_add_code_line("    s_seg_pos, s_row_r, g_collision_self_cc_ranges, NUM_COLLISION_SELF_CC_RANGES, NUM_COLLISION_ROWS, g_collision_row_link, dbg_fine_rechecked, margin, check_self);")
         self.gen_add_end_function()
 
     # ---- differentiable collision PRIMITIVES + cost, capsule rows ----

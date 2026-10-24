@@ -149,3 +149,168 @@ def test_missing_optional_preset_reports_explicit_path(monkeypatch):
         str(p).endswith('external/foam/assets/panda/smaller_panda_spherized.urdf') else is_file(p))
     with pytest.raises(ValueError, match='explicit path'):
         resolve_spherized_urdf('foam', 'unused-until-preset-resolves.urdf')
+
+
+def _three_link_source(tmp_path):
+    """base (fixed to mount) -> mount (revolute to tip) -> tip; base and mount have no movable
+    ancestor, tip does. Every link carries collision geometry in the source."""
+    source = tmp_path / 'source.urdf'
+    source.write_text(
+        '<robot name="r">'
+        '<link name="base"><collision><geometry><sphere radius=".03"/></geometry></collision></link>'
+        '<link name="mount"><collision><geometry><sphere radius=".02"/></geometry></collision></link>'
+        '<link name="tip"><collision><geometry><sphere radius=".02"/></geometry></collision></link>'
+        '<joint name="weld" type="fixed"><parent link="base"/><child link="mount"/><origin xyz="0 0 .1"/></joint>'
+        '<joint name="j1" type="revolute"><parent link="mount"/><child link="tip"/><origin xyz="0 0 .1"/>'
+        '<axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="1" velocity="1"/></joint>'
+        '</robot>')
+    return source
+
+
+def test_sphere_model_tolerates_base_chain_omission_with_a_warning(tmp_path):
+    """V2 (HJCD-IK): a link with no movable ancestor may be empty or absent; the validator warns
+    and names it. A movable link keeps the strict rule."""
+    import warnings
+    source = _three_link_source(tmp_path)
+    spheres = tmp_path / 'spheres.urdf'
+    spherize_urdf(source, 0.05, spheres)
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        validate_sphere_model(source, spheres)          # complete model: silent
+    tree = ET.parse(spheres)
+    root = tree.getroot()
+    mount = next(l for l in root.findall('link') if l.get('name') == 'mount')
+    for col in mount.findall('collision'):
+        mount.remove(col)                               # mount: present, no spheres
+    base = next(l for l in root.findall('link') if l.get('name') == 'base')
+    root.remove(base)                                   # base: absent, with its fixed joint
+    root.remove(next(j for j in root.findall('joint') if j.get('name') == 'weld'))
+    tree.write(spheres)
+    with pytest.warns(UserWarning) as record:
+        validate_sphere_model(source, spheres)
+    messages = ' '.join(str(w.message) for w in record)
+    assert 'leaves out base' in messages and 'no spheres for mount' in messages
+    tip = next(l for l in root.findall('link') if l.get('name') == 'tip')
+    for col in tip.findall('collision'):
+        tip.remove(col)                                 # tip has a movable ancestor: still an error
+    tree.write(spheres)
+    with pytest.raises(ValueError, match='omits collision geometry for tip'):
+        validate_sphere_model(source, spheres)
+
+
+def test_sphere_model_still_rejects_a_missing_movable_link(tmp_path):
+    source = _three_link_source(tmp_path)
+    spheres = tmp_path / 'spheres.urdf'
+    spherize_urdf(source, 0.05, spheres)
+    tree = ET.parse(spheres)
+    root = tree.getroot()
+    root.remove(next(l for l in root.findall('link') if l.get('name') == 'tip'))
+    root.remove(next(j for j in root.findall('joint') if j.get('name') == 'j1'))
+    tree.write(spheres)
+    with pytest.raises(ValueError, match='kinematic frames'):
+        validate_sphere_model(source, spheres)
+
+
+def test_base_chain_omission_flows_through_the_spec_builder(tmp_path):
+    """The tolerated omission reaches codegen unchanged: the spec builder skips base-chain
+    spheres anyway, so a model without its base link yields the same rows as a complete one."""
+    import warnings
+    from URDFParser import URDFParser
+    from grid_codegen.algorithms._collision import build_sphere_tiers
+    source = _three_link_source(tmp_path)
+    full = tmp_path / 'full.urdf'
+    spherize_urdf(source, 0.05, full)
+    robot = URDFParser().parse(str(source))
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        reference = build_sphere_tiers(robot, {'fine': resolve_spherized_urdf(str(full), source)})['fine']
+    trimmed = tmp_path / 'trimmed.urdf'
+    tree = ET.parse(full)
+    root = tree.getroot()
+    root.remove(next(l for l in root.findall('link') if l.get('name') == 'base'))
+    root.remove(next(j for j in root.findall('joint') if j.get('name') == 'weld'))
+    tree.write(trimmed)
+    with pytest.warns(UserWarning, match='leaves out base'):
+        path = resolve_spherized_urdf(str(trimmed), source)
+    tier = build_sphere_tiers(robot, {'fine': path})['fine']
+    assert tier['n'] == reference['n'] > 0
+    assert tier['anchor'] == reference['anchor'] and tier['offset'] == reference['offset']
+    assert tier['radius'] == reference['radius']
+
+
+def test_report_geometry_source_switch(tmp_path, monkeypatch, capsys):
+    """V3 (HJCD-IK): --geometry visual measures against the <visual> shapes. A link whose visual
+    is a 10 cm box around a 2 cm collision sphere reports far more uncovered surface under the
+    visual geometry than under the collision geometry; an unresolvable visual mesh is named and
+    skipped instead of aborting the report."""
+    from grid_codegen.spherize import main
+    source = tmp_path / 'source.urdf'
+    source.write_text(
+        '<robot name="r">'
+        '<link name="base"><collision><geometry><sphere radius=".02"/></geometry></collision>'
+        '<visual><geometry><box size=".1 .1 .1"/></geometry></visual></link>'
+        '<link name="tip"><collision><geometry><sphere radius=".02"/></geometry></collision>'
+        '<visual><geometry><mesh filename="package://nowhere/tip.obj"/></geometry></visual></link>'
+        '<joint name="j" type="revolute"><parent link="base"/><child link="tip"/><origin xyz="0 0 .1"/>'
+        '<axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="1" velocity="1"/></joint>'
+        '</robot>')
+    spheres = tmp_path / 'spheres.urdf'
+    spherize_urdf(source, 0.05, spheres)
+    monkeypatch.delenv('ROS_PACKAGE_PATH', raising=False)
+
+    def report(*extra):
+        monkeypatch.setattr('sys.argv', ['grid-spherize', str(source), '--report', str(spheres), *extra])
+        main()
+        return capsys.readouterr().out
+
+    collision = report()
+    visual = report('--geometry', 'visual')
+    assert 'against collision geometry' in collision and 'against visual geometry' in visual
+    uncovered = lambda out, link: float(next(l for l in out.splitlines() if l.startswith(link + ' ')).split()[-1])
+    assert uncovered(collision, 'base') == 0.0
+    assert uncovered(visual, 'base') > 50.0
+    assert 'tip visual mesh not resolved: package://nowhere/tip.obj' in visual
+    assert uncovered(collision, 'tip') == 0.0
+
+
+def test_rebind_reattaches_spheres_by_link_name(tmp_path, monkeypatch, capsys):
+    """V1 (HJCD-IK): a sphere model built on a URDF whose joint origins differ (the foam Panda
+    finger case) is re-attached to the kinematic URDF by link name; each sphere keeps its
+    offset in its link frame, the result validates strictly against the target, carries the
+    provenance comment, and a link the target lacks is an error."""
+    from grid_codegen.algorithms._collision import parse_spherized_urdf, rebind_sphere_model
+    from grid_codegen.spherize import main
+    kinematic = _three_link_source(tmp_path)
+    shifted = tmp_path / 'shifted.urdf'
+    shifted.write_text(kinematic.read_text().replace('<origin xyz="0 0 .1"/></joint><joint name="j1"',
+                                                     '<origin xyz="0 0 .165"/></joint><joint name="j1"'))
+    assert shifted.read_text() != kinematic.read_text()
+    spheres = tmp_path / 'spheres_on_shifted.urdf'
+    spherize_urdf(shifted, 0.05, spheres)
+    with pytest.raises(ValueError, match='kinematic frames'):
+        validate_sphere_model(kinematic, spheres)          # the raw model does not fit the kinematic URDF
+    out = tmp_path / 'rebound.urdf'
+    provenance = rebind_sphere_model(spheres, kinematic, out)
+    validate_sphere_model(kinematic, out)                  # strict, and it passes
+    assert parse_spherized_urdf(out) == parse_spherized_urdf(spheres)   # offsets kept, per link
+    text = out.read_text()
+    assert text.startswith('<!-- grid-spherize rebind:') and provenance['content_sha256'] in text
+    assert 'fidelity' in provenance and provenance['spheres'] > 0
+    import hashlib
+    body = text.split('-->\n', 1)[1]
+    assert hashlib.sha256(body.encode()).hexdigest() == provenance['content_sha256']
+    # the CLI form, with a report on the rebound model
+    monkeypatch.setattr('sys.argv', ['grid-spherize', str(spheres), '--rebind-to', str(kinematic),
+                                     '--out', str(tmp_path / 'cli_rebound.urdf'), '--report'])
+    main()
+    printed = capsys.readouterr().out
+    assert 'Rebound' in printed and 'against collision geometry' in printed
+    # a link the target does not have
+    tree = ET.parse(spheres)
+    root = tree.getroot()
+    extra = ET.SubElement(root, 'link'); extra.set('name', 'ghost')
+    col = ET.SubElement(extra, 'collision'); ET.SubElement(col, 'origin').set('xyz', '0 0 0')
+    ET.SubElement(ET.SubElement(col, 'geometry'), 'sphere').set('radius', '0.01')
+    tree.write(spheres)
+    with pytest.raises(ValueError, match="does not have: \\['ghost'\\]"):
+        rebind_sphere_model(spheres, kinematic, tmp_path / 'again.urdf')

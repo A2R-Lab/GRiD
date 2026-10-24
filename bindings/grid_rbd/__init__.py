@@ -38,6 +38,7 @@ from ._cache import (
     list_registered as _list_registered,
     manifest_lookup,
     manifest_register,
+    _sweep_dead_staging_dirs,
     read_build_inputs,
     stale_hit_reasons,
     store_dir,
@@ -528,35 +529,7 @@ def _build_notice_end(name: str, secs: float, cache_dir: Path) -> None:
     _notice(f"grid_rbd: built {name!r} in {secs:.0f} s — cached under {cache_dir}; later loads take about a second.")
 
 
-def _sweep_dead_staging_dirs(store: Path) -> int:
-    """Remove `.gen_<pid>_<key>` staging dirs whose owning process is gone.
-    The builder deletes its own staging dir in a `finally`, but a killed
-    build (SIGKILL/SIGTERM mid-nvcc, a crashed interpreter) leaves the dir —
-    38 of them had accumulated by 2026-09-22 (audit W16 hygiene). A live pid
-    (another builder mid-compile) is left alone. Returns the count removed."""
-    import shutil as _shutil
-    removed = 0
-    try:
-        candidates = list(store.glob(".gen_*_*"))
-    except OSError:
-        return 0
-    for d in candidates:
-        try:
-            pid = int(d.name.split("_")[1])
-        except (IndexError, ValueError):
-            continue
-        if pid == os.getpid():
-            continue
-        try:
-            os.kill(pid, 0)
-            continue  # alive: a concurrent builder owns it
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            continue  # alive, other user
-        _shutil.rmtree(d, ignore_errors=True)
-        removed += 1
-    return removed
+# _sweep_dead_staging_dirs lives in _cache (shared with the consumer artifact store).
 
 
 def warm_robot(
@@ -1125,8 +1098,18 @@ def load_robot(
 
 from .gc_cache import gc_cache  # noqa: E402  (store GC; python -m grid_rbd.gc_cache)
 
+from ._artifacts import (ArtifactIncompatibleError, ArtifactNotFoundError, ConsumerArtifact,  # noqa: E402
+                         ConsumerArtifactError, build_artifact, list_artifacts, load_artifact)
+
 __all__ = [
     "gc_cache",
+    "build_artifact",
+    "load_artifact",
+    "list_artifacts",
+    "ConsumerArtifact",
+    "ConsumerArtifactError",
+    "ArtifactNotFoundError",
+    "ArtifactIncompatibleError",
     "RobotHandle",
     "SecondOrderID",
     "SecondOrderFD",
