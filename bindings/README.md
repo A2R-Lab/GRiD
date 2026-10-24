@@ -241,6 +241,19 @@ cuda_arch=...)`. Build the cache offline, ship or keep the cache dir, and
 every later `register_robot` / `get_robot` / `jax.jit` starts in well under a
 second.
 
+### Consumer artifacts (your kernels against the generated header)
+
+A solver that writes its own kernels over `grid.cuh` builds them through the same store:
+`grid_rbd.build_artifact(consumer, name, urdf_path, sources=[...], headers=[...],
+include_dirs=[...], defines={...}, **codegen_options)` generates the header for the robot,
+compiles the sources against it (plus the collision header and the GLASS includes), links
+them into an artifact under `<cache_dir>/consumers/<consumer>/`, and reuses it on the next
+call with the same inputs; `grid_rbd.load_artifact(consumer, name)` returns a prepared artifact
+without a toolchain. The codegen options are those of `register_robot`, plus `emit_plant` and
+the collision options (`collision`, `collision_res`, `collision_native`, `spherized_urdf`).
+GRiD never binds the consumer's symbols; load the artifact with `ctypes` or your own binding.
+See the agent integration guide for the full description.
+
 Registration failures (a failed device allocation, a bad toolkit) raise a Python
 exception naming the failed operation; the generated initializers never
 `exit()` or reset the CUDA context inside the interpreter (they use the

@@ -3236,3 +3236,20 @@ Symptom: the waiter for the release pull request merged it seconds after the pus
 Diagnosis: the GraphQL status rollup reports an in-progress check run with an empty-string conclusion, not a null one. jq's `//` operator replaces only `null` and `false`, so a filter of the form `.conclusion // "PENDING"` passed the empty string through, the pending sentinel never appeared, and a unique list of `""` and `SUCCESS` read as green. The head had one commit over a fully green parent, the receipt commit, so no bad code reached main, but the rule is merge on green and the tag waited for the merge commit's own CI before it was pushed.
 
 Fix: a waiter decides on `.status == "COMPLETED"` for every check (and on the `status` column of `gh run list` for workflows), treats an empty check list as pending, and only then reads conclusions, with `SKIPPED` and `NEUTRAL` accepted and anything else red. The companion rule is 7.z42: a waiter that cannot name what it is waiting for is not a gate.
+
+### 7.z59 A kernel that calls a generated device function launches with that function's dynamic arena (2026-10-24, consumer kernels and the collision runners)
+
+Symptom: two runners written in one night failed the same way, an illegal memory access on the first synchronize. One evaluated `config_free` next to `collision_distance` from a kernel launched with no dynamic shared memory; the other was a consumer unit that evaluated the end-effector pose and, in a second build, the collision verdict, launched with the pose's arena.
+
+Diagnosis: every generated `_device` function that runs a batched pass (the multi-target extractor inside `config_free`, the pose chain-up, the dynamics passes) carves its scratch from the kernel's dynamic shared arena, `extern __shared__`, and the header states each function's requirement as `<ALGO>_DYNAMIC_SHARED_MEM_BYTES<T>()`. A launch that omits the third launch parameter, or sizes it for a smaller function, hands the device code an arena that ends before its scratch does; the fault lands on the first write past the end, far from the call that sized the launch.
+
+Fix: a kernel that calls several generated functions launches with the maximum of their arena sizes, after `cudaFuncSetAttribute(..., cudaFuncAttributeMaxDynamicSharedMemorySize, ...)` when that maximum exceeds the default. The collision runners take `MULTI_TARGET_POSITION_DYNAMIC_SHARED_MEM_BYTES<T>()` for the checkers; the consumer unit takes the larger of that and the pose's. The rule for a consumer author is in the integration guide: read the `_DYNAMIC_SHARED_MEM_BYTES` of every generated function the kernel calls, launch with the maximum.
+
+### 7.z60 A float boundary test needs offsets the arithmetic can represent, not the next float (2026-10-24, margin-aware checking)
+
+Symptom: the exact-boundary check of the margin rule, built from `nextafterf`, reported a hit at the margin plus one ulp as free.
+
+Diagnosis: the checker tests `d^2 - (r + margin + r_obstacle)^2 < 0`. With radii 0.25 and 0.25 and a margin of 0.5 the sum is exactly 1; one ulp of 0.5 is 2^-24, which survives the first addition (0.75 has ulp 2^-24) and is then rounded away by the second (1 has ulp 2^-23, and the tie rounds to even), so the sum is exactly 1 again and the verdict is free, correctly for the number the arithmetic saw.
+
+Fix: perturb by an amount every intermediate can represent, here 2^-21, four ulps of a metre, so the sum lands on a representable value above or below the threshold. The generated-code gate does not rely on such cases: it compares the warp and block verdicts with the distance surfaces outside a stated rounding band, and sweeps each configuration's own clearance from 1e-4 below to 1e-4 above, which is where a user's margin lives.
+

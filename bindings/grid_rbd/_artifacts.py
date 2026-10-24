@@ -40,9 +40,10 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from . import _cache
-from ._cache import (_KEY_SCHEMA, _arch_loadable, canonical_options, default_cache_dir,
-                     detect_cuda_arch, effective_cuda_archs, package_version,
-                     read_build_inputs, stale_hit_reasons, write_build_inputs)
+from ._cache import (_KEY_SCHEMA, _arch_loadable, _sweep_dead_staging_dirs, canonical_options,
+                     default_cache_dir, detect_cuda_arch, effective_cuda_archs, keymap_lookup,
+                     keymap_record, package_version, read_build_inputs, stale_hit_reasons,
+                     write_build_inputs)
 from ._compile import _NVCC_DEFAULT_FLAGS, _build_jobs, find_nvcc, generate_grid_cuh
 
 _log = logging.getLogger("grid_rbd")
@@ -426,42 +427,6 @@ def _manifest_register(root: Path, name: str, content_key: str, meta: dict[str, 
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
-def _keymap_lookup(root: Path, input_key: str) -> str | None:
-    try:
-        return (root / "bykey" / input_key).read_text().strip() or None
-    except OSError:
-        return None
-
-
-def _keymap_record(root: Path, input_key: str, content_key: str) -> None:
-    bykey = root / "bykey"
-    bykey.mkdir(parents=True, exist_ok=True)
-    tmp = bykey / f".{input_key}.{os.getpid()}.tmp"
-    tmp.write_text(content_key + "\n")
-    tmp.replace(bykey / input_key)
-
-
-def _sweep_dead_staging_dirs(store: Path) -> None:
-    try:
-        candidates = list(store.glob(".gen_*_*"))
-    except OSError:
-        return
-    for d in candidates:
-        try:
-            pid = int(d.name.split("_")[1])
-        except (IndexError, ValueError):
-            continue
-        if pid == os.getpid():
-            continue
-        try:
-            os.kill(pid, 0)
-            continue
-        except ProcessLookupError:
-            shutil.rmtree(d, ignore_errors=True)
-        except PermissionError:
-            continue
-
-
 # ─── public operations ───────────────────────────────────────────────────────
 def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
                    sources: Sequence[str | Path],
@@ -558,7 +523,7 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
         return stale_hit_reasons(entry_dir, identity)
 
     if plan_only:
-        mapped = _keymap_lookup(root, input_key)
+        mapped = keymap_lookup(root, input_key)
         entry_dir = store / mapped if mapped else None
         stale = _entry_state(entry_dir) if entry_dir is not None else None
         return {
@@ -572,7 +537,7 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
         }
 
     if not force_rebuild:
-        mapped = _keymap_lookup(root, input_key)
+        mapped = keymap_lookup(root, input_key)
         if mapped:
             entry_dir = store / mapped
             stale = _entry_state(entry_dir)
@@ -628,7 +593,7 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
                 meta = json.loads((entry_dir / "meta.json").read_text())
     finally:
         shutil.rmtree(gen_dir, ignore_errors=True)
-    _keymap_record(root, input_key, content_key)
+    keymap_record(root, input_key, content_key)
     _manifest_register(root, name, content_key, meta)
     return ConsumerArtifact(consumer, name, entry_dir / artifact_name, entry_dir / "grid.cuh",
                             entry_dir, content_key, input_key, cuda_arch, meta, compiled)
