@@ -24,7 +24,7 @@ from .launch_config import (LAUNCH_CONFIG_DEFAULT_GPU, LAUNCH_CONFIG_TIER_SYMBOL
 # Jacobians) carries no plant block unless emit_plant=True.
 PLANT_TRIGGER_ALGORITHMS = frozenset({
     "integrator", "integrator_gradient", "integrator_with_gradient", "fdsva_so",
-    "end_effector_pose_gradient", "end_effector_pose_hessian", "com", "ccrba"})
+    "end_effector_pose_gradient", "end_effector_pose_hessian", "com", "ccrba", "dccrba"})
 
 
 def plant_block_requested(emit_plant, codegen_profile, algorithm_list, algorithms,
@@ -1158,8 +1158,8 @@ class GRiDCodeGenerator:
         # the grid namespace closes and makes ZERO edits to any grid:: emit path.
         # Emission scope (HJCD-IK ask E1, 2026-10-23): the block is emitted for the
         # 'all' profile, for any request that carries a plant algorithm (the
-        # integrators, fdsva_so, the end-effector pose derivatives, com, ccrba), cost
-        # frames, contact frames or a multi-target batch, and whenever the caller
+        # integrators, fdsva_so, the end-effector pose derivatives, com, ccrba,
+        # dccrba), cost frames, contact frames or a multi-target batch, and whenever the caller
         # passes emit_plant=True; a kinematics-only header carries no plant block.
         if plant_block_requested(emit_plant, codegen_profile, algorithm_list, algorithms,
                                  cost_frames, contact_frames, multi_target_batch):
@@ -1167,7 +1167,7 @@ class GRiDCodeGenerator:
         else:
             self.gen_add_code_line("")
             self.gen_add_code_line("// [grid_plant] namespace not emitted: the request carries no plant algorithm (integrator, "
-                                   "integrator_gradient, fdsva_so, end_effector_pose_gradient, com, ccrba), no cost or contact "
+                                   "integrator_gradient, fdsva_so, end_effector_pose_gradient, com, ccrba, dccrba), no cost or contact "
                                    "frames and no multi-target batch, and the profile is not 'all'. Pass emit_plant=True to force it.")
         self.gen_add_fragment_mark("collision")
         # W3: sibling `grid_collision` namespace (baked sphere radii + self_cc_ranges + config_free

@@ -3253,3 +3253,10 @@ Diagnosis: the checker tests `d^2 - (r + margin + r_obstacle)^2 < 0`. With radii
 
 Fix: perturb by an amount every intermediate can represent, here 2^-21, four ulps of a metre, so the sum lands on a representable value above or below the threshold. The generated-code gate does not rely on such cases: it compares the warp and block verdicts with the distance surfaces outside a stated rounding band, and sweeps each configuration's own clearance from 1e-4 below to 1e-4 above, which is where a user's margin lives.
 
+### 7.z61 A plant trigger list has to name the algorithm the plant actually consumes (2026-10-24, release receipt at 3afb7b3)
+
+Symptom: the first 0.6.0 release receipt failed all 36 cells of `test_cuda_momentum_contract` with an nvcc error, `grid_plant` is not a namespace, while the CPU lane, the byte gate and the plant emission tests were green.
+
+Diagnosis: the emission rule from ask E1 emits the `grid_plant` block when the resolved algorithm set carries a plant algorithm, and the list named `ccrba` but not `dccrba`. The momentum cost is the plant's full-state cost and is built on `dccrba`, so the contract runner, which generates with `algorithm_list=["dccrba"]`, received a header without the block. The CPU lane cannot see this: it checks which headers carry the block, not whether a runner that needs the block compiles, and the runners that do compile against `grid_plant` all use profiles that trigger it.
+
+Fix: `dccrba` joins `PLANT_TRIGGER_ALGORITHMS`, with the docs, the changelog and the emission test following. The lesson for any opt-out rule: enumerate the consumers of the thing being dropped (here `grep grid_plant:: test/**/*.cu` and the sibling tests' codegen calls) and run one compile of each before the receipt, because a receipt-only discovery costs a full re-run when the fix lands in a fingerprinted path.

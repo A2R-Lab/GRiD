@@ -46,6 +46,7 @@ def test_explicit_option_and_plant_requests_keep_the_block(tmp_path):
     assert PLANT_OPEN in _header(tmp_path, "cost_frames", codegen_profile="kinematics",
                                  cost_frames=["iiwa_joint_4"])
     assert PLANT_OPEN in _header(tmp_path, "integrators", algorithm_list=["integrator"])
+    assert PLANT_OPEN in _header(tmp_path, "dccrba_only", algorithm_list=["dccrba"])
     assert PLANT_OPEN not in _header(tmp_path, "all_off", emit_plant=False)
 
 
@@ -69,4 +70,4 @@ def test_decision_rule_per_profile(profile, expected):
 
 def test_trigger_set_names_only_plant_compositions():
     assert "end_effector_pose" not in PLANT_TRIGGER_ALGORITHMS
-    assert {"integrator", "fdsva_so", "end_effector_pose_gradient", "com", "ccrba"} <= PLANT_TRIGGER_ALGORITHMS
+    assert {"integrator", "fdsva_so", "end_effector_pose_gradient", "com", "ccrba", "dccrba"} <= PLANT_TRIGGER_ALGORITHMS
