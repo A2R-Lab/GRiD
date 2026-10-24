@@ -28,6 +28,12 @@ repository. Everything below describes the packaged A2R-Lab releases.
   the spherized URDF or carry no collision element; the validator warns and names it, because
   the generator drops base-chain spheres at bake time. Every other link keeps the strict rule:
   present, identical kinematic frame, spheres only, not empty when the source has geometry.
+- `grid-spherize --report --geometry collision|visual` (HJCD-IK ask V3). The fidelity report
+  measures the sphere model against the collision geometry by default, or against the `<visual>`
+  shapes, whose numbers compare with fidelity tables published against visual meshes where the
+  collision hulls sit well outside the links. The header line names the geometry source; a visual
+  mesh that does not resolve to a local file is named and its link skipped. Generation still reads
+  the collision elements only.
 
 ## [0.5.5] — 2026-10-23
 

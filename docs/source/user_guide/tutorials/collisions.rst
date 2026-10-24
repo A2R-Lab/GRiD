@@ -120,6 +120,12 @@ and the uncovered fraction of 2,000 seeded mesh-surface samples. Bulge uses
 400 samples per sphere. These are reproducible diagnostics, not a proof
 of continuous mesh coverage or a certified bulge bound. Primitive meshes
 used for this report are tessellated. Inspect the report alongside the model.
+``--geometry visual`` measures against the ``<visual>`` shapes instead of the
+collision geometry, for comparison with fidelity tables published against
+visual meshes (on some robots the collision hulls sit well outside the visible
+links); the header line names the geometry source, and a visual mesh that does
+not resolve to a local file is named and its link skipped. Generation always
+reads the collision elements.
 
 ``--spherized-urdf`` rejects missing collision links, non-sphere geometry,
 invalid spheres, and mismatched joint frames. The one tolerance is the base

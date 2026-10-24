@@ -236,3 +236,38 @@ def test_base_chain_omission_flows_through_the_spec_builder(tmp_path):
     assert tier['n'] == reference['n'] > 0
     assert tier['anchor'] == reference['anchor'] and tier['offset'] == reference['offset']
     assert tier['radius'] == reference['radius']
+
+
+def test_report_geometry_source_switch(tmp_path, monkeypatch, capsys):
+    """V3 (HJCD-IK): --geometry visual measures against the <visual> shapes. A link whose visual
+    is a 10 cm box around a 2 cm collision sphere reports far more uncovered surface under the
+    visual geometry than under the collision geometry; an unresolvable visual mesh is named and
+    skipped instead of aborting the report."""
+    from grid_codegen.spherize import main
+    source = tmp_path / 'source.urdf'
+    source.write_text(
+        '<robot name="r">'
+        '<link name="base"><collision><geometry><sphere radius=".02"/></geometry></collision>'
+        '<visual><geometry><box size=".1 .1 .1"/></geometry></visual></link>'
+        '<link name="tip"><collision><geometry><sphere radius=".02"/></geometry></collision>'
+        '<visual><geometry><mesh filename="package://nowhere/tip.obj"/></geometry></visual></link>'
+        '<joint name="j" type="revolute"><parent link="base"/><child link="tip"/><origin xyz="0 0 .1"/>'
+        '<axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="1" velocity="1"/></joint>'
+        '</robot>')
+    spheres = tmp_path / 'spheres.urdf'
+    spherize_urdf(source, 0.05, spheres)
+    monkeypatch.delenv('ROS_PACKAGE_PATH', raising=False)
+
+    def report(*extra):
+        monkeypatch.setattr('sys.argv', ['grid-spherize', str(source), '--report', str(spheres), *extra])
+        main()
+        return capsys.readouterr().out
+
+    collision = report()
+    visual = report('--geometry', 'visual')
+    assert 'against collision geometry' in collision and 'against visual geometry' in visual
+    uncovered = lambda out, link: float(next(l for l in out.splitlines() if l.startswith(link + ' ')).split()[-1])
+    assert uncovered(collision, 'base') == 0.0
+    assert uncovered(visual, 'base') > 50.0
+    assert 'tip visual mesh not resolved: package://nowhere/tip.obj' in visual
+    assert uncovered(collision, 'tip') == 0.0
