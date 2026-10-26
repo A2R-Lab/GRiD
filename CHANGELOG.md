@@ -12,6 +12,13 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Project fixed-base skew-axis mimic forces and mass matrices through every
+  nonzero motion-subspace component instead of a cardinal-axis index. Independent
+  slider mechanics now check ID/FD/ABA/M/Minv, with first derivatives on cardinal
+  slider/mimic cases. This is not a claim of general skew-mimic derivative support.
+- Add an executable native/Python consumer migration example and process-death
+  publication recovery tests. Document the non-transactional crash boundary and
+  the tested GCC/CUDA scope separately from Clang flag recognition.
 - Add independent environment and self clearances to collision feasibility checks
   through `CollisionMargins<T>` and the validating host factory
   `make_collision_margins`. Scalar calls still apply one margin to both; explicit

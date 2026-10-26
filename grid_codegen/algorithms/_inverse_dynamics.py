@@ -726,6 +726,16 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
                             + ") * s_vaf[" + str(12*n + 6*jid + int(row)) + "];")
                 continue
             vs = self._v_slot_cpp(jid)
+            if not self.robot.S_is_cardinal_by_id(jid):
+                # Reduced-coordinate projection is alpha * S^T f, including
+                # every nonzero component of a skew motion subspace.
+                alpha = float(self._alpha_for_jid(jid))
+                for row, value in enumerate(self.robot._get_flat_S_by_id(jid)):
+                    if value != 0:
+                        self.gen_add_code_line(
+                            "s_c[" + str(vs) + "] += static_cast<T>(" + repr(alpha * float(value))
+                            + ") * s_vaf[" + str(12*n + 6*jid + row) + "];")
+                continue
             s_ind = self.robot.get_S_index_by_id(jid)
             s_sign = self.robot.get_S_sign_by_id(jid)
             alpha = self._alpha_for_jid(jid)

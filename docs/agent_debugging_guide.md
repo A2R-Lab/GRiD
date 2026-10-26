@@ -3393,3 +3393,31 @@ Keep the trailing boolean in place so an existing self-toggle call is not silent
 reinterpreted as another scalar. Test the consumer's environment-only plus empty-env
 self calls against the combined call, and use independent raw clearances and
 exactly representable boundary cases rather than relying on mutual agreement alone.
+
+### 7.z68 Compose joint properties in the projection, not only the forward pass
+
+A skew-axis joint and a mimic joint can each work alone while their combination
+fails. The mimic RNEA force extraction still selected a single signed S row;
+fixed-base mimic CRBA did the same for IC*S and both diagonal/ancestor S^T*f
+projections. Use the full motion column, scaled by the mimic multiplier at each
+reduced-coordinate projection. Preserve the existing cardinal emission rather
+than changing its arithmetic during a targeted repair.
+
+The all-prismatic two-body fixture gives an independent check: a mass-1 slider
+and mass-.7 follower with absolute displacement q/2+offset have generalized mass
+1+.7/4, not 1+.7/2 or 1+.7. Gravity projects with 1+.7/2. Test mass, inverse mass,
+inverse/forward dynamics and ABA at rest and nonzero state/input, with thread
+invariance. This fixture's zero q/qd derivatives do not prove nonzero curvature,
+floating-base skew-mimic support or general skew-mimic gradients.
+
+### 7.z69 Process death is not a caught publication exception
+
+Fault injection that raises OSError exercises rollback, not abrupt termination.
+Spawn a writer and exit it at each rename boundary while it holds the entry
+lock, then recover from a separate process with bounded waits. The lock inode
+must remain stable and the OS must release its ownership. A crash after moving
+the previous entry may leave a missing entry and a `.replaced_*` backup; a crash
+after installation leaves a complete winner and possibly a backup. Retry must
+repair/adopt correctly without deleting reusable objects. This is recovery,
+not durable atomic replacement or reader snapshot isolation. Do not purge
+backups or shared caches automatically as part of a regression test.
