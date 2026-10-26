@@ -63,6 +63,7 @@ def test_release_policy_requires_exact_recorded_scope():
     'grid_codegen/input.py', 'bindings/grid_rbd/input.py', 'bindings/src/input.py',
     'test/conftest.py', 'test/cuda_equivalents/input.py', 'grid_assets/input.py',
     'tools/check_installed_numerics.py',
+    'bindings/examples/consumer_artifact_migration.py',
 ])
 def test_correctness_edit_changes_fingerprint(repo, path):
     before = fingerprint(repo)

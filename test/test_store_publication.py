@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 import errno
 import json
 import multiprocessing
+import os
 import threading
 
 import pytest
@@ -126,3 +127,64 @@ def test_empty_runtime_file_is_not_a_complete_entry(tmp_path, empty):
     with pytest.raises(RuntimeError, match="incomplete artifact"):
         _store.publish_entry(stage, tmp_path / "key", "robot.so")
     assert not (tmp_path / "key").exists()
+
+
+def _interrupted_publish(root, checkpoint):
+    """Abrupt death while holding the entry lock: no Python finally/rollback."""
+    entry = root / "key"
+    staged = _stage(root, "interrupted")
+    replace = _store.os.replace
+
+    def interrupt(src, dst):
+        if src == staged and checkpoint == "before-install":
+            os._exit(73)
+        replace(src, dst)
+        if src == staged and checkpoint == "after-install":
+            os._exit(73)
+
+    _store.os.replace = interrupt
+    _store.publish_entry(staged, entry, "robot.so", force=True)
+
+
+@pytest.mark.parametrize("checkpoint", ["before-install", "after-install"])
+@pytest.mark.parametrize("existing", ["complete", "damaged"])
+def test_retry_after_process_death_releases_lock_and_preserves_objects(tmp_path, checkpoint, existing):
+    entry = tmp_path / "key"
+    _stage(tmp_path, "old").rename(entry)
+    if existing == "damaged":
+        (entry / "robot.so").unlink()
+    objects = tmp_path / "objects"
+    objects.mkdir()
+    cached = objects / "retained.o"
+    cached.write_bytes(b"reusable object")
+    ctx = multiprocessing.get_context("spawn")
+    worker = ctx.Process(target=_interrupted_publish, args=(tmp_path, checkpoint))
+    try:
+        worker.start()
+        worker.join(timeout=20)
+        assert worker.exitcode == 73
+    finally:
+        if worker.pid is not None and worker.is_alive():
+            worker.terminate()
+            worker.join(timeout=10)
+    # A crash can leave a backup and a temporarily absent entry. It must not
+    # advertise a partial result or strand the OS lock. Retrying repairs it;
+    # no scavenging/deletion of another process's backup is required.
+    observed = _store.entry_metadata(entry, "robot.so")
+    assert observed == ({"value": "interrupted"} if checkpoint == "after-install" else None)
+    results, barrier = ctx.Queue(), ctx.Barrier(1)
+    retry = ctx.Process(target=_process_publish, args=(tmp_path, "retry", barrier, results))
+    try:
+        retry.start()
+        winner = results.get(timeout=30)
+        retry.join(timeout=20)
+        assert retry.exitcode == 0
+        assert winner == {"value": "interrupted" if checkpoint == "after-install" else "retry"}
+        assert (entry / "robot.so").read_text() == winner["value"]
+        assert cached.read_bytes() == b"reusable object"
+        assert len(list(tmp_path.glob(".replaced_*"))) == 1
+    finally:
+        if retry.pid is not None and retry.is_alive():
+            retry.terminate()
+            retry.join(timeout=10)
+        results.close()

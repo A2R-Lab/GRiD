@@ -167,9 +167,26 @@ The consumer build resolves nvcc's host selection from `-ccbin` /
 compiler's path, bytes and version, and pins that compiler for compilation and
 linking. GCC and Clang are recognized separately; Clang does not receive the
 GCC-only GNU-unique option. An explicitly conflicting link compiler is rejected.
+The current native/CUDA integration gates exercise Linux with GCC; recognition
+of Clang flags alone is not evidence of a validated Clang/CUDA configuration.
 Expand nvcc option files into the explicit flag lists rather than passing
 `--options-file`, `-optf` or `@file`; hidden compiler selections/dependencies in
 those files are not supported by this consumer build path.
+
+For an executable migration example, run `consumer_artifact_migration.py` from
+this directory with `--urdf /absolute/robot.urdf --work /tmp/new-probe --cuda-arch 120`
+(select your actual architecture). It requires pybind11 as a consumer build
+dependency, builds explicit native exports and a declared Python extension,
+then checks pointer reuse and prepared loading. It is a build/load contract
+example, not a numerical or performance benchmark.
+
+Publication is recoverable, not a durable filesystem transaction. An abrupt
+process death after displacing an entry can leave a `.replaced_*` backup and a
+missing entry; the next build repairs the entry and retains reusable objects.
+Death after installing the new entry can leave a complete winner and its backup.
+The OS releases the writer lock on exit. Backups are not automatically purged;
+do not delete shared entries or assume concurrent readers see a snapshot. Normal
+rename errors attempt rollback, but process death cannot execute that rollback.
 
 - `max_batch_size` is a compile-time cap. Calls with `batch ≤ max_batch` run in one launch;
   larger batches must be chunked by the caller. Bake in the largest batch you will run.

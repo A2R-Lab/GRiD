@@ -18,6 +18,7 @@ Run with:
 from __future__ import annotations
 
 import ctypes
+from concurrent.futures import ThreadPoolExecutor
 import json
 import shutil
 import sys
@@ -41,6 +42,50 @@ pytestmark = pytest.mark.python_wrappers
 _URDF = robot_urdf("iiwa14")
 _KERNEL = Path(__file__).with_name("consumer_artifact_kernel.cu")
 _KINEMATICS = ["end_effector_pose"]
+
+
+def test_consumer_migration_example(tmp_path):
+    from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
+    script = _REPO_ROOT / "bindings/examples/consumer_artifact_migration.py"
+    result = subprocess.run([sys.executable, str(script), "--urdf", str(_URDF),
+                             "--work", str(tmp_path / "migration"),
+                             "--cuda-arch", str(_detect_cuda_arch())],
+                            cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout.strip().splitlines()[-1])
+    assert report["num_pos"] == 7
+    assert report["artifacts"]["native"]["python_extension"] is False
+    assert report["artifacts"]["python"]["python_extension"] is True
+
+
+def test_concurrent_consumer_builds_publish_loadable_winner(tmp_path):
+    """Real separately imported builders share a private store, not a mock lock."""
+    from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
+    source = tmp_path / "shared.cu"
+    source.write_text('#include "grid.cuh"\n'
+                      'extern "C" __attribute__((visibility("default")))\n'
+                      'int concurrent_num_pos() { return grid::NUM_POS; }\n')
+    cache = tmp_path / "cache"
+    script = '''import ctypes, json, sys
+from grid_rbd import build_artifact, load_artifact
+art = build_artifact("concurrent", "robot", sys.argv[1], sources=[sys.argv[2]],
+                     cache_dir=sys.argv[3], cuda_arch=int(sys.argv[4]),
+                     algorithm_list=["end_effector_pose"], enable_mujoco_kernels=False)
+loaded = load_artifact("concurrent", "robot", cache_dir=sys.argv[3], cuda_arch=int(sys.argv[4]))
+assert loaded.content_key == art.content_key
+lib = ctypes.CDLL(str(loaded.path))
+assert lib.concurrent_num_pos() == 7
+print(json.dumps({"key": loaded.content_key, "path": str(loaded.path)}))
+'''
+    argv = [sys.executable, "-c", script, str(_URDF), str(source), str(cache), str(_detect_cuda_arch())]
+    def build(_):
+        result = subprocess.run(argv, cwd=tmp_path, text=True, capture_output=True, timeout=120)
+        assert result.returncode == 0, result.stdout + result.stderr
+        return json.loads(result.stdout.strip().splitlines()[-1])
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        first, second = list(workers.map(build, range(2)))
+    assert first == second
+    assert Path(first["path"]).is_file()
 
 
 def _build(cache_dir, name="iiwa14", tag=1, **kw):

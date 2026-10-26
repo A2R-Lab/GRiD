@@ -26,6 +26,13 @@ def test_installed_numerics_helper_is_fingerprinted_and_warmed():
     assert '"${REPO_ROOT}/tools/check_installed_numerics.py"' in source
 
 
+def test_consumer_migration_example_is_fingerprinted():
+    path = "bindings/examples/consumer_artifact_migration.py"
+    assert path in rss.wrapper_fingerprint_paths("test_consumer_artifact")
+    assert path in (rss.REPO_ROOT / "pyproject.toml").read_text()
+    assert path in (rss.REPO_ROOT / "test/gpu-proof-policy-release.yaml").read_text()
+
+
 @pytest.fixture(autouse=True)
 def unchanged_oracle_for_synthetic_receipts(monkeypatch):
     # Synthetic receipts below use fictitious commit SHAs; isolate their
