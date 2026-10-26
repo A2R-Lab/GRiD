@@ -21,6 +21,9 @@ import ctypes
 import json
 import shutil
 import sys
+import sysconfig
+import importlib.util
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -103,11 +106,11 @@ def test_second_build_is_a_pointer_hit_and_a_define_rekeys(tmp_path):
 def test_unchanged_unit_reuses_its_object(tmp_path):
     cache = tmp_path / "cache"
     other = tmp_path / "other_unit.cu"
-    other.write_text('#include "grid.cuh"\nextern "C" int consumer_other() { return grid::NUM_POS * 10; }\n')
+    other.write_text('#include "grid.cuh"\nextern "C" __attribute__((visibility("default"))) int consumer_other() { return grid::NUM_POS * 10; }\n')
     first = _build(cache, sources=[_KERNEL, other])
     units = json.loads((first.store_dir / "meta.json").read_text())["build"]["units"]
     assert units[_KERNEL.name]["compiled"] and units[other.name]["compiled"]
-    other.write_text('#include "grid.cuh"\nextern "C" int consumer_other() { return grid::NUM_POS * 20; }\n')
+    other.write_text('#include "grid.cuh"\nextern "C" __attribute__((visibility("default"))) int consumer_other() { return grid::NUM_POS * 20; }\n')
     second = _build(cache, sources=[_KERNEL, other])
     units = json.loads((second.store_dir / "meta.json").read_text())["build"]["units"]
     assert second.content_key != first.content_key
@@ -165,3 +168,83 @@ def test_plant_block_follows_the_request(tmp_path):
     assert "namespace grid_plant {" not in without.header.read_text()
     forced = _build(cache, name="iiwa14_plant", emit_plant=True)
     assert "namespace grid_plant {" in forced.header.read_text() and forced.content_key != without.content_key
+
+
+def test_declared_python_extension_import_and_prepared_load(tmp_path, monkeypatch):
+    import pybind11
+    source = tmp_path / "abi_probe.cpp"
+    source.write_text('#include <pybind11/pybind11.h>\nextern "C" int abi_num_pos();\n'
+                      'PYBIND11_MODULE(grid_abi_probe, m) { m.def("num_pos", &abi_num_pos); }\n')
+    cuda_source = tmp_path / "abi_probe.cu"
+    cuda_source.write_text('#include "grid.cuh"\nextern "C" int abi_num_pos() { return grid::NUM_POS; }\n')
+    opts = dict(sources=[source, cuda_source], include_dirs=[pybind11.get_include(), sysconfig.get_path("include")],
+                artifact_name="grid_abi_probe.so", python_extension=True)
+    art = _build(tmp_path, name="extension", **opts)
+    assert art.meta["python_abi"]["soabi"] == sysconfig.get_config_var("SOABI")
+    spec = importlib.util.spec_from_file_location("grid_abi_probe", art.path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.num_pos() == 7
+    assert not _build(tmp_path, name="extension", **opts).compiled
+    monkeypatch.setenv("PATH", "/nonexistent")
+    loaded = _grid_rbd.load_artifact("gate", "extension", cache_dir=tmp_path, cuda_arch=art.cuda_arch)
+    assert loaded.path == art.path
+
+
+def test_undeclared_python_extension_is_not_published(tmp_path):
+    source = tmp_path / "undeclared.cpp"
+    source.write_text('extern "C" __attribute__((visibility("default"))) void* PyInit_undeclared() { return nullptr; }\n')
+    with pytest.raises(ValueError, match="python_extension"):
+        _build(tmp_path, name="undeclared", sources=[source])
+    assert not _grid_rbd.list_artifacts("gate", cache_dir=tmp_path)
+
+
+def test_source_path_macro_survives_cache_reuse(tmp_path):
+    keys = []
+    for folder in ("first", "second"):
+        source = tmp_path / folder / "same.cpp"
+        source.parent.mkdir()
+        source.write_text('extern "C" __attribute__((visibility("default"))) const char* source_path() { return __FILE__; }\n')
+        art = _build(tmp_path / "cache", name=folder, sources=[source])
+        lib = ctypes.CDLL(str(art.path))
+        lib.source_path.restype = ctypes.c_char_p
+        assert lib.source_path().decode() == str(source)
+        keys.append(art.content_key)
+    assert len(set(keys)) == 2
+
+
+def test_two_robot_consumer_statics_are_isolated_in_both_load_orders(tmp_path):
+    source = tmp_path / "state.cu"
+    source.write_text('''#include "grid.cuh"
+inline int& consumer_state() { static int value = grid::NUM_POS; return value; }
+extern "C" __attribute__((visibility("default"))) int state_get() { return consumer_state(); }
+extern "C" __attribute__((visibility("default"))) void state_set(int n) { consumer_state() = n; }
+extern "C" __attribute__((visibility("default"))) void* state_address() { return &consumer_state(); }
+''')
+    artifacts = []
+    for name, urdf, n in (("arm", _URDF, 7), ("slider", robot_urdf("slider_fixed_tool"), 1)):
+        art = _grid_rbd.build_artifact("isolation", name, urdf, sources=[source], cache_dir=tmp_path,
+                                      algorithm_list=["end_effector_pose"], enable_mujoco_kernels=False)
+        symbols = subprocess.run(["nm", "-D", "--defined-only", str(art.path)],
+                                 capture_output=True, text=True, check=True).stdout
+        assert not any(line.split()[1] == "u" for line in symbols.splitlines() if len(line.split()) >= 3)
+        assert "consumer_state" not in symbols
+        for export in ("state_get", "state_set", "state_address"):
+            assert any(line.split()[-1] == export for line in symbols.splitlines())
+        artifacts.append((str(art.path), n))
+    # New interpreter for each order: unloading a CUDA shared library is not a
+    # supported reset mechanism, and previous imports would mask order dependence.
+    program = '''import ctypes, json, sys
+pairs = json.loads(sys.argv[1])
+libs = [ctypes.CDLL(path) for path, n in pairs]
+for lib, (_, n) in zip(libs, pairs):
+    lib.state_address.restype = ctypes.c_void_p
+    assert lib.state_get() == n
+assert libs[0].state_address() != libs[1].state_address()
+libs[0].state_set(101)
+assert libs[0].state_get() == 101 and libs[1].state_get() == pairs[1][1]
+libs[1].state_set(202)
+assert libs[0].state_get() == 101 and libs[1].state_get() == 202
+'''
+    for ordered in (artifacts, artifacts[::-1]):
+        subprocess.run([sys.executable, "-c", program, json.dumps(ordered)], check=True)

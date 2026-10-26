@@ -30,6 +30,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from ._store import publish_object
 
 
 # Package logger. Quiet by default (no handler) — the host app opts in via
@@ -135,7 +136,15 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     from URDFParser import URDFParser
     from grid_codegen import GRiDCodeGenerator
 
-    parser = URDFParser()
+    class _BindingParser(URDFParser):
+        def print_joint_order(self):
+            # Keep the parser's CLI report out of library stdout without a
+            # process-global stdout redirect around concurrent parses.
+            _log.info("grid_rbd: joint order: %s (nq=%d, nv=%d)",
+                      ", ".join(j.get_name() for j in self.robot.get_joints_ordered_by_id()),
+                      self.robot.get_num_pos(), self.robot.get_num_vel())
+
+    parser = _BindingParser()
     robot = parser.parse(
         str(urdf_path),
         floating_base=options.get("floating_base", False),
@@ -873,9 +882,7 @@ def _build_units(cmd: list[str], source_dir: Path, out_so: Path, arch: str,
             log.write(f"[{unit.stem}] rc={r.returncode} {secs:.1f}s\n")
         if r.returncode == 0 and cached is not None:
             # publish atomically (another build may be producing the same key)
-            tmp = cached.with_name(cached.name + f".{os.getpid()}.tmp")
-            shutil.move(str(obj), str(tmp))
-            os.replace(tmp, cached)
+            publish_object(obj, cached)
             obj = cached
         return obj, r.returncode, secs, ulog.read_text()
 

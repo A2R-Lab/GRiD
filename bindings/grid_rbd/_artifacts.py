@@ -33,8 +33,11 @@ import os
 import re
 import shutil
 import subprocess
+import sys
+import sysconfig
 import threading
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -45,15 +48,17 @@ from ._cache import (_KEY_SCHEMA, _arch_loadable, _sweep_dead_staging_dirs, cano
                      keymap_record, package_version, read_build_inputs, stale_hit_reasons,
                      write_build_inputs)
 from ._compile import _NVCC_DEFAULT_FLAGS, _build_jobs, find_nvcc, generate_grid_cuh
+from ._store import entry_metadata, publish_entry, publish_object, staging_dir
+from ._consumer_toolchain import resolve_consumer_toolchain
 
 _log = logging.getLogger("grid_rbd")
 
 ARTIFACT_SCHEMA = 1
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
-# What a load must match: the key schema and the device the artifact was compiled for. The
+# What a load must match: key schema, device, and the ABI for Python extensions. The
 # toolchain, GLASS content and the codegen tree are provenance, recorded but not required to
 # load a prepared artifact on a box that never had them.
-LOAD_IDENTITY_KEYS = ("key_schema", "artifact_schema", "cuda_arch")
+LOAD_IDENTITY_KEYS = ("key_schema", "artifact_schema", "cuda_arch", "python_abi")
 _SOURCE_SUFFIXES = (".cu", ".cpp", ".cc", ".cxx")
 
 
@@ -96,7 +101,9 @@ def _check_name(value: str, what: str) -> str:
 
 def _artifact_module_hash() -> str:
     try:
-        return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+        h = hashlib.sha256(Path(__file__).read_bytes())
+        h.update(Path(__file__).with_name("_consumer_toolchain.py").read_bytes())
+        return h.hexdigest()
     except OSError:
         return ""
 
@@ -134,8 +141,49 @@ def artifact_identity(cuda_arch: int) -> dict[str, Any]:
     return identity
 
 
+def _python_abi_identity() -> dict[str, Any]:
+    """Interpreter ABI for declared extensions, without querying a compiler."""
+    return {
+        "implementation": sys.implementation.name,
+        "version": list(sys.version_info[:2]),
+        "cache_tag": sys.implementation.cache_tag,
+        "soabi": sysconfig.get_config_var("SOABI"),
+        "ext_suffix": sysconfig.get_config_var("EXT_SUFFIX"),
+        "debug": bool(sysconfig.get_config_var("Py_DEBUG")),
+        "free_threaded": bool(sysconfig.get_config_var("Py_GIL_DISABLED")),
+    }
+
+
+def _validate_python_exports(path: Path, python_extension: bool) -> None:
+    """Validate the pre-lookup declaration; inspecting a binary alone is too late
+    to protect reuse. Consumer builds require nm, prepared loads do not."""
+    result = subprocess.run(["nm", "-D", "--defined-only", str(path)],
+                            capture_output=True, text=True, check=True)
+    has_pyinit = any(line.split() and line.split()[-1].startswith("PyInit_")
+                     for line in result.stdout.splitlines())
+    if has_pyinit != python_extension:
+        raise ValueError("python_extension declaration disagrees with exported PyInit_* symbols; "
+                         "pass python_extension=True for a Python extension and False for a native library")
+
+
 def _file_digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _collision_mesh_identity(urdf_path: Path) -> list[dict[str, str]]:
+    """Resolve with the spherizer's rules before considering a fast cache hit."""
+    from grid_codegen.algorithms._spherize import _resolve_mesh_path
+    dependencies = []
+    for link in ET.parse(urdf_path).getroot().findall("link"):
+        for mesh in link.findall("collision/geometry/mesh"):
+            filename = mesh.get("filename", "")
+            resolved = _resolve_mesh_path(filename, str(urdf_path.parent))
+            if resolved is None:
+                raise ValueError(f"collision mesh {filename!r} for link {link.get('name')!r} "
+                                 "could not be resolved; provide the asset locally")
+            path = Path(resolved).resolve()
+            dependencies.append({"uri": filename, "path": str(path), "sha256": _file_digest(path)})
+    return dependencies
 
 
 def _resolve_files(values: Sequence[str | Path], what: str, suffixes: tuple[str, ...] | None) -> list[Path]:
@@ -232,6 +280,8 @@ def _code_options(urdf_path: Path, cuda_arch: int, *, floating_base, ee_joint_na
         opts["collision"] = True
         opts["collision_res"] = float(collision_res) if not isinstance(collision_res, (list, tuple)) \
             else [float(r) for r in collision_res]
+    if collision or collision_native:
+        opts["collision_meshes"] = _collision_mesh_identity(urdf_path)
     if launch_config_profile is not None:
         opts["launch_config_profile"] = str(launch_config_profile)
     # The baked per-algorithm launch configuration is not derivable from the URDF bytes; fold
@@ -260,7 +310,7 @@ def _input_key(urdf_bytes: bytes, code_options: dict[str, Any], sources: list[Pa
     h.update(urdf_bytes)
     h.update(canonical_options(code_options).encode())
     for p in sources:
-        h.update(b"source:" + p.name.encode() + b"\0" + p.read_bytes() + b"\0")
+        h.update(b"source:" + str(p).encode() + b"\0" + p.read_bytes() + b"\0")
     for p in headers:
         h.update(b"header:" + p.name.encode() + b"\0" + p.read_bytes() + b"\0")
     h.update(("include_dirs=" + ";".join(str(d) for d in include_dirs)).encode())
@@ -278,15 +328,17 @@ def _toolchain_tag() -> str:
 
 
 def _content_key(gen_dir: Path, sources: list[Path], headers: list[Path], compile_cmd: list[str],
-                 link_flags: list[str], artifact_name: str) -> str:
+                 link_flags: list[str], artifact_name: str, *, python_abi=None, toolchain=None) -> str:
     """Exactly what nvcc sees: the generated header, the static collision header, the
     consumer's sources and headers, the flag list (the staging dir's own -I removed; its
     content is hashed), the link flags and the toolchain."""
     h = hashlib.sha256()
+    h.update(("python_abi=" + canonical_options(python_abi)).encode())
+    h.update(("consumer_toolchain=" + canonical_options(toolchain)).encode())
     h.update((gen_dir / "grid.cuh").read_bytes())
     h.update(_collision_include_dir().joinpath("grid_collision_geometry.cuh").read_bytes())
     for p in sources:
-        h.update(b"source:" + p.name.encode() + b"\0" + p.read_bytes() + b"\0")
+        h.update(b"source:" + str(p).encode() + b"\0" + p.read_bytes() + b"\0")
     for p in headers:
         h.update(b"header:" + p.name.encode() + b"\0" + p.read_bytes() + b"\0")
     src = str(gen_dir)
@@ -299,8 +351,14 @@ def _content_key(gen_dir: Path, sources: list[Path], headers: list[Path], compil
     return h.hexdigest()
 
 
-def _unit_object_key(unit: Path, gen_dir: Path, headers: list[Path], compile_cmd: list[str]) -> str:
+def _unit_object_key(unit: Path, gen_dir: Path, headers: list[Path], compile_cmd: list[str], *,
+                     python_abi=None, toolchain=None) -> str:
     h = hashlib.sha256()
+    h.update(("python_abi=" + canonical_options(python_abi)).encode())
+    h.update(("consumer_toolchain=" + canonical_options(toolchain)).encode())
+    # nvcc receives this exact resolved path: suffix selects the language and
+    # __FILE__ exposes the whole path, not merely its basename.
+    h.update(str(unit).encode() + b"\0")
     src = str(gen_dir)
     for a in compile_cmd[1:]:
         if a == f"-I{src}" or a.startswith(src + "/"):
@@ -317,11 +375,12 @@ def _unit_object_key(unit: Path, gen_dir: Path, headers: list[Path], compile_cmd
 
 # ─── the compile half ─────────────────────────────────────────────────────────
 def _compile_command(gen_dir: Path, cuda_arch: int, include_dirs: list[Path], defines: list[str],
-                     extra_flags: list[str]) -> list[str]:
+                     extra_flags: list[str], toolchain=None) -> list[str]:
     nvcc = find_nvcc()
     archs = effective_cuda_archs(cuda_arch)
     gencode_archs = archs if archs is not None else [cuda_arch]
-    cmd = [nvcc] + list(_NVCC_DEFAULT_FLAGS) + [f"-gencode=arch=compute_{a},code=sm_{a}" for a in gencode_archs]
+    cmd = [nvcc] + (toolchain.prepend if toolchain else []) + list(_NVCC_DEFAULT_FLAGS)
+    cmd += [f"-gencode=arch=compute_{a},code=sm_{a}" for a in gencode_archs]
     cmd.append(f"-I{gen_dir}")
     cmd.append(f"-I{_collision_include_dir()}")
     for d in _glass_include_dirs():
@@ -330,12 +389,13 @@ def _compile_command(gen_dir: Path, cuda_arch: int, include_dirs: list[Path], de
         cmd.append(f"-I{d}")
     for d in defines:
         cmd.append(f"-D{d}")
-    cmd.extend(extra_flags)
+    cmd.extend(toolchain.compile_flags() if toolchain else extra_flags)
     return cmd
 
 
 def _build(gen_dir: Path, sources: list[Path], headers: list[Path], compile_cmd: list[str], link_flags: list[str],
-           out_so: Path, object_cache_dir: Path, reuse_objects: bool) -> dict[str, Any]:
+           out_so: Path, object_cache_dir: Path, reuse_objects: bool, validate_inputs=None,
+           python_abi=None, toolchain=None) -> dict[str, Any]:
     """Compile each consumer source with -c (from the object cache when its key exists), then
     host-link the objects into `out_so`. Returns a record of what ran."""
     nvcc = compile_cmd[0]
@@ -351,26 +411,32 @@ def _build(gen_dir: Path, sources: list[Path], headers: list[Path], compile_cmd:
     record: dict[str, Any] = {"units": {}}
 
     def one(unit: Path) -> tuple[Path, int, float, str]:
-        key = _unit_object_key(unit, gen_dir, headers, compile_cmd)
-        cached = object_cache_dir / f"{unit.stem}-{key}.o"
+        if validate_inputs is not None:
+            validate_inputs()
+        key = _unit_object_key(unit, gen_dir, headers, compile_cmd, python_abi=python_abi,
+                               toolchain=toolchain.identity if toolchain else None)
+        cached = object_cache_dir / f"{unit.name}-{key}.o"
         if reuse_objects and cached.is_file():
             os.utime(cached)
             with lock, log_path.open("a") as log:
                 log.write(f"[{unit.stem}] cached {cached.name}\n")
             record["units"][unit.name] = {"object": cached.name, "compiled": False}
             return cached, 0, 0.0, ""
-        obj = build_dir / (unit.stem + ".o")
-        ulog = build_dir / (unit.stem + ".log")
+        obj = build_dir / (unit.name + ".o")
+        ulog = build_dir / (unit.name + ".log")
         t0 = time.monotonic()
         with ulog.open("w") as f:
-            r = subprocess.run(compile_cmd + ["-c", str(unit), "-o", str(obj)], stdout=f, stderr=subprocess.STDOUT)
+            r = subprocess.run(compile_cmd + ["-c", str(unit), "-o", str(obj)], stdout=f,
+                               stderr=subprocess.STDOUT, env=toolchain.environment() if toolchain else None)
         secs = time.monotonic() - t0
         with lock, log_path.open("a") as log:
             log.write(f"[{unit.stem}] rc={r.returncode} {secs:.1f}s\n")
         if r.returncode == 0:
-            tmp = cached.with_name(cached.name + f".{os.getpid()}.tmp")
-            shutil.move(str(obj), str(tmp))
-            os.replace(tmp, cached)
+            # Reject changed inputs before exposing an object under its old key,
+            # not merely before publishing the final linked artifact.
+            if validate_inputs is not None:
+                validate_inputs()
+            publish_object(obj, cached)
             obj = cached
             record["units"][unit.name] = {"object": cached.name, "compiled": True, "seconds": round(secs, 1)}
         return obj, r.returncode, secs, ulog.read_text()
@@ -382,12 +448,14 @@ def _build(gen_dir: Path, sources: list[Path], headers: list[Path], compile_cmd:
         obj, rc, out = failed[0]
         raise RuntimeError(f"nvcc exit {rc} compiling the consumer unit {obj.stem}:\n{out}")
     objs = [str(obj) for obj, _, _, _ in results]
-    link = [nvcc, "--shared", "-o", str(out_so)] + objs + link_flags
+    link = (toolchain.link_command(nvcc, out_so, objs) if toolchain else
+            [nvcc, "--shared", "-o", str(out_so)] + objs + link_flags)
     t0 = time.monotonic()
     with log_path.open("a") as log:
         log.write("\n$ " + " ".join(link) + "\n")
         log.flush()
-        r = subprocess.run(link, stdout=log, stderr=subprocess.STDOUT)
+        r = subprocess.run(link, stdout=log, stderr=subprocess.STDOUT,
+                           env=toolchain.environment() if toolchain else None)
         log.write(f"[link] rc={r.returncode} {time.monotonic() - t0:.1f}s\n")
     if r.returncode != 0:
         raise RuntimeError(f"nvcc exit {r.returncode} linking the consumer artifact; build log:\n" + log_path.read_text())
@@ -436,6 +504,7 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
                    extra_flags: Sequence[str] = (),
                    link_flags: Sequence[str] = (),
                    artifact_name: str = "artifact.so",
+                   python_extension: bool = False,
                    cache_dir: str | Path | None = None,
                    cuda_arch: int | None = None,
                    force_rebuild: bool = False,
@@ -469,6 +538,10 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
     into the identity by content (an include directory is folded by path only, so list the
     headers whose edits must re-key the build); `defines` are `NAME` or `NAME=VALUE`;
     `extra_flags` go to every unit compile, `link_flags` to the link.
+    Declare `python_extension=True` for Python/pybind extensions before cache lookup.
+    Their interpreter ABI participates in pointer, content and object identity and is
+    checked on prepared loads. Native C libraries (the default) are Python-independent.
+    Builds check the declaration against exported PyInit_* symbols using `nm`.
 
     The codegen keywords (`floating_base`, `ee_joint_names`, `dtype`, `algorithm_list`,
     `enable_mujoco_kernels`, `cost_frames`, `contact_frames`, the joint-dynamics and runtime
@@ -483,6 +556,8 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
     _check_name(consumer, "consumer")
     _check_name(name, "name")
     _check_name(artifact_name, "artifact_name")
+    if not isinstance(python_extension, bool):
+        raise TypeError("python_extension must be a bool")
     urdf_p = Path(urdf_path).expanduser().resolve()
     if not urdf_p.is_file():
         raise FileNotFoundError(f"URDF file not found: {urdf_p}")
@@ -514,12 +589,38 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
         collision_res=collision_res, collision_native=collision_native, spherized_urdf=spherized_urdf,
         launch_config_profile=launch_config_profile)
     identity = artifact_identity(cuda_arch)
+    toolchain = resolve_consumer_toolchain(xflags, lflags)
+    if toolchain is not None:
+        identity["host_cxx"] = toolchain.identity
+    python_abi = _python_abi_identity() if python_extension else None
+    identity["python_abi"] = python_abi
     input_key = _input_key(urdf_bytes, code_options, srcs, hdrs, incs, defs, xflags, lflags, artifact_name, identity)
     store = root / "store"
 
+    def check_inputs_unchanged():
+        if toolchain is not None:
+            toolchain.environment()
+        current_options = dict(code_options)
+        if collision or collision_native:
+            current_options["collision_meshes"] = _collision_mesh_identity(urdf_p)
+        if spherized_urdf:
+            current_options["spherized_urdf_sha256"] = _file_digest(Path(code_options["spherized_urdf"]))
+        current_key = _input_key(urdf_p.read_bytes(), current_options, srcs, hdrs, incs,
+                                 defs, xflags, lflags, artifact_name, identity)
+        if current_key != input_key:
+            raise RuntimeError("consumer build inputs changed during generation or compilation; "
+                               "no artifact published; retry with immutable inputs")
+
     def _entry_state(entry_dir: Path) -> list[str]:
-        if not ((entry_dir / artifact_name).exists() and (entry_dir / "meta.json").exists()):
+        meta = entry_metadata(entry_dir, artifact_name)
+        if meta is None:
             return ["entry incomplete (artifact or meta.json missing)"]
+        if (meta.get("python_extension") is not python_extension or
+                "python_abi" not in meta or meta["python_abi"] != python_abi):
+            return ["python_abi: metadata declaration disagrees with requested artifact"]
+        recorded = read_build_inputs(entry_dir)
+        if recorded is not None and "python_abi" not in recorded:
+            return ["python_abi: no extension declaration recorded"]
         return stale_hit_reasons(entry_dir, identity)
 
     if plan_only:
@@ -550,32 +651,47 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
 
     store.mkdir(parents=True, exist_ok=True)
     _sweep_dead_staging_dirs(store)
-    gen_dir = store / f".gen_{os.getpid()}_{input_key[:8]}"
-    shutil.rmtree(gen_dir, ignore_errors=True)
-    gen_dir.mkdir(parents=True, exist_ok=True)
+    gen_dir = staging_dir(store, input_key)
     compiled = False
     try:
         generate_grid_cuh(urdf_p, code_options, gen_dir / "grid.cuh")
-        compile_cmd = _compile_command(gen_dir, cuda_arch, incs, defs, xflags)
-        content_key = _content_key(gen_dir, srcs, hdrs, compile_cmd, lflags, artifact_name)
+        check_inputs_unchanged()
+        compile_cmd = _compile_command(gen_dir, cuda_arch, incs, defs, xflags, toolchain)
+        content_key = _content_key(gen_dir, srcs, hdrs, compile_cmd, lflags, artifact_name,
+                                   python_abi=python_abi, toolchain=toolchain.identity if toolchain else None)
         entry_dir = store / content_key
-        if (entry_dir / artifact_name).exists() and (entry_dir / "meta.json").exists() and not force_rebuild:
-            meta = json.loads((entry_dir / "meta.json").read_text())
+        cached_meta = entry_metadata(entry_dir, artifact_name)
+        recorded = read_build_inputs(entry_dir) if cached_meta is not None else None
+        # A sidecar can be damaged independently of the content-addressed binary.
+        # Do not return a hit that load_artifact would reject, or relabel an
+        # incompatible declaration. Rebuild and replace under the publication lock.
+        abi_repair = cached_meta is not None and (
+            cached_meta.get("python_extension") is not python_extension or
+            "python_abi" not in cached_meta or cached_meta["python_abi"] != python_abi or
+            (recorded is not None and ("python_abi" not in recorded or recorded["python_abi"] != python_abi)))
+        if cached_meta is not None and not force_rebuild and not abi_repair:
+            meta = cached_meta
             if read_build_inputs(entry_dir) is None:
                 write_build_inputs(entry_dir, identity)
         else:
             _log.info("grid_rbd: building consumer artifact %s/%s (%d unit(s))", consumer, name, len(srcs))
             t0 = time.monotonic()
             record = _build(gen_dir, srcs, hdrs, compile_cmd, lflags, gen_dir / artifact_name,
-                            root / "objects", reuse_objects=not force_rebuild)
+                            root / "objects", reuse_objects=not force_rebuild,
+                            validate_inputs=check_inputs_unchanged, python_abi=python_abi, toolchain=toolchain)
+            _validate_python_exports(gen_dir / artifact_name, python_extension)
+            check_inputs_unchanged()
             compiled = record["compiled_units"] > 0
             meta = {
                 "consumer": consumer, "name": name, "artifact": artifact_name,
                 "urdf": str(urdf_p), "urdf_sha256": hashlib.sha256(urdf_bytes).hexdigest(),
                 "sources": {p.name: _file_digest(p) for p in srcs},
+                "source_paths": [str(p) for p in srcs],
                 "headers": {p.name: _file_digest(p) for p in hdrs},
                 "include_dirs": [str(d) for d in incs], "defines": defs,
                 "extra_flags": xflags, "link_flags": lflags,
+                "python_extension": python_extension, "python_abi": python_abi,
+                "consumer_toolchain": toolchain.identity if toolchain else None,
                 "code_options": code_options, "cuda_arch": int(cuda_arch),
                 "grid_rbd": package_version(), "artifact_schema": ARTIFACT_SCHEMA,
                 "build_seconds": round(time.monotonic() - t0, 1), "build": record,
@@ -585,12 +701,7 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
                 meta["cuda_archs"] = archs
             (gen_dir / "meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True))
             write_build_inputs(gen_dir, identity)
-            if force_rebuild and entry_dir.exists():
-                shutil.rmtree(entry_dir)
-            try:
-                os.replace(gen_dir, entry_dir)
-            except OSError:
-                meta = json.loads((entry_dir / "meta.json").read_text())
+            meta = publish_entry(gen_dir, entry_dir, artifact_name, force=force_rebuild or abi_repair)
     finally:
         shutil.rmtree(gen_dir, ignore_errors=True)
     keymap_record(root, input_key, content_key)
@@ -603,7 +714,8 @@ def load_artifact(consumer: str, name: str, cache_dir: str | Path | None = None,
                   cuda_arch: int | None = None) -> ConsumerArtifact:
     """The prepared artifact `name` of `consumer`, without a toolchain: the manifest names it,
     the entry must be whole and recorded for this device (or one of a fat build's devices) and
-    key schema. With no detectable GPU and no `cuda_arch`, the recorded device is trusted."""
+    key schema. Declared Python extensions must match this interpreter's ABI.
+    With no detectable GPU and no `cuda_arch`, the recorded device is trusted."""
     _check_name(consumer, "consumer")
     _check_name(name, "name")
     cache_root = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
@@ -613,7 +725,8 @@ def load_artifact(consumer: str, name: str, cache_dir: str | Path | None = None,
         raise ArtifactNotFoundError(f"no artifact {name!r} for consumer {consumer!r} under {cache_root}")
     entry_dir = root / "store" / entry["content_key"]
     artifact_name = entry.get("artifact", "artifact.so")
-    if not (entry_dir / artifact_name).exists() or not (entry_dir / "meta.json").exists():
+    meta = entry_metadata(entry_dir, artifact_name)
+    if meta is None:
         raise ArtifactIncompatibleError(f"artifact {name!r} of {consumer!r} is incomplete at {entry_dir}")
     recorded = read_build_inputs(entry_dir)
     if recorded is None:
@@ -621,6 +734,16 @@ def load_artifact(consumer: str, name: str, cache_dir: str | Path | None = None,
     if cuda_arch is None:
         cuda_arch = detect_cuda_arch()
     reasons = []
+    if "python_abi" not in recorded:
+        reasons.append("python_abi: no extension declaration recorded; rebuild the artifact")
+    else:
+        abi = recorded["python_abi"]
+        if (abi is not None and not isinstance(abi, dict)) or (
+                meta.get("python_extension") is not (abi is not None)) or (
+                "python_abi" not in meta or meta["python_abi"] != abi):
+            reasons.append("python_abi: metadata and identity declarations disagree; rebuild the artifact")
+        elif abi is not None and abi != _python_abi_identity():
+            reasons.append(f"python_abi: recorded {abi!r} != current {_python_abi_identity()!r}")
     if recorded.get("key_schema") != _KEY_SCHEMA:
         reasons.append(f"key_schema: recorded {recorded.get('key_schema')!r} != current {_KEY_SCHEMA!r}")
     if recorded.get("artifact_schema") != ARTIFACT_SCHEMA:
@@ -629,7 +752,6 @@ def load_artifact(consumer: str, name: str, cache_dir: str | Path | None = None,
         reasons.append(f"cuda_arch: recorded {recorded.get('cuda_arch')!r} (archs {recorded.get('cuda_archs')!r}) != current {cuda_arch!r}")
     if reasons:
         raise ArtifactIncompatibleError(f"artifact {name!r} of {consumer!r} cannot be loaded here: " + "; ".join(reasons))
-    meta = json.loads((entry_dir / "meta.json").read_text())
     return ConsumerArtifact(consumer, name, entry_dir / artifact_name, entry_dir / "grid.cuh", entry_dir,
                             entry["content_key"], None, int(recorded.get("cuda_arch", cuda_arch or 0)), meta, False)
 

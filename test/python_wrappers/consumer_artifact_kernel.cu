@@ -31,13 +31,13 @@ __global__ void consumer_pose_kernel(const T *d_q, const grid::robotModel<T> *d_
     }
 }
 
-extern "C" int consumer_num_pos() { return grid::NUM_POS; }
-extern "C" int consumer_num_ees() { return grid::NUM_EES; }
-extern "C" int consumer_build_tag() { return CONSUMER_BUILD_TAG; }
+extern "C" __attribute__((visibility("default"))) int consumer_num_pos() { return grid::NUM_POS; }
+extern "C" __attribute__((visibility("default"))) int consumer_num_ees() { return grid::NUM_EES; }
+extern "C" __attribute__((visibility("default"))) int consumer_build_tag() { return CONSUMER_BUILD_TAG; }
 
 // Evaluates the pose (6 per end effector) of `q` on the device; returns 0 on success,
 // writes the collision verdict (1 free, 0 hit, -1 when the header has no collision namespace).
-extern "C" int consumer_pose(const float *q, float *pose, int *is_free) {
+extern "C" __attribute__((visibility("default"))) int consumer_pose(const float *q, float *pose, int *is_free) {
     static const grid::robotModel<T> *d_model = nullptr;
     if (d_model == nullptr) d_model = grid::init_robotModel<T>();
     T *d_q = nullptr, *d_pose = nullptr; int *d_free = nullptr;
