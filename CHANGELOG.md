@@ -12,6 +12,37 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Add independent environment and self clearances to collision feasibility checks
+  through `CollisionMargins<T>` and the validating host factory
+  `make_collision_margins`. Scalar calls still apply one margin to both; explicit
+  per-side zero overrides are supported. The trailing self toggle, raw distances,
+  normals and cost derivatives retain their meanings.
+- Isolate consumer-library symbols by default. Native C entry points now require
+  explicit default visibility; pybind initialization exports remain visible.
+  Consumer compile and link share a recorded host-compiler selection, with
+  GCC-only GNU-unique suppression. GRiD's wrapper export policy is unchanged.
+- Add `python_extension=True` to consumer builds. Interpreter ABI identity guards
+  pointer, content and object reuse and prepared loads; native artifacts remain
+  independent of Python. Builds verify the declaration against exported Python
+  initialization symbols before publication.
+- Repair incomplete wrapper and consumer cache entries under a per-content
+  publication lock. Private staging, object, pointer and identity temporary files
+  distinguish concurrent threads as well as processes. Publication I/O failures propagate
+  instead of being mistaken for a completed concurrent build. Malformed identity
+  records are cache misses; permission failures remain errors.
+- Include resolved source paths and suffixes in consumer reuse identity (including
+  path-sensitive `__FILE__` expansions), and use
+  distinct output paths for same-stem sources such as `kernel.cu` and
+  `kernel.cpp`. Collision requests fingerprint resolved mesh paths and bytes
+  before reusing a cached artifact.
+- Fix generation for all-prismatic robots with fixed tool targets, initialize
+  mimic coordinates on no-trigonometry transform paths, and use typed block
+  loads on those paths. One-DoF second-order contraction uses an untiled width
+  of one instead of failing to select a tile.
+- Floor a warm compile job's memory prediction at the largest measured peak
+  among variants of the same robot. A relink measurement cannot reduce that
+  floor; first-job admission and the default for unmeasured jobs are unchanged.
+
 ## [0.6.0] — 2026-10-24
 
 - Margin-aware collision checking (HJCD-IK ask G7). `grid_collision::config_free` on the block,

@@ -115,19 +115,61 @@ lib = ctypes.CDLL(str(art.path))                 # art.header is the grid.cuh it
 ```
 
 The identity covers the URDF, the codegen options and the codegen tree, the sources and
-headers by content, the defines and flags, the toolchain, the CUDA architecture and the
-package version. A second call with the same inputs is a pointer hit (no generation, no
+headers by content, resolved source paths (including `__FILE__` expansions),
+the defines and flags, the toolchain, the CUDA architecture and the
+package version. Collision requests also fingerprint the resolved collision mesh paths
+and bytes before consulting a cached pointer. List every transitive consumer header in
+`headers`; include-directory contents are not discovered automatically. Keep all inputs
+immutable throughout a build. Detected input changes abort publication, but these checks
+are not a filesystem snapshot and cannot detect a concurrent edit restored between reads.
+A second call with the same inputs is a pointer hit (no generation, no
 `nvcc`); a changed define or source re-keys the artifact, and a unit whose exact inputs were
 compiled before links from the per-consumer object cache. The artifact, its `grid.cuh`,
-`meta.json`, `build_inputs.json` and `build.log` are published atomically under
+`meta.json`, `build_inputs.json` and `build.log` are staged together and published under
 `consumers/<consumer>/store/<content_key>/`, and the consumer's manifest binds the name under
 a lock. `grid_rbd.load_artifact("hjcd", "panda")` returns a prepared artifact without a
 toolchain, refusing one recorded for another device or key schema;
 `build_artifact(..., plan_only=True)` reports what a build would use and whether it is
 already there; `grid_rbd.list_artifacts("hjcd")` lists the manifest. The gate is
 `test/python_wrappers/test_consumer_artifact.py`.
-Ship the cache dir (`grid_rbd.default_cache_dir()`, default `~/.cache/grid-rbd/` or
-`$GRID_RBD_CACHE_DIR`) and every later run starts in well under a second.
+Keep the cache dir (`grid_rbd.default_cache_dir()`, default `~/.cache/grid-rbd/` or
+`$GRID_RBD_CACHE_DIR`) to reuse a compatible prepared build without compiling again.
+Cold loading time depends on the filesystem, CUDA context and consuming application.
+Incomplete entries are rebuilt without clearing reusable object files. Concurrent
+publishers coordinate per content key, and private staging directories distinguish
+threads as well as processes. Replacing a damaged or forced entry can briefly make
+that path unavailable to a concurrent prepared reader; it does not expose a partly
+written new directory. `force_rebuild` replaces the store entry; it does not
+unload or replace a shared library already loaded by the application. Restart that
+process to adopt a rebuilt library at the same path.
+
+For a Python extension (including pybind11), pass `python_extension=True` before
+the first build. GRiD records the interpreter implementation, major/minor version,
+SOABI, extension suffix and debug/free-threaded ABI settings in pointer, content
+and object identity. Prepared loading checks that ABI without requiring a compiler.
+Native libraries keep the default `False` and do not depend on Python's ABI.
+The caller still supplies matching Python/pybind headers and flags; this is not
+an automatic extension builder or an `abi3` compatibility promise. Consumer builds
+require `nm` to verify the declaration against exported `PyInit_*` symbols before
+publication. Prepared entries without an ABI declaration must be rebuilt once;
+do not relabel an old entry manually.
+
+Consumer modules compile with hidden symbol visibility, including inline
+functions. GCC builds also disable GNU-unique statics so one robot's template
+state cannot bind to another module's state. Export intended C entry points
+explicitly, for example
+`extern "C" __attribute__((visibility("default"))) int num_pos();`.
+pybind11 exports its `PyInit_*` entry point itself. This policy applies to
+consumer units only; the wrapper's C ABI and framework exports are unchanged.
+
+The consumer build resolves nvcc's host selection from `-ccbin` /
+`--compiler-bindir`, `NVCC_CCBIN` and prepend/append flags, records the selected
+compiler's path, bytes and version, and pins that compiler for compilation and
+linking. GCC and Clang are recognized separately; Clang does not receive the
+GCC-only GNU-unique option. An explicitly conflicting link compiler is rejected.
+Expand nvcc option files into the explicit flag lists rather than passing
+`--options-file`, `-optf` or `@file`; hidden compiler selections/dependencies in
+those files are not supported by this consumer build path.
 
 - `max_batch_size` is a compile-time cap. Calls with `batch ≤ max_batch` run in one launch;
   larger batches must be chunked by the caller. Bake in the largest batch you will run.

@@ -83,6 +83,29 @@ an interrupted run without re-running completed shards. See ``CLAUDE.md`` and
 ``test/run_split_suite.py --help`` for the full contract (RAM-aware compile
 pool, shard bin-packing, receipt merge/carry).
 
+Compile memory estimates
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+The compile pool records process-tree peak RSS. Warm variants of one robot
+share a lower bound equal to that robot's largest recorded warm-job peak:
+a variant measured as a cheap cached relink must not later be admitted as
+if a cold compilation were equally small. Unmeasured variants retain the
+conservative default when it is larger. This is a prediction, not a memory
+limit. The empty pool still admits one job even if its estimate exceeds the
+budget, so a single build must fit on the machine.
+
+On a memory-constrained Jetson, bound both concurrent compile jobs and each
+job's compiler processes. The low-level driver honors
+``GRID_SPLIT_COMPILE_JOBS`` (for example, 2) and
+``GRID_RBD_BUILD_JOBS``. The tracked receipt launcher sets its own profile;
+inspect that profile instead of assuming inherited environment overrides
+take effect. Check current free RAM and disk before an approved run. A
+historical successful pool size is not a guarantee for a cold cache or a
+larger robot.
+
+Targeted checks
+~~~~~~~~~~~~~~~
+
 For a quick targeted check, plain pytest still works:
 
 .. code-block:: bash

@@ -61,7 +61,7 @@ an alpha feature outside the receipt.
      - Ubuntu 24.04.5, Linux 7.0.0-38, x86-64
      - full receipt; release timing; install check (a fresh venv with
        torch 2.11.0+cu128 and jax 0.11.2 from PyPI)
-     - receipt 2026-10-15; timing 2026-09-27 to 2026-10-07; install check
+     - receipt 2026-10-24; timing 2026-09-27 to 2026-10-07; install check
        2026-10-15
    * - sm_87 (compute capability 8.7)
      - NVIDIA Jetson AGX Orin, 64 GB

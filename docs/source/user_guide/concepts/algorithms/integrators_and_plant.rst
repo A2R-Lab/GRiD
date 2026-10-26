@@ -170,7 +170,8 @@ state (``N = NX``) or the input (``N = NU``) with a caller matrix; and, on a
 baked cost frame, ``frame_position_cost`` on ``p_f(q) - p_des``,
 ``frame_orientation_cost`` on the log-map residual ``log(R_des^T R_f(q))``
 with Jacobian ``Jr(e)^-1`` times the frame's body-axes angular Jacobian (no
-Euler chart, regular at every orientation), and ``frame_velocity_cost`` on
+Euler chart; the principal log map has a branch cut at a relative rotation of
+pi), and ``frame_velocity_cost`` on
 the twist ``J(q) qd - v_des`` with the residual Jacobian ``[d(J qd)/dq | J]``
 (fixed base). Cost frames are named joints or fixed joints baked with
 ``gen_all_code(cost_frames=[...])`` or ``register_robot(cost_frames=[...])``

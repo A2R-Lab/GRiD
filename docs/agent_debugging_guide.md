@@ -3268,3 +3268,128 @@ Symptom: the last shard of the Orin receipt failed both cells of `test_cuda_mjx_
 Diagnosis: the test read `GRID_CUDA_ARCH` with a default of 120 and passed `-arch sm_120` to nvcc, while the sixty-one other compile sites go through `detect_cuda_arch`, which probes the first GPU and lets the variable override it. The test dates from July and had only ever run on the 5090; the sm_87 table row had no earlier receipt to catch it.
 
 Fix: the test probes like the others. For the v0.5.4 receipt, whose tree cannot change, the shard is resumed with `GRID_CUDA_ARCH=87` in the environment, which is the override the test documents and gives the harness sites the same answer as the probe. Audit before any new architecture row: `grep -n '"-arch"' test/cuda_equivalents/test_*.py test/python_wrappers/test_*.py | grep -v 'sm_{arch}\|cuda_arch()'` must come back empty.
+
+### 7.z63 Compile-pool peak ledger: a same-robot warm variant measured after its sibling is a near-free relink, and its tiny peak admits it concurrently next time
+
+The Orin v0.6.0 receipt (10-24) died six minutes in and the box hard-rebooted
+with no shutdown record. The pool had admitted warm00 (iiwa14, mb=8), warm01
+(go2), warm08 (iiwa14, mb=64) and warm20 (iiwa14, mb=256) together because the
+ledger predicted the two extra iiwa14 variants at under 1 GiB. Those numbers
+came from the v0.5.4 run, where the pool happened to start them after warm00
+had finished: the object cache made each a 15 s relink at 0.7 GiB, status
+BUILT, so `report_pool` recorded them as real builds. On a cold cache the same
+three iiwa14 specs are three full 14 GiB compiles, plus go2, about 56 GiB on a
+61 GB Jetson with 2 GB of swap; the 10 GiB MemAvailable floor is checked only
+at admission. Symptoms: `[pool] + ...` lines whose `avail` falls by tens of
+GiB per minute, a log that stops mid-pool, `last -x reboot` with no matching
+shutdown, and `~/GRiD/test/.split_suite/compile_rss.json` entries for
+`warm:<robot>,mb=NN` keys far below their `warm:<robot>,mb=8` sibling.
+Rule: a warm job's peak is a property of the robot family and the cache state,
+not of the key, so a warm prediction must not fall below the largest recorded
+peak of any key for the same robot. Until that lands in `compile_sched`, launch
+Jetson receipts with `GRID_SPLIT_COMPILE_JOBS=2` (two full compiles fit with
+30 GiB to spare). Cause confirmation needs the user: `sudo journalctl -b -1`
+grep for oom or panic; the agent cannot read the journal.
+
+### 7.z64 All-prismatic fixed tools reach previously hidden no-trig paths
+
+HJCD G13 reproduces with a single prismatic joint and a fixed tool, each with
+nonzero origin rotation and translation. The homogeneous transform list mixes
+symbolic movable transforms with NumPy fixed transforms. Calling `.atoms` on
+every matrix crashes when no earlier revolute transform short-circuits the trig
+scan. Normalize each matrix to a symbolic matrix for the scan only.
+
+Do not stop at removing the exception. The no-trig XI loader still emitted an
+undeclared cooperative group `tgrp`, and passed element counts to a byte-copy
+API. Use typed block loads. Mimic coordinate substitution reads folded scratch
+even when all joints are prismatic, so both XI and homogeneous loaders need
+the mimic fold on their no-trig paths. A one-DoF full-profile generation also
+exposed an empty contraction-tile candidate set; the untiled width of one is
+valid. CPU FK/Jacobian checks for the skew slider match an independent transform.
+The direct CUDA gate passes pose/Jacobian, thread/warp FK, and thread-count
+invariance for the slider and its negative-multiplier, nonzero-offset mimic
+variant at 1/32/64/128 threads. A runner's target is a body index:
+`NUM_JOINTS` is the reduced coordinate count here, so the last articulated
+frame is `NUM_BODIES - 1`, not `NUM_JOINTS - 1`. Request the gradient explicitly
+and use the named fixed-target entry points when checking the tool frame.
+
+### 7.z65 A content key does not make incomplete-entry repair race safe
+
+Both wrapper and consumer stores could rebuild after a missing binary, then
+interpret a failed directory rename as evidence that another builder had
+published a complete winner. The old incomplete directory could instead win
+again. Metadata loss could also fail on a content hit before any repair.
+Use shared completeness checks and a per-content lock whose inode is outside
+the replaceable entry. Keep the old entry until publication succeeds, restore
+it after a failed replacement, and propagate I/O errors. Use unique staging
+and object temporary names even within one process. A process ID alone does
+not distinguish concurrent threads. The same rule applies after the artifact
+publish: `bykey` pointers and legacy identity-sidecar backfills also need private
+temporaries. Barrier tests reproduced their rename races. Identity readers must
+validate the JSON object type and must not turn permission errors into cache
+misses; otherwise repair can hide a real access failure.
+
+Consumer object names must retain the source suffix: `kernel.cu` and
+`kernel.cpp` are distinct units even when their stems or bytes coincide.
+Collision mesh bytes and resolution paths are request inputs, not just the
+URDF text. Validate detected input changes before publishing objects as well
+as the final artifact; rejecting only the final publication can leave a bad
+object cached under an earlier key. Caller inputs must remain immutable:
+before/after comparisons cannot rule out edits restored between the reads.
+
+### 7.z66 Consumer extensions need ABI identity before lookup and private statics
+
+A generated header and unchanged consumer source do not imply a reusable Python
+extension. The interpreter ABI must enter the input pointer, content and per-unit
+object keys before lookup. Checking only at prepared load leaves incompatible
+content/object reuse open. `python_extension=True` declares the build up front;
+the exported `PyInit_*` symbols validate the declaration before publication.
+Native C artifacts do not need a Python ABI dependency. Prepared loads require
+the recorded declaration but not a compiler. The focused fixture separates its
+pybind `.cpp` unit from its generated-header `.cu` unit: including CUDA device
+code in a `.cpp` unit makes nvcc select the wrong source language.
+
+Consumer-only hidden visibility and GCC's `-fno-gnu-unique` keep function-local
+template state private across robot modules. Explicit C exports and pybind's
+initialization export remain visible. Do not copy this policy blindly to the
+wrapper, whose dlsym/framework exports have their own contract. The consumer
+test loads two robots in both orders in fresh processes, checks distinct state
+addresses and independent writes, and inspects dynamic symbols.
+
+Resolve the actual nvcc host compiler, not whichever `c++` happens to be first
+on PATH. Compile and link must use the same selected driver. Preserve its driver
+spelling (a `clang++` symlink can select different link behavior from `clang`),
+record its binary and version, and distinguish GCC from Clang before selecting
+GNU-only flags. Flatten nvcc prepend/append flags once so the compiler choice
+and flags used by child processes agree with the recorded identity.
+
+The full CPU oracle also exposed a naming assumption in the new mimic fixture:
+URDF joints and links may share a name. Pinocchio frame lookup must request the
+BODY frame explicitly, not search every frame type. Keep the inertia/FK
+comparisons and their tolerances unchanged.
+
+Both pointer and content hits must check agreement between ABI metadata and the
+identity sidecar. Checking only prepared loads permits a fast build lookup to
+return an artifact its own loader refuses. Fault injection into each file is
+needed; a sidecar-only test does not cover damaged metadata.
+
+Consumer paths are compile inputs too: nvcc receives an absolute source path and
+`__FILE__` exposes it. Same basename, suffix and bytes in two directories must not
+alias in pointer, content or unit-object keys. The compiled regression exports
+`__FILE__` and checks both actual locations, not just key inequality.
+
+### 7.z67 Separate feasibility margins must reach every tier and surface
+
+Resolve a common margin and optional environment/self overrides once on the host.
+Zero is an explicit override, never an inheritance sentinel. Pass the effective
+pair to block, warp and native-capsule feasibility checks; the same per-side
+margin must reach broad and fine tiers. Self inflation belongs to one member of
+the pair, not both. Keep distance, normal and cost paths independent.
+
+Replacing a templated scalar parameter with a value object can break inferred
+template calls even if the object has a converting constructor. Put that argument
+in a non-deduced context, and compile tests for inferred as well as explicit T.
+Keep the trailing boolean in place so an existing self-toggle call is not silently
+reinterpreted as another scalar. Test the consumer's environment-only plus empty-env
+self calls against the combined call, and use independent raw clearances and
+exactly representable boundary cases rather than relying on mutual agreement alone.
