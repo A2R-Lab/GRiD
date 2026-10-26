@@ -37,6 +37,14 @@ NATIVE_RUNNER = Path(__file__).with_name("cuda_collision_native_runner.cu")
 SELFCC_RUNNER = Path(__file__).with_name("cuda_collision_native_selfcc_runner.cu")
 
 
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.robot_smoke
+def test_static_separate_margin_thresholds(tmp_path):
+    out = _compile_and_run(tmp_path, Path(__file__).with_name("cuda_collision_margins_runner.cu"))
+    assert "MARGINS_FACTORY_BOUNDARY PASS" in out
+
+
 def _iiwa_native_spec():
     urdf = robot_urdf("iiwa14")
     if not urdf.exists():

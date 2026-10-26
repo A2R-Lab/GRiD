@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<robot name="slider_mimic_fixed_tool">
+  <link name="base"/>
+  <link name="slider">
+    <inertial><mass value="1"/><inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial>
+  </link>
+  <link name="follower">
+    <inertial><mass value="0.7"/><inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial>
+  </link>
+  <link name="tool"/>
+  <joint name="slide" type="prismatic">
+    <parent link="base"/><child link="slider"/>
+    <origin xyz="0.04 0.01 0.02" rpy="0.3 0.2 0.1"/>
+    <axis xyz="0.6 0 0.8"/>
+    <limit lower="0" upper="0.5" effort="10" velocity="1"/>
+  </joint>
+  <joint name="follower" type="prismatic">
+    <parent link="slider"/><child link="follower"/>
+    <axis xyz="0.6 0 0.8"/>
+    <mimic joint="slide" multiplier="-0.5" offset="0.17"/>
+    <limit lower="-0.1" upper="0.2" effort="10" velocity="1"/>
+  </joint>
+  <joint name="tool" type="fixed">
+    <parent link="follower"/><child link="tool"/>
+    <origin xyz="0.04 0.01 0.02" rpy="0.3 0.2 0.1"/>
+  </joint>
+</robot>

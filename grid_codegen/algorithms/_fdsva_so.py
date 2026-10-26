@@ -195,7 +195,8 @@ def _fdsva_so_minv_tile(n):
     the untiled loop (A/B knob)."""
     if os.environ.get("GRID_FDSVA_SO_MINV_TILE", "") == "1":
         return 1
-    return max(d for d in range(1, 9) if n % d == 0 and n // d >= 2)
+    # A one-DoF model has only one i-tile; its valid untiled width is still 1.
+    return max((d for d in range(1, 9) if n % d == 0 and n // d >= 2), default=1)
 
 
 def gen_fdsva_so_contract_temp_mem_size(self):

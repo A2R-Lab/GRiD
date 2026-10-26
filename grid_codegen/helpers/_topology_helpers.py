@@ -996,27 +996,25 @@ def gen_load_update_XImats_helpers(self, include_base_inertia = False, include_h
             self.gen_add_sync()
     # else just load in XI from global to shared efficiently
     else:
+        # This helper has a block API, not a cooperative-group parameter. The
+        # old no-trig branch referred to an undeclared tgrp and copied element
+        # counts as byte counts. Use the same typed load as the trig branch.
+        self.gen_add_parallel_loop("ind", str(XI_size))
         if runtime_inertia:
-            # RUNTIME_INERTIA: copy only the X-region [0,36*n) and any Xhom tail
-            # [36*2*n, XI_size); rebuild the I-region [36*n,36*2*n) from the
-            # param table. Default: one contiguous memcpy_async of the whole XI.
-            self.gen_add_code_line("if constexpr (RUNTIME_INERTIA) {", True)
-            self.gen_add_code_line("cgrps::memcpy_async(tgrp,s_XImats,d_robotModel->d_XImats," + str(i_region_lo) + ");")
-            if XI_size > i_region_hi:
-                self.gen_add_code_line("cgrps::memcpy_async(tgrp,s_XImats+" + str(i_region_hi) + ",d_robotModel->d_XImats+" + str(i_region_hi) + "," + str(XI_size - i_region_hi) + ");")
-            self.gen_add_end_control_flow()
-            self.gen_add_code_line("else {", True)
-            self.gen_add_code_line("cgrps::memcpy_async(tgrp,s_XImats,d_robotModel->d_XImats," + str(XI_size) + ");")
-            self.gen_add_end_control_flow()
-        else:
-            self.gen_add_code_line("cgrps::memcpy_async(tgrp,s_XImats,d_robotModel->d_XImats," + str(XI_size) + ");")
+            self.gen_add_code_line("if constexpr (RUNTIME_INERTIA) { if (ind >= " + str(i_region_lo) + " && ind < " + str(i_region_hi) + ") { continue; } }")
+        self.gen_add_code_line("s_XImats[ind] = d_robotModel->d_XImats[ind];")
+        self.gen_add_end_control_flow()
         if not self.robot.is_serial_chain() or not self.robot.are_Ss_identical(list(range(n))):
-            self.gen_add_code_line("cgrps::memcpy_async(tgrp,s_topology_helpers,d_robotModel->d_topology_helpers," + str(self.gen_topology_helpers_size()) + "*sizeof(int));")
-        self.gen_add_code_line("cgrps::wait(tgrp);")
+            self.gen_add_parallel_loop("ind", str(self.gen_topology_helpers_size()))
+            self.gen_add_code_line("s_topology_helpers[ind] = d_robotModel->d_topology_helpers[ind];")
+            self.gen_add_end_control_flow()
+        self.gen_add_sync()
         if runtime_inertia:
             _emit_runtime_inertia_rebuild(self, n)
         if runtime_transform:
             _emit_runtime_transform_rebuild(self, n)
+        if self.robot_has_mimic_joints():
+            _emit_mimic_q_fold(self)
     # loop through Xmats and update all non-constant values serially
     # runtime_transform: source the X cells from the symbolic-Xfixed transforms
     # (dense rpy pattern, origin carried as xf_* symbols) so the origin literals
@@ -1253,7 +1251,9 @@ def gen_load_update_XmatsHom_helpers(self, include_base_inertia = False, include
     Xmats_hom = self.robot.get_Xmats_hom_ordered_by_id(include_fixed_joints = self.include_fixed_kinematic_targets)
     use_trig = False
     for mat in Xmats_hom:
-        if len(mat.atoms(sp.sin, sp.cos)) > 0:
+        # Movable transforms are symbolic; fixed tool transforms can be NumPy
+        # arrays. Normalize for the scan without changing their stored values.
+        if len(sp.Matrix(mat).atoms(sp.sin, sp.cos)) > 0:
             use_trig = True
             break
     # if trig is needed, compute sin/cos while loading XImats from global to shared
@@ -1304,6 +1304,8 @@ def gen_load_update_XmatsHom_helpers(self, include_base_inertia = False, include
             self.gen_add_code_line("s_topology_helpers[ind] = d_robotModel->d_topology_helpers[ind];")
             self.gen_add_end_control_flow()
         self.gen_add_sync()
+        if self.robot_has_mimic_joints():
+            _emit_mimic_q_fold(self)
     # loop through Xmats and update all non-constant values serially
     def replace_hom_config_symbols(str_val, ind):
         return _config_symbol_subst(self, str_val, ind, spherical = self.robot.joint_is_spherical(ind), ccode = True)
