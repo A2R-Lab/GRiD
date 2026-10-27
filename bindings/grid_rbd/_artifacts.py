@@ -50,6 +50,7 @@ from ._cache import (_KEY_SCHEMA, _arch_loadable, _sweep_dead_staging_dirs, cano
 from ._compile import _NVCC_DEFAULT_FLAGS, _build_jobs, find_nvcc, generate_grid_cuh
 from ._store import entry_metadata, publish_entry, publish_object, staging_dir
 from ._consumer_toolchain import resolve_consumer_toolchain
+from ._consumer_dependencies import discover_dependencies
 
 _log = logging.getLogger("grid_rbd")
 
@@ -103,6 +104,7 @@ def _artifact_module_hash() -> str:
     try:
         h = hashlib.sha256(Path(__file__).read_bytes())
         h.update(Path(__file__).with_name("_consumer_toolchain.py").read_bytes())
+        h.update(Path(__file__).with_name("_consumer_dependencies.py").read_bytes())
         return h.hexdigest()
     except OSError:
         return ""
@@ -328,13 +330,15 @@ def _toolchain_tag() -> str:
 
 
 def _content_key(gen_dir: Path, sources: list[Path], headers: list[Path], compile_cmd: list[str],
-                 link_flags: list[str], artifact_name: str, *, python_abi=None, toolchain=None) -> str:
+                 link_flags: list[str], artifact_name: str, *, python_abi=None, toolchain=None,
+                 dependencies=None) -> str:
     """Exactly what nvcc sees: the generated header, the static collision header, the
     consumer's sources and headers, the flag list (the staging dir's own -I removed; its
     content is hashed), the link flags and the toolchain."""
     h = hashlib.sha256()
     h.update(("python_abi=" + canonical_options(python_abi)).encode())
     h.update(("consumer_toolchain=" + canonical_options(toolchain)).encode())
+    h.update(("dependencies=" + canonical_options(dependencies)).encode())
     h.update((gen_dir / "grid.cuh").read_bytes())
     h.update(_collision_include_dir().joinpath("grid_collision_geometry.cuh").read_bytes())
     for p in sources:
@@ -352,10 +356,11 @@ def _content_key(gen_dir: Path, sources: list[Path], headers: list[Path], compil
 
 
 def _unit_object_key(unit: Path, gen_dir: Path, headers: list[Path], compile_cmd: list[str], *,
-                     python_abi=None, toolchain=None) -> str:
+                     python_abi=None, toolchain=None, dependencies=None) -> str:
     h = hashlib.sha256()
     h.update(("python_abi=" + canonical_options(python_abi)).encode())
     h.update(("consumer_toolchain=" + canonical_options(toolchain)).encode())
+    h.update(("dependencies=" + canonical_options(dependencies)).encode())
     # nvcc receives this exact resolved path: suffix selects the language and
     # __FILE__ exposes the whole path, not merely its basename.
     h.update(str(unit).encode() + b"\0")
@@ -395,7 +400,7 @@ def _compile_command(gen_dir: Path, cuda_arch: int, include_dirs: list[Path], de
 
 def _build(gen_dir: Path, sources: list[Path], headers: list[Path], compile_cmd: list[str], link_flags: list[str],
            out_so: Path, object_cache_dir: Path, reuse_objects: bool, validate_inputs=None,
-           python_abi=None, toolchain=None) -> dict[str, Any]:
+           python_abi=None, toolchain=None, dependencies=None, validate_unit_inputs=None) -> dict[str, Any]:
     """Compile each consumer source with -c (from the object cache when its key exists), then
     host-link the objects into `out_so`. Returns a record of what ran."""
     nvcc = compile_cmd[0]
@@ -413,8 +418,11 @@ def _build(gen_dir: Path, sources: list[Path], headers: list[Path], compile_cmd:
     def one(unit: Path) -> tuple[Path, int, float, str]:
         if validate_inputs is not None:
             validate_inputs()
+        if validate_unit_inputs is not None:
+            validate_unit_inputs(unit)
         key = _unit_object_key(unit, gen_dir, headers, compile_cmd, python_abi=python_abi,
-                               toolchain=toolchain.identity if toolchain else None)
+                               toolchain=toolchain.identity if toolchain else None,
+                               dependencies=dependencies["units"][str(unit)] if dependencies else None)
         cached = object_cache_dir / f"{unit.name}-{key}.o"
         if reuse_objects and cached.is_file():
             os.utime(cached)
@@ -436,6 +444,8 @@ def _build(gen_dir: Path, sources: list[Path], headers: list[Path], compile_cmd:
             # not merely before publishing the final linked artifact.
             if validate_inputs is not None:
                 validate_inputs()
+            if validate_unit_inputs is not None:
+                validate_unit_inputs(unit)
             publish_object(obj, cached)
             obj = cached
             record["units"][unit.name] = {"object": cached.name, "compiled": True, "seconds": round(secs, 1)}
@@ -534,9 +544,11 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
     `name` the artifact within it (one per robot and configuration). `sources` are the
     consumer's translation units, each compiled with `-c` against the generated `grid.cuh`
     (plus the static collision header and the GLASS include directories) and linked with
-    `--shared` into `artifact_name`; `headers` are the consumer's own header files, folded
-    into the identity by content (an include directory is folded by path only, so list the
-    headers whose edits must re-key the build); `defines` are `NAME` or `NAME=VALUE`;
+    `--shared` into `artifact_name`. Non-system dependencies are discovered with nvcc
+    before reuse/build and hashed by path and contents; `headers` supplements that
+    discovery with explicitly declared dependencies. System headers excluded by -MM
+    are an environment assumption, not covered by compiler identity alone.
+    `defines` are `NAME` or `NAME=VALUE`;
     `extra_flags` go to every unit compile, `link_flags` to the link.
     Declare `python_extension=True` for Python/pybind extensions before cache lookup.
     Their interpreter ABI participates in pointer, content and object identity and is
@@ -551,8 +563,10 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
     validated against the URDF). `launch_config_profile` (default: the bindings' "ffi"
     profile) names the baked launch-configuration profile.
 
-    `plan_only=True` reports what a build would use and whether it is already there, without
-    generating or compiling. `force_rebuild=True` recompiles every unit."""
+    `plan_only=True` reports what a build would use without generating or compiling;
+    validating an existing entry still invokes dependency preprocessing. Cold plans
+    cannot know dependencies until a generated header exists. `force_rebuild=True`
+    recompiles every unit. Prepared `load_artifact` requires neither source nor compiler."""
     _check_name(consumer, "consumer")
     _check_name(name, "name")
     _check_name(artifact_name, "artifact_name")
@@ -621,7 +635,15 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
         recorded = read_build_inputs(entry_dir)
         if recorded is not None and "python_abi" not in recorded:
             return ["python_abi: no extension declaration recorded"]
-        return stale_hit_reasons(entry_dir, identity)
+        stale = stale_hit_reasons(entry_dir, identity)
+        if stale:
+            return stale
+        command = _compile_command(entry_dir, cuda_arch, incs, defs, xflags, toolchain)
+        current = discover_dependencies(entry_dir, srcs, command, toolchain)
+        check_inputs_unchanged()
+        if meta.get("dependencies") != current:
+            return ["dependencies: selected files or contents changed (or no capture recorded)"]
+        return []
 
     if plan_only:
         mapped = keymap_lookup(root, input_key)
@@ -634,7 +656,7 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
             "content_key": mapped if (mapped and stale == []) else None,
             "cached": bool(mapped) and stale == [], "stale_reasons": stale,
             "store_dir": str(entry_dir) if (mapped and stale == []) else None,
-            "would": "load" if (mapped and stale == []) else "generate+compile (the content key decides whether nvcc runs)",
+            "would": "load" if (mapped and stale == []) else "generate+compile (the content key decides whether compilation is needed)",
         }
 
     if not force_rebuild:
@@ -657,8 +679,26 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
         generate_grid_cuh(urdf_p, code_options, gen_dir / "grid.cuh")
         check_inputs_unchanged()
         compile_cmd = _compile_command(gen_dir, cuda_arch, incs, defs, xflags, toolchain)
+        dependencies = discover_dependencies(gen_dir, srcs, compile_cmd, toolchain)
+
+        def check_build_inputs():
+            check_inputs_unchanged()
+            if discover_dependencies(gen_dir, srcs, compile_cmd, toolchain) != dependencies:
+                raise RuntimeError("consumer dependencies changed during build; no artifact published; "
+                                   "retry with immutable inputs")
+
+        def check_unit_inputs(unit):
+            # Check the unit being exposed, not every unrelated unit around each
+            # compile. Whole-build checks still bracket final publication.
+            current = discover_dependencies(gen_dir, [unit], compile_cmd, toolchain)
+            if current["units"][str(unit)] != dependencies["units"][str(unit)]:
+                raise RuntimeError("consumer dependencies changed during unit compilation; "
+                                   "retry with immutable inputs")
+
+        check_build_inputs()
         content_key = _content_key(gen_dir, srcs, hdrs, compile_cmd, lflags, artifact_name,
-                                   python_abi=python_abi, toolchain=toolchain.identity if toolchain else None)
+                                   python_abi=python_abi, toolchain=toolchain.identity if toolchain else None,
+                                   dependencies=dependencies)
         entry_dir = store / content_key
         cached_meta = entry_metadata(entry_dir, artifact_name)
         recorded = read_build_inputs(entry_dir) if cached_meta is not None else None
@@ -669,7 +709,9 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
             cached_meta.get("python_extension") is not python_extension or
             "python_abi" not in cached_meta or cached_meta["python_abi"] != python_abi or
             (recorded is not None and ("python_abi" not in recorded or recorded["python_abi"] != python_abi)))
-        if cached_meta is not None and not force_rebuild and not abi_repair:
+        dependency_repair = cached_meta is not None and cached_meta.get("dependencies") != dependencies
+        if cached_meta is not None and not force_rebuild and not abi_repair and not dependency_repair:
+            check_build_inputs()
             meta = cached_meta
             if read_build_inputs(entry_dir) is None:
                 write_build_inputs(entry_dir, identity)
@@ -678,9 +720,10 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
             t0 = time.monotonic()
             record = _build(gen_dir, srcs, hdrs, compile_cmd, lflags, gen_dir / artifact_name,
                             root / "objects", reuse_objects=not force_rebuild,
-                            validate_inputs=check_inputs_unchanged, python_abi=python_abi, toolchain=toolchain)
+                            validate_inputs=check_inputs_unchanged, python_abi=python_abi, toolchain=toolchain,
+                            dependencies=dependencies, validate_unit_inputs=check_unit_inputs)
             _validate_python_exports(gen_dir / artifact_name, python_extension)
-            check_inputs_unchanged()
+            check_build_inputs()
             compiled = record["compiled_units"] > 0
             meta = {
                 "consumer": consumer, "name": name, "artifact": artifact_name,
@@ -692,6 +735,7 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
                 "extra_flags": xflags, "link_flags": lflags,
                 "python_extension": python_extension, "python_abi": python_abi,
                 "consumer_toolchain": toolchain.identity if toolchain else None,
+                "dependencies": dependencies,
                 "code_options": code_options, "cuda_arch": int(cuda_arch),
                 "grid_rbd": package_version(), "artifact_schema": ARTIFACT_SCHEMA,
                 "build_seconds": round(time.monotonic() - t0, 1), "build": record,
@@ -701,7 +745,10 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
                 meta["cuda_archs"] = archs
             (gen_dir / "meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True))
             write_build_inputs(gen_dir, identity)
-            meta = publish_entry(gen_dir, entry_dir, artifact_name, force=force_rebuild or abi_repair)
+            check_build_inputs()
+            meta = publish_entry(gen_dir, entry_dir, artifact_name,
+                                 force=force_rebuild or abi_repair or dependency_repair)
+        check_inputs_unchanged()
     finally:
         shutil.rmtree(gen_dir, ignore_errors=True)
     keymap_record(root, input_key, content_key)

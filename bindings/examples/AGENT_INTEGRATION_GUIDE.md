@@ -118,19 +118,32 @@ The identity covers the URDF, the codegen options and the codegen tree, the sour
 headers by content, resolved source paths (including `__FILE__` expansions),
 the defines and flags, the toolchain, the CUDA architecture and the
 package version. Collision requests also fingerprint the resolved collision mesh paths
-and bytes before consulting a cached pointer. List every transitive consumer header in
-`headers`; include-directory contents are not discovered automatically. Keep all inputs
+and bytes before consulting a cached pointer. Consumer builds run `nvcc -MM` with
+their effective compile flags and record the selected non-system dependencies
+and their content hashes per translation unit in `meta.json`. Discovery runs on
+build lookups too: changing a transitive header, upgrading pybind headers in
+place or adding an earlier include-path match invalidates affected reuse.
+Explicit `headers` supplement this discovery for additional file inputs.
+System development headers omitted by `-MM` remain an environment assumption;
+compiler identity does not fingerprint every toolkit/host package file. Use an
+immutable build environment, or explicitly list relevant omitted headers.
+Dependency output must name readable files. Literal backslashes in POSIX filenames
+are not supported: nvcc rewrites them as slashes in its report. Use ordinary path
+separators and names; spaces, `#` and `$` are tested. An unreadable dependency is
+an error, never a reason to accept an old cached artifact.
+Keep all inputs
 immutable throughout a build. Detected input changes abort publication, but these checks
 are not a filesystem snapshot and cannot detect a concurrent edit restored between reads.
-A second call with the same inputs is a pointer hit (no generation, no
-`nvcc`); a changed define or source re-keys the artifact, and a unit whose exact inputs were
+A second call with the same inputs is a pointer hit (no generation or compilation,
+but dependency preprocessing still runs); a changed define or source re-keys the artifact, and a unit whose exact inputs were
 compiled before links from the per-consumer object cache. The artifact, its `grid.cuh`,
 `meta.json`, `build_inputs.json` and `build.log` are staged together and published under
 `consumers/<consumer>/store/<content_key>/`, and the consumer's manifest binds the name under
 a lock. `grid_rbd.load_artifact("hjcd", "panda")` returns a prepared artifact without a
 toolchain, refusing one recorded for another device or key schema;
 `build_artifact(..., plan_only=True)` reports what a build would use and whether it is
-already there; `grid_rbd.list_artifacts("hjcd")` lists the manifest. The gate is
+already there. Checking a cached plan performs dependency preprocessing; a cold
+plan does not generate or compile. `grid_rbd.list_artifacts("hjcd")` lists the manifest. The gate is
 `test/python_wrappers/test_consumer_artifact.py`.
 Keep the cache dir (`grid_rbd.default_cache_dir()`, default `~/.cache/grid-rbd/` or
 `$GRID_RBD_CACHE_DIR`) to reuse a compatible prepared build without compiling again.

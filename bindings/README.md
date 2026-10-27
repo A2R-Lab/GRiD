@@ -254,6 +254,14 @@ the collision options (`collision`, `collision_res`, `collision_native`, `spheri
 GRiD never binds the consumer's symbols; load the artifact with `ctypes` or your own binding.
 See the agent integration guide for the full description.
 
+Consumer build lookups use `nvcc -MM` to rediscover and hash selected non-system
+headers, including transitive headers and newly shadowing include-path matches.
+`headers=[...]` adds explicit file inputs rather than replacing discovery.
+Unchanged build lookups and cached `plan_only` checks preprocess but do not
+compile. Prepared `load_artifact` remains compiler-free. System development
+headers omitted by `-MM` require an immutable build environment or explicit
+header declarations; compiler version alone is not a complete environment hash.
+
 Registration failures (a failed device allocation, a bad toolkit) raise a Python
 exception naming the failed operation; the generated initializers never
 `exit()` or reset the CUDA context inside the interpreter (they use the

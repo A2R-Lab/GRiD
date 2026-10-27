@@ -3421,3 +3421,29 @@ after installation leaves a complete winner and possibly a backup. Retry must
 repair/adopt correctly without deleting reusable objects. This is recovery,
 not durable atomic replacement or reader snapshot isolation. Do not purge
 backups or shared caches automatically as part of a regression test.
+
+### 7.z70 Header selection is a build input, not just a directory name
+
+Hashing a caller's source and explicit header list misses unlisted transitive
+headers and a new header earlier on the include path. Discover dependencies
+with the actual compiler and effective flags on every consumer build lookup,
+then hash selected paths and bytes per unit. A stored list alone cannot detect
+a previously absent earlier match. Generated staging paths must be normalized
+so a fresh generation directory does not defeat content reuse.
+Retain the compiler-selected spelling as well as the resolved target: a new
+symlink alias can change a header's `__FILE__` while its bytes stay identical.
+
+Parse the compiler's Make format, including whitespace before the target colon,
+escaped spaces and line continuations. nvcc leaves `#` and `$` literal, so do not
+apply Make variable/comment evaluation or dollar unescaping. Its POSIX backslash
+filename rewriting can yield an unreadable dependency; report that failure rather
+than guessing or accepting an old artifact. Fail closed on preprocessing failure;
+never return the old artifact as a fallback. Recheck before publishing objects
+and the completed entry while inputs are immutable. This does not create a
+filesystem snapshot. Prepared loading is a separate compiler-free operation.
+Check each unit's own dependencies around its compilation and all dependencies
+before artifact publication; rescanning every unit around every other unit makes
+the number of preprocessor invocations quadratic without protecting that unit's
+object any better. No stat-based digest reuse is needed for this reduction.
+`-MM` deliberately omits system headers: compiler identity is not evidence that
+all development packages stayed unchanged. Record that assumption explicitly.

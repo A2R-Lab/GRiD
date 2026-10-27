@@ -12,6 +12,12 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Capture consumer translation-unit dependencies with `nvcc -MM` and hash the
+  selected non-system header contents into artifact and per-unit reuse keys.
+  Build lookups rediscover include selection, including newly shadowing headers;
+  prepared loads remain compiler-free. Explicit headers supplement discovery,
+  while omitted system development headers remain a documented environment
+  assumption. No stat-based hashing shortcut or kernel change is introduced.
 - Project fixed-base skew-axis mimic forces and mass matrices through every
   nonzero motion-subspace component instead of a cardinal-axis index. Independent
   slider mechanics now check ID/FD/ABA/M/Minv, with first derivatives on cardinal

@@ -24,6 +24,8 @@ def build_case(tmp_path, monkeypatch):
     monkeypatch.setattr(artifacts, "generate_grid_cuh", lambda urdf, opts, out: out.write_text("header"))
     monkeypatch.setattr(artifacts, "_validate_python_exports", lambda *a: None, raising=False)
     monkeypatch.setattr(artifacts, "resolve_consumer_toolchain", lambda *a: None)
+    monkeypatch.setattr(artifacts, "discover_dependencies", lambda *a: {
+        "schema": 1, "mode": "nvcc-MM", "units": {str(source): []}})
 
     def compile(gen, srcs, hdrs, cmd, flags, out, objects, **kw):
         state.builds += 1

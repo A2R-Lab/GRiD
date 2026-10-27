@@ -5,9 +5,9 @@ generates for a robot, under the store's rules, in a namespace of the cache dire
 belongs to the consumer. This suite builds `consumer_artifact_kernel.cu` for iiwa14 in a fresh
 cache directory and checks, in order: the artifact loads through ctypes and its end-effector
 pose equals the RBDReference oracle; the second build of the same request is a pointer hit
-(no generation, no nvcc); a changed define re-keys the artifact and recompiles; a second unit
+(no generation or compilation; dependency preprocessing only); a changed define re-keys the artifact and recompiles; a second unit
 that does not change reuses its object; a tampered identity record is refused and the
-content key re-hits without nvcc; `load_artifact` works with nvcc off the PATH and refuses an
+content key re-hits without compilation; `load_artifact` works with nvcc off the PATH and refuses an
 artifact recorded for another device; the collision options emit the `grid_collision`
 namespace and the sphere-model validator runs; a kinematics-only artifact carries no plant
 block unless asked.
@@ -44,6 +44,44 @@ _KERNEL = Path(__file__).with_name("consumer_artifact_kernel.cu")
 _KINEMATICS = ["end_effector_pose"]
 
 
+def test_compiler_discovered_headers_rekey_native_values(tmp_path):
+    """Transitive edits and a new earlier include win without explicit headers=."""
+    from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
+    early, late = tmp_path / "early", tmp_path / "late headers"
+    early.mkdir(); late.mkdir()
+    (late / "config.h").write_text('#include "detail space.h"\n')
+    detail = late / "detail space.h"
+    detail.write_text("#define VALUE 13\n")
+    device_header = late / "device.h"
+    device_header.write_text("#define DEVICE_VALUE 17\n")
+    source = tmp_path / "deps.cu"
+    source.write_text('#include "grid.cuh"\n#include "config.h"\n'
+                      '#ifdef __CUDA_ARCH__\n#include "device.h"\n#endif\n'
+                      'extern "C" __attribute__((visibility("default")))\n'
+                      'int dependency_value() { return VALUE; }\n')
+    def build():
+        return _grid_rbd.build_artifact("dependencies", "robot", _URDF,
+            sources=[source], include_dirs=[early, late], cache_dir=tmp_path / "cache",
+            cuda_arch=_detect_cuda_arch(), algorithm_list=_KINEMATICS,
+            enable_mujoco_kernels=False)
+    def value(artifact):
+        return ctypes.CDLL(str(artifact.path)).dependency_value()
+    first = build()
+    assert str(device_header) in {
+        row["path"] for row in first.meta["dependencies"]["units"][str(source)]}
+    assert value(first) == 13
+    assert not build().compiled
+    detail.write_text("#define VALUE 29\n")
+    second = build()
+    assert second.content_key != first.content_key and value(second) == 29
+    (early / "config.h").write_text("#define VALUE 47\n")
+    third = build()
+    assert third.content_key != second.content_key and value(third) == 47
+    device_header.write_text("#define DEVICE_VALUE 23\n")
+    fourth = build()
+    assert fourth.content_key != third.content_key and fourth.compiled
+
+
 def test_consumer_migration_example(tmp_path):
     from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
     script = _REPO_ROOT / "bindings/examples/consumer_artifact_migration.py"
@@ -56,6 +94,52 @@ def test_consumer_migration_example(tmp_path):
     assert report["num_pos"] == 7
     assert report["artifacts"]["native"]["python_extension"] is False
     assert report["artifacts"]["python"]["python_extension"] is True
+
+
+def test_shadowing_symlink_preserves_header_file_macro_identity(tmp_path):
+    early, late = tmp_path / "early", tmp_path / "late"
+    early.mkdir(); late.mkdir()
+    header = late / "selected.h"
+    header.write_text('inline const char* selected_path() { return __FILE__; }\n')
+    source = tmp_path / "path.cpp"
+    source.write_text('#include "selected.h"\n'
+        'extern "C" __attribute__((visibility("default"))) const char* header_path() { return selected_path(); }\n')
+    opts = dict(sources=[source], include_dirs=[early, late])
+    first = _build(tmp_path, name="header_path", **opts)
+    def path(art):
+        lib = ctypes.CDLL(str(art.path))
+        lib.header_path.restype = ctypes.c_char_p
+        return lib.header_path().decode()
+    assert path(first) == str(header)
+    alias = early / "selected.h"
+    alias.symlink_to(header)
+    second = _build(tmp_path, name="header_path", **opts)
+    assert second.content_key != first.content_key
+    assert path(second) == str(alias)
+
+
+@pytest.mark.parametrize("header_name", ["space name.h", "hash#name.h", "cash$name.h", "cash$$name.h"])
+def test_real_compiler_dependency_filename_escaping(tmp_path, header_name):
+    from grid_rbd._consumer_dependencies import discover_dependencies
+    header = tmp_path / header_name
+    header.write_text("constexpr int dependency_probe = 7;\n")
+    source = tmp_path / "escaping.cpp"
+    source.write_text(f'#include "{header_name}"\n')
+    # Direct compiler discovery is enough here; executable builds above cover
+    # its connection to object keys and the returned numerical artifact.
+    result = discover_dependencies(tmp_path / "generated", [source], [shutil.which("nvcc")])
+    assert str(header) in {row["path"] for row in result["units"][str(source)]}
+
+
+def test_real_compiler_unreadable_dependency_fails_closed(tmp_path):
+    from grid_rbd._consumer_dependencies import discover_dependencies
+    # nvcc emits back/slash.h for this legal POSIX name. Do not silently omit
+    # the dependency or adopt an old cached artifact when its report is unusable.
+    (tmp_path / r"back\slash.h").write_text("constexpr int probe = 7;\n")
+    source = tmp_path / "backslash.cpp"
+    source.write_text('#include "back\\slash.h"\n')
+    with pytest.raises(RuntimeError, match="dependency cannot be read"):
+        discover_dependencies(tmp_path / "generated", [source], [shutil.which("nvcc")])
 
 
 def test_concurrent_consumer_builds_publish_loadable_winner(tmp_path):
@@ -217,12 +301,15 @@ def test_plant_block_follows_the_request(tmp_path):
 
 def test_declared_python_extension_import_and_prepared_load(tmp_path, monkeypatch):
     import pybind11
+    # Only a private copy is changed; installed/peer headers stay untouched.
+    pybind_include = tmp_path / "pybind-include"
+    shutil.copytree(pybind11.get_include(), pybind_include)
     source = tmp_path / "abi_probe.cpp"
     source.write_text('#include <pybind11/pybind11.h>\nextern "C" int abi_num_pos();\n'
                       'PYBIND11_MODULE(grid_abi_probe, m) { m.def("num_pos", &abi_num_pos); }\n')
     cuda_source = tmp_path / "abi_probe.cu"
     cuda_source.write_text('#include "grid.cuh"\nextern "C" int abi_num_pos() { return grid::NUM_POS; }\n')
-    opts = dict(sources=[source, cuda_source], include_dirs=[pybind11.get_include(), sysconfig.get_path("include")],
+    opts = dict(sources=[source, cuda_source], include_dirs=[pybind_include, sysconfig.get_path("include")],
                 artifact_name="grid_abi_probe.so", python_extension=True)
     art = _build(tmp_path, name="extension", **opts)
     assert art.meta["python_abi"]["soabi"] == sysconfig.get_config_var("SOABI")
@@ -231,9 +318,19 @@ def test_declared_python_extension_import_and_prepared_load(tmp_path, monkeypatc
     spec.loader.exec_module(module)
     assert module.num_pos() == 7
     assert not _build(tmp_path, name="extension", **opts).compiled
+    common = pybind_include / "pybind11" / "detail" / "common.h"
+    common.write_text(common.read_text() + "\n// private in-place header upgrade probe\n")
+    upgraded = _build(tmp_path, name="extension", **opts)
+    assert upgraded.content_key != art.content_key
+    assert upgraded.meta["build"]["units"][source.name]["compiled"]
+    assert not upgraded.meta["build"]["units"][cuda_source.name]["compiled"]
+    spec = importlib.util.spec_from_file_location("grid_abi_probe", upgraded.path)
+    upgraded_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(upgraded_module)
+    assert upgraded_module.num_pos() == 7
     monkeypatch.setenv("PATH", "/nonexistent")
     loaded = _grid_rbd.load_artifact("gate", "extension", cache_dir=tmp_path, cuda_arch=art.cuda_arch)
-    assert loaded.path == art.path
+    assert loaded.path == upgraded.path
 
 
 def test_undeclared_python_extension_is_not_published(tmp_path):

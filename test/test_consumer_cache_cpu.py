@@ -20,13 +20,15 @@ def consumer(tmp_path, monkeypatch):
     monkeypatch.setattr(artifacts, "_toolchain_tag", lambda: "fake-toolchain")
     monkeypatch.setattr(artifacts, "_validate_python_exports", lambda *a: None)
     monkeypatch.setattr(artifacts, "resolve_consumer_toolchain", lambda *a: None)
+    monkeypatch.setattr(artifacts, "discover_dependencies", lambda *a: {
+        "schema": 1, "mode": "nvcc-MM", "units": {str(source): []}})
 
     def generate(urdf, opts, out):
         state.generated += 1
         out.write_text('// header\n')
 
     def build(gen, sources, headers, cmd, flags, out, objects, reuse_objects, validate_inputs=None,
-              python_abi=None, toolchain=None):
+                    python_abi=None, toolchain=None, dependencies=None, validate_unit_inputs=None):
         state.compiled += 1
         out.write_bytes(b"artifact")
         return {"compiled_units": 1, "units": {}}
