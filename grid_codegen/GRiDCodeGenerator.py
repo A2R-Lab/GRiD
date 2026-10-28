@@ -1,5 +1,6 @@
 import os
 import warnings
+import math
 
 # Codegen-time frame-selection predicate shared with the idsva_so dispatcher /
 # device wrapper. The emission gate (enable_idsva_so_world_frame) MUST agree with
@@ -208,8 +209,13 @@ class GRiDCodeGenerator:
         self._code_parts.append(text)
         self._code_cache = None
 
-    def __init__(self, robotObj, DEBUG_MODE = False, NEED_PRINT_MAT = False, FILE_NAMESPACE = "grid", USE_JOINT_DYNAMICS = False, dtype = "float", MUJOCO_OUTPUT = False, LAUNCH_CONFIG_ROBOT = None, LAUNCH_CONFIG_PROFILE = "host", runtime_joint_dynamics = False, LAUNCH_CONFIG_GPU = None, FRICTION_MODEL = "sign", FRICTION_WIDTH = 0.03):
+    def __init__(self, robotObj, DEBUG_MODE = False, NEED_PRINT_MAT = False, FILE_NAMESPACE = "grid", USE_JOINT_DYNAMICS = False, dtype = "float", MUJOCO_OUTPUT = False, LAUNCH_CONFIG_ROBOT = None, LAUNCH_CONFIG_PROFILE = "host", runtime_joint_dynamics = False, LAUNCH_CONFIG_GPU = None, FRICTION_MODEL = "sign", FRICTION_WIDTH = 0.03, JOINT_ARMATURE = None):
         self.robot = robotObj
+        # Reflected rotor inertia: M_eff = M + diag(a). Baked constants enter
+        # ABA/Minv's articulated joint inertia, CRBA's diagonal and RNEA's
+        # a*qdd term. Constant a has no q/qd derivative; FD derivatives inherit
+        # the corrected Minv. None/zeros leave emitted CUDA unchanged.
+        self.joint_armature = self._validate_joint_armature(JOINT_ARMATURE)
         # runtime_joint_dynamics: when True, the id/fd/aba/*_gradient bias reads
         # the per-DOF damping/friction coefficients from a mutable device table
         # (set_joint_dynamics_params) instead of baking them as literals, so they
@@ -354,6 +360,48 @@ class GRiDCodeGenerator:
         return bool(getattr(self, "USE_JOINT_DYNAMICS", False)) \
             and getattr(self, "FRICTION_MODEL", "sign") == "tanh" \
             and bool(self.robot.robot_has_joint_friction())
+
+    def _validate_joint_armature(self, armature):
+        """One finite nonnegative reflected inertia per supported scalar joint."""
+        if armature is None:
+            return None
+        robot = self.robot
+        n = robot.get_num_joints()
+        try:
+            values = [float(value) for value in armature]
+        except (TypeError, ValueError) as exc:
+            raise ValueError("JOINT_ARMATURE must be a sequence of per-joint floats") from exc
+        if len(values) != n:
+            raise ValueError(f"JOINT_ARMATURE has {len(values)} entries but the robot has {n} joints")
+        if any(not math.isfinite(value) or value < 0.0 for value in values):
+            raise ValueError("JOINT_ARMATURE entries must be finite and >= 0")
+        unsupported = []
+        if robot.floating_base:
+            unsupported.append("floating base")
+        if self.robot_has_mimic_joints():
+            unsupported.append("mimic joints")
+        if robot.robot_has_spherical():
+            unsupported.append("spherical joints")
+        if robot.robot_has_skew_axis():
+            unsupported.append("skew joint axes")
+        bad_types = sorted({kind for kind in robot.get_joint_types_by_id().values()
+                            if kind not in ("revolute", "continuous")})
+        if bad_types:
+            unsupported.append(f"joint types {bad_types}")
+        if robot.get_num_vel() != n:
+            unsupported.append(f"nv={robot.get_num_vel()} != n_joints={n}")
+        if unsupported:
+            raise NotImplementedError("JOINT_ARMATURE supports only fixed-base scalar revolute/continuous "
+                                      "cardinal-axis non-mimic robots; unsupported: " + "; ".join(unsupported))
+        return values if any(value != 0.0 for value in values) else None
+
+    def robot_has_armature(self):
+        return self.joint_armature is not None
+
+    def gen_bake_armature_array(self, name="s_armature"):
+        """Per-joint constants (joint id equals velocity slot on this topology)."""
+        self.gen_add_code_line("// JOINT_ARMATURE: M_eff = M + diag(reflected inertia)")
+        self.gen_bake_const_array(name, self.joint_armature, "T")
 
     def _normalize_codegen_algorithms(self, codegen_profile = "all", algorithm_list = None):
         from ._algo_profiles import normalize_codegen_algorithms
