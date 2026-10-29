@@ -3447,3 +3447,20 @@ the number of preprocessor invocations quadratic without protecting that unit's
 object any better. No stat-based digest reuse is needed for this reduction.
 `-MM` deliberately omits system headers: compiler identity is not evidence that
 all development packages stayed unchanged. Record that assumption explicitly.
+
+### 7.z71 Cooperative barriers do not cancel restricted-pointer load reuse
+
+GLASS fix `e537364` reloads values published by other threads through narrowly
+volatile cooperative loads. An inlined restricted caller can otherwise reuse a
+thread's earlier value across a barrier. The barrier remains necessary; volatile
+does not grant arbitrary pointer aliasing or make an unsynchronized read safe.
+The single-thread barrier specialization retains ordinary loads.
+
+GRiD embeds the affected triangular solve, pivoted inverse and adaptive symmetric
+eigensolve bodies. Test the generated header, not only the standalone dependency:
+`test_cuda_glass_handoff.py` uses disjoint restricted inputs/arena/outputs, two
+independent blocks, poisoned/reused shared and global scratch, FP32/FP64 independent
+NumPy references and 1/17/32/64/128/256 threads. The existing robot PSD-clamp gate
+checks the enclosing cost path. This does not certify other consumer algorithms
+or pre-Blackwell hardware. A compiler-version field in a receipt describes PATH
+nvcc; it must agree with the compiler selected by the actual build.

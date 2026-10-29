@@ -12,6 +12,11 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Update GLASS to `9a24f37` for cooperative handoff reloads under restricted
+  callers. Add embedded FP32/FP64 solve, eigenvalue-clamp and pivoted-inverse
+  regressions with poisoned scratch and thread-count checks. Update
+  pytest-gpu-proof to 0.5.0, enable receipt-tooling CPU checks on Python 3.10,
+  and test compiler-metadata merge refusal and legacy-field compatibility.
 - Capture consumer translation-unit dependencies with `nvcc -MM` and hash the
   selected non-system header contents into artifact and per-unit reuse keys.
   Build lookups rediscover include selection, including newly shadowing headers;

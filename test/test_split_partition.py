@@ -931,12 +931,12 @@ def test_driver_import_puts_repo_root_ahead_of_stdlib_test_package(tmp_path):
 
 
 def test_plan_refresh_uses_the_real_plan_carry(tmp_path, monkeypatch):
-    """Integration with pytest-gpu-proof's OWN `plan_carry` (0.4.1): the base
+    """Integration with pytest-gpu-proof's OWN `plan_carry`: the base
     verdicts plan_refresh consumes come from the tool against a real git repo,
     so a clean shard carries, a touched test file stales exactly that shard,
     and a dirty recording tree stales everything."""
     import subprocess
-    pytest.importorskip("pytest_gpu_proof")  # needs CPython 3.11 or newer
+    pytest.importorskip("pytest_gpu_proof")
     from pytest_gpu_proof.fingerprint import compute_fingerprint
     from pytest_gpu_proof.merge import plan_carry
 
