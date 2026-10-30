@@ -3564,3 +3564,19 @@ pose-Jacobian disjoint-column path writes an unscaled axis; a lone non-unit mimi
 job must still take the weighted path. A constant intermediary followed by a
 cross-branch mimic with multiplier -0.5 reproduced a yaw derivative of +1 before
 this correction. Test the survivor's scale, not just removal of the zero job.
+
+The floating CRBA fold follows the same ownership rule: accumulate every body's
+composite inertia, but omit a constant body's reduced projection. A constant
+ancestor still transports an active descendant's force to earlier active joints
+and the floating base. The bounded dynamics audit covers both precisions,
+nontrivial base quaternion/velocity/acceleration and five thread counts against
+independently locked models for CRBA, ID gradients and body/world second order.
+
+When composing these tests, obey the selected entry point's contract. A kernel's
+arena-byte query does not size a differently carved device wrapper. The optimized
+fixed-base body-SO inner intentionally uses a transposed mixed-derivative block;
+the generated public-output epilogue restores the public layout. Floating
+body-SO also requires its gravity-Hessian global workspace even on a small model.
+Supply that workspace and reuse the generator's epilogue in a composed audit;
+do not transpose the oracle opportunistically or change production math to fix
+an incomplete caller. Preserve failed harness evidence separately from defects.

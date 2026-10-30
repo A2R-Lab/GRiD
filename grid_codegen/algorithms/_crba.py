@@ -752,6 +752,8 @@ def _gen_crba_mimic_floating_phase2(self, NJ):
     for ind in range(1, NJ):
         vi = self._v_slot_cpp(ind)
         alpha_i = self._alpha_for_jid(ind)
+        if alpha_i == 0.0:
+            continue  # Phase 1 already propagated IC; this body owns no column.
         s_ind = self.robot.get_S_index_by_id(ind)
         s_sign = self.robot.get_S_sign_by_id(ind)
         self.gen_add_code_line("// body " + str(ind) + " -> v-slot " + str(vi) + " (alpha=" + repr(alpha_i) + ")")
@@ -769,6 +771,9 @@ def _gen_crba_mimic_floating_phase2(self, NJ):
             j = self.robot.get_parent_id(j)
             vj = self._v_slot_cpp(j)
             alpha_j = self._alpha_for_jid(j)
+            if alpha_j == 0.0:
+                cur, nxt = nxt, cur  # Transport through it without projecting.
+                continue
             sj_ind = self.robot.get_S_index_by_id(j)
             sj_sign = self.robot.get_S_sign_by_id(j)
             contrib_coeff = float(alpha_i) * float(alpha_j) * float(sj_sign)

@@ -108,6 +108,23 @@ def test_constant_hom_derivative_preserves_floating_base_owner(tmp_path):
             assert second[i*nq+j] == robot.get_d2Xmat_hom_local_by_id(0, i, j)
 
 
+def test_floating_constant_crba_has_no_placeholder_projection(tmp_path):
+    from test.cuda_equivalents.test_cuda_constant_dynamics_audit import audit_model
+    robot = audit_model(tmp_path, floating=True, descendant=True)
+    gen = GRiDCodeGenerator(robot)
+    gen.gen_all_code(output_path=str(tmp_path / 'grid.cuh'), emit_plant=False,
+                     algorithm_list=['crba'], enable_mujoco_kernels=False)
+    code = (tmp_path / 'grid.cuh').read_text()
+    phase = code.split('// === mimic-aware floating CRBA Phase 2', 1)[1]
+    phase = phase.split('// floating-base root block', 1)[0]
+    constant = robot.get_joint_by_name('constant').jid
+    assert f'// body {constant} ->' not in phase
+    assert 'static_cast<T>(0.0) *' not in phase
+    # The constant intermediary's transform must still carry a descendant's
+    # inertia to the active ancestor and then to the floating base.
+    assert f's_XImats[{36*constant} + p + 6*r]' in phase
+
+
 @pytest.mark.parametrize('algorithm', [
     'inverse_dynamics', 'minv', 'forward_dynamics', 'aba', 'crba',
     'forward_dynamics_gradient', 'integrator_gradient', 'fdsva_so',

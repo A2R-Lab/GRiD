@@ -12,6 +12,10 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Omit zero-weight reduced projections in floating-base constant-joint CRBA
+  while retaining composite inertia and transport through constant ancestors.
+  Add FP32/FP64 floating and fixed-base descendant dynamics tests against
+  independently locked models, including first and second derivatives.
 - Preserve coordinate ownership in homogeneous derivative tables and EE
   gradient/Hessian metadata when constant joints are retained. Correct empty
   coordinate generation in integrator/plant arena binders. Add zero-DoF pose
