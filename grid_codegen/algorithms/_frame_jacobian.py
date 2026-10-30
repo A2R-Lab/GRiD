@@ -113,6 +113,8 @@ def frame_jacobian_jobs(self):
             else:
                 vinds = list(vinds)
             alpha = self._alpha_for_jid(jj) if HAS_MIMIC else 1.0
+            if alpha == 0.0:
+                continue  # Constant bodies own no Jacobian column.
             for c in range(S.shape[1]):
                 vi = vinds[c] if c < len(vinds) else vinds[-1]
                 ang = [float(S[0, c]), float(S[1, c]), float(S[2, c])]
@@ -520,6 +522,10 @@ def gen_frame_jacobian_dot_device(self):
         self.gen_add_code_line("vj[0]=vp[0]+(wp[1]*dz-wp[2]*dy); vj[1]=vp[1]+(wp[2]*dx-wp[0]*dz); vj[2]=vp[2]+(wp[0]*dy-wp[1]*dx);")
         self.gen_add_end_control_flow()
         # this column's own contribution: w += sc*(R_j S_ang), v += sc*(R_j S_lin)
+        if 0.0 in s_alpha:
+            # Retain the parent rigid transport above, but never read the
+            # constant body's placeholder velocity slot (possibly nonexistent).
+            self.gen_add_code_line("if (fjd_alpha[t] == static_cast<T>(0)) continue;")
         self.gen_add_code_line("T a0=fjd_ang[3*t],a1=fjd_ang[3*t+1],a2=fjd_ang[3*t+2];")
         self.gen_add_code_line("T l0=fjd_lin[3*t],l1=fjd_lin[3*t+1],l2=fjd_lin[3*t+2];")
         self.gen_add_code_line("T aw0=Xj[0]*a0+Xj[4]*a1+Xj[8]*a2, aw1=Xj[1]*a0+Xj[5]*a1+Xj[9]*a2, aw2=Xj[2]*a0+Xj[6]*a1+Xj[10]*a2;")
@@ -546,6 +552,8 @@ def gen_frame_jacobian_dot_device(self):
             vinds = self.robot.get_joint_index_v(jj)
             vinds = list(vinds) if isinstance(vinds, (list, tuple, np.ndarray)) else [vinds]
             alpha = self._alpha_for_jid(jj) if HAS_MIMIC else 1.0
+            if alpha == 0.0:
+                continue
             for c in range(S.shape[1]):
                 vi = vinds[c] if c < len(vinds) else vinds[-1]
                 jobs.append((jid, jj, int(vi),

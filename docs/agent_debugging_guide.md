@@ -3510,3 +3510,33 @@ a source-only declaration test cannot establish runtime agreement. The failing
 iiwa gradient had reference agreement near 1e-14 through the integrator, but plant
 errors near 1e17 through the mismatched C boundary. Keep this distinct from an
 arena sizing defect or numerical tolerance issue.
+
+### 7.z75 A constant body's placeholder slot is not a derivative column
+
+A zero mimic multiplier removes local coordinate ownership, not the body. Skip
+its local velocity reads, derivative columns and reduced force/tensor projection
+before evaluating the expression. Multiplying an unrelated NaN or an invalid
+empty-buffer read by zero is not safe. Preserve inherited motion, derivatives
+and force transmission: removing the complete body traversal would lose the
+inertial contribution of a rigid attachment.
+
+Apply this rule to metadata job lists as well as scalar expressions. Frame
+Jacobian and Coriolis columns exclude constant bodies; second-order folds cover
+only active internal tensor cells. An empty fold has no jobs but still needs a
+legal inert initializer in generated device storage. Topology allocation and
+loading must use the same body-based query for mimic models, not a reduced
+coordinate count that may be zero.
+
+The constant derivative regressions compare with an independently locked robot,
+use NaNs in an unrelated branch without sanitizing the owning branch, and pass
+actual null q/v/a pointers when their lengths are zero. Output canaries and
+1/17/32/64/256-thread checks complement memcheck and synccheck. Composed inners
+need their own caller kernel for this thread matrix; a generated kernel's
+explicit launch bound is not permission to launch it with more threads.
+
+Keep the support claim bounded. These checks exercise ID gradients, frame
+Jacobians/Jdot, body/world ID second derivatives, Coriolis and frame-velocity
+cost pieces. They do not certify every zero-DoF dynamics wrapper, floating
+constant-joint derivative combination or timing kernel. Generated zero-trip
+timing expressions can still contain division by zero; do not suppress warnings
+or infer support from a different inner's successful compilation.

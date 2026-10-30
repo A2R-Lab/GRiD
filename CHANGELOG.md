@@ -12,6 +12,11 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Omit constant-joint local columns and zero-weight projection reads in generated
+  inverse-dynamics derivatives, second-order folds, frame Jacobians/Jdot and
+  Coriolis metadata. Retain inherited body motion and force transmission. Add
+  independent locked-model, poisoned-branch and empty-buffer CUDA regressions;
+  these do not establish general zero-DoF wrapper or timing support.
 - Match plant-step, gradient and Hessian C ABI gravity/timestep scalars to the
   selected precision, including MuJoCo entry points. FP64 callers previously
   passed doubles to float arguments; add signature and numerical regressions.

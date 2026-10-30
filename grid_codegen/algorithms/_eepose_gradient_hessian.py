@@ -3084,7 +3084,7 @@ def gen_ee_pose_fk_batched_kernel(self):
     # buffer; serial chains with identical Ss pass nullptr (the loader skips the
     # topology copy). This kernel hand-declares its shared arena, so the nullptr case
     # is explicit here (callers using gen_declare_shared_arena get it automatically).
-    if not self.robot.is_serial_chain() or not self.robot.are_Ss_identical(list(range(n))):
+    if self.gen_topology_helpers_size() > 0:
         self.gen_add_code_line("__shared__ int s_topology_helpers[" + str(self.gen_topology_helpers_size()) + "];")
     else:
         self.gen_add_code_line("int *s_topology_helpers = nullptr;")

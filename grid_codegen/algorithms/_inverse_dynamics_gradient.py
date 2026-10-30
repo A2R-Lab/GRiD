@@ -62,6 +62,8 @@ def _idg_damping_diag_cpp(self, n):
         if HAS_MIMIC:
             vs = self._v_slot_cpp(jid)
             alpha = float(self._alpha_for_jid(jid))
+            if alpha == 0.0:
+                continue  # No reduced derivative row belongs to a constant joint.
         else:
             vs = self.robot.get_joint_index_v(jid)
             alpha = 1.0
@@ -1864,7 +1866,9 @@ def _gen_inverse_dynamics_gradient_mimic_inner(self, nv, NB):
       backward pass       -> dc_dq, dc_dqd (nv x nv).
     Every joint-velocity read scales by the body's mimic multiplier alpha and
     every dc_du / df_du write accumulates (+=) into the body's reduced v-slot,
-    so a mimic body and its target fold together. Non-root bodies are single
+    so a mimic body and its target fold together. A constant body has no local
+    read or reduced-column contribution, but retains inherited motion and force
+    propagation. Non-root bodies are single
     -DoF (the floating root is the only multi-DoF joint and is never mimic);
     the floating-base root (jid 0) carries a 6-DoF motion subspace S = I_6
     over v-slots 0..5, so its own-DoF contributions LOOP over the 6 root DoFs
@@ -2020,28 +2024,29 @@ def _gen_inverse_dynamics_gradient_mimic_inner(self, nv, NB):
             self.gen_add_end_control_flow()
             self.gen_add_sync()  # the X*parent cols feed the single-column += folds below
 
-            # dv_dq[:,idx,ind]  += alpha * mxS(S, X*v_parent)  = alpha*s_sign*mx_Sind(X v_parent)
-            # X*v_parent: dv contribution uses v[parent]. Single reduced-column (idx)
-            # fold -> ONE lane (cross-body v-slot accumulate stays unsplit, bit-exact).
-            # SPHERICAL: 3 single-column folds, one per v-block slot vblk[k], using
-            # mx<k> (S col k = angular axis k, sign +1). Each is a single-lane write.
-            self.gen_add_serial_ops()
-            self.gen_add_code_line("// dv_dq[:,idx] += alpha*mxS(S, X*v_parent); dv_dqd[:,idx] += alpha*S")
-            self.gen_add_code_line("T s_mtmp[6];")
-            self.gen_add_code_line("for (int r = 0; r < 6; r++) { s_mtmp[r] = static_cast<T>(0);")
-            self.gen_add_code_line("  for (int p = 0; p < 6; p++) s_mtmp[r] += s_XImats[" + str(Xoff) + " + r + 6*p] * s_vaf[" + str(6*parent) + " + p]; }")
-            # mx<s_ind>_peq_scaled into dv_dq[:,idx,ind]. mxS(S,.) carries the
-            # joint sign (S = s_sign*e_{s_ind}); mx<ind>_peq_scaled only applies
-            # the UNIT-axis column, so fold s_sign into the scale (alpha*s_sign).
-            if is_spherical:
-                for k in range(3):
-                    self.gen_add_code_line("mx" + str(k) + "_peq_scaled<T>(&s_temp[" + str(cell(off_dv_dq, ind, 0)) + " + 6*" + str(vblk[k]) + "], s_mtmp, static_cast<T>(1.0));")
-            elif is_skew:
-                self.gen_add_code_line("{ const T S_skew[6] = " + _idg_Svec_cpp(S_vec) + "; mxS_general_peq_scaled<T>(&s_temp[" + str(cell(off_dv_dq, ind, 0)) + " + 6*" + str(idx) + "], s_mtmp, S_skew, static_cast<T>(" + repr(alpha) + ")); }")
-            else:
-                self.gen_add_code_line("mx" + str(s_ind) + "_peq_scaled<T>(&s_temp[" + str(cell(off_dv_dq, ind, 0)) + " + 6*" + str(idx) + "], s_mtmp, static_cast<T>(" + repr(alpha * s_sign) + "));")
-            self.gen_add_end_control_flow()
-            self.gen_add_sync()  # dv_dq[:,idx] now visible to the da += mxS(dv) reader below
+            if alpha != 0.0:
+                # dv_dq[:,idx,ind]  += alpha * mxS(S, X*v_parent)  = alpha*s_sign*mx_Sind(X v_parent)
+                # X*v_parent: dv contribution uses v[parent]. Single reduced-column (idx)
+                # fold -> ONE lane (cross-body v-slot accumulate stays unsplit, bit-exact).
+                # SPHERICAL: 3 single-column folds, one per v-block slot vblk[k], using
+                # mx<k> (S col k = angular axis k, sign +1). Each is a single-lane write.
+                self.gen_add_serial_ops()
+                self.gen_add_code_line("// dv_dq[:,idx] += alpha*mxS(S, X*v_parent); dv_dqd[:,idx] += alpha*S")
+                self.gen_add_code_line("T s_mtmp[6];")
+                self.gen_add_code_line("for (int r = 0; r < 6; r++) { s_mtmp[r] = static_cast<T>(0);")
+                self.gen_add_code_line("  for (int p = 0; p < 6; p++) s_mtmp[r] += s_XImats[" + str(Xoff) + " + r + 6*p] * s_vaf[" + str(6*parent) + " + p]; }")
+                # mx<s_ind>_peq_scaled into dv_dq[:,idx,ind]. mxS(S,.) carries the
+                # joint sign (S = s_sign*e_{s_ind}); mx<ind>_peq_scaled only applies
+                # the UNIT-axis column, so fold s_sign into the scale (alpha*s_sign).
+                if is_spherical:
+                    for k in range(3):
+                        self.gen_add_code_line("mx" + str(k) + "_peq_scaled<T>(&s_temp[" + str(cell(off_dv_dq, ind, 0)) + " + 6*" + str(vblk[k]) + "], s_mtmp, static_cast<T>(1.0));")
+                elif is_skew:
+                    self.gen_add_code_line("{ const T S_skew[6] = " + _idg_Svec_cpp(S_vec) + "; mxS_general_peq_scaled<T>(&s_temp[" + str(cell(off_dv_dq, ind, 0)) + " + 6*" + str(idx) + "], s_mtmp, S_skew, static_cast<T>(" + repr(alpha) + ")); }")
+                else:
+                    self.gen_add_code_line("mx" + str(s_ind) + "_peq_scaled<T>(&s_temp[" + str(cell(off_dv_dq, ind, 0)) + " + 6*" + str(idx) + "], s_mtmp, static_cast<T>(" + repr(alpha * s_sign) + "));")
+                self.gen_add_end_control_flow()
+                self.gen_add_sync()  # dv_dq[:,idx] now visible to the da += mxS(dv) reader below
 
         if is_float_root:
             # ===== FLOATING ROOT own-DoF terms (6-DoF motion subspace S) =====
@@ -2136,7 +2141,7 @@ def _gen_inverse_dynamics_gradient_mimic_inner(self, nv, NB):
                 self.gen_add_code_line("mx" + str(k) + "_peq_scaled<T>(&s_temp[" + str(cell(off_da_dqd, ind, 0)) + " + 6*" + str(vblk[k]) + "], &s_vaf[" + str(v_ind) + "], static_cast<T>(1.0));")
             self.gen_add_end_control_flow()
             self.gen_add_sync()  # all da cols (incl vblk cols) before df reads them
-        else:
+        elif alpha != 0.0:
             # dv_dqd[:,idx,ind] += alpha*S  (S = s_sign*e_{s_ind}). NOTE: the oracle
             # adds this for EVERY body including the root (it sits OUTSIDE the
             # parent!=-1 guard in rnea_grad_fpass_dqd) — the joint's own velocity
@@ -2328,36 +2333,38 @@ def _gen_inverse_dynamics_gradient_mimic_inner(self, nv, NB):
         # dc_dqd[idx, c] += alpha * s_sign * df_dqd[s_ind, c, ind]
         # WIN B: one lane per gradient column c. Each c writes a distinct dc_du
         # entry; the cross-body accumulate at row idx is serialized by the walk.
-        self.gen_add_parallel_loop("c", str(nv))
-        if is_skew:
-            # dc[idx,c] += alpha * S^T df[:,c] = alpha * sum_r S[r]*df[r,c]
-            dq_terms = " + ".join("static_cast<T>(" + repr(alpha * S_vec[r]) + ") * s_temp[" + str(cell(off_df_dq, ind, 0)) + " + 6*c + " + str(r) + "]" for r in range(6) if S_vec[r] != 0.0)
-            qd_terms = " + ".join("static_cast<T>(" + repr(alpha * S_vec[r]) + ") * s_temp[" + str(cell(off_df_dqd, ind, 0)) + " + 6*c + " + str(r) + "]" for r in range(6) if S_vec[r] != 0.0)
-            self.gen_add_code_line("s_dc_du[c*" + str(nv) + " + " + str(idx) + "] += " + (dq_terms if dq_terms else "static_cast<T>(0)") + ";")
-            self.gen_add_code_line("s_dc_du[" + str(nv*nv) + " + c*" + str(nv) + " + " + str(idx) + "] += " + (qd_terms if qd_terms else "static_cast<T>(0)") + ";")
-        else:
-            coeff = alpha * s_sign
-            self.gen_add_code_line("s_dc_du[c*" + str(nv) + " + " + str(idx) + "] += static_cast<T>(" + repr(coeff) + ") * s_temp[" + str(cell(off_df_dq, ind, 0)) + " + 6*c + " + str(s_ind) + "];")
-            self.gen_add_code_line("s_dc_du[" + str(nv*nv) + " + c*" + str(nv) + " + " + str(idx) + "] += static_cast<T>(" + repr(coeff) + ") * s_temp[" + str(cell(off_df_dqd, ind, 0)) + " + 6*c + " + str(s_ind) + "];")
-        self.gen_add_end_control_flow()
+        if alpha != 0.0:
+            self.gen_add_parallel_loop("c", str(nv))
+            if is_skew:
+                # dc[idx,c] += alpha * S^T df[:,c] = alpha * sum_r S[r]*df[r,c]
+                dq_terms = " + ".join("static_cast<T>(" + repr(alpha * S_vec[r]) + ") * s_temp[" + str(cell(off_df_dq, ind, 0)) + " + 6*c + " + str(r) + "]" for r in range(6) if S_vec[r] != 0.0)
+                qd_terms = " + ".join("static_cast<T>(" + repr(alpha * S_vec[r]) + ") * s_temp[" + str(cell(off_df_dqd, ind, 0)) + " + 6*c + " + str(r) + "]" for r in range(6) if S_vec[r] != 0.0)
+                self.gen_add_code_line("s_dc_du[c*" + str(nv) + " + " + str(idx) + "] += " + (dq_terms if dq_terms else "static_cast<T>(0)") + ";")
+                self.gen_add_code_line("s_dc_du[" + str(nv*nv) + " + c*" + str(nv) + " + " + str(idx) + "] += " + (qd_terms if qd_terms else "static_cast<T>(0)") + ";")
+            else:
+                coeff = alpha * s_sign
+                self.gen_add_code_line("s_dc_du[c*" + str(nv) + " + " + str(idx) + "] += static_cast<T>(" + repr(coeff) + ") * s_temp[" + str(cell(off_df_dq, ind, 0)) + " + 6*c + " + str(s_ind) + "];")
+                self.gen_add_code_line("s_dc_du[" + str(nv*nv) + " + c*" + str(nv) + " + " + str(idx) + "] += static_cast<T>(" + repr(coeff) + ") * s_temp[" + str(cell(off_df_dqd, ind, 0)) + " + 6*c + " + str(s_ind) + "];")
+            self.gen_add_end_control_flow()
         if parent != -1:
             self.gen_add_sync()  # dc_du fold reads df[ind]; df[parent] += below must wait
             # df_dq[:,idx,parent] += alpha * X^T * fxS(S, f[ind]). Single reduced-
             # column (idx) fold on the PARENT -> ONE lane (bit-exact accumulate).
             # fxS(S, f) = Fx(S)*f = fx_times_v(S, f); S = s_sign*e_{s_ind}
-            self.gen_add_serial_ops()
-            self.gen_add_code_line("T s_fxs[6]; T s_xtfxs[6]; T s_Svec[6];")
-            if is_skew:
-                self.gen_add_code_line("{ const T S_skew[6] = " + _idg_Svec_cpp(S_vec) + "; for (int r = 0; r < 6; r++) s_Svec[r] = S_skew[r]; }")
-            else:
-                self.gen_add_code_line("for (int r = 0; r < 6; r++) s_Svec[r] = static_cast<T>(0);")
-                self.gen_add_code_line("s_Svec[" + str(s_ind) + "] = static_cast<T>(" + repr(s_sign) + ");")
-            self.gen_add_code_line("fx_times_v<T>(s_fxs, s_Svec, &s_vaf[" + str(f_ind) + "]);")
-            # X^T * s_fxs : (X^T)[r,p] = X[p,r] = s_XImats[Xoff + p + 6*r]
-            self.gen_add_code_line("for (int r = 0; r < 6; r++) { s_xtfxs[r] = static_cast<T>(0);")
-            self.gen_add_code_line("  for (int p = 0; p < 6; p++) s_xtfxs[r] += s_XImats[" + str(Xoff) + " + p + 6*r] * s_fxs[p]; }")
-            self.gen_add_code_line("for (int r = 0; r < 6; r++) s_temp[" + str(cell(off_df_dq, parent, 0)) + " + 6*" + str(idx) + " + r] += static_cast<T>(" + repr(alpha) + ") * s_xtfxs[r];")
-            self.gen_add_end_control_flow()
+            if alpha != 0.0:
+                self.gen_add_serial_ops()
+                self.gen_add_code_line("T s_fxs[6]; T s_xtfxs[6]; T s_Svec[6];")
+                if is_skew:
+                    self.gen_add_code_line("{ const T S_skew[6] = " + _idg_Svec_cpp(S_vec) + "; for (int r = 0; r < 6; r++) s_Svec[r] = S_skew[r]; }")
+                else:
+                    self.gen_add_code_line("for (int r = 0; r < 6; r++) s_Svec[r] = static_cast<T>(0);")
+                    self.gen_add_code_line("s_Svec[" + str(s_ind) + "] = static_cast<T>(" + repr(s_sign) + ");")
+                self.gen_add_code_line("fx_times_v<T>(s_fxs, s_Svec, &s_vaf[" + str(f_ind) + "]);")
+                # X^T * s_fxs : (X^T)[r,p] = X[p,r] = s_XImats[Xoff + p + 6*r]
+                self.gen_add_code_line("for (int r = 0; r < 6; r++) { s_xtfxs[r] = static_cast<T>(0);")
+                self.gen_add_code_line("  for (int p = 0; p < 6; p++) s_xtfxs[r] += s_XImats[" + str(Xoff) + " + p + 6*r] * s_fxs[p]; }")
+                self.gen_add_code_line("for (int r = 0; r < 6; r++) s_temp[" + str(cell(off_df_dq, parent, 0)) + " + 6*" + str(idx) + " + r] += static_cast<T>(" + repr(alpha) + ") * s_xtfxs[r];")
+                self.gen_add_end_control_flow()
             # The single-column df_dq[:,idx,parent] += (above) must land BEFORE the
             # X^T propagation below touches that same parent column (preserves the
             # original H-then-I float accumulation order -> bit-exact).

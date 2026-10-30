@@ -93,6 +93,11 @@ def _coriolis_metadata(self):
         joint = robot.get_joint_by_id(i)
         is_mimic = getattr(joint, "is_mimic", False)
         alpha = float(joint.get_mimic_multiplier()) if is_mimic else 1.0
+        if alpha == 0.0:
+            # The body still transports motion and inertia, but owns no local
+            # velocity columns or reduced Coriolis rows/columns.
+            body_col_start.append(len(col_body))
+            continue
         vi = robot.get_joint_index_v(i)
         if not isinstance(vi, (list, tuple, np.ndarray)):
             vi = [vi]
@@ -266,7 +271,7 @@ def gen_coriolis_matrix_inner(self):
         f"static const int cor_col_s_sign[] = {{ {_coriolis_int_array(md['col_s_sign'])} }};",
         f"static const int cor_body_col_start[] = {{ {_coriolis_int_array(md['body_col_start'])} }};",
         "static const T cor_col_alpha[] = { " + ", ".join(
-            "static_cast<T>(" + repr(a) + ")" for a in md['col_alpha']) + " };",
+            "static_cast<T>(" + repr(a) + ")" for a in (md['col_alpha'] or [0.0])) + " };",
         f"static const int cor_job_icol[] = {{ {_coriolis_int_array(md['job_icol'])} }};",
         f"static const int cor_job_tcol[] = {{ {_coriolis_int_array(md['job_tcol'])} }};",
         f"static const int cor_job_body[] = {{ {_coriolis_int_array(md['job_body'])} }};",

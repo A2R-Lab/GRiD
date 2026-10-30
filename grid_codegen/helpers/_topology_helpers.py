@@ -721,7 +721,7 @@ def gen_XImats_helpers_temp_shared_memory_code(self, temp_mem_size = 0, include_
     # inside [0, inner+36*NB) since inner >= 2*num_pos.
     layout = self._resolve_arena_layout(
         extra_t_buffers, temp_mem_size,
-        include_topology_helpers = (not self.robot.is_serial_chain() or not self.robot.are_Ss_identical(list(range(n)))),
+        include_topology_helpers = self.gen_topology_helpers_size() > 0,
         ximat_size = XI_size,
         apply_runtime_transform_band = (getattr(self, "runtime_transform", False) and not include_homogenous_transforms))
     self.gen_declare_shared_arena(layout.t_buffers, layout.temp_mem_size,
@@ -982,7 +982,7 @@ def gen_load_update_XImats_helpers(self, include_base_inertia = False, include_h
             _emit_runtime_inertia_rebuild(self, n)
         if runtime_transform:
             _emit_runtime_transform_rebuild(self, n)
-        if not self.robot.is_serial_chain() or not self.robot.are_Ss_identical(list(range(n))):
+        if self.gen_topology_helpers_size() > 0:
             self.gen_add_parallel_loop("ind",str(self.gen_topology_helpers_size()))
             self.gen_add_code_line("s_topology_helpers[ind] = d_robotModel->d_topology_helpers[ind];")
             self.gen_add_end_control_flow()
@@ -1009,7 +1009,7 @@ def gen_load_update_XImats_helpers(self, include_base_inertia = False, include_h
             self.gen_add_code_line("if constexpr (RUNTIME_INERTIA) { if (ind >= " + str(i_region_lo) + " && ind < " + str(i_region_hi) + ") { continue; } }")
         self.gen_add_code_line("s_XImats[ind] = d_robotModel->d_XImats[ind];")
         self.gen_add_end_control_flow()
-        if not self.robot.is_serial_chain() or not self.robot.are_Ss_identical(list(range(n))):
+        if self.gen_topology_helpers_size() > 0:
             self.gen_add_parallel_loop("ind", str(self.gen_topology_helpers_size()))
             self.gen_add_code_line("s_topology_helpers[ind] = d_robotModel->d_topology_helpers[ind];")
             self.gen_add_end_control_flow()
@@ -1274,7 +1274,7 @@ def gen_load_update_XmatsHom_helpers(self, include_base_inertia = False, include
             self.gen_add_parallel_loop("ind",str(d2Xhom_size))
             self.gen_add_code_line("s_d2XmatsHom[ind] = d_robotModel->d_XImats[ind+" + str(baseXI_size + Xhom_size + dXhom_size) + "];")
             self.gen_add_end_control_flow()
-        if not self.robot.is_serial_chain() or not self.robot.are_Ss_identical(list(range(n))):
+        if self.gen_topology_helpers_size() > 0:
             self.gen_add_parallel_loop("ind",str(self.gen_topology_helpers_size()))
             self.gen_add_code_line("s_topology_helpers[ind] = d_robotModel->d_topology_helpers[ind];")
             self.gen_add_end_control_flow()
@@ -1304,7 +1304,7 @@ def gen_load_update_XmatsHom_helpers(self, include_base_inertia = False, include
             self.gen_add_parallel_loop("ind",str(d2Xhom_size))
             self.gen_add_code_line("s_d2XmatsHom[ind] = d_robotModel->d_XImats[ind+" + str(baseXI_size + Xhom_size + dXhom_size) + "];")
             self.gen_add_end_control_flow()
-        if not self.robot.is_serial_chain() or not self.robot.are_Ss_identical(list(range(n))):
+        if self.gen_topology_helpers_size() > 0:
             self.gen_add_parallel_loop("ind",str(self.gen_topology_helpers_size()))
             self.gen_add_code_line("s_topology_helpers[ind] = d_robotModel->d_topology_helpers[ind];")
             self.gen_add_end_control_flow()
@@ -1400,11 +1400,12 @@ def gen_topology_helpers_size(self):
     size = 0
     if not self.robot.is_serial_chain():
         size += 5*n + 1
-    # Preserve the legacy are_Ss_identical query set (get_num_pos()) so the
-    # boolean — and thus whether the S_inds section exists at all — is unchanged
-    # for non-mimic robots (Gate A byte-identical). Only the allocated WIDTH (n)
-    # grows to cover the NJ-wide build for mimic models.
-    if not self.robot.are_Ss_identical(list(range(self.robot.get_num_pos()))):
+    # Mimic bodies (including constant joints with nq == 0) still have motion
+    # subspaces. Query the same body set as gen_init_topology_helpers, not the
+    # reduced coordinate count. Preserve the legacy query and allocated width
+    # for non-mimic robots (their representative headers remain byte-identical).
+    query_count = self.robot.get_num_joints() if self.robot_has_mimic_joints() else self.robot.get_num_pos()
+    if not self.robot.are_Ss_identical(list(range(query_count))):
         size += n
     return size
 
