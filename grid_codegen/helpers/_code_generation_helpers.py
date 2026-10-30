@@ -1378,7 +1378,8 @@ def gen_arena_carve_struct(self, struct_name, layout, sizer_expr,
     else:
         self.gen_add_code_line("a." + topology_name + " = nullptr;")
     self.gen_add_code_line("#ifdef GRID_CUDA_DEBUG_LAYOUT")
-    self.gen_add_code_line("assert(s_arena_offset <= " + sizer_expr + ");")
+    # Parenthesize template commas so the preprocessor sees one assert argument.
+    self.gen_add_code_line("assert((s_arena_offset <= " + sizer_expr + "));")
     self.gen_add_code_line("#endif")
     self.gen_add_code_line("(void)s_arena_offset;")
     self.gen_add_code_line("return a;")

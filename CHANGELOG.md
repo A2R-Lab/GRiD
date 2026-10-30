@@ -12,6 +12,22 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Match plant-step, gradient and Hessian C ABI gravity/timestep scalars to the
+  selected precision, including MuJoCo entry points. FP64 callers previously
+  passed doubles to float arguments; add signature and numerical regressions.
+- Size the full-shared plant-gradient arena independently of the tier-selected
+  integrator allocation. Reject oversized plant-gradient calls before launching;
+  retain the tiered integrator-gradient path. Share spherical scratch dimensions
+  and test compiled carve bounds, canaries and device admission. Fix template
+  commas in generated debug-layout assertions.
+- Correct constant-mimic coordinate evaluation: fixed-leader chains keep their
+  composed offset without reading an unrelated q slot. Match block and
+  thread/warp FK emission and omit zero local motion/projection contributions in
+  the reference while retaining body motion and transmitted forces. Add
+  direct/chained, empty-coordinate and FP32/FP64 CUDA regressions.
+- Do not read placeholder velocity/acceleration slots or project zero local
+  contributions in generated inverse dynamics for constant joints. Add a
+  branched FP32/FP64 poison regression that preserves genuine NaN inputs.
 - Update GLASS to `9a24f37` for cooperative handoff reloads under restricted
   callers. Add embedded FP32/FP64 solve, eigenvalue-clamp and pivoted-inverse
   regressions with poisoned scratch and thread-count checks. Update

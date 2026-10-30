@@ -787,6 +787,16 @@ All take/return 2D arrays with axis 0 = batch; cost methods return
 PyTorch handles. See :doc:`../concepts/algorithms/integrators_and_plant` for
 input layouts, diagonal weights and derivative scope.
 
+``plant_step_gradient`` uses a full shared-memory arena. It rejects a model
+whose arena exceeds the active device's per-block capacity; use
+``integrator_gradient(q, qd, u, dt)`` for the equivalent state-transition
+Jacobian through the tiered workspace path. The two allocations are not
+interchangeable: a spill-selected integrator allocation can be smaller than
+the plant layout. Native callers of ``plant_step_gradient_arena<T>::carve``
+must allocate
+``grid_plant::PLANT_STEP_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()`` bytes.
+An enclosing kernel must also budget its own static and dynamic storage.
+
 External forces (``f_ext``)
 ---------------------------
 

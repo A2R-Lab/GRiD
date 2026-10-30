@@ -2003,28 +2003,25 @@ def _plant_step_gradient_extra_t_buffers(self):
     gen_plant_step_gradient_kernel and the plant_step_gradient_arena carve
     struct so the two cannot drift."""
     n = self.robot.get_num_vel()
-    fb = 1 if self.robot.floating_base else 0
-    nx = self.robot.get_num_pos() + self.robot.get_num_vel()
-    from ._integrator import _max_stages_in_use
-    max_stages = _max_stages_in_use()
-    d_qdd_count = max_stages * n * 3 * n
-    vaf_cnt = 18 * (self.robot.get_num_joints() if self.robot_has_mimic_joints() else n)
-    return [
-        ("s_x", nx),
-        ("s_u", n),
-        ("s_dAB", 2 * n * 3 * n),
-        ("s_df_du", n * 2 * n),
-        ("s_dc_du", n * 2 * n),
-        ("s_vaf", vaf_cnt),
-        ("s_Minv", n * n),
-        ("s_qdd", n),
-        ("s_q_orig", n + fb),
-        ("s_qd_orig", n),
-        ("s_stage_grad_qdd", max_stages * n),
-        ("s_D_qdd_stage", d_qdd_count),
-        ("s_dInt_q_6x6", 36),
-        ("s_dInt_v_6x6", 36),
-    ]
+    nq = self.robot.get_num_pos()
+    from ._integrator_gradient import _integrator_du_extra_t_buffers
+    # Only input packing differs: plant uses [q;qd] plus u, integrator uses
+    # three nq-wide slots. Share all scratch dimensions, including spherical
+    # q_orig and multi-joint SO(3) dIntegrate storage.
+    scratch = _integrator_du_extra_t_buffers(
+        self, nq, n, int(self.robot.floating_base), True, True, False)[1:]
+    return [("s_x", nq + n), ("s_u", n)] + scratch
+
+
+def _plant_step_gradient_layout(self):
+    """Full-shared layout; never substitute the tier-selected integrator layout."""
+    return self._resolve_arena_layout(
+        _plant_step_gradient_extra_t_buffers(self),
+        self.gen_integrator_gradient_inner_temp_mem_size(),
+        include_topology_helpers=(not self.robot.is_serial_chain()
+                                  or not self.robot.are_Ss_identical(list(range(self.robot.get_num_pos())))),
+        ximat_size=self.gen_get_XI_size(False, False),
+        apply_runtime_transform_band=getattr(self, "runtime_transform", False))
 
 
 def gen_plant_step_gradient_arena_carve_struct(self):
@@ -2032,27 +2029,30 @@ def gen_plant_step_gradient_arena_carve_struct(self):
     (GATO ASK6): the full-smem sub-buffer layout plant_step_gradient_kernel
     carves — the struct's members ARE plant_step_gradient's caller-placed
     buffer arguments, so an external kernel can allocate
-    grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T, TIER_SHARED>() bytes (the
-    same reservation the kernel launches with), carve(), and forward. No exact
-    t-count tie exists for this surface (it reserves the du sizer, which may be
-    a spilled rung on big robots while this layout is always full-smem), so the
-    carve assert is the <= allocation-safety form only."""
-    layout = self._resolve_arena_layout(
-        _plant_step_gradient_extra_t_buffers(self),
-        self.gen_integrator_gradient_inner_temp_mem_size(),
-        include_topology_helpers = (not self.robot.is_serial_chain()
-                                    or not self.robot.are_Ss_identical(list(range(self.robot.get_num_pos())))),
-        ximat_size = self.gen_get_XI_size(False, False),
-        apply_runtime_transform_band = getattr(self, "runtime_transform", False))
+    PLANT_STEP_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>() bytes, carve(), and forward.
+    This surface does not spill. The tiered integrator kernel remains available
+    for models that cannot admit the full-shared plant layout."""
+    layout = _plant_step_gradient_layout(self)
+    t_count = sum(count for _, count in layout.t_buffers) + layout.ximat_size + layout.temp_mem_size
+    self.gen_add_code_lines([
+        "// Full-shared plant layout, NOT the tier-selected integrator allocation.",
+        "template <typename T> __host__ __device__ constexpr size_t PLANT_STEP_GRADIENT_DYNAMIC_SHARED_MEM_BYTES() {",
+        "    return grid::grid_shared_arena_bytes<T>(" + str(t_count) + ", " + str(layout.topology_count) + ");",
+        "}",
+        "template <typename T> __host__ inline cudaError_t plant_step_gradient_check_shared_memory() {",
+        '    return grid::grid_check_dynamic_shared_memory_bytes("plant_step_gradient (full shared; use tiered integrator_gradient if unsupported)", PLANT_STEP_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>());',
+        "}",
+    ])
     self.gen_arena_carve_struct(
         "plant_step_gradient_arena", layout,
-        "grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T, grid::TIER_SHARED>()",
-        expected_t_count = None,
+        "PLANT_STEP_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()",
+        expected_t_count = t_count,
         helper_ns = "grid::",  # emitted in namespace grid_plant; the arena helpers live in grid::
         doc = "plant_step_gradient_arena: carve struct mirroring plant_step_gradient_kernel's "
               "full-smem scratch layout; members map 1:1 onto plant_step_gradient's caller-placed "
-              "buffer arguments. Allocate INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T, TIER_SHARED>() "
-              "bytes and call carve(base).")
+              "buffer arguments. Allocate PLANT_STEP_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>() "
+              "bytes and call carve(base). No spill support: check device admission before launch; "
+              "composed callers must also budget their own static/dynamic storage.")
 
 
 def gen_plant_step_gradient_kernel(self):
@@ -2065,7 +2065,7 @@ def gen_plant_step_gradient_kernel(self):
     body (every band in smem: SCRATCH_IN_SMEM=true, no workspace/spill) — then
     calls grid_plant::plant_step_gradient (the thin pass-through). The emitted
     s_dAB is byte-identical to grid::integrator_gradient's. Inputs/outputs are
-    global; the launch reserves grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES.
+    global; the launch reserves PLANT_STEP_GRADIENT_DYNAMIC_SHARED_MEM_BYTES.
 
     x = [q (NUM_POS); qd (NUM_VEL)] (NON-const: the multi-stage RK path mutates
     q/qd across stages in smem); u = control torque (NUM_VEL)."""

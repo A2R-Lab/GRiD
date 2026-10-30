@@ -61,7 +61,8 @@ PLANT_STEP_OPS = {
     "plant_step_gradient": dict(
         gate="GRID_PLANT_HAS_STEP_GRADIENT",
         kernel="plant_step_gradient_kernel",
-        smem="INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES",
+        smem="PLANT_STEP_GRADIENT_DYNAMIC_SHARED_MEM_BYTES",
+        smem_ns="grid_plant",
         check="plant_step_gradient_kernel",
         name="plant_step_gradient",
         jax_comment=[
@@ -156,7 +157,7 @@ def _jax_step_block(key: str) -> list[str]:
         "    GRID_RBD_CTX_LOCALS(ctx);",
         *op["launcher_decls"],
         "    dim3 grid_dim = grid_rbd_grid_for(g_ctx, batch);",
-        f"    const size_t smem = grid::{smem}<T>();",
+        f"    const size_t smem = {op.get('smem_ns', 'grid')}::{smem}<T>();",
         f"    cudaFuncSetAttribute(grid_plant::{kern}<T, IT, MUJOCO>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);",
         f"    dim3 thr = grid_clamp_threads_for(grid_plant::{kern}<T, IT, MUJOCO>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(g_ctx, batch));",
         f"    grid_plant::{kern}<T, IT, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr,",
@@ -180,6 +181,7 @@ def _jax_step_block(key: str) -> list[str]:
     ]
     if op["out_size"] == "dab":
         L.append("    const int dab = 2 * nv * 3 * nv;")
+        L.append('    if (grid_plant::plant_step_gradient_check_shared_memory<T>() != cudaSuccess) return ffi::Error::Internal("plant_step_gradient full-shared arena exceeds device capacity; use integrator_gradient");')
     L += [
         "    auto dims = x.dimensions();",
         "    if (dims.size() != 2 || (int)dims[1] != nx)",
@@ -392,7 +394,7 @@ def _torch_step_block(key: str) -> list[str]:
         L.append("    const int nx = grid::NUM_POS + grid::NUM_VEL, nv = grid::NUM_VEL;")
     L += [
         "    dim3 grid_dim = grid_rbd_grid_for(g_ctx, batch);",
-        f"    const size_t smem = grid::{smem}<T>();",
+        f"    const size_t smem = {op.get('smem_ns', 'grid')}::{smem}<T>();",
         f"    cudaFuncSetAttribute(grid_plant::{kern}<T, IT, MUJOCO>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);",
         f"    dim3 thr = grid_clamp_threads_for(grid_plant::{kern}<T, IT, MUJOCO>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(g_ctx, batch));",
         f"    grid_plant::{kern}<T, IT, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr,",
@@ -409,6 +411,7 @@ def _torch_step_block(key: str) -> list[str]:
     ]
     if op["out_size"] == "dab":
         L.append("    const int dab = 2 * nv * 3 * nv;")
+        L.append('    TORCH_CHECK(grid_plant::plant_step_gradient_check_shared_memory<T>() == cudaSuccess, "plant_step_gradient full-shared arena exceeds device capacity; use integrator_gradient");')
     L += [
         f'    grid_torch_check_n(x, "{name}: x", nx);',
         f'    grid_torch_check_n(u, "{name}: u", nv);',

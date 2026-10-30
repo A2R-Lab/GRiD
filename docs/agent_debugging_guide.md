@@ -3464,3 +3464,49 @@ NumPy references and 1/17/32/64/128/256 threads. The existing robot PSD-clamp ga
 checks the enclosing cost path. This does not certify other consumer algorithms
 or pre-Blackwell hardware. A compiler-version field in a receipt describes PATH
 nvcc; it must agree with the compiler selected by the actual build.
+
+### 7.z72 Constant mimic joints have no input coordinate
+
+A mimic chain ending at a fixed joint has a constant local coordinate, not a
+scaled read from dense slot zero. Resolve its effective multiplier to zero and
+retain the composed offset. Return/emit the offset before indexing q: zero times
+an invalid read is still invalid, and zero times NaN is still NaN. The ordinary
+transform fold and thread/warp FK must use the same rule; the latter previously
+looked up target -1 directly.
+
+The body still transmits ancestor motion and inertia. Omit only its zero local
+derivative contribution, not the whole body traversal. A retained dense scatter
+placeholder is not coordinate ownership. Test fixed leaders both before and
+after the follower, chains, poisoned/empty q, and an independent rigidly locked
+model. A constant-only FK pass does not establish zero-DoF support for every
+dynamics routine; audit velocity reads and reduced-output writes separately.
+
+### 7.z73 A tier name does not imply a full-shared layout
+
+The plant-gradient kernel and binder kept every band in shared memory, but
+advertised the integrator's tier-selected reservation. G1 FP32 carved 124256
+bytes from an advertised 84128. A debug inequality using that same wrong sizer
+does not repair the allocation. Give the full-shared surface its own exact
+sizer and reject unsupported device admission; retain the separately validated
+tiered integrator path. Composed callers must budget their own additional storage.
+
+Use the common integrator scratch definitions rather than copying older
+``nv+floating`` pose dimensions or a fixed 36-element spherical derivative slab.
+Exercise the actual emitted carve with field-end writes, canaries and sanitizer,
+and test both fitting and rejected public calls. Enabling debug layout also
+exposed ``assert(expr<T, TIER>())``: wrap the whole expression in parentheses so
+the preprocessor does not treat the template comma as a second macro argument.
+
+### 7.z74 C ABI scalar arguments must match the selected precision
+
+The six handwritten plant step/gradient/Hessian entry points declared gravity
+and timestep as float, while the CAbi<CT> function pointer passed CT. FP32 tests
+therefore passed and FP64 calls corrupted the scalar values without a linker
+error. Match these parameters to T, just like their typed array arguments and
+the generated launchers. Include the MuJoCo twins in the signature regression.
+
+Test an actual FP64 binding against both the typed integrator and the reference;
+a source-only declaration test cannot establish runtime agreement. The failing
+iiwa gradient had reference agreement near 1e-14 through the integrator, but plant
+errors near 1e17 through the mismatched C boundary. Keep this distinct from an
+arena sizing defect or numerical tolerance issue.
