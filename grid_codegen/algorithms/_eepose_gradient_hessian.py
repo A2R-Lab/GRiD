@@ -485,6 +485,8 @@ def _eepose_grad_chain_metadata(self, all_ees, anchor_override=None):
         anchors.append(ee if anchor_override is None else anchor_override[ee_idx])
         jobs = []
         for j in chain:
+            if self._alpha_for_jid(j) == 0.0:
+                continue  # Retain the FK chain, but there is no local column.
             S = _np.asarray(self.robot.get_S_by_id(j), dtype=_np.float64)
             if S.ndim == 1:
                 S = S.reshape(-1, 1)
@@ -580,8 +582,15 @@ def group_jacobian_jobs(self, fill_jobs, anchors):
     for entry in flat_jobs:
         ee_idx, _anc, job = entry
         _groups.setdefault((ee_idx, job["vi"]), []).append(entry)
-    single_jobs = [grp[0] for grp in _groups.values() if len(grp) == 1]
-    multi_groups = [grp for grp in _groups.values() if len(grp) > 1]
+    single_jobs, multi_groups = [], []
+    for grp in _groups.values():
+        # The disjoint-column fast path writes an unscaled axis. A lone mimic
+        # contribution still needs its multiplier, even after constant jobs
+        # have been removed from this column.
+        if len(grp) == 1 and (not has_mimic or self._alpha_for_jid(grp[0][2]["j"]) == 1.0):
+            single_jobs.append(grp[0])
+        else:
+            multi_groups.append(grp)
     return single_jobs, multi_groups, has_mimic
 
 
@@ -1182,6 +1191,8 @@ def _eepose_hessian_chain_metadata(self, all_ees, anchor_override=None):
         dof_info = []
         intra_pairs = []
         for chain_pos, j in enumerate(chain):
+            if self._alpha_for_jid(j) == 0.0:
+                continue  # Constant joints contribute no derivative pairs.
             S = _np.asarray(self.robot.get_S_by_id(j), dtype=_np.float64)
             if S.ndim == 1:
                 S = S.reshape(-1, 1)

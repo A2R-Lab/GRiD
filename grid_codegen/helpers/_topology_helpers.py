@@ -40,6 +40,8 @@ def _global_hom_derivative_matrices_by_q(self):
     mats = [sp.zeros(4, 4) for _ in range(n)]
     owners = [None for _ in range(n)]
     for jid in range(self.robot.get_num_joints()):
+        if self._alpha_for_jid(jid) == 0.0:
+            continue  # A constant body's dense placeholder owns no q slot.
         qinds = _qinds_to_list(self, self.robot.get_joint_index_q(jid))
         for local_ind, qind in enumerate(qinds):
             mats[qind] = self.robot.get_dXmat_hom_local_by_id(jid, local_ind)
@@ -76,6 +78,8 @@ def _global_hom_second_derivative_matrices(self):
     mats = [sp.zeros(4, 4) for _ in range(n*n)]
     owners = [None for _ in range(n*n)]
     for jid in range(self.robot.get_num_joints()):
+        if self._alpha_for_jid(jid) == 0.0:
+            continue  # Do not overwrite another joint's quaternion/q block.
         qinds = _qinds_to_list(self, self.robot.get_joint_index_q(jid))
         for local_i, qind_i in enumerate(qinds):
             for local_j, qind_j in enumerate(qinds):

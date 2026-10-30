@@ -2018,8 +2018,7 @@ def _plant_step_gradient_layout(self):
     return self._resolve_arena_layout(
         _plant_step_gradient_extra_t_buffers(self),
         self.gen_integrator_gradient_inner_temp_mem_size(),
-        include_topology_helpers=(not self.robot.is_serial_chain()
-                                  or not self.robot.are_Ss_identical(list(range(self.robot.get_num_pos())))),
+        include_topology_helpers=self.gen_topology_helpers_size() > 0,
         ximat_size=self.gen_get_XI_size(False, False),
         apply_runtime_transform_band=getattr(self, "runtime_transform", False))
 

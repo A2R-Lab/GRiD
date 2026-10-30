@@ -3540,3 +3540,27 @@ cost pieces. They do not certify every zero-DoF dynamics wrapper, floating
 constant-joint derivative combination or timing kernel. Generated zero-trip
 timing expressions can still contain division by zero; do not suppress warnings
 or infer support from a different inner's successful compilation.
+
+The broader generation audit exposed the same error in homogeneous derivative
+ownership and EE gradient/Hessian job lists. A retained constant joint must not
+overwrite a real q owner's entry (including the floating quaternion block) or
+create a Hessian pair. The empty pose-Hessian device test caught a real output
+canary overwrite before this correction. Follow generation tests with actual
+device calls: successful header emission alone did not detect that write.
+The zero-DoF Euler plant-gradient call is separately checked at its emitted
+32-thread maximum; this is not a blanket claim about all integrator modes or
+Python empty-batch/empty-coordinate handling.
+
+Do not stop at unchanged canaries: FP64 memcheck found an invalid shared read
+through Minv/CRBA even though the zero-DoF plant-gradient numerical test passed.
+CRBA emitted `s_M[0] += 0 * ...` into a zero-sized reduced matrix. Skip the
+constant body's mass projection after propagating composite inertia. When an
+active body's ancestor is constant, keep the spatial transport through that
+ancestor but omit its reduced matrix entry. Use a nonempty locked-model control
+as well as the empty call; a global early return would not test this distinction.
+
+Filtering jobs can change which emission path a surviving column takes. The
+pose-Jacobian disjoint-column path writes an unscaled axis; a lone non-unit mimic
+job must still take the weighted path. A constant intermediary followed by a
+cross-branch mimic with multiplier -0.5 reproduced a yaw derivative of +1 before
+this correction. Test the survivor's scale, not just removal of the zero job.

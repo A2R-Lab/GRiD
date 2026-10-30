@@ -1287,8 +1287,7 @@ def gen_integrator_du_arena_carve_struct(self):
         _integrator_du_extra_t_buffers(self, nq, n, fb, dqdd_in_smem, dab_in_smem,
                                        compute_x_kp1 = True),
         inner_temp_size,
-        include_topology_helpers = (not self.robot.is_serial_chain()
-                                    or not self.robot.are_Ss_identical(list(range(nq)))),
+        include_topology_helpers = self.gen_topology_helpers_size() > 0,
         ximat_size = self.gen_get_XI_size(False, False),
         apply_runtime_transform_band = getattr(self, "runtime_transform", False))
     self.gen_arena_carve_struct(

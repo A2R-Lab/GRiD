@@ -118,6 +118,8 @@ def _gen_crba_inner_mimic_fixed(self, NB):
     for ind in range(NB):
         vi = self._v_slot_cpp(ind)
         alpha_i = self._alpha_for_jid(ind)
+        if alpha_i == 0.0:
+            continue  # IC was propagated above; no reduced row/column is owned.
         # fh = IC[ind] * S[ind] = S_sign * column s_ind of IC[ind]
         self.gen_add_code_line("// body " + str(ind) + " -> v-slot " + str(vi) + " (alpha=" + repr(alpha_i) + ")")
         if self.robot.S_is_cardinal_by_id(ind):
@@ -144,6 +146,9 @@ def _gen_crba_inner_mimic_fixed(self, NB):
             j = self.robot.get_parent_id(j)
             vj = self._v_slot_cpp(j)
             alpha_j = self._alpha_for_jid(j)
+            if alpha_j == 0.0:
+                cur, nxt = nxt, cur  # Keep transport through the constant body.
+                continue
             if self.robot.S_is_cardinal_by_id(j):
                 sj_ind = self.robot.get_S_index_by_id(j)
                 sj_sign = self.robot.get_S_sign_by_id(j)

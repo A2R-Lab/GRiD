@@ -12,6 +12,15 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Preserve coordinate ownership in homogeneous derivative tables and EE
+  gradient/Hessian metadata when constant joints are retained. Correct empty
+  coordinate generation in integrator/plant arena binders. Add zero-DoF pose
+  Hessian and Euler plant-gradient device canary tests plus nonempty controls.
+  Preserve non-unit mimic scaling when an EE Jacobian column has just one
+  contribution, including after a constant column is removed.
+- Exclude constant-joint reduced rows/columns in fixed-base mimic CRBA, preserving
+  composite inertia and ancestor transport. This removes a zero-size mass-matrix
+  access exposed by FP64 memcheck through the Euler plant-gradient path.
 - Omit constant-joint local columns and zero-weight projection reads in generated
   inverse-dynamics derivatives, second-order folds, frame Jacobians/Jdot and
   Coriolis metadata. Retain inherited body motion and force transmission. Add
