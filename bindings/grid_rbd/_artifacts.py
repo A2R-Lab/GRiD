@@ -51,10 +51,12 @@ from ._compile import _NVCC_DEFAULT_FLAGS, _build_jobs, find_nvcc, generate_grid
 from ._store import entry_metadata, publish_entry, publish_object, staging_dir
 from ._consumer_toolchain import resolve_consumer_toolchain
 from ._consumer_dependencies import discover_dependencies
+from ._model_artifact import (check_expected_id, record_model_association,
+                              validate_model_association)
 
 _log = logging.getLogger("grid_rbd")
 
-ARTIFACT_SCHEMA = 1
+ARTIFACT_SCHEMA = 2
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 # What a load must match: key schema, device, and the ABI for Python extensions. The
 # toolchain, GLASS content and the codegen tree are provenance, recorded but not required to
@@ -88,6 +90,14 @@ class ConsumerArtifact:
     meta: dict[str, Any]
     compiled: bool        # nvcc ran in this call (False: reused or loaded)
 
+    @property
+    def descriptor(self):
+        """Validated coordinate metadata, not complete dynamics/artifact identity."""
+        try:
+            return validate_model_association(self.store_dir, self.meta, self.path.name)
+        except ValueError as exc:
+            raise ArtifactIncompatibleError(str(exc)) from exc
+
 
 # ─── paths ──────────────────────────────────────────────────────────────────
 def consumer_root(cache_dir: Path, consumer: str) -> Path:
@@ -105,6 +115,7 @@ def _artifact_module_hash() -> str:
         h = hashlib.sha256(Path(__file__).read_bytes())
         h.update(Path(__file__).with_name("_consumer_toolchain.py").read_bytes())
         h.update(Path(__file__).with_name("_consumer_dependencies.py").read_bytes())
+        h.update(Path(__file__).with_name("_model_artifact.py").read_bytes())
         return h.hexdigest()
     except OSError:
         return ""
@@ -515,6 +526,7 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
                    link_flags: Sequence[str] = (),
                    artifact_name: str = "artifact.so",
                    python_extension: bool = False,
+                   expected_descriptor_id: str | None = None,
                    cache_dir: str | Path | None = None,
                    cuda_arch: int | None = None,
                    force_rebuild: bool = False,
@@ -554,6 +566,9 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
     Their interpreter ABI participates in pointer, content and object identity and is
     checked on prepared loads. Native C libraries (the default) are Python-independent.
     Builds check the declaration against exported PyInit_* symbols using `nm`.
+    `expected_descriptor_id` optionally checks prior CPU model inspection on
+    cold and reused builds. Schema-2 artifacts bind validated coordinate
+    metadata to the generated header and binary; older artifacts need rebuilding.
 
     The codegen keywords (`floating_base`, `ee_joint_names`, `dtype`, `algorithm_list`,
     `enable_mujoco_kernels`, `cost_frames`, `contact_frames`, the joint-dynamics and runtime
@@ -572,10 +587,17 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
     _check_name(artifact_name, "artifact_name")
     if not isinstance(python_extension, bool):
         raise TypeError("python_extension must be a bool")
+    check_expected_id(expected_descriptor_id)
     urdf_p = Path(urdf_path).expanduser().resolve()
     if not urdf_p.is_file():
         raise FileNotFoundError(f"URDF file not found: {urdf_p}")
     urdf_bytes = urdf_p.read_bytes()
+    if expected_descriptor_id is not None:
+        from ._model import describe_model
+        actual = describe_model(urdf_p, floating_base=floating_base,
+                                runtime_transform=runtime_transform)['descriptor_id']
+        if actual != expected_descriptor_id:
+            raise ValueError('expected_descriptor_id does not match requested model')
     srcs = _resolve_files(list(sources), "source", _SOURCE_SUFFIXES)
     if not srcs:
         raise ValueError("sources must name at least one translation unit")
@@ -629,10 +651,19 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
         meta = entry_metadata(entry_dir, artifact_name)
         if meta is None:
             return ["entry incomplete (artifact or meta.json missing)"]
+        if type(meta.get('artifact_schema')) is not int or meta['artifact_schema'] != ARTIFACT_SCHEMA:
+            return ['artifact_schema: incompatible metadata; rebuild artifact']
+        try:
+            validate_model_association(entry_dir, meta, artifact_name, expected_descriptor_id)
+        except ValueError as exc:
+            return [str(exc)]
         if (meta.get("python_extension") is not python_extension or
                 "python_abi" not in meta or meta["python_abi"] != python_abi):
             return ["python_abi: metadata declaration disagrees with requested artifact"]
         recorded = read_build_inputs(entry_dir)
+        if recorded is not None and (type(recorded.get('artifact_schema')) is not int or
+                                     recorded['artifact_schema'] != ARTIFACT_SCHEMA):
+            return ['artifact_schema: incompatible identity record; rebuild artifact']
         if recorded is not None and "python_abi" not in recorded:
             return ["python_abi: no extension declaration recorded"]
         stale = stale_hit_reasons(entry_dir, identity)
@@ -666,6 +697,7 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
             stale = _entry_state(entry_dir)
             if not stale:
                 meta = json.loads((entry_dir / "meta.json").read_text())
+                validate_model_association(entry_dir, meta, artifact_name, expected_descriptor_id)
                 _manifest_register(root, name, mapped, meta)
                 return ConsumerArtifact(consumer, name, entry_dir / artifact_name, entry_dir / "grid.cuh",
                                         entry_dir, mapped, input_key, cuda_arch, meta, False)
@@ -710,7 +742,21 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
             "python_abi" not in cached_meta or cached_meta["python_abi"] != python_abi or
             (recorded is not None and ("python_abi" not in recorded or recorded["python_abi"] != python_abi)))
         dependency_repair = cached_meta is not None and cached_meta.get("dependencies") != dependencies
-        if cached_meta is not None and not force_rebuild and not abi_repair and not dependency_repair:
+        schema_repair = cached_meta is not None and (
+            type(cached_meta.get('artifact_schema')) is not int or
+            cached_meta['artifact_schema'] != ARTIFACT_SCHEMA or
+            (recorded is not None and (
+                type(recorded.get('artifact_schema')) is not int or
+                recorded['artifact_schema'] != ARTIFACT_SCHEMA or
+                recorded.get('key_schema') != _KEY_SCHEMA)))
+        descriptor_repair = False
+        if cached_meta is not None:
+            try:
+                validate_model_association(entry_dir, cached_meta, artifact_name, expected_descriptor_id)
+            except ValueError:
+                descriptor_repair = True
+        if cached_meta is not None and not any((force_rebuild, abi_repair, dependency_repair,
+                                                descriptor_repair, schema_repair)):
             check_build_inputs()
             meta = cached_meta
             if read_build_inputs(entry_dir) is None:
@@ -739,6 +785,7 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
                 "code_options": code_options, "cuda_arch": int(cuda_arch),
                 "grid_rbd": package_version(), "artifact_schema": ARTIFACT_SCHEMA,
                 "build_seconds": round(time.monotonic() - t0, 1), "build": record,
+                "model_association": record_model_association(gen_dir, artifact_name),
             }
             archs = effective_cuda_archs(cuda_arch)
             if archs is not None:
@@ -747,8 +794,10 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
             write_build_inputs(gen_dir, identity)
             check_build_inputs()
             meta = publish_entry(gen_dir, entry_dir, artifact_name,
-                                 force=force_rebuild or abi_repair or dependency_repair)
+                                 force=any((force_rebuild, abi_repair, dependency_repair,
+                                            descriptor_repair, schema_repair)))
         check_inputs_unchanged()
+        validate_model_association(entry_dir, meta, artifact_name, expected_descriptor_id)
     finally:
         shutil.rmtree(gen_dir, ignore_errors=True)
     keymap_record(root, input_key, content_key)
@@ -758,13 +807,14 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
 
 
 def load_artifact(consumer: str, name: str, cache_dir: str | Path | None = None,
-                  cuda_arch: int | None = None) -> ConsumerArtifact:
+                  cuda_arch: int | None = None, *, expected_descriptor_id: str | None = None) -> ConsumerArtifact:
     """The prepared artifact `name` of `consumer`, without a toolchain: the manifest names it,
     the entry must be whole and recorded for this device (or one of a fat build's devices) and
     key schema. Declared Python extensions must match this interpreter's ABI.
     With no detectable GPU and no `cuda_arch`, the recorded device is trusted."""
     _check_name(consumer, "consumer")
     _check_name(name, "name")
+    check_expected_id(expected_descriptor_id)
     cache_root = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
     root = consumer_root(cache_root, consumer)
     entry = _load_manifest(root)["artifacts"].get(name) if _manifest_path(root).exists() else None
@@ -793,12 +843,18 @@ def load_artifact(consumer: str, name: str, cache_dir: str | Path | None = None,
             reasons.append(f"python_abi: recorded {abi!r} != current {_python_abi_identity()!r}")
     if recorded.get("key_schema") != _KEY_SCHEMA:
         reasons.append(f"key_schema: recorded {recorded.get('key_schema')!r} != current {_KEY_SCHEMA!r}")
-    if recorded.get("artifact_schema") != ARTIFACT_SCHEMA:
+    if type(recorded.get('artifact_schema')) is not int or recorded['artifact_schema'] != ARTIFACT_SCHEMA:
         reasons.append(f"artifact_schema: recorded {recorded.get('artifact_schema')!r} != current {ARTIFACT_SCHEMA!r}")
+    if type(meta.get('artifact_schema')) is not int or meta['artifact_schema'] != ARTIFACT_SCHEMA:
+        reasons.append('artifact_schema: metadata is incompatible; rebuild artifact')
     if cuda_arch and not _arch_loadable(recorded, int(cuda_arch)):
         reasons.append(f"cuda_arch: recorded {recorded.get('cuda_arch')!r} (archs {recorded.get('cuda_archs')!r}) != current {cuda_arch!r}")
     if reasons:
         raise ArtifactIncompatibleError(f"artifact {name!r} of {consumer!r} cannot be loaded here: " + "; ".join(reasons))
+    try:
+        validate_model_association(entry_dir, meta, artifact_name, expected_descriptor_id)
+    except ValueError as exc:
+        raise ArtifactIncompatibleError(str(exc)) from exc
     return ConsumerArtifact(consumer, name, entry_dir / artifact_name, entry_dir / "grid.cuh", entry_dir,
                             entry["content_key"], None, int(recorded.get("cuda_arch", cuda_arch or 0)), meta, False)
 

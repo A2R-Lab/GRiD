@@ -204,13 +204,14 @@ def _codegen_source_hash() -> str:
     # flags here silently reuses a stale .so (this is how an enable_idsva_so_world_frame
     # default change went unbuilt). Hash it explicitly; keep the rest of the binding
     # package out so runtime-only file churn doesn't force needless rebuilds.
-    compile_py = Path(__file__).resolve().parent / "_compile.py"
-    try:
-        h.update(b"bindings/grid_rbd/_compile.py")
-        h.update(compile_py.read_bytes())
-        found = True
-    except OSError:
-        pass
+    for name in ("_compile.py", "_model.py"):
+        compile_py = Path(__file__).resolve().parent / name
+        try:
+            h.update(("bindings/grid_rbd/" + name).encode())
+            h.update(compile_py.read_bytes())
+            found = True
+        except OSError:
+            pass
     return h.hexdigest() if found else ""
 
 
@@ -317,7 +318,7 @@ def _compile_source_hash() -> str:
     """Compile and publication helpers participate in the fast-path identity."""
     try:
         h = hashlib.sha256()
-        for name in ("_compile.py", "_store.py"):
+        for name in ("_compile.py", "_store.py", "_model.py"):
             h.update(name.encode() + b"\0")
             h.update((Path(__file__).parent / name).read_bytes())
         return h.hexdigest()

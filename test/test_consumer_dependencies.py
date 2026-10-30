@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from grid_rbd import _artifacts as artifacts
+from test._consumer_model_fixture import generate_metadata_header
 from grid_rbd._consumer_dependencies import parse_dependencies, discover_dependencies
 
 
@@ -59,7 +60,7 @@ def case(tmp_path, monkeypatch):
     monkeypatch.setattr(artifacts, "_toolchain_tag", lambda: "fake")
     monkeypatch.setattr(artifacts, "_build_jobs", lambda: 1)
     monkeypatch.setattr(artifacts, "_validate_python_exports", lambda *a: None)
-    monkeypatch.setattr(artifacts, "generate_grid_cuh", lambda u, o, p: p.write_text("// grid\n"))
+    monkeypatch.setattr(artifacts, "generate_grid_cuh", generate_metadata_header)
     monkeypatch.setattr(artifacts, "_compile_command", lambda gen, arch, incs, *a:
                         ["fake-nvcc", f"-I{gen}", *[f"-I{p}" for p in incs]])
 

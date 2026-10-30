@@ -47,6 +47,7 @@ from ._cache import (
 from ._compile import compile_sources, generate_sources
 from ._store import entry_metadata, publish_entry, staging_dir
 from ._handle import RobotHandle, SecondOrderID, SecondOrderFD
+from ._model import describe_model
 
 _log = logging.getLogger("grid_rbd")
 
@@ -1099,6 +1100,7 @@ from ._artifacts import (ArtifactIncompatibleError, ArtifactNotFoundError, Consu
                          ConsumerArtifactError, build_artifact, list_artifacts, load_artifact)
 
 __all__ = [
+    "describe_model",
     "gc_cache",
     "build_artifact",
     "load_artifact",

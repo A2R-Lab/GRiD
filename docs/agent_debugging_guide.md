@@ -3580,3 +3580,24 @@ body-SO also requires its gravity-Hessian global workspace even on a small model
 Supply that workspace and reuse the generator's epilogue in a composed audit;
 do not transpose the oracle opportunistically or change production math to fix
 an incomplete caller. Preserve failed harness evidence separately from defects.
+
+### 7.z76 Coordinate identity is not physical identity or a prepared-artifact proof
+
+The schema-1 descriptor owns coordinate/frame meaning, not inertia, actuation or
+compiled-code identity. Changing mass should preserve descriptor ID while changing
+artifact identity. A dependent joint has null owned slices even when its leader
+owns slot zero. Test descriptor-only FK against an independent reference and hand
+anchors; comparing two emitters from one wrong table is not enough.
+
+Prepared consumer loading validates descriptor structure/digest, the embedded
+header representation, and header/binary hashes. Parse the saved finite literal
+grammar; do not regenerate headers or require URDF/compiler access to check a
+prepared artifact. These hashes detect stale/mixed files, not an attacker who
+replaces a complete coherent store. Check pointer hits, content hits, concurrent
+publication winners and prepared loads, not just the first build.
+
+Metadata is an additive generated fragment before the final suggested-thread
+block. Strip only its marked block when proving prior algorithm bytes unchanged.
+An independently emitted metadata-only header can compile with an ordinary host
+C++ compiler; the complete grid.cuh remains CUDA and needs a `.cu` translation
+unit (or an explicit CUDA language selection), even for a host-only accessor.

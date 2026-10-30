@@ -12,6 +12,15 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Add CPU model inspection and generated host/device coordinate/frame metadata
+  with explicit independent ownership, xyzw conventions and typed canonical
+  identity. A single-body-pose frame composer requires no FK pass or shared
+  scratch and refuses nominal runtime-transform offsets. Wrapper metadata is
+  derived from the same descriptor. Consumer artifact schema 2 validates the
+  descriptor/header/binary association on build, reuse and source-free prepared
+  load; older prepared artifacts require rebuilding. Descriptor identity is
+  not complete dynamics or artifact identity.
+
 - Omit zero-weight reduced projections in floating-base constant-joint CRBA
   while retaining composite inertia and transport through constant ancestors.
   Add FP32/FP64 floating and fixed-base descendant dynamics tests against

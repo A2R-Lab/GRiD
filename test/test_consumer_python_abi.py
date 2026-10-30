@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from grid_rbd import _artifacts as artifacts
+from test._consumer_model_fixture import generate_metadata_header
 
 
 @pytest.fixture
@@ -21,7 +22,7 @@ def build_case(tmp_path, monkeypatch):
         "cuda_arch": arch})
     monkeypatch.setattr(artifacts, "_compile_command", lambda gen, *a: ["fake", f"-I{gen}"])
     monkeypatch.setattr(artifacts, "_toolchain_tag", lambda: "fake")
-    monkeypatch.setattr(artifacts, "generate_grid_cuh", lambda urdf, opts, out: out.write_text("header"))
+    monkeypatch.setattr(artifacts, "generate_grid_cuh", generate_metadata_header)
     monkeypatch.setattr(artifacts, "_validate_python_exports", lambda *a: None, raising=False)
     monkeypatch.setattr(artifacts, "resolve_consumer_toolchain", lambda *a: None)
     monkeypatch.setattr(artifacts, "discover_dependencies", lambda *a: {

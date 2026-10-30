@@ -1176,11 +1176,21 @@ class GRiDCodeGenerator:
         if collision_spec is not None:
             from .algorithms._collision import normalize_collision_tiers
             self.gen_collision_namespace(normalize_collision_tiers(collision_spec))
+        self.gen_add_fragment_mark("model_metadata")
+        # Additive public geometry metadata; runtime algorithms above are unchanged.
+        # The legacy raw Euler-coordinate generator has no schema-1 descriptor.
+        # Installed bindings always parse quaternion coordinates.
+        self.model_descriptor = None
+        if self.robot.using_quaternion:
+            from .model_descriptor import descriptor_from_robot
+            from .model_metadata_cpp import emit_model_metadata
+            self.model_descriptor = descriptor_from_robot(
+                self.robot, runtime_transform=bool(self.runtime_transform))
+            self.gen_add_code_line('// Model descriptor begins (schema 1).')
+            self.gen_add_code_lines(emit_model_metadata(self.model_descriptor, self.file_namespace).splitlines())
+            self.gen_add_code_line('// Model descriptor ends.')
         self.gen_add_fragment_mark("suggested_threads")
-        # Per-algorithm suggested thread counts (2026-10-21, GATO issue 19): read the
-        # widest block-parallel loop on each kernel's call tree back from the text
-        # emitted above and reopen the namespace with one constant per algorithm.
-        # Additive and last, so no kernel body changes.
+        # Per-algorithm suggested thread counts remain the final additive block.
         from .suggested_threads import derive as _derive_suggested_threads, emit_block as _emit_suggested_block
         from .algo_registry import launch_config_descriptors as _lc_descriptors
         self._suggested_threads, self._suggested_threads_unknown = _derive_suggested_threads(

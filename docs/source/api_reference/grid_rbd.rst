@@ -23,6 +23,14 @@ See :doc:`../user_guide/tutorials/python_wrappers` for the guided tour and
 ``bindings/examples/AGENT_INTEGRATION_GUIDE.md`` for the agent-facing
 lifecycle notes.
 
+Model inspection
+----------------
+
+See :doc:`model_coordinates` for coordinate ownership, frame conventions and
+prepared-artifact identity.
+
+.. autofunction:: grid_rbd.describe_model
+
 Registration
 ------------
 

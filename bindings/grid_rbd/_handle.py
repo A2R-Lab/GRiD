@@ -337,6 +337,20 @@ class RobotHandle:
         return bool(self._meta.get("floating_base", False))
 
     @property
+    def model_descriptor(self):
+        """Nominal GRiD-native coordinates, irrespective of output_convention.
+
+        Returns an independent copy. Runtime origin updates do not mutate this
+        baked descriptor; runtime_transform marks those placements as nominal.
+        """
+        from copy import deepcopy
+        from grid_codegen.model_descriptor import validate_descriptor
+        descriptor = self._meta.get('model_descriptor')
+        if descriptor is None:
+            raise RuntimeError('cached robot predates the model descriptor; rebuild it')
+        return deepcopy(validate_descriptor(descriptor))
+
+    @property
     def configuration_layout(self):
         """Independent joint blocks mapping public positions to tangent slots."""
         from ._configuration import configuration_layout_from_meta
@@ -462,8 +476,12 @@ class RobotHandle:
 
     @property
     def joint_names(self):
-        """Joint names, index == joint id (the input-vector ordering). ``None``
-        on a .so registered before names were persisted."""
+        """Names indexed by effective joint ID, not by q/v coordinate slot.
+
+        Mimic joints own no inputs; spherical/floating joints own multiple
+        entries. Use model_descriptor/configuration_layout for coordinate
+        ownership. ``None`` on an artifact predating persisted names.
+        """
         names = self._meta.get("joint_names")
         return list(names) if names else None
 

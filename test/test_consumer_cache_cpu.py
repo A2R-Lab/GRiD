@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from grid_rbd import _artifacts as artifacts
+from test._consumer_model_fixture import generate_metadata_header
 
 
 @pytest.fixture
@@ -15,7 +16,8 @@ def consumer(tmp_path, monkeypatch):
     source = tmp_path / "kernel.cu"
     source.write_text('// consumer\n')
     state = SimpleNamespace(generated=0, compiled=0, urdf=urdf, source=source)
-    monkeypatch.setattr(artifacts, "artifact_identity", lambda arch: {"key_schema": 1, "cuda_arch": arch})
+    monkeypatch.setattr(artifacts, "artifact_identity", lambda arch: {
+        "key_schema": artifacts._KEY_SCHEMA, "artifact_schema": artifacts.ARTIFACT_SCHEMA, "cuda_arch": arch})
     monkeypatch.setattr(artifacts, "_compile_command", lambda gen, *a: ["fake-nvcc", f"-I{gen}"])
     monkeypatch.setattr(artifacts, "_toolchain_tag", lambda: "fake-toolchain")
     monkeypatch.setattr(artifacts, "_validate_python_exports", lambda *a: None)
@@ -25,7 +27,7 @@ def consumer(tmp_path, monkeypatch):
 
     def generate(urdf, opts, out):
         state.generated += 1
-        out.write_text('// header\n')
+        generate_metadata_header(urdf, opts, out)
 
     def build(gen, sources, headers, cmd, flags, out, objects, reuse_objects, validate_inputs=None,
                     python_abi=None, toolchain=None, dependencies=None, validate_unit_inputs=None):
@@ -41,7 +43,7 @@ def consumer(tmp_path, monkeypatch):
     return state
 
 
-@pytest.mark.parametrize("missing", ["artifact.so", "meta.json", "grid.cuh"])
+@pytest.mark.parametrize("missing", ["artifact.so", "meta.json", "grid.cuh", "model_descriptor.json"])
 def test_missing_entry_file_is_repaired(consumer, missing):
     first = consumer.build()
     (first.store_dir / missing).unlink()
@@ -59,6 +61,86 @@ def test_bad_metadata_is_repaired(consumer):
     second = consumer.build()
     assert second.content_key == first.content_key and consumer.compiled == 2
     assert json.loads((second.store_dir / "meta.json").read_text())["consumer"] == "cpu-probe"
+
+
+@pytest.mark.parametrize('damage', ['descriptor', 'rehash', 'header', 'binary', 'association'])
+def test_model_association_rejects_and_repairs_swapped_files(consumer, damage):
+    from grid_codegen.model_descriptor import descriptor_id
+    first=consumer.build()
+    original=first.descriptor
+    if damage in ('descriptor', 'rehash'):
+        path=first.store_dir/'model_descriptor.json'
+        d=json.loads(path.read_text())
+        d['model_name']='different coordinates'
+        if damage=='rehash':
+            d['descriptor_id']=descriptor_id(d)
+        path.write_text(json.dumps(d))
+    elif damage=='association':
+        path=first.store_dir/'meta.json'
+        meta=json.loads(path.read_text()); meta.pop('model_association')
+        path.write_text(json.dumps(meta))
+    else:
+        path=first.header if damage=='header' else first.path
+        path.write_bytes(path.read_bytes()+b'changed')
+    with pytest.raises(artifacts.ArtifactIncompatibleError, match='model descriptor'):
+        artifacts.load_artifact('cpu-probe', 'robot', cache_dir=consumer.urdf.parent/'cache', cuda_arch=120)
+    assert not consumer.build(plan_only=True)['cached']
+    repaired=consumer.build()
+    assert repaired.descriptor==original
+    assert consumer.compiled==2
+    assert not consumer.build().compiled
+
+
+@pytest.mark.parametrize('sidecar',['meta.json','build_inputs.json'])
+@pytest.mark.parametrize('value',[1,True,2.0])
+def test_schema_damage_cannot_hide_in_content_reuse(consumer,sidecar,value):
+    first=consumer.build()
+    path=first.store_dir/sidecar
+    data=json.loads(path.read_text()); data['artifact_schema']=value
+    path.write_text(json.dumps(data))
+    with pytest.raises(artifacts.ArtifactIncompatibleError,match='artifact_schema'):
+        artifacts.load_artifact('cpu-probe','robot',cache_dir=first.store_dir.parents[3],cuda_arch=120)
+    rebuilt=consumer.build()
+    assert rebuilt.content_key==first.content_key
+    assert artifacts.load_artifact('cpu-probe','robot',cache_dir=first.store_dir.parents[3],
+                                    cuda_arch=120).descriptor==first.descriptor
+    assert not consumer.build().compiled
+
+
+def test_expected_descriptor_checked_on_cold_warm_content_and_prepared_paths(consumer, monkeypatch):
+    from grid_rbd import describe_model
+    expected=describe_model(consumer.urdf)['descriptor_id']
+    with pytest.raises(ValueError,match='expected_descriptor_id'):
+        consumer.build(expected_descriptor_id='0'*64)
+    assert consumer.compiled==0
+    first=consumer.build(expected_descriptor_id=expected)
+    assert not consumer.build(expected_descriptor_id=expected).compiled
+    # Remove just the disposable test pointer to exercise a content-store reuse.
+    monkeypatch.setattr(artifacts,'keymap_lookup',lambda *a: None)
+    assert not consumer.build(expected_descriptor_id=expected).compiled
+    consumer.urdf.unlink(); consumer.source.unlink()
+    monkeypatch.setattr(artifacts,'find_nvcc',lambda: pytest.fail('prepared load used compiler'))
+    from grid_codegen import model_metadata_cpp
+    monkeypatch.setattr(model_metadata_cpp,'emit_model_metadata',lambda *a: pytest.fail('prepared regenerated metadata'))
+    loaded=artifacts.load_artifact('cpu-probe','robot',cache_dir=first.store_dir.parents[3],
+                                   cuda_arch=120,expected_descriptor_id=expected)
+    assert loaded.descriptor['descriptor_id']==expected
+    with pytest.raises(artifacts.ArtifactIncompatibleError,match='expected_descriptor_id'):
+        artifacts.load_artifact('cpu-probe','robot',cache_dir=first.store_dir.parents[3],
+                                 cuda_arch=120,expected_descriptor_id='0'*64)
+
+
+@pytest.mark.parametrize('literal', ['"duplicate";\ninline constexpr char descriptor_id[] = "second"',
+                                    '"bad\\x41"', '"bad\\777"', '"unterminated'])
+def test_bad_header_literals_rejected(consumer, literal):
+    import re
+    first=consumer.build()
+    text=first.header.read_text()
+    text=re.sub(r'inline constexpr char descriptor_id\[\] = .*?;',
+                lambda _: 'inline constexpr char descriptor_id[] = '+literal+';', text)
+    first.header.write_text(text)
+    with pytest.raises(artifacts.ArtifactIncompatibleError,match='model descriptor'):
+        artifacts.load_artifact('cpu-probe','robot',cache_dir=first.store_dir.parents[3],cuda_arch=120)
 
 
 def test_same_stem_sources_produce_distinct_objects_and_links(tmp_path, monkeypatch):
