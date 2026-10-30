@@ -25,3 +25,4 @@ debug parsed robot topology.
    urdf
    gridcodegen
    model_coordinates
+   workspace_composition

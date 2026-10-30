@@ -1,0 +1,5 @@
+Source: A2R-Lab Parallel-DDP-unified robot_assets/acrobot.urdf
+Commit: a89455b84b7dc11d95333d532347fec8a35bad67
+SHA256: 76dfcd91bf5515d7ba6200177d71f4c7e5fe7b216cc8c729f21eb3643327ff67
+Copied byte-for-byte for the agreed Package 3 consumer model/precision matrix.
+This fixture is fully actuated; no acrobot underactuation contract is implied.

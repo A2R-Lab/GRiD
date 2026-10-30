@@ -12,6 +12,14 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Add checked generated cost-menu views, explicit full-shared/deep-spill
+  fixed-base plant-Hessian views with matched evaluators, gradient initialization
+  extents, and exact target EE inner scratch queries. Keep allocation, collective
+  synchronization, invocation ownership and actual enclosing-kernel resource
+  admission explicit. Correct the plant-Hessian launch-size query's missing
+  runtime-transform reserve using the same resolved layout as its kernel.
+  Numerical arithmetic and tier selection are unchanged.
+
 - Add CPU model inspection and generated host/device coordinate/frame metadata
   with explicit independent ownership, xyzw conventions and typed canonical
   identity. A single-body-pose frame composer requires no FK pass or shared

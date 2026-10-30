@@ -803,6 +803,46 @@ def gen_state_cost_tangent(self):
     self.gen_add_end_function()
 
 
+def _gen_tracking_cost_menu_arena(self):
+    """Use the evaluator's exact bytes and the activation/feature row floor."""
+    term_floor = 3 * self.robot.get_num_vel() + 72
+    self.gen_add_code_lines([
+        "// Cost menu workspace begins.",
+        "template <typename T, int MX = 0, int MU = 0>",
+        "struct tracking_cost_menu_arena {",
+        '    static_assert(MX >= 0 && MU >= 0, "feature row counts must be nonnegative");',
+        '    static_assert(sizeof(T) == 4 || sizeof(T) == 8, "float or double storage required");',
+        "    T *s_frame; T *s_scratch;",
+        "    static __host__ __device__ constexpr size_t alignment() { return 16; }",
+        "    static __host__ __device__ constexpr size_t scratch_offset() {",
+        "        return grid::grid_align_up(sizeof(T) * GRID_PLANT_FRAME_SCRATCH_COUNT, alignment());",
+        "    }",
+        "    static __host__ __device__ constexpr size_t scratch_bytes() {",
+        "        constexpr size_t rows = MX > MU ? MX : MU;",
+        f"        constexpr size_t terms = sizeof(T) * (rows > {term_floor} ? rows : {term_floor});",
+        "        constexpr size_t frame = FRAME_EVAL_DYNAMIC_SHARED_MEM_BYTES<T>();",
+        "        return terms > frame ? terms : frame;",
+        "    }",
+        "    static __host__ __device__ constexpr size_t bytes() {",
+        "        return grid::grid_align_up(scratch_offset() + scratch_bytes(), alignment());",
+        "    }",
+        "    // Views only: no allocation, initialization, barrier or device admission.",
+        "    // Unchecked hot path: preparation must establish alignment and capacity.",
+        "    static __host__ __device__ tracking_cost_menu_arena carve(void *base) {",
+        "        tracking_cost_menu_arena a;",
+        "        a.s_frame = reinterpret_cast<T *>(base);",
+        "        a.s_scratch = reinterpret_cast<T *>(reinterpret_cast<unsigned char *>(base) + scratch_offset());",
+        "        return a;",
+        "    }",
+        "    static __host__ __device__ bool bind(void *base, size_t capacity, tracking_cost_menu_arena &out) {",
+        "        if (!base || capacity < bytes() || reinterpret_cast<uintptr_t>(base) % alignment()) return false;",
+        "        out = carve(base); return true;",
+        "    }",
+        "};",
+        "// Cost menu workspace ends.",
+    ])
+
+
 def gen_tracking_cost_menu(self):
     """The menu preset. Fixed base: the state is x = [q; qd] (NUM_POS == NUM_VEL)
     and the input u is NUM_VEL wide. Floating base: the state term is the tangent
@@ -819,6 +859,7 @@ def gen_tracking_cost_menu(self):
     self.gen_add_code_line("const int GRID_PLANT_MENU_TANGENT = " + ("1" if fb else "0") + ";  // 1: the preset is in the tangent layout (gradient 2*NUM_VEL, Hessian 2*NUM_VEL square, input NUM_VEL - 6)")
     self.gen_add_code_line("const int GRID_PLANT_MENU_NU = " + NU + ";  // the input width of the preset")
     self.gen_add_code_line("const int GRID_PLANT_MENU_NLX = " + NLX + ";  // the variable width of the linear x feature ([q[7:]; qd] on a floating base, x on a fixed base)")
+    _gen_tracking_cost_menu_arena(self)
     self.gen_add_func_doc("cost_menu_params: the per-knot buffers of tracking_cost_menu (every pointer a runtime buffer; a term whose activation is GRID_PLANT_ACTIVATION_NONE is skipped)",
                           ["x_des / u_des / Q / R and the barrier bound-and-mu triples as tracking_cost; ee_des / W are the cost-frame CF position target and weight.",
                            "activation (GRID_PLANT_MENU_TERMS ints) and eps (same length) select and parameterize every term, order GRID_PLANT_MENU_*.",

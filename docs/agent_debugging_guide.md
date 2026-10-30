@@ -3601,3 +3601,53 @@ block. Strip only its marked block when proving prior algorithm bytes unchanged.
 An independently emitted metadata-only header can compile with an ordinary host
 C++ compiler; the complete grid.cuh remains CUDA and needs a `.cu` translation
 unit (or an explicit CUDA language selection), even for a host-only accessor.
+
+### 7.z77 Workspace views need composition tests, not just size equality
+
+Share the ordered slots and scratch authorities with the production caller.
+Resource-tier names do not identify storage: a shared tier can select deep
+Hessian spill. Pair an explicit full/deep view with its evaluator flags and give
+each concurrent invocation its own global slot. Capacity/alignment validation
+does not establish that static plus dynamic storage fits the enclosing kernel.
+
+Poison and reuse the allocation, keep other caller regions live, check guards and
+run 1/17/32/64/256 threads. Gradient composition must initialize the full public
+vaf extent. Menu bounds remain valid even when their weights are zero. An input
+initialization loop followed by a single-thread override needs a barrier; the
+workspace test's quaternion/activation initialization exposed this under
+racecheck although its numerical checks passed. Fence between collective calls
+when their scratch is reused, even if today's specialization happens to fence.
+
+Use the agreed numerical policy. The extra strict entrywise FP32 diagnostic on
+iiwa found near-zero cancellation in both the new caller and the byte-identical
+stock-kernel output; it did not establish a binder regression. Preserve the
+diagnostic failure, compare with the stock kernel exactly, and retain the pinned
+consumer's tensor-norm Hessian criterion alongside its entrywise step/gradient,
+symmetry, zero-block and finite-difference tests. FP64 keeps its tighter analytic
+criterion. Do not silently relabel an exploratory diagnostic as a passed gate.
+
+Include a branched runtime-transform configuration. Its stock plant-Hessian
+launch query omitted the extra 36 scalars per retained body while the actual
+carve included them; FP64 memcheck found topology writes beyond dynamic shared
+memory. Resolve the launch count through the same layout authority. The composed
+view was already sized correctly, so a successful composed call alone would have
+missed the production-kernel defect. A manually composed transform loader must
+also select the runtime-transform template flag; the default baked loader is not
+the same operation in a runtime-transform header.
+
+Separate cross-kernel rounding from nondeterminism. The extra branched FP64
+runtime-transform composition test differed from the stock kernel in six entries
+by at most 8.14e-20, while reference error was below 1e-15 and both storage layouts
+and all thread counts were bit-identical. Brian approved a 64-epsilon relative
+cross-kernel bound for this one fixture on 2026-10-30, with no absolute floor;
+other stock comparisons remain exact. Independent oracle/finite-difference,
+finite-output, poison/reuse and exact thread/storage checks are unchanged.
+Negative controls reject nonfinite results, zero/nonzero differences and an
+above-bound perturbation. Preserve the original diagnostic failures.
+
+The exact EE scratch tests also reproduce section 1r's homogeneous constant-slot
+WAR warning in FP32, not FP64. Keep detailed raw reports and the known-warning
+disposition distinct from clean sanitizer passes. The narrow classifier in
+test/ee_constant_slot_warnings.py requires the reviewed call sites, counts and
+equal constant bytes; malformed reports, other hazards or errors fail closed.
+Do not generalize that classifier into permission to ignore racecheck warnings.

@@ -3299,6 +3299,9 @@ def gen_ee_target_aliases(self, include_pose = True, include_gradient = True, in
 
     if include_pose:
         self.gen_add_code_lines([
+            "// EE target pose scratch query begins.",
+            "template <typename T> __host__ __device__ constexpr size_t EE_TARGET_POSE_INNER_SCRATCH_BYTES() { return sizeof(T) * size_t(" + str(self.gen_end_effector_pose_inner_temp_mem_size(getattr(self, "_ee_target_name", ""))) + "); }",
+            "// EE target pose scratch query ends.",
             "template <typename T, bool TEMP_IN_SMEM = true, typename... Args>",
             "__device__ __forceinline__",
             "void end_effector_pose_target_inner(Args... args) { "
@@ -3312,6 +3315,9 @@ def gen_ee_target_aliases(self, include_pose = True, include_gradient = True, in
 
     if include_gradient:
         self.gen_add_code_lines([
+            "// EE target gradient scratch query begins.",
+            "template <typename T> __host__ __device__ constexpr size_t EE_TARGET_GRAD_INNER_SCRATCH_BYTES() { return sizeof(T) * size_t(" + str(self.gen_end_effector_pose_gradient_inner_temp_mem_size(getattr(self, "_ee_target_name", ""))) + "); }",
+            "// EE target gradient scratch query ends.",
             "template <typename T, bool TEMP_IN_SMEM = true, typename... Args>",
             "__device__ __forceinline__",
             "void end_effector_pose_gradient_target_inner(Args... args) { "

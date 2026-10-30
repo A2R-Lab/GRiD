@@ -1314,6 +1314,9 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              _tier_ternary_line("CRBA_TEMP_IN_SMEM", "bool", (("true" if self.crba_spill_tier_3way[0] <= 1 else "false"), ("true" if self.crba_spill_tier_3way[1] <= 1 else "false"), ("true" if self.crba_spill_tier_3way[2] <= 1 else "false"))),
                              # s_M output in smem ONLY at rung0; spilled to the SO band at rung1/rung2. Mirror DCCRBA_OUTPUT_IN_SMEM's ==0.
                              _tier_ternary_line("CRBA_M_IN_SMEM", "bool", (("true" if self.crba_spill_tier_3way[0] == 0 else "false"), ("true" if self.crba_spill_tier_3way[1] == 0 else "false"), ("true" if self.crba_spill_tier_3way[2] == 0 else "false"))),
+                             "// EE pose scratch query begins.",
+                             "template <typename T> __host__ __device__ constexpr size_t EE_POSE_INNER_SCRATCH_BYTES() { return sizeof(T) * static_cast<size_t>(" + str(self.gen_end_effector_pose_inner_temp_mem_size()) + "); }",
+                             "// EE pose scratch query ends.",
                              "// --- end_effector_pose_gradient_inner (chain workspace) ---",
                              "template <typename T, bool TEMP_IN_SMEM = true> __host__ __device__ constexpr size_t EE_GRAD_INNER_SMEM_BYTES() { return TEMP_IN_SMEM ? sizeof(T) * static_cast<size_t>(" + str(self.gen_end_effector_pose_gradient_inner_temp_mem_size()) + ") : static_cast<size_t>(0); }",
                              "template <typename T, bool TEMP_IN_SMEM = true> __host__ __device__ constexpr size_t EE_GRAD_INNER_WORKSPACE_BYTES() { return TEMP_IN_SMEM ? static_cast<size_t>(0) : sizeof(T) * static_cast<size_t>(" + str(self.gen_end_effector_pose_gradient_inner_temp_mem_size()) + "); }",

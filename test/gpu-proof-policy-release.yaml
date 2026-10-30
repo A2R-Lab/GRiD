@@ -37,6 +37,7 @@ required_fingerprint_paths:
   - test/python_wrappers
   - test/conftest.py
   - test/helpers.py
+  - test/ee_constant_slot_warnings.py
   - test/run_gpu_proof.sh
   - test/run_split_suite.py
   - test/compile_sched.py
