@@ -763,9 +763,14 @@ def _emit_mimic_q_fold(self):
         if getattr(j, "is_mimic", False):
             mult = j.get_mimic_multiplier()
             off = j.get_mimic_offset()
-            expr = "static_cast<T>(" + repr(mult) + ") * s_q[" + str(qslot) + "]"
-            if off != 0.0:
-                expr += " + static_cast<T>(" + repr(off) + ")"
+            if j.get_mimic_target_id() == -1 or mult == 0.0:
+                # Constant mimics have no input coordinate, including when
+                # nq==0. Zero times an invalid/poisoned read is not safe.
+                expr = "static_cast<T>(" + repr(off) + ")"
+            else:
+                expr = "static_cast<T>(" + repr(mult) + ") * s_q[" + str(qslot) + "]"
+                if off != 0.0:
+                    expr += " + static_cast<T>(" + repr(off) + ")"
             self.gen_add_code_line("s_temp[" + str(ind) + "] = " + expr + ";")
         else:
             self.gen_add_code_line("s_temp[" + str(ind) + "] = s_q[" + str(qslot) + "];")

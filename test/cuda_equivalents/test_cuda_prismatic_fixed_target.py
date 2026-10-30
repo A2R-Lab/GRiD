@@ -55,7 +55,7 @@ def test_prismatic_fixed_tool_values_and_thread_invariance(tmp_path, mimic):
             baseline = values[:19]
 
 
-@pytest.mark.parametrize("mimic", [False, True])
+@pytest.mark.parametrize("mimic", [False, True, "constant"])
 @pytest.mark.parametrize("axis", ["cardinal", "skew"])
 def test_prismatic_dynamics_against_independent_mechanics(tmp_path, mimic, axis, monkeypatch):
     """ID/FD/ABA/M/Minv and cardinal first derivatives, not only FK.
@@ -72,6 +72,8 @@ def test_prismatic_dynamics_against_independent_mechanics(tmp_path, mimic, axis,
     urdf = tmp_path / "slider.urdf"
     urdf.write_text(source.read_text().replace("0.6 0 0.8", "0 0 1")
                     if axis == "cardinal" else source.read_text())
+    if mimic == "constant":
+        urdf.write_text(urdf.read_text().replace('mimic joint="slide"', 'mimic joint="tool"'))
     robot = URDFParser().parse(str(urdf))
     algos = ["inverse_dynamics", "forward_dynamics", "aba", "crba", "minv"]
     if axis == "cardinal":
@@ -84,8 +86,10 @@ def test_prismatic_dynamics_against_independent_mechanics(tmp_path, mimic, axis,
                                    skip_gradients=axis != "cardinal", skip_eepose_gradients=True)
     direction = np.array([0., 0., 1.]) if axis == "cardinal" else np.array([.6, 0., .8])
     world_axis = Rotation.from_euler("xyz", [.3, .2, .1]).apply(direction)
-    mass = 1. + (.7 * .5**2 if mimic else 0.)
-    bias = (1. + (.7 * .5 if mimic else 0.)) * 9.81 * world_axis[2]
+    # A constant follower still inherits the ancestor's full translation.
+    ratio = 1. if mimic == "constant" else .5
+    mass = 1. + (.7 * ratio**2 if mimic else 0.)
+    bias = (1. + (.7 * ratio if mimic else 0.)) * 9.81 * world_axis[2]
     reference = RBDReference(robot)
     for q, qd, torque in ((0., 0., 0.), (.13, -.4, 2.), (.5, .7, -3.)):
         expected = {"inverse_dynamics": bias, "forward_dynamics": (torque - bias) / mass,

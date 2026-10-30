@@ -2700,17 +2700,19 @@ def _ee_pose_inner_angle_expr(self, jid):
     """The C expression for joint jid's LOCAL angle theta in terms of s_q. Non-mimic
     joints read their own dense q slot. MIMIC joints have no q slot of their own —
     their angle is mult*q[source] + offset (chained mimics are pre-flattened by the
-    parser, so the target is always a real q-owning joint). This inline fold is what
+    parser; a chain ending at a fixed joint is a constant). This inline fold is what
     lets the standalone (d_robotModel-free) FK inner support mimic robots without
     the general load_update path's s_q_eff scratch."""
     joint = self.robot.get_joint_by_id(jid)
     if joint is not None and joint.is_mimic_joint():
         src = int(joint.get_mimic_target_id())
+        mult = float(joint.get_mimic_multiplier())
+        off = float(joint.get_mimic_offset())
+        if src == -1 or mult == 0.0:
+            return "static_cast<T>(" + str(off) + ")"
         src_slot = self.robot.get_joint_index_q(src)
         if isinstance(src_slot, (list, tuple)):
             src_slot = src_slot[0]
-        mult = float(joint.get_mimic_multiplier())
-        off = float(joint.get_mimic_offset())
         expr = "static_cast<T>(" + str(mult) + ") * s_q[" + str(src_slot) + "]"
         if off != 0.0:
             expr += " + static_cast<T>(" + str(off) + ")"
