@@ -140,7 +140,7 @@ def _compile_runner(build_dir, floating=False):
     arch = _detect_cuda_arch()
     exe = build_dir / "cuda_continuous_joint_runner.exe"
     cmd = [
-        nvcc, "-std=c++11", "-O0",
+        nvcc, "-std=c++17", "-O0",
         f"-DGRID_CUDA_FLOATING_BASE={1 if floating else 0}",
         # gen3 exercises id / crba / ee_pose only; skip the gradient and
         # ee-pose-gradient runner sections so we don't need the heavy gradient /

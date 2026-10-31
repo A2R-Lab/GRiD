@@ -104,7 +104,7 @@ def _compile_runner(build_dir: Path, floating_base: bool):
     executable = build_dir / "cuda_energy_regressor_runner.exe"
     thread_count = _random_thread_count()
     cmd = [
-        nvcc, "-std=c++11", "-O0",
+        nvcc, "-std=c++17", "-O0",
         f"-DGRID_CUDA_FLOATING_BASE={1 if floating_base else 0}",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
         f"-DGRID_CUDA_REGRESSOR_TEST_THREADS={thread_count}",

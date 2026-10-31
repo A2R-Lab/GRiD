@@ -2437,8 +2437,9 @@ def gen_plant_step_hessian_kernel(self):
     self.gen_add_code_line(
         "template <typename T, int TIER = grid::GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t "
         "INTEGRATOR_HESSIAN_DYNAMIC_SHARED_MEM_BYTES() { "
-        # ONE return (nested ternary): constexpr under the runners' -std=c++11
-        # (same tier values as the if-constexpr chain it replaced, 2026-09-23).
+        # ONE return (nested ternary), the C++11-constexpr form kept from the
+        # runners' -std=c++11 days; they compile with -std=c++17 since
+        # 2026-10-31 (same tier values as the if-constexpr chain, 2026-09-23).
         "return (TIER == grid::TIER_SHARED) ? grid::grid_shared_arena_bytes<T>(" + str(t0) + ", grid::TOPOLOGY_HELPERS_COUNT) "
         ": (TIER == grid::TIER_LITE) ? grid::grid_shared_arena_bytes<T>(" + str(t1) + ", grid::TOPOLOGY_HELPERS_COUNT) "
         ": grid::grid_shared_arena_bytes<T>(" + str(t2) + ", grid::TOPOLOGY_HELPERS_COUNT); "

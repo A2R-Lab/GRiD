@@ -18,9 +18,10 @@ def _tier_bytes_lines(macro, counts):
     String-for-string identical to the hand-written wall it replaced (C3
     table-drive, 2026-09-08)."""
     # ONE return statement (a nested ternary), not an `if constexpr` chain: the
-    # sizers are constexpr (GATO ask 2026-09-20) and the equivalence runners
-    # compile with -std=c++11, where a constexpr function body must be exactly
-    # one return. Same values per tier as the chain it replaced.
+    # sizers are constexpr (GATO ask 2026-09-20) and the single-return form
+    # dates from the runners' -std=c++11 days (they compile with -std=c++17
+    # since 2026-10-31, the header's documented standard). Same values per
+    # tier as the chain it replaced.
     return ["template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t " + macro + "() { "
             "return (TIER == TIER_SHARED) ? grid_shared_arena_bytes<T>(" + str(counts[0]) + ", TOPOLOGY_HELPERS_COUNT) "
             ": (TIER == TIER_LITE) ? grid_shared_arena_bytes<T>(" + str(counts[1]) + ", TOPOLOGY_HELPERS_COUNT) "

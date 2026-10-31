@@ -502,7 +502,7 @@ def _linalg_backend_compile_flags(arch: str) -> tuple[str, list[str], str]:
     function keeps the (cxx_standard, flags, note) tuple shape so callers
     don't need updating."""
     del arch  # unused; sm/arch is handled by the outer compile harness
-    return "-std=c++11", ["-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS"], "glass"
+    return "-std=c++17", ["-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS"], "glass"
 
 
 def _parse_const_ints(header_path: Path) -> dict[str, int]:

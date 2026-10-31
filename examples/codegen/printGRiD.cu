@@ -1,6 +1,6 @@
 /***
 Built + run by examples/codegen/print_grid.py (which auto-detects the GPU arch):
-  nvcc -std=c++11 -o printGRiD.exe printGRiD.cu -gencode arch=compute_<ARCH>,code=sm_<ARCH>
+  nvcc -std=c++17 -o printGRiD.exe printGRiD.cu -gencode arch=compute_<ARCH>,code=sm_<ARCH>
 (<ARCH> e.g. 120 for sm_120). Dumps every generated kernel's output for a given grid.cuh.
 ***/
 

@@ -75,7 +75,7 @@ def _compile_runner(build_dir):
     arch = _detect_cuda_arch()
     exe = build_dir / "cuda_branching_skew_runner.exe"
     cmd = [
-        nvcc, "-std=c++11", "-O0",
+        nvcc, "-std=c++17", "-O0",
         "-DGRID_CUDA_FLOATING_BASE=0",
         "-DGRID_RUNNER_SKIP_GRADIENTS=1",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
