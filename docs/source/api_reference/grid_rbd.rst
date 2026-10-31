@@ -85,14 +85,23 @@ Step Hessian
 
 .. py:method:: grid_rbd.RobotHandle.plant_step_hessian(x, u, dt, *, integrator_type="euler", gravity=-9.81)
 
-   Return the explicit step Hessian with shape ``(B, 2*NV, 3*NV, 3*NV)``
-   for ``x`` of shape ``(B, NQ+NV)`` and ``u`` of shape ``(B, NV)``.
-   Input derivative axes are ``[dq; dqd; du]`` and output rows are
-   position tangent followed by velocity. Euler and semi-implicit Euler
-   are supported on fixed and floating bases; multi-stage RK Hessians are
-   unsupported. This method is available on the NumPy handle, not the
-   JAX/PyTorch handles. The generated artifact must include its ``fdsva_so``
-   dependency. See :doc:`../user_guide/concepts/algorithms/integrators_and_plant`.
+   Return the second derivative of the step with shape
+   ``(B, 2*NV, 3*NV, 3*NV)`` for ``x`` of shape ``(B, NQ+NV)`` and ``u`` of
+   shape ``(B, NV)``. Input derivative axes are ``[dq; dqd; du]`` and output
+   rows are position tangent followed by velocity.
+
+   The value is the moving-gradient sensitivity defined in
+   :doc:`integration_conventions`: the derivative of the native step gradient
+   along each input tangent direction, where every evaluated gradient uses its
+   own input tangent basis and predicted-output anchor. On scalar coordinates
+   this is the ordinary component Hessian. On a floating base or a spherical
+   joint it is not the symmetric Hessian in one fixed chart and not the
+   curvature of a nonzero shooting defect, and it need not be symmetric.
+   Euler and semi-implicit Euler are supported on admitted fixed, floating
+   and fixed-spherical models; multi-stage schemes are unsupported. This
+   method is available on the NumPy handle, not the JAX/PyTorch handles. The
+   generated artifact must include its ``fdsva_so`` dependency. See
+   :doc:`../user_guide/concepts/algorithms/integrators_and_plant`.
 
 JAX and torch handles
 ---------------------

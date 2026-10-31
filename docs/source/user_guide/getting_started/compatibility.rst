@@ -140,14 +140,29 @@ specified in :doc:`../concepts/operand_validation`; layouts are in
 Native interface stability
 --------------------------
 
-* The generated ``grid.cuh`` keeps its inline entry points
-  (``init_gridData_checked`` gained an optional trailing allocator-pool
-  argument; the pool-less allocator spellings remain).
+* Public generated surfaces are the ones documented on the API reference
+  pages and the CUDA tutorials: the kernel and ``*_device`` entry points named
+  in :doc:`../tutorials/cuda_support_status`, the ``grid::model`` metadata and
+  transform helpers of :doc:`../../api_reference/model_coordinates`, the
+  configuration primitives of :doc:`../../api_reference/integration_conventions`
+  and the ``grid_plant`` workspace views of
+  :doc:`../../api_reference/workspace_composition`. Neither an underscore nor
+  an ``inline`` spelling decides this: a generated function absent from those
+  pages is an implementation detail that a later minor version may rename or
+  remove. (``init_gridData_checked`` gained an optional trailing allocator-pool
+  argument; the pool-less allocator spellings remain.)
+* Source compatibility, descriptor schema compatibility, compiled-artifact
+  reuse and tested numerical support are separate promises. A call that still
+  compiles does not imply that an old prepared artifact loads: artifact reuse
+  is decided by the content, toolchain and descriptor checks described on the
+  model-coordinates page, and a schema change requires one rebuild.
 * The per-robot wrapper ``.so``'s ``extern "C" grid_rbd_*`` symbols are
   private to the package: they are consumed only by the pybind core of the
   same content-keyed build and gained a leading ``ctx_id`` in 0.5.0, the first
-  packaged release. Do
-  not link against them directly.
+  packaged release. Do not link against them directly.
+* The two joint-transform helpers in ``grid::model`` are CUDA device
+  functions; host code reads the same placements through the constexpr
+  ``joint`` and ``frame`` record accessors.
 
 Differentiation
 ---------------

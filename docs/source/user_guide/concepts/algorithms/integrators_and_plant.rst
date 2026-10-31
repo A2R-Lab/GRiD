@@ -117,7 +117,13 @@ The integrator composes forward dynamics (the mass-matrix-inverse path) with
 the chosen scheme inside one kernel, so the four acceleration stages of
 ``rk4`` do not require four kernel launches. Its gradient uses the analytical forward-dynamics gradient, and the
 step Hessian composes the second-order :doc:`fdsva_so` with the integration
-map (including the floating-base retract derivatives). This fused integrator
+map (including the floating-base retract derivatives). What it computes on a
+manifold is the derivative of the moving step gradient, each evaluated
+gradient carrying its own tangent basis and output anchor, as defined in
+:doc:`../../../api_reference/integration_conventions`. On a floating base
+or a spherical joint this is not a fixed-chart Hessian and not the curvature
+of a shooting defect; solvers that need those terms derive them from the
+difference Jacobians on that page. This fused integrator
 kernel does not make an arbitrary sequence of Python calls a single launch.
 
 On a floating base the integrator applies Pinocchio's SE(3) update to the

@@ -271,6 +271,7 @@ research, cite the original paper and record the software commit or release:
    user_guide/getting_started/fast_robot_setup
    user_guide/getting_started/library_overview
    user_guide/getting_started/compatibility
+   user_guide/getting_started/migrating_to_0_7
    user_guide/glossary
 
 .. toctree::

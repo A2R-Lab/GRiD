@@ -340,3 +340,8 @@ See also
   patterns (stay on device, CUDA graphs, zero-copy interop).
 * `examples/notebooks/ <https://github.com/A2R-Lab/GRiD/tree/main/examples/notebooks>`_: the guided notebook track (start with
   ``01_quickstart_iiwa14``).
+* :doc:`../../api_reference/model_coordinates`: what ``nq``, ``nv``, joint IDs,
+  quaternions and named frames mean for the robot you just loaded, and how to
+  inspect them without a GPU through ``describe_model``.
+* :doc:`migrating_to_0_7`: the ordered checklist for moving a 0.6
+  deployment to 0.7.

@@ -219,3 +219,13 @@ inline. Each ``_device`` routine's dynamic shared-memory requirement is
 exposed as ``grid::<ALGO>_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()``; the
 :doc:`resource tiers <../concepts/resource_tier_system>` page covers fitting a
 routine into a tight outer kernel.
+
+Three reference pages specify what a kernel that includes the header can rely
+on: :doc:`../../api_reference/model_coordinates` for coordinate ownership,
+joint and frame identifiers and the ``grid::model`` accessors;
+:doc:`../../api_reference/integration_conventions` for the native
+difference, step derivatives and the thread-local transform and difference
+primitives; and :doc:`../../api_reference/workspace_composition` for the
+``grid_plant`` workspace views that size and bind storage inside your own
+kernel. Consumers that build and reload compiled artifacts through
+``grid_rbd`` start from :doc:`../getting_started/migrating_to_0_7`.

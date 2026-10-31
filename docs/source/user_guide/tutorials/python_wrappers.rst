@@ -813,3 +813,7 @@ See also
 
 * :doc:`benchmarks`: bench harness and what the methods cost.
 * :doc:`../concepts/algorithms/index`: algorithm-level docs.
+* :doc:`../../api_reference/model_coordinates`: the handle's ``model_descriptor``,
+  coordinate ownership and named frames.
+* :doc:`../../api_reference/integration_conventions`: what ``plant_step_gradient``
+  and ``plant_step_hessian`` differentiate on a floating base or a spherical joint.
