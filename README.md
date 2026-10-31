@@ -23,7 +23,7 @@ The full documentation is the website, <https://a2r-lab.org/GRiD/>: installation
 [How do I…?](https://a2r-lab.org/GRiD/docs/how_do_i.html) index, concepts, API reference, benchmarks and validation.
 This README points to it.
 
-Version 0.6.0 is on [PyPI](https://pypi.org/project/grid-rbd/); 0.5.0 was the first packaged release. GRiD is alpha
+Version 0.7.0 is on [PyPI](https://pypi.org/project/grid-rbd/); 0.5.0 was the first packaged release. GRiD is alpha
 software and APIs may change between minor versions (see the
 [changelog](https://github.com/A2R-Lab/GRiD/blob/main/CHANGELOG.md)). The GPU test receipt and the release timing ran on
 Linux x86-64 with CPython 3.12, CUDA toolkit 13.2 and one RTX 5090 (sm_120); CPython 3.10, 3.11 and 3.13 wheels are built and
