@@ -12,6 +12,8 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-10-31
+
 - Add the skew revolute mimic fixture `revolute_mimic_fixed_tool` with
   closed-form mechanics checks of the numpy oracle and the generated CUDA
   inverse dynamics, forward dynamics, ABA, mass matrix and its inverse.
@@ -590,7 +592,8 @@ update on top of that, organised here by theme:
 - Closed kinematic loops are unsupported.
 - No Windows, macOS, Jetson or precompiled-robot wheels.
 
-[Unreleased]: https://github.com/A2R-Lab/GRiD/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/A2R-Lab/GRiD/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/A2R-Lab/GRiD/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/A2R-Lab/GRiD/compare/v0.5.5...v0.6.0
 [0.5.5]: https://github.com/A2R-Lab/GRiD/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/A2R-Lab/GRiD/compare/v0.5.3...v0.5.4
