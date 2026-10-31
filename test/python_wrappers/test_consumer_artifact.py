@@ -124,6 +124,7 @@ def test_consumer_migration_example(tmp_path):
     assert report["num_pos"] == 7
     assert report["artifacts"]["native"]["python_extension"] is False
     assert report["artifacts"]["python"]["python_extension"] is True
+    assert report["prepared_phase"] == "ok"
 
 
 def test_shadowing_symlink_preserves_header_file_macro_identity(tmp_path):
