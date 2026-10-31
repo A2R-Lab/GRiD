@@ -2172,6 +2172,9 @@ def _plant_hessian_pool_size(self):
     if self.robot.floating_base:
         from ._integrator_gradient import FLOATING_HESSIAN_SE3_SCRATCH
         inner = max(inner, FLOATING_HESSIAN_SE3_SCRATCH)
+    elif any(j.jtype == 'spherical' for j in self.robot.get_joints_ordered_by_id()):
+        from ._integrator_gradient import SPHERICAL_HESSIAN_SCRATCH
+        inner = max(inner, SPHERICAL_HESSIAN_SCRATCH)
     return inner
 
 

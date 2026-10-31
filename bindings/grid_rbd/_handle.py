@@ -1888,16 +1888,22 @@ class RobotHandle:
         x is (B, NUM_POS + NUM_VEL); u is (B, NUM_VEL). Returns the s_d2AB
         surface of shape (B, 2*NV, 3*NV, 3*NV):
 
-            H[b, o, a, b'] = d^2 x_{k+1}[o] / dz[a] dz[b'],  z = [dq; dqd; du]
+            H[batch, o, a, c] = d G(perturb(z, epsilon*e_a))[o,c] / d epsilon
 
-        with output rows split as [position-tangent (NV); velocity (NV)].
+        with z = [dq; dv; du] and output rows [position-tangent; velocity].
+        Each G uses its own input tangent basis and predicted-output anchor.
+        On manifold coordinates this moving-gradient sensitivity can be
+        asymmetric: it is NOT the fixed-chart Hessian or a shooting-defect
+        Hessian. Symmetrization does not supply the missing transport terms.
+        See the public integration-conventions reference for the precise maps.
         Matches ``RBDReference.plant_step_hessian``. Pass-through to
         grid::integrator_hessian_device (composes fdsva_so + dt-scaled assembly).
 
         Scope: euler / semi_implicit_euler on fixed and floating bases (multi-stage
         step Hessians are not generated; those codes return the rc=3 error).
-        Floating-base and multi-stage RK are deferred (the C-ABI returns rc=3 /
-        raises for any other ``integrator_type``).
+        Fixed-base spherical coordinates use their SO(3) retract as well.
+        Other integrators return rc=3; this NumPy method does not imply a
+        JAX/Torch second-derivative handle method or general manifold support.
         """
         x = np.ascontiguousarray(x, dtype=self._dt)
         u = np.ascontiguousarray(u, dtype=self._dt)

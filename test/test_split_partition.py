@@ -870,6 +870,18 @@ def test_fingerprint_follows_named_runners_and_local_helpers():
     assert "test/cuda_equivalents/executable_cache.py" not in narrow
 
 
+def test_manifold_and_descriptor_oracles_are_in_narrow_gpu_scope():
+    from test import run_split_suite as R
+    paths=R._shard_fingerprint_paths({"test_cuda_model_primitives"})
+    assert "test/test_model_descriptor.py" in paths
+    assert "test/test_manifold_conventions.py" in paths
+    assert "test/cuda_equivalents/test_cuda_constant_derivatives.py" in paths
+    for module in ("test_cuda_joint_transform_suffix", "test_cuda_spherical_plant_hessian"):
+        paths=R._shard_fingerprint_paths({module})
+        helper="test_model_descriptor" if "suffix" in module else "test_manifold_conventions"
+        assert f"test/{helper}.py" in paths
+
+
 def test_resume_prunes_dirty_recorded_clean_rows(tmp_path):
     """2026-10-10: a clean resume row whose per-shard receipt recorded
     repo.dirty re-runs (the merge would fold the dirty flag into the merged

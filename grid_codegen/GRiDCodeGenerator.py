@@ -1188,6 +1188,12 @@ class GRiDCodeGenerator:
                 self.robot, runtime_transform=bool(self.runtime_transform))
             self.gen_add_code_line('// Model descriptor begins (schema 1).')
             self.gen_add_code_lines(emit_model_metadata(self.model_descriptor, self.file_namespace).splitlines())
+            from .model_primitives import emit_joint_transforms, emit_configuration_primitives
+            self.gen_add_code_line('// Model thread primitives begin.')
+            self.gen_add_code_lines(emit_joint_transforms(self).splitlines())
+            if algorithms & {"integrator", "integrator_gradient", "integrator_with_gradient", "fdsva_so"}:
+                self.gen_add_code_lines(emit_configuration_primitives(self.model_descriptor, self.file_namespace).splitlines())
+            self.gen_add_code_line('// Model thread primitives end.')
             self.gen_add_code_line('// Model descriptor ends.')
         self.gen_add_fragment_mark("suggested_threads")
         # Per-algorithm suggested thread counts remain the final additive block.

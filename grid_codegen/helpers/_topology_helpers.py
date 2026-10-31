@@ -1404,11 +1404,11 @@ def gen_topology_helpers_size(self):
     size = 0
     if not self.robot.is_serial_chain():
         size += 5*n + 1
-    # Mimic bodies (including constant joints with nq == 0) still have motion
-    # subspaces. Query the same body set as gen_init_topology_helpers, not the
-    # reduced coordinate count. Preserve the legacy query and allocated width
-    # for non-mimic robots (their representative headers remain byte-identical).
-    query_count = self.robot.get_num_joints() if self.robot_has_mimic_joints() else self.robot.get_num_pos()
+    # Subspaces belong to joints, not configuration coordinates: a spherical
+    # joint contributes four q entries but only one subspace. Match the builder's
+    # body set, including mimic/constant bodies. Keep the allocation width above
+    # unchanged for existing representative headers.
+    query_count = self.robot.get_num_joints()
     if not self.robot.are_Ss_identical(list(range(query_count))):
         size += n
     return size
@@ -1522,19 +1522,19 @@ def gen_topology_helpers_pointers_for_cpp(self, inds = None, updated_var_names =
             var_names[key] = value
     n = self.robot.get_num_vel()
     NJ = self.robot.get_num_joints()
-    # FIXED-BASE MIMIC: the topology-helper sections are built NJ-wide, but the
+    # Fixed-base mimic/spherical: helper sections are built NJ-wide, but the
     # OFFSET=True section strides below use `n` (= get_num_vel()). For a mimic
-    # model NJ > nv, so the device would read parent/S-index at the wrong stride
+    # model NJ differs from nv, so the device would read parent/S-index at the wrong stride
     # at multi-joint BFS levels. Use NJ as the stride here (the algorithms also
     # iterate over NJ bodies for mimic-fixed). Floating-base keeps the legacy
     # nv stride (its sections + reads are already NJ-consistent via the
     # floating-specific path, and a swap breaks the byte-identical Gate A).
-    if self.robot_has_mimic_joints() and not self.robot.floating_base:
+    if (self.robot_has_mimic_joints() or self.robot.robot_has_spherical()) and not self.robot.floating_base:
         n = NJ
     if inds == None:
-        inds = list(range(n))
+        inds = list(range(NJ))
     IDENTICAL_S_FLAG_INDS = self.robot.are_Ss_identical(inds)
-    IDENTICAL_S_FLAG_GLOBAL = self.robot.are_Ss_identical(list(range(n)))
+    IDENTICAL_S_FLAG_GLOBAL = self.robot.are_Ss_identical(list(range(NJ)))
 
     # check for one ind
     if len(inds) == 1:

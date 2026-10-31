@@ -12,6 +12,15 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Add thread-local full-configuration and independent-scalar joint transforms,
+  plus compact and dense native configuration-difference Jacobians derived from
+  the model descriptor's coordinate partition. Document buffer ownership,
+  runtime-table limits, parameter lifetime and defect composition.
+- Repair admitted fixed-spherical Euler/semi-implicit step second derivatives
+  in the CPU reference and generated CUDA. Stabilize small-angle reference
+  Rodrigues coefficients. Clarify that `plant_step_hessian` differentiates the
+  moving-basis gradient: it is not a fixed-chart or shooting-defect Hessian.
+
 - Add checked generated cost-menu views, explicit full-shared/deep-spill
   fixed-base plant-Hessian views with matched evaluators, gradient initialization
   extents, and exact target EE inner scratch queries. Keep allocation, collective

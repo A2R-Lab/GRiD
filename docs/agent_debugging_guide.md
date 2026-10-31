@@ -3651,3 +3651,43 @@ disposition distinct from clean sanitizer passes. The narrow classifier in
 test/ee_constant_slot_warnings.py requires the reviewed call sites, counts and
 equal constant bytes; malformed reports, other hazards or errors fail closed.
 Do not generalize that classifier into permission to ignore racecheck warnings.
+
+### 7.z78 Fixed base does not mean affine coordinates
+
+A fixed-base spherical joint retracts on SO(3). Do not select the affine
+second-order path using only `floating_base`: use the independent manifold
+blocks. Package 4 reproduced zero spherical d2Integrate and missing plant
+position-row curvature, then checked the repair against Pinocchio derivatives
+and finite differences of the moving gradient. Test the minimum single spherical
+joint as well as shifted/mixed blocks. Its topology has one joint, four stored
+coordinates and three velocities; topology subspace queries must use joint IDs,
+not `range(nq)`. The public shared/spilled pool authority must also cover the
+minimum model's retract scratch, not merely larger typical robots.
+
+The plant tensor differentiates moving-basis G; it is not a fixed-chart or
+shooting-defect Hessian. A scalarized fixed-chart finite difference and a
+nonzero antisymmetric moving-G component make this distinction executable.
+For differences near identity, direct `(1-cos(theta))/theta**2` can cancel well
+above 1e-8. Compare independent matrix series and Pinocchio, use stable
+coefficients, and do not enlarge tolerances to accommodate the cancellation.
+
+### 7.z79 Standalone thread primitives do not prove composed callers
+
+The Package 4 scalar transform passed standalone divergent-lane tests but gave
+incorrect FP32 matrices in a suffix caller that selects between local and shared
+transform pointers before thread GEMM. The legacy helper passed. Memcheck,
+racecheck, synccheck and initcheck all reported clean: none is an arithmetic
+oracle for register/local-value reuse. Independent descriptor-only FK caught it.
+Forcing inline, initializing the local output, adding an output restrict qualifier
+and consolidating return sites did not fix the reproducer. A scalar device-call
+boundary, a private always-local input copy, and a private plain multiplication
+each passed. This isolates an optimization-sensitive composition, not a general
+proof of a GLASS or compiler defect. Keep the scalar writer call boundary and
+the permanent actual-shape suffix regression; do not silently replace consumer
+GEMM, require an extra full-q copy, or waive the failed arithmetic.
+
+The tested seven-joint FP32 caller used 96 local bytes versus 32 for the legacy
+helper (registers 62/64 versus 56); the 32-joint caller used 62 versus 66 registers
+but retained the extra local storage. These are resource measurements, not
+timings. Consumer acceptance and a separately authorized focused runtime check
+must resolve whether the new path is suitable for production adoption.

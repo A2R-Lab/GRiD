@@ -305,8 +305,8 @@ def register_robot(
         ``"torch"``/``None`` (what the torch/jax registrars pass — jax's baked
         defaults already ARE its tuned config). Runtime-only.
     runtime_inertia : bool, optional
-        Build the robot with a runtime-mutable inertia table (D.4 / Phase 5,
-        numpy backend only). Default False ⇒ the per-link spatial inertia is
+        Build the robot with a runtime-mutable inertia table shared by the
+        NumPy, JAX and PyTorch surfaces of the loaded module. Default False ⇒ the per-link spatial inertia is
         baked into the .so (byte-identical to a plain build, same cache key).
         When True, the codegen emits a ``d_inertia_params`` table + on-device
         6x6 rebuild + a host mutator, and the handle gains
