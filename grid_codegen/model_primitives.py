@@ -18,13 +18,12 @@ def emit_joint_transforms(gen):
     for scalar in (False, True):
         name = 'joint_transform_scalar' if scalar else 'joint_transform'
         arg = 'T coordinate' if scalar else 'const T *s_q'
-        # Keep the scalar writer behind a device call boundary until GLASS drops
-        # __restrict__ from the read operands of its single-thread gemm: with the
-        # writer inlined, nvcc 13.2 treats these stores as unrelated to loads
-        # through a restrict B operand that selects this array (guide 7.z79,
-        # both precisions, not caught by sanitizers). Remove after the re-pin;
-        # test_cuda_joint_transform_suffix fails without it on the unfixed GLASS.
-        qualifier = '__noinline__' if scalar else '__forceinline__'
+        # Both writers inline. The scalar writer once sat behind a device
+        # call boundary because GLASS's single-thread gemm declared its read
+        # operands __restrict__ and nvcc dropped the writer's stores when the
+        # B operand selected this array (guide 7.z79); GLASS 6a82320 declares
+        # no __restrict__ on its interfaces and carries the regression.
+        qualifier = '__forceinline__'
         lines += ['template<class T> __device__ '+qualifier+' bool '+name+'(',
                   f'    int joint_id, {arg}, T *out) {{',
                   '  if (runtime_transform) return false;', '  switch(joint_id) {']
