@@ -3691,3 +3691,23 @@ helper (registers 62/64 versus 56); the 32-joint caller used 62 versus 66 regist
 but retained the extra local storage. These are resource measurements, not
 timings. Consumer acceptance and a separately authorized focused runtime check
 must resolve whether the new path is suitable for production adoption.
+
+Root cause found 2026-10-31. The failure is not FP32-specific and not a GRiD
+emitter defect: a standalone 241-line reproducer with no GRiD or GLASS include
+(docs/open-tasks/z79_restrict_select_miscompile_2026-10-31/repro.cu) fails the
+same way in FP32 and FP64, nondeterministically between two repeats of one
+launch, with `-Xptxas -O0` still failing and `-G` passing, so the fault is in
+nvcc 13.2's NVVM stage. The enabler is `__restrict__` on the B operand of the
+single-thread product: with the writer inlined, the noalias scopes let the
+optimiser treat the writer's stores to the local array as unrelated to the
+loads through B, which is that array on one path of the local-or-shared select
+(twelve fewer `st.local` in the failing PTX). Removing `__restrict__` from B
+alone on `gemm_impl_ct` (GLASS gemm.cuh line 325 at 9a24f37) makes the inlined
+writer pass at 56 registers and 32 local bytes; removing it from A or C alone
+does nothing; the full-q `joint_transform` route passes in the same pattern.
+Fix lands in GLASS (handoff_to_glass_restrict_select_miscompile_2026-10-31.md);
+GRiD keeps the boundary until the re-pin, then removes it and relies on the
+suffix regression, which fails without the boundary on the unfixed GLASS.
+Lesson: a read operand that a caller may select between address spaces or
+objects must not be `__restrict__`; this is the third restrict incident on this
+toolchain after 1g and the GATO bdsv case.

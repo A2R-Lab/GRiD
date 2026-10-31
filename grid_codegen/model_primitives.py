@@ -18,10 +18,12 @@ def emit_joint_transforms(gen):
     for scalar in (False, True):
         name = 'joint_transform_scalar' if scalar else 'joint_transform'
         arg = 'T coordinate' if scalar else 'const T *s_q'
-        # Keep the scalar writer behind a device call boundary. In the composed
-        # divergent suffix regression, nvcc's inlined writer plus a generic
-        # shared/local input pointer to thread GEMM miscompiles FP32 outputs.
-        # Standalone transform checks and CUDA sanitizers alone do not catch it.
+        # Keep the scalar writer behind a device call boundary until GLASS drops
+        # __restrict__ from the read operands of its single-thread gemm: with the
+        # writer inlined, nvcc 13.2 treats these stores as unrelated to loads
+        # through a restrict B operand that selects this array (guide 7.z79,
+        # both precisions, not caught by sanitizers). Remove after the re-pin;
+        # test_cuda_joint_transform_suffix fails without it on the unfixed GLASS.
         qualifier = '__noinline__' if scalar else '__forceinline__'
         lines += ['template<class T> __device__ '+qualifier+' bool '+name+'(',
                   f'    int joint_id, {arg}, T *out) {{',
