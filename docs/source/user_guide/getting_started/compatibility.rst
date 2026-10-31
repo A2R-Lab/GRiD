@@ -148,9 +148,17 @@ Native interface stability
   and the ``grid_plant`` workspace views of
   :doc:`../../api_reference/workspace_composition`. Neither an underscore nor
   an ``inline`` spelling decides this: a generated function absent from those
-  pages is an implementation detail that a later minor version may rename or
+  pages is an implementation detail that a later release may rename or
   remove. (``init_gridData_checked`` gained an optional trailing allocator-pool
   argument; the pool-less allocator spellings remain.)
+* Release policy during 0.x: any release may change a documented public
+  contract, and a release that does so says so in the changelog with the
+  migration step, as :doc:`migrating_to_0_7` does for this one. Correctness
+  fixes name the affected operations, the numerical change and any rebuild
+  they require. The version number records what shipped; it does not promise
+  which kind of change a release may carry, a deprecation period, a support
+  window or a response time. What is promised is that a public contract never
+  changes silently.
 * Source compatibility, descriptor schema compatibility, compiled-artifact
   reuse and tested numerical support are separate promises. A call that still
   compiles does not imply that an old prepared artifact loads: artifact reuse

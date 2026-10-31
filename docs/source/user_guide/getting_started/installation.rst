@@ -17,10 +17,11 @@ Release wheels and the source distribution are published on PyPI as
 
 This does not compile robot CUDA code or access a GPU. On a platform without
 a matching wheel pip builds the source distribution, whose small Python
-extension requires a C++17 compiler. GRiD is alpha software: APIs may change
-between minor versions (see the `changelog
+extension requires a C++17 compiler. GRiD is alpha software: a public API
+may change between releases, always with a changelog entry and a migration
+step (see the `changelog
 <https://github.com/A2R-Lab/GRiD/blob/main/CHANGELOG.md>`_ for what each
-release ships).
+release ships and :doc:`compatibility` for the policy).
 
 The base install requires NumPy; the ``jax``, ``torch`` and ``all`` extras
 select optional framework dependencies (see the :doc:`../../index` quick-start
