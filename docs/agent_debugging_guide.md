@@ -3728,3 +3728,25 @@ to 640, high24 640 to 384); the solver kernels are unchanged. Whether the
 inlined writer is faster is the timing night's question, not a correctness one.
 Policy for GRiD's own emitters stays: no `__restrict__` on a read operand a
 caller may select between address spaces or objects.
+
+### 7.z80 A consumer-probe wave does not run the equivalence runners
+
+Found 2026-10-31 by the Package 6 skew revolute mimic fixture: its CUDA test
+failed to compile with "statement may not appear in a constexpr function" at
+the generated `joint(int id, joint_record &)` accessor. The accessor has a
+`switch` body and is `constexpr`, legal from C++14 on; the equivalence runner
+harness (`cuda_harness._linalg_backend_compile_flags`) and eleven test files
+still compiled with `-std=c++11`, a cuBLASDx-era pin. Every generated header
+failed the same way (iiwa14: 101 errors under C++11, none under C++17), so the
+whole `cuda_equivalents` domain had been red since d559d3e (Codex Package 1,
+2026-10-26) and nobody saw it: the wave closed packages on exact-wheel
+consumer probes, which compile with the consumers' own C++17 flags, and no
+receipt or split-suite run happened between 10-24 and 10-31. Two generator
+comments (`_constants_arena.py`, `_plant.py`) recorded the C++11 single-return
+rule the accessors broke. Fix: the runners compile with `-std=c++17`, the
+header's documented standard; the accessors are an accepted public contract
+and stay as they are. Lessons: a generated construct that raises the language
+floor must be checked against the harness standard, not only against consumer
+builds; and a wave that changes codegen must run at least one equivalence
+shard before a package closes, whatever the probes say. The two-pass receipt
+would have caught this on pass one, at the cost of a pass.

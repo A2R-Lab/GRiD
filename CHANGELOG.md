@@ -12,6 +12,12 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Add the skew revolute mimic fixture `revolute_mimic_fixed_tool` with
+  closed-form mechanics checks of the numpy oracle and the generated CUDA
+  inverse dynamics, forward dynamics, ABA, mass matrix and its inverse.
+- Compile the CUDA equivalence runners with `-std=c++17`, the header's
+  documented standard; the generated constexpr record accessors use switch
+  bodies, which the runners' former `-std=c++11` flag rejected.
 - Update GLASS to `6a82320`, which declares no `__restrict__` on its own
   interfaces and carries a regression for the selected-operand miscompile
   (nvcc 11.4 through 13.2 dropped the stores of an inlined scalar joint

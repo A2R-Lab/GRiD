@@ -146,6 +146,22 @@ touches `gpu-proof.json`. Commit the receipt with its header-key ledger.
 A release does not wait for secondary receipts; they are documentation of the
 other architectures, recorded when those machines are available.
 
+Jetson resource budget for a secondary receipt (Orin, 64 GB, twelve cores). The
+10-24 attempt rebooted the box out of memory inside the compile pool (guide
+7.z63), so launch with the budget stated, not the defaults: `GRID_SPLIT_COMPILE_JOBS=2`
+(two full wrapper builds fit with room to spare; the default of five does not),
+`GRID_SPLIT_SHARD_JOBS=1` (one GPU shard at a time, the default), and
+`GRID_RBD_BUILD_JOBS=4` per wrapper build (the default is `min(8, cores,
+MemAvailable / 3 GB)`, which with two concurrent humanoid builds at 12 to 15 GB
+each exceeds the box). Disk preflight before launch: the pass writes wrapper
+objects to `~/.cache/grid-rbd` and runner executables to `.grid_build_cache/cuda`
+in the checkout (37 GB and 47 GB respectively on the 5090 box after a month of
+runs); check `df -h` on both volumes, clear both caches if the volume is under
+30 GB free, and do not start at the 6 GB free the 10-24 launch had. Set
+`GRID_SPLIT_STALL_SECS=7200` so a long humanoid compile is not mistaken for a
+hang, and `GRID_CUDA_ARCH=87` only if a test's architecture probe reports
+otherwise. Everything else follows the shell path above unchanged.
+
 Inspect final package provenance and verify the exact frozen artifacts before the
 TestPyPI rehearsal and the production upload. Package ownership, publisher setup,
 tagging, pushes and uploads need maintainer approval; the artifact workflow
