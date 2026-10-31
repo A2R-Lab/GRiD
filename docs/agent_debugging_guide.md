@@ -3711,3 +3711,20 @@ suffix regression, which fails without the boundary on the unfixed GLASS.
 Lesson: a read operand that a caller may select between address spaces or
 objects must not be `__restrict__`; this is the third restrict incident on this
 toolchain after 1g and the GATO bdsv case.
+
+Fixed upstream 2026-10-31. GLASS `ef4533c` (receipt `6a82320`) declares no
+`__restrict__` on any parameter of its own functions and carries the
+regression (`test/cuda/test_select.cu`, both precisions); GRiD re-pinned to
+`6a82320` and removed the `__noinline__` boundary from `joint_transform_scalar`
+(5f3f219). The GLASS agent reproduced the class on sm_120 / CUDA 13.2, sm_87 /
+CUDA 13.2 and sm_72 / CUDA 11.4, so it is long-standing NVVM behaviour, not a
+13.2 regression. Verified on the re-pinned wheel: the suffix regression passes
+in both precisions, and HJCD's Package 4 probe (Panda and the 24-joint high
+fixture; build, check and prepared modes) passes with the HJCD suffix kernel
+losing its call frame: Panda FP32 48 registers / 64 stack bytes to 56 / 0, FP64
+80 / 176 to 94 / 40; high24 FP32 56 / 64 to 72 / 0, FP64 88 / 176 to 144 / 40.
+The FP64 register growth lowers that probe kernel's thread ceiling (Panda 768
+to 640, high24 640 to 384); the solver kernels are unchanged. Whether the
+inlined writer is faster is the timing night's question, not a correctness one.
+Policy for GRiD's own emitters stays: no `__restrict__` on a read operand a
+caller may select between address spaces or objects.

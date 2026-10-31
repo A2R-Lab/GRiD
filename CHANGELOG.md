@@ -12,6 +12,11 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Update GLASS to `6a82320`, which declares no `__restrict__` on its own
+  interfaces and carries a regression for the selected-operand miscompile
+  (nvcc 11.4 through 13.2 dropped the stores of an inlined scalar joint
+  transform writer whose output a restricted gemm operand selected). The scalar
+  joint transform writer is inlined again; no call frame in consumer suffixes.
 - Add thread-local full-configuration and independent-scalar joint transforms,
   plus compact and dense native configuration-difference Jacobians derived from
   the model descriptor's coordinate partition. Document buffer ownership,
