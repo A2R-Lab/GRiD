@@ -45,7 +45,7 @@ pip install "grid-rbd[jax]"     # or "grid-rbd[torch]", "grid-rbd[all]"
 ```
 ```python
 import numpy as np, grid_rbd
-robot = grid_rbd.load_robot("grid_assets/robots/iiwa14.urdf",
+robot = grid_rbd.load_robot("robot.urdf",      # any URDF; samples: grid_assets/robots/ in the repository
                             algorithm_list=["forward_dynamics"], enable_mujoco_kernels=False)
 q = np.zeros((8, robot.nq), dtype=np.float32)
 qd, tau = (np.zeros((8, robot.nv), dtype=np.float32) for _ in range(2))
