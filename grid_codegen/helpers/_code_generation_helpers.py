@@ -1316,7 +1316,7 @@ def gen_arena_carve_struct(self, struct_name, layout, sizer_expr,
                            expected_t_count = None,
                            ximat_name = "s_XImats", temp_name = "s_temp",
                            topology_name = "s_topology_helpers", doc = None,
-                           helper_ns = ""):
+                           helper_ns = "", host_device = False, checked_bind = False):
     """Emit a NAMESPACE-scope carve struct mirroring one kernel's shared-arena
     layout (TIER_SHARED shape only, no tier branch), so an external caller
     (e.g. GATO's BSQP) can allocate <sizer_expr> bytes and carve the exact
@@ -1353,32 +1353,53 @@ def gen_arena_carve_struct(self, struct_name, layout, sizer_expr,
         self.gen_add_code_line("T *" + ximat_name + ";")
     self.gen_add_code_line("T *" + temp_name + ";")
     self.gen_add_code_line("int *" + topology_name + ";")
-    self.gen_add_code_line("static __device__ " + struct_name + "<T> carve(void *base) {", True)
+    if checked_bind:
+        self.gen_add_code_line("// Checked arena interface begins.")
+        for name, count in layout.t_buffers:
+            self.gen_add_code_line(f"static constexpr size_t {name}_count = {count};")
+        self.gen_add_code_line(f"static constexpr size_t {temp_name}_count = {layout.temp_mem_size};")
+        self.gen_add_code_line(f"static constexpr size_t {ximat_name}_count = {layout.ximat_size};")
+        self.gen_add_code_line(f"static constexpr size_t {topology_name}_count = {layout.topology_count};")
+        self.gen_add_code_line("static __host__ __device__ constexpr size_t bytes() { return " + sizer_expr + "; }")
+        self.gen_add_code_line("static __host__ __device__ constexpr size_t alignment() { return 16; }")
+        qual = "__host__ __device__" if host_device else "__device__"
+        self.gen_add_code_line("static " + qual + " bool bind(void *base, size_t capacity, " + struct_name + " &out) {", True)
+        self.gen_add_code_line("if (!base || capacity < bytes() || reinterpret_cast<uintptr_t>(base) % alignment()) return false;")
+        self.gen_add_code_line("out = carve(base); return true;")
+        self.gen_add_end_control_flow()
+        self.gen_add_code_line("// Checked arena interface ends.")
+    qualifier = "__host__ __device__" if host_device else "__device__"
+    def pointer(kind):
+        if host_device:
+            return "reinterpret_cast<" + kind + " *>(s_arena + s_arena_offset)"
+        return helper_ns + "grid_arena_ptr<" + kind + ">(s_arena, s_arena_offset)"
+    self.gen_add_code_line("static " + qualifier + " " + struct_name + "<T> carve(void *base) {", True)
     self.gen_add_code_line("unsigned char *s_arena = reinterpret_cast<unsigned char *>(base);")
     self.gen_add_code_line("size_t s_arena_offset = 0;")
     self.gen_add_code_line(struct_name + "<T> a;")
     for name, count in layout.t_buffers:
         self.gen_add_code_line("s_arena_offset = " + helper_ns + "grid_align_up(s_arena_offset, alignof(T));")
-        self.gen_add_code_line("a." + name + " = " + helper_ns + "grid_arena_ptr<T>(s_arena, s_arena_offset);")
+        self.gen_add_code_line("a." + name + " = " + pointer("T") + ";")
         self.gen_add_code_line("s_arena_offset += sizeof(T) * static_cast<size_t>(" + str(count) + ");")
     if layout.ximat_size:
         self.gen_add_code_line("s_arena_offset = " + helper_ns + "grid_align_up(s_arena_offset, alignof(T));")
-        self.gen_add_code_line("a." + ximat_name + " = " + helper_ns + "grid_arena_ptr<T>(s_arena, s_arena_offset);")
+        self.gen_add_code_line("a." + ximat_name + " = " + pointer("T") + ";")
         self.gen_add_code_line("s_arena_offset += sizeof(T) * static_cast<size_t>(" + str(int(layout.ximat_size)) + ");")
     if int(layout.temp_mem_size or 0) != 0:
         self.gen_add_code_line("s_arena_offset = " + helper_ns + "grid_align_up(s_arena_offset, alignof(T));")
-        self.gen_add_code_line("a." + temp_name + " = " + helper_ns + "grid_arena_ptr<T>(s_arena, s_arena_offset);")
+        self.gen_add_code_line("a." + temp_name + " = " + pointer("T") + ";")
         self.gen_add_code_line("s_arena_offset += sizeof(T) * static_cast<size_t>(" + str(int(layout.temp_mem_size)) + ");")
     else:
         self.gen_add_code_line("a." + temp_name + " = nullptr;")
     if layout.topology_count > 0:
         self.gen_add_code_line("s_arena_offset = " + helper_ns + "grid_align_up(s_arena_offset, alignof(int));")
-        self.gen_add_code_line("a." + topology_name + " = " + helper_ns + "grid_arena_ptr<int>(s_arena, s_arena_offset);")
+        self.gen_add_code_line("a." + topology_name + " = " + pointer("int") + ";")
         self.gen_add_code_line("s_arena_offset += sizeof(int) * static_cast<size_t>(" + str(layout.topology_count) + ");")
     else:
         self.gen_add_code_line("a." + topology_name + " = nullptr;")
     self.gen_add_code_line("#ifdef GRID_CUDA_DEBUG_LAYOUT")
-    self.gen_add_code_line("assert(s_arena_offset <= " + sizer_expr + ");")
+    # Parenthesize template commas so the preprocessor sees one assert argument.
+    self.gen_add_code_line("assert((s_arena_offset <= " + sizer_expr + "));")
     self.gen_add_code_line("#endif")
     self.gen_add_code_line("(void)s_arena_offset;")
     self.gen_add_code_line("return a;")

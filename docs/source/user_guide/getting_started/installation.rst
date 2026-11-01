@@ -17,10 +17,11 @@ Release wheels and the source distribution are published on PyPI as
 
 This does not compile robot CUDA code or access a GPU. On a platform without
 a matching wheel pip builds the source distribution, whose small Python
-extension requires a C++17 compiler. GRiD is alpha software: APIs may change
-between minor versions (see the `changelog
+extension requires a C++17 compiler. GRiD is alpha software: a public API
+may change between releases, always with a changelog entry and a migration
+step (see the `changelog
 <https://github.com/A2R-Lab/GRiD/blob/main/CHANGELOG.md>`_ for what each
-release ships).
+release ships and :doc:`compatibility` for the policy).
 
 The base install requires NumPy; the ``jax``, ``torch`` and ``all`` extras
 select optional framework dependencies (see the :doc:`../../index` quick-start
@@ -285,7 +286,7 @@ architectures. Run it with the NVIDIA Container Toolkit:
 
 .. code-block:: shell
 
-   docker run --rm -it --gpus all -v grid-cache:/var/cache/grid-rbd ghcr.io/a2r-lab/grid:0.5.3
+   docker run --rm -it --gpus all -v grid-cache:/var/cache/grid-rbd ghcr.io/a2r-lab/grid:0.7.0
 
 The image's cache store carries one compiled robot library: an iiwa14
 binary for sm_86, sm_89, sm_90 and sm_120, compiled with the sm_120 launch
@@ -299,7 +300,7 @@ the image's store. The header-only path needs no compile
 step: ``nvcc -arch=sm_90 -std=c++17 -I /opt/grid/iiwa14 my_kernel.cu``
 builds against the baked header. Build the image yourself from the
 repository root with
-``docker build -f install/docker/Dockerfile --build-arg GRID_RBD_VERSION=0.5.3 -t grid:0.5.3 .``;
+``docker build -f install/docker/Dockerfile --build-arg GRID_RBD_VERSION=0.7.0 -t grid:0.5.3 .``;
 the build argument ``GRID_RBD_VERSION`` selects the PyPI version and
 ``GRID_ARCHS`` the compute capabilities of the precompiled iiwa14 binary.
 

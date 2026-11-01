@@ -12,6 +12,144 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-10-31
+
+Consumers rebuild their prepared artifacts (schema 2), declare pybind modules
+with `python_extension=True` and pass `CollisionMargins` where a scalar margin
+went before; the migration steps are on the documentation's *Migrating to 0.7*
+page, which this changelog does not repeat.
+
+- Make the spherizer's warnings errors on the generated-from-mesh collision
+  routes (`collision=True`, `collision_native=True`, `grid-generate -c`,
+  `grid-spherize`): a mesh whose voxel fill failed and would be replaced by a
+  bounding-box cover, or a model with no spheres, stops generation because
+  either silently changes the clearance rows a consumer bakes.
+  `strict_collision=False` on `build_artifact`, `--no-strict-collision` on the
+  two command lines, and `strict=False` on `spherize_urdf` accept them with the
+  warning. The opt-out is part of the artifact's input key.
+- Rename `ConsumerArtifact.descriptor` to `model_descriptor`, the name the
+  robot handle uses for the same metadata.
+- Keep the double-precision cells of the suites added in this release in the
+  fp64 alpha lane (`make test-fp64`), outside the signed receipt, the policy
+  the fp64 tier has had since 0.5.3; the receipt keeps a float cell of every
+  configuration those suites cover.
+- Add the skew revolute mimic fixture `revolute_mimic_fixed_tool` with
+  closed-form mechanics checks of the numpy oracle and the generated CUDA
+  inverse dynamics, forward dynamics, ABA, mass matrix and its inverse.
+- Compile the CUDA equivalence runners with `-std=c++17`, the header's
+  documented standard; the generated constexpr record accessors use switch
+  bodies, which the runners' former `-std=c++11` flag rejected.
+- Update GLASS to `6a82320`, which declares no `__restrict__` on its own
+  interfaces and carries a regression for the selected-operand miscompile
+  (nvcc 11.4 through 13.2 dropped the stores of an inlined scalar joint
+  transform writer whose output a restricted gemm operand selected). The scalar
+  joint transform writer is inlined again; no call frame in consumer suffixes.
+- Add thread-local full-configuration and independent-scalar joint transforms,
+  plus compact and dense native configuration-difference Jacobians derived from
+  the model descriptor's coordinate partition. Document buffer ownership,
+  runtime-table limits, parameter lifetime and defect composition.
+- Repair admitted fixed-spherical Euler/semi-implicit step second derivatives
+  in the CPU reference and generated CUDA. Stabilize small-angle reference
+  Rodrigues coefficients. Clarify that `plant_step_hessian` differentiates the
+  moving-basis gradient: it is not a fixed-chart or shooting-defect Hessian.
+- Add checked generated cost-menu views, explicit full-shared/deep-spill
+  fixed-base plant-Hessian views with matched evaluators, gradient initialization
+  extents, and exact target EE inner scratch queries. Keep allocation, collective
+  synchronization, invocation ownership and actual enclosing-kernel resource
+  admission explicit. Correct the plant-Hessian launch-size query's missing
+  runtime-transform reserve using the same resolved layout as its kernel.
+  Numerical arithmetic and tier selection are unchanged.
+- Add CPU model inspection and generated host/device coordinate/frame metadata
+  with explicit independent ownership, xyzw conventions and typed canonical
+  identity. A single-body-pose frame composer requires no FK pass or shared
+  scratch and refuses nominal runtime-transform offsets. Wrapper metadata is
+  derived from the same descriptor. Consumer artifact schema 2 validates the
+  descriptor/header/binary association on build, reuse and source-free prepared
+  load; older prepared artifacts require rebuilding. Descriptor identity is
+  not complete dynamics or artifact identity.
+- Omit zero-weight reduced projections in floating-base constant-joint CRBA
+  while retaining composite inertia and transport through constant ancestors.
+  Add FP32/FP64 floating and fixed-base descendant dynamics tests against
+  independently locked models, including first and second derivatives.
+- Preserve coordinate ownership in homogeneous derivative tables and EE
+  gradient/Hessian metadata when constant joints are retained. Correct empty
+  coordinate generation in integrator/plant arena binders. Add zero-DoF pose
+  Hessian and Euler plant-gradient device canary tests plus nonempty controls.
+  Preserve non-unit mimic scaling when an EE Jacobian column has just one
+  contribution, including after a constant column is removed.
+- Exclude constant-joint reduced rows/columns in fixed-base mimic CRBA, preserving
+  composite inertia and ancestor transport. This removes a zero-size mass-matrix
+  access exposed by FP64 memcheck through the Euler plant-gradient path.
+- Omit constant-joint local columns and zero-weight projection reads in generated
+  inverse-dynamics derivatives, second-order folds, frame Jacobians/Jdot and
+  Coriolis metadata. Retain inherited body motion and force transmission. Add
+  independent locked-model, poisoned-branch and empty-buffer CUDA regressions;
+  these do not establish general zero-DoF wrapper or timing support.
+- Match plant-step, gradient and Hessian C ABI gravity/timestep scalars to the
+  selected precision, including MuJoCo entry points. FP64 callers previously
+  passed doubles to float arguments; add signature and numerical regressions.
+- Size the full-shared plant-gradient arena independently of the tier-selected
+  integrator allocation. Reject oversized plant-gradient calls before launching;
+  retain the tiered integrator-gradient path. Share spherical scratch dimensions
+  and test compiled carve bounds, canaries and device admission. Fix template
+  commas in generated debug-layout assertions.
+- Correct constant-mimic coordinate evaluation: fixed-leader chains keep their
+  composed offset without reading an unrelated q slot. Match block and
+  thread/warp FK emission and omit zero local motion/projection contributions in
+  the reference while retaining body motion and transmitted forces. Add
+  direct/chained, empty-coordinate and FP32/FP64 CUDA regressions.
+- Do not read placeholder velocity/acceleration slots or project zero local
+  contributions in generated inverse dynamics for constant joints. Add a
+  branched FP32/FP64 poison regression that preserves genuine NaN inputs.
+- Update GLASS first to `9a24f37` for cooperative handoff reloads under
+  restricted callers (the release pin is `6a82320`, above). Add embedded FP32/FP64 solve, eigenvalue-clamp and pivoted-inverse
+  regressions with poisoned scratch and thread-count checks. Update
+  pytest-gpu-proof to 0.5.0, enable receipt-tooling CPU checks on Python 3.10,
+  and test compiler-metadata merge refusal and legacy-field compatibility.
+- Capture consumer translation-unit dependencies with `nvcc -MM` and hash the
+  selected non-system header contents into artifact and per-unit reuse keys.
+  Build lookups rediscover include selection, including newly shadowing headers;
+  prepared loads remain compiler-free. Explicit headers supplement discovery,
+  while omitted system development headers remain a documented environment
+  assumption. No stat-based hashing shortcut or kernel change is introduced.
+- Project fixed-base skew-axis mimic forces and mass matrices through every
+  nonzero motion-subspace component instead of a cardinal-axis index. Independent
+  slider mechanics now check ID/FD/ABA/M/Minv, with first derivatives on cardinal
+  slider/mimic cases. This is not a claim of general skew-mimic derivative support.
+- Add an executable native/Python consumer migration example and process-death
+  publication recovery tests. Document the non-transactional crash boundary and
+  the tested GCC/CUDA scope separately from Clang flag recognition.
+- Add independent environment and self clearances to collision feasibility checks
+  through `CollisionMargins<T>` and the validating host factory
+  `make_collision_margins`. Scalar calls still apply one margin to both; explicit
+  per-side zero overrides are supported. The trailing self toggle, raw distances,
+  normals and cost derivatives retain their meanings.
+- Isolate consumer-library symbols by default. Native C entry points now require
+  explicit default visibility; pybind initialization exports remain visible.
+  Consumer compile and link share a recorded host-compiler selection, with
+  GCC-only GNU-unique suppression. GRiD's wrapper export policy is unchanged.
+- Add `python_extension=True` to consumer builds. Interpreter ABI identity guards
+  pointer, content and object reuse and prepared loads; native artifacts remain
+  independent of Python. Builds verify the declaration against exported Python
+  initialization symbols before publication.
+- Repair incomplete wrapper and consumer cache entries under a per-content
+  publication lock. Private staging, object, pointer and identity temporary files
+  distinguish concurrent threads as well as processes. Publication I/O failures propagate
+  instead of being mistaken for a completed concurrent build. Malformed identity
+  records are cache misses; permission failures remain errors.
+- Include resolved source paths and suffixes in consumer reuse identity (including
+  path-sensitive `__FILE__` expansions), and use
+  distinct output paths for same-stem sources such as `kernel.cu` and
+  `kernel.cpp`. Collision requests fingerprint resolved mesh paths and bytes
+  before reusing a cached artifact.
+- Fix generation for all-prismatic robots with fixed tool targets, initialize
+  mimic coordinates on no-trigonometry transform paths, and use typed block
+  loads on those paths. One-DoF second-order contraction uses an untiled width
+  of one instead of failing to select a tile.
+- Floor a warm compile job's memory prediction at the largest measured peak
+  among variants of the same robot. A relink measurement cannot reduce that
+  floor; first-job admission and the default for unmeasured jobs are unchanged.
+
 ## [0.6.0] — 2026-10-24
 
 - Margin-aware collision checking (HJCD-IK ask G7). `grid_collision::config_free` on the block,
@@ -470,7 +608,8 @@ update on top of that, organised here by theme:
 - Closed kinematic loops are unsupported.
 - No Windows, macOS, Jetson or precompiled-robot wheels.
 
-[Unreleased]: https://github.com/A2R-Lab/GRiD/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/A2R-Lab/GRiD/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/A2R-Lab/GRiD/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/A2R-Lab/GRiD/compare/v0.5.5...v0.6.0
 [0.5.5]: https://github.com/A2R-Lab/GRiD/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/A2R-Lab/GRiD/compare/v0.5.3...v0.5.4

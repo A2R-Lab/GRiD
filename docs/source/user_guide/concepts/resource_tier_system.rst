@@ -154,7 +154,7 @@ existing call sites are unchanged):
    * - ``end_effector_pose_gradient_inner``
      - ``bool TEMP_IN_SMEM``
      - the double-buffered kinematic-chain workspace
-   * - ``fdsva_so_inner``
+   * - ``fdsva_so_contract``
      - ``bool SCRATCH_IN_SMEM``
      - the 4·NV³ contraction scratch
    * - ``integrator_inner``
@@ -323,7 +323,7 @@ The tier knob is exposed at the kernel level on every emitted
 ``_inner`` level, these functions accept ``RESOURCE_TIER`` and a
 caller-provided ``T *d_workspace`` argument:
 
-* ``fdsva_so_inner<T, RESOURCE_TIER>(s_df2, s_idsva_so, s_Minv,
+* ``fdsva_so_contract<T, SCRATCH_IN_SMEM>(s_df2, s_idsva_so, s_Minv,
   s_df_du, s_XImats, s_temp, d_workspace, gravity)``: 4*nv³ inner
   scratch routes between ``s_temp`` (SHARED) and ``d_workspace``
   (LITE/MINIMAL).
@@ -346,18 +346,22 @@ Sizing constants, called from host code to allocate the right buffers:
 
 .. code-block:: cpp
 
-   template <typename T, int TIER = TIER_SHARED>
-   constexpr size_t FDSVA_SO_INNER_SMEM_BYTES();           // bytes for s_temp at TIER
-   template <typename T, int TIER = TIER_SHARED>
-   constexpr size_t FDSVA_SO_INNER_WORKSPACE_BYTES();      // bytes for d_workspace at TIER
+   template <typename T, bool SCRATCH_IN_SMEM = true>
+   constexpr size_t FDSVA_SO_INNER_SMEM_BYTES();           // bytes for s_temp
+   template <typename T, bool SCRATCH_IN_SMEM = true>
+   constexpr size_t FDSVA_SO_INNER_WORKSPACE_BYTES();      // bytes for d_workspace
+   template <int TIER>
+   constexpr bool FDSVA_SO_SCRATCH_IN_SMEM();              // the placement codegen chose for TIER on this robot
 
    // Same pattern: FORWARD_DYNAMICS_GRADIENT_DEVICE_INLINE_*, INVERSE_DYNAMICS_GRADIENT_DEVICE_INLINE_*,
    //               END_EFFECTOR_POSE_HESSIAN_DEVICE_INLINE_*, IDSVA_SO_DEVICE_INLINE_*
 
-At ``TIER_SHARED`` the SMEM_BYTES value matches current behavior
-(the temp is in shared); at ``TIER_LITE``/``TIER_MINIMAL`` the
-SMEM_BYTES value drops (temp moved out) and the WORKSPACE_BYTES
-value covers the moved temp.
+The sizes are keyed on the placement, not on a tier: with the scratch in
+shared memory SMEM_BYTES is 4 nv\ :sup:`3` elements and WORKSPACE_BYTES is
+zero; with the scratch in global memory the two swap.
+``FDSVA_SO_SCRATCH_IN_SMEM<TIER>()`` reports which placement the generator
+assigned to each tier for this robot, so a caller can size both arenas from
+the tier it launches at.
 
 Inline-CUDA usage example::
 
@@ -366,16 +370,15 @@ Inline-CUDA usage example::
        // ... slice s_arena for your own buffers ...
        T *s_grid_temp = /* slice for GRiD primitive */;
 
-       // At launch site we passed sizeof(s_grid_temp) =
-       //   grid::FDSVA_SO_INNER_SMEM_BYTES<T, grid::TIER_MINIMAL>()
-       //   == 0 at MINIMAL — no smem reserved for GRiD temp.
-       // Workspace was malloc'd to:
-       //   grid::FDSVA_SO_INNER_WORKSPACE_BYTES<T, grid::TIER_MINIMAL>()
-       //   == 4 * NV^3 * sizeof(T) at MINIMAL.
+       constexpr bool in_smem = grid::FDSVA_SO_SCRATCH_IN_SMEM<grid::TIER_MINIMAL>();
+       // The launch passed grid::FDSVA_SO_INNER_SMEM_BYTES<T, in_smem>() bytes of
+       // dynamic shared memory for s_grid_temp (zero when the scratch is in global
+       // memory) and allocated grid::FDSVA_SO_INNER_WORKSPACE_BYTES<T, in_smem>()
+       // bytes of workspace (4 * NV^3 * sizeof(T) in that case).
 
-       grid::fdsva_so_inner<T, grid::TIER_MINIMAL>(
+       grid::fdsva_so_contract<T, in_smem>(
            s_df2, s_idsva_so, s_Minv, s_df_du, s_XImats,
-           /* s_temp */ nullptr,       // unused at MINIMAL
+           /* s_temp */ s_grid_temp,   // unused when in_smem is false
            /* d_workspace */ workspace, // global mem
            gravity);
    }

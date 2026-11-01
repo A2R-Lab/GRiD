@@ -485,6 +485,8 @@ def _eepose_grad_chain_metadata(self, all_ees, anchor_override=None):
         anchors.append(ee if anchor_override is None else anchor_override[ee_idx])
         jobs = []
         for j in chain:
+            if self._alpha_for_jid(j) == 0.0:
+                continue  # Retain the FK chain, but there is no local column.
             S = _np.asarray(self.robot.get_S_by_id(j), dtype=_np.float64)
             if S.ndim == 1:
                 S = S.reshape(-1, 1)
@@ -580,8 +582,15 @@ def group_jacobian_jobs(self, fill_jobs, anchors):
     for entry in flat_jobs:
         ee_idx, _anc, job = entry
         _groups.setdefault((ee_idx, job["vi"]), []).append(entry)
-    single_jobs = [grp[0] for grp in _groups.values() if len(grp) == 1]
-    multi_groups = [grp for grp in _groups.values() if len(grp) > 1]
+    single_jobs, multi_groups = [], []
+    for grp in _groups.values():
+        # The disjoint-column fast path writes an unscaled axis. A lone mimic
+        # contribution still needs its multiplier, even after constant jobs
+        # have been removed from this column.
+        if len(grp) == 1 and (not has_mimic or self._alpha_for_jid(grp[0][2]["j"]) == 1.0):
+            single_jobs.append(grp[0])
+        else:
+            multi_groups.append(grp)
     return single_jobs, multi_groups, has_mimic
 
 
@@ -1182,6 +1191,8 @@ def _eepose_hessian_chain_metadata(self, all_ees, anchor_override=None):
         dof_info = []
         intra_pairs = []
         for chain_pos, j in enumerate(chain):
+            if self._alpha_for_jid(j) == 0.0:
+                continue  # Constant joints contribute no derivative pairs.
             S = _np.asarray(self.robot.get_S_by_id(j), dtype=_np.float64)
             if S.ndim == 1:
                 S = S.reshape(-1, 1)
@@ -2700,17 +2711,19 @@ def _ee_pose_inner_angle_expr(self, jid):
     """The C expression for joint jid's LOCAL angle theta in terms of s_q. Non-mimic
     joints read their own dense q slot. MIMIC joints have no q slot of their own —
     their angle is mult*q[source] + offset (chained mimics are pre-flattened by the
-    parser, so the target is always a real q-owning joint). This inline fold is what
+    parser; a chain ending at a fixed joint is a constant). This inline fold is what
     lets the standalone (d_robotModel-free) FK inner support mimic robots without
     the general load_update path's s_q_eff scratch."""
     joint = self.robot.get_joint_by_id(jid)
     if joint is not None and joint.is_mimic_joint():
         src = int(joint.get_mimic_target_id())
+        mult = float(joint.get_mimic_multiplier())
+        off = float(joint.get_mimic_offset())
+        if src == -1 or mult == 0.0:
+            return "static_cast<T>(" + str(off) + ")"
         src_slot = self.robot.get_joint_index_q(src)
         if isinstance(src_slot, (list, tuple)):
             src_slot = src_slot[0]
-        mult = float(joint.get_mimic_multiplier())
-        off = float(joint.get_mimic_offset())
         expr = "static_cast<T>(" + str(mult) + ") * s_q[" + str(src_slot) + "]"
         if off != 0.0:
             expr += " + static_cast<T>(" + str(off) + ")"
@@ -3082,7 +3095,7 @@ def gen_ee_pose_fk_batched_kernel(self):
     # buffer; serial chains with identical Ss pass nullptr (the loader skips the
     # topology copy). This kernel hand-declares its shared arena, so the nullptr case
     # is explicit here (callers using gen_declare_shared_arena get it automatically).
-    if not self.robot.is_serial_chain() or not self.robot.are_Ss_identical(list(range(n))):
+    if self.gen_topology_helpers_size() > 0:
         self.gen_add_code_line("__shared__ int s_topology_helpers[" + str(self.gen_topology_helpers_size()) + "];")
     else:
         self.gen_add_code_line("int *s_topology_helpers = nullptr;")
@@ -3286,6 +3299,9 @@ def gen_ee_target_aliases(self, include_pose = True, include_gradient = True, in
 
     if include_pose:
         self.gen_add_code_lines([
+            "// EE target pose scratch query begins.",
+            "template <typename T> __host__ __device__ constexpr size_t EE_TARGET_POSE_INNER_SCRATCH_BYTES() { return sizeof(T) * size_t(" + str(self.gen_end_effector_pose_inner_temp_mem_size(getattr(self, "_ee_target_name", ""))) + "); }",
+            "// EE target pose scratch query ends.",
             "template <typename T, bool TEMP_IN_SMEM = true, typename... Args>",
             "__device__ __forceinline__",
             "void end_effector_pose_target_inner(Args... args) { "
@@ -3299,6 +3315,9 @@ def gen_ee_target_aliases(self, include_pose = True, include_gradient = True, in
 
     if include_gradient:
         self.gen_add_code_lines([
+            "// EE target gradient scratch query begins.",
+            "template <typename T> __host__ __device__ constexpr size_t EE_TARGET_GRAD_INNER_SCRATCH_BYTES() { return sizeof(T) * size_t(" + str(self.gen_end_effector_pose_gradient_inner_temp_mem_size(getattr(self, "_ee_target_name", ""))) + "); }",
+            "// EE target gradient scratch query ends.",
             "template <typename T, bool TEMP_IN_SMEM = true, typename... Args>",
             "__device__ __forceinline__",
             "void end_effector_pose_gradient_target_inner(Args... args) { "

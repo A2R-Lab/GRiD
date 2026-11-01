@@ -63,6 +63,18 @@ def test_installed_source_identity_is_location_independent_and_detects_edits(tmp
     assert _cache._codegen_source_hash() != original
 
 
+def test_shared_model_parser_changes_both_generation_and_compile_identity(monkeypatch):
+    from grid_rbd import _cache
+    before=(_cache._codegen_source_hash(),_cache._compile_source_hash())
+    read=Path.read_bytes
+    def changed(path):
+        result=read(path)
+        return result+b'\n# changed model parsing\n' if path.name=='_model.py' else result
+    monkeypatch.setattr(Path,'read_bytes',changed)
+    after=(_cache._codegen_source_hash(),_cache._compile_source_hash())
+    assert all(a!=b for a,b in zip(before,after))
+
+
 def test_missing_toolkit_error_explains_registration_requirement(monkeypatch):
     from grid_rbd import _compile
     monkeypatch.setattr(_compile.shutil, 'which', lambda _: None)

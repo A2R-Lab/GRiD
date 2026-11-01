@@ -3,7 +3,7 @@ payload) + init/close emission (init_grid_kernel_attrs, per-algo split-compile
 attr fns, init_grid/close_grid/streams). H4 move from GRiDCodeGenerator.py
 (2026-08-27, verbatim). The names are class-bound on GRiDCodeGenerator (tests
 read GRiDCodeGenerator.KERNEL_ATTR_MANIFEST etc.)."""
-from .algo_registry import ALGO_DESCRIPTORS, descriptor_for
+from .algo_registry import descriptor_for
 from .helpers._gpu_err import legacy_wrapper_lines
 from .launch_config import baked_launch_cfg
 

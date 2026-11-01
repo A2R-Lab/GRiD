@@ -4,8 +4,9 @@ Compatibility and known limitations
 Platforms and toolchain
 -----------------------
 
-* There is one artifact per GPU architecture. A robot ``.so`` is compiled for the
-  ``sm_XX`` of the GPU that registers it (or ``cuda_arch=``); loading it on a
+* There is one artifact per GPU architecture unless ``GRID_RBD_CUDA_ARCHS`` names
+  several and the build is a fat binary. A robot ``.so`` is otherwise compiled for
+  the ``sm_XX`` of the GPU that registers it (or ``cuda_arch=``); loading it on a
   different architecture is refused at context creation with a clear error.
   The model, the API and the generated code carry over between machines; the
   binary does not.
@@ -19,7 +20,8 @@ Platforms and toolchain
   numpy-only build. With the ``[torch]`` extra the wrapper reads the standard
   that torch's ATen header guard demands and compiles with it. The torch we run
   (2.12.0, cu128) compiles with C++17. A torch that demands C++20 needs an nvcc
-  and host compiler accepting C++20, and that path is untested here.
+  and host compiler accepting C++20; that path has run only in the Orin smoke
+  below (torch 2.14.0+cu130), never under a receipt.
   ``GRID_RBD_CXX_STD`` forces the standard.
 * The ``[jax]`` / ``[torch]`` extras pin the CPU packages; install the CUDA
   wheel yourself. We run ``jax[cuda12]`` (``jax-cuda12-plugin`` 0.10.0) and a
@@ -61,7 +63,7 @@ an alpha feature outside the receipt.
      - Ubuntu 24.04.5, Linux 7.0.0-38, x86-64
      - full receipt; release timing; install check (a fresh venv with
        torch 2.11.0+cu128 and jax 0.11.2 from PyPI)
-     - receipt 2026-10-15; timing 2026-09-27 to 2026-10-07; install check
+     - receipt 2026-10-24; timing 2026-09-27 to 2026-10-07; install check
        2026-10-15
    * - sm_87 (compute capability 8.7)
      - NVIDIA Jetson AGX Orin, 64 GB
@@ -98,9 +100,10 @@ carries its own CUDA 12.8 runtime libraries for torch's kernels, and the
 615.71.09 does. A ``jax[cuda13]`` plugin, a torch wheel other than cu128, a
 CUDA 12 toolkit and CPython 3.10, 3.11 or 3.13 on a GPU are untested; the CI
 wheel builds for CPython 3.10, 3.11 and 3.13 and the CPU test lane on 3.10 and
-3.13 run on CPU only. The Jetson rows record smoke runs, not receipts. The
-Orin receipt is recorded under ``receipts/`` once the per-architecture receipt
-table is on main; the Xavier stays header-only because JetPack 5 ships CUDA
+3.13 run on CPU only. The Jetson rows record smoke runs, not receipts. No
+secondary receipt has been recorded yet; the first Orin receipt lands under
+``receipts/`` through the per-architecture table in
+``test/gpu-proof-receipts.yaml``; the Xavier stays header-only because JetPack 5 ships CUDA
 11.4 and Python 3.8, below the floors of the generator and the bindings.
 
 Runtime contexts
@@ -140,14 +143,37 @@ specified in :doc:`../concepts/operand_validation`; layouts are in
 Native interface stability
 --------------------------
 
-* The generated ``grid.cuh`` keeps its inline entry points
-  (``init_gridData_checked`` gained an optional trailing allocator-pool
-  argument; the pool-less allocator spellings remain).
+* Public generated surfaces are the ones documented on the API reference
+  pages and the CUDA tutorials: the kernel and ``*_device`` entry points named
+  in :doc:`../tutorials/cuda_support_status`, the ``grid::model`` metadata and
+  transform helpers of :doc:`../../api_reference/model_coordinates`, the
+  configuration primitives of :doc:`../../api_reference/integration_conventions`
+  and the ``grid_plant`` workspace views of
+  :doc:`../../api_reference/workspace_composition`. Neither an underscore nor
+  an ``inline`` spelling decides this: a generated function absent from those
+  pages is an implementation detail that a later release may rename or
+  remove. (``init_gridData_checked`` gained an optional trailing allocator-pool
+  argument; the pool-less allocator spellings remain.)
+* Release policy during 0.x: any release may change a documented public
+  contract, and a release that does so says so in the changelog with the
+  migration step, as :doc:`migrating_to_0_7` does for this one. Correctness
+  fixes name the affected operations, the numerical change and any rebuild
+  they require. The version number records what shipped; it does not promise
+  which kind of change a release may carry, a deprecation period, a support
+  window or a response time. What is promised is that a public contract never
+  changes silently.
+* Source compatibility, descriptor schema compatibility, compiled-artifact
+  reuse and tested numerical support are separate promises. A call that still
+  compiles does not imply that an old prepared artifact loads: artifact reuse
+  is decided by the content, toolchain and descriptor checks described on the
+  model-coordinates page, and a schema change requires one rebuild.
 * The per-robot wrapper ``.so``'s ``extern "C" grid_rbd_*`` symbols are
   private to the package: they are consumed only by the pybind core of the
   same content-keyed build and gained a leading ``ctx_id`` in 0.5.0, the first
-  packaged release. Do
-  not link against them directly.
+  packaged release. Do not link against them directly.
+* The two joint-transform helpers in ``grid::model`` are CUDA device
+  functions; host code reads the same placements through the constexpr
+  ``joint`` and ``frame`` record accessors.
 
 Differentiation
 ---------------

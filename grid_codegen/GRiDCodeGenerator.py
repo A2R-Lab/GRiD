@@ -1176,11 +1176,26 @@ class GRiDCodeGenerator:
         if collision_spec is not None:
             from .algorithms._collision import normalize_collision_tiers
             self.gen_collision_namespace(normalize_collision_tiers(collision_spec))
+        self.gen_add_fragment_mark("model_metadata")
+        # The schema-1 descriptor requires quaternion coordinates (the bindings
+        # always parse that way).
+        self.model_descriptor = None
+        if self.robot.using_quaternion:
+            from .model_descriptor import descriptor_from_robot
+            from .model_metadata_cpp import emit_model_metadata
+            self.model_descriptor = descriptor_from_robot(
+                self.robot, runtime_transform=bool(self.runtime_transform))
+            self.gen_add_code_line('// Model descriptor begins (schema 1).')
+            self.gen_add_code_lines(emit_model_metadata(self.model_descriptor, self.file_namespace).splitlines())
+            from .model_primitives import emit_joint_transforms, emit_configuration_primitives
+            self.gen_add_code_line('// Model thread primitives begin.')
+            self.gen_add_code_lines(emit_joint_transforms(self).splitlines())
+            if algorithms & {"integrator", "integrator_gradient", "integrator_with_gradient", "fdsva_so"}:
+                self.gen_add_code_lines(emit_configuration_primitives(self.model_descriptor, self.file_namespace).splitlines())
+            self.gen_add_code_line('// Model thread primitives end.')
+            self.gen_add_code_line('// Model descriptor ends.')
         self.gen_add_fragment_mark("suggested_threads")
-        # Per-algorithm suggested thread counts (2026-10-21, GATO issue 19): read the
-        # widest block-parallel loop on each kernel's call tree back from the text
-        # emitted above and reopen the namespace with one constant per algorithm.
-        # Additive and last, so no kernel body changes.
+        # Suggested thread counts are emitted last; they derive from the text above.
         from .suggested_threads import derive as _derive_suggested_threads, emit_block as _emit_suggested_block
         from .algo_registry import launch_config_descriptors as _lc_descriptors
         self._suggested_threads, self._suggested_threads_unknown = _derive_suggested_threads(

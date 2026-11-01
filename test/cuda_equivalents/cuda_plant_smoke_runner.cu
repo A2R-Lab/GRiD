@@ -498,8 +498,15 @@ __global__ void cost_menu_kernel(const T *g_q, const T *g_qd, const T *g_u, cons
     __shared__ T s_Au[MENU_MU * NU], s_bu[MENU_MU], s_tu[MENU_MU], s_Wu[MENU_MU];
     __shared__ T s_Rdes[9], s_vdes[6], s_Wv[6], s_cfdes[3], s_Wcf[3], s_xlo[NX], s_xhi[NX];
     __shared__ int s_act[grid_plant::GRID_PLANT_MENU_TERMS]; __shared__ T s_eps[grid_plant::GRID_PLANT_MENU_TERMS];
+#if defined(GRID_PLANT_HAS_COST_MENU)
+    extern __shared__ __align__(16) unsigned char menu_storage[];
+    grid_plant::tracking_cost_menu_arena<T, MENU_MX, MENU_MU> menu_arena;
+    if (!decltype(menu_arena)::bind(menu_storage, decltype(menu_arena)::bytes(), menu_arena)) return;
+    T *s_frame = menu_arena.s_frame, *s_arena = menu_arena.s_scratch;
+#else
     __shared__ T s_frame[grid_plant::GRID_PLANT_FRAME_SCRATCH_COUNT];
     extern __shared__ __align__(16) T s_arena[];
+#endif
     __shared__ T s_out[1], s_grad[NX], s_hess[NX * NX];
     const int tid = threadIdx.x + threadIdx.y * blockDim.x;
     const int nth = blockDim.x * blockDim.y;
@@ -931,6 +938,12 @@ void run() {
     if (grid_plant::FRAME_EVAL_DYNAMIC_SHARED_MEM_BYTES<T>() > menu_dyn) menu_dyn = grid_plant::FRAME_EVAL_DYNAMIC_SHARED_MEM_BYTES<T>();
 #if defined(GRID_PLANT_HAS_GRAVITY_TORQUE)
     if (grid_plant::GRAVITY_TORQUE_DYNAMIC_SHARED_MEM_BYTES<T>() > menu_dyn) menu_dyn = grid_plant::GRAVITY_TORQUE_DYNAMIC_SHARED_MEM_BYTES<T>();
+#endif
+#if defined(GRID_PLANT_HAS_COST_MENU)
+    // Other raw terms in this diagnostic kernel reuse only the scratch region.
+    menu_dyn += grid_plant::tracking_cost_menu_arena<T, MENU_MX, MENU_MU>::scratch_offset();
+    if (grid_plant::tracking_cost_menu_arena<T, MENU_MX, MENU_MU>::bytes() > menu_dyn)
+        menu_dyn = grid_plant::tracking_cost_menu_arena<T, MENU_MX, MENU_MU>::bytes();
 #endif
     cudaFuncSetAttribute(cost_menu_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)menu_dyn);
     cost_menu_kernel<T><<<1, nthreads, menu_dyn>>>(g_q, g_qd, g_u, d_robotModel, gravity, o_mas, o_mai, o_mae, o_mlx, o_mlu, o_mq, o_mm, o_mg,

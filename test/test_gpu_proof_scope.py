@@ -5,11 +5,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-# pytest-gpu-proof requires CPython 3.11 or newer (it reads pyproject with
-# tomllib); the CPU lane on 3.10 cannot install it, so this module skips there
-# and runs in full on 3.12 and 3.13.
+# Optional in a runtime-only environment, mandatory in the CPU CI matrix.
 pytest.importorskip("pytest_gpu_proof")
-import tomllib  # noqa: E402
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10; installed by pytest-gpu-proof.
+    import tomli as tomllib
 from pytest_gpu_proof.fingerprint import compute_fingerprint  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -63,6 +64,7 @@ def test_release_policy_requires_exact_recorded_scope():
     'grid_codegen/input.py', 'bindings/grid_rbd/input.py', 'bindings/src/input.py',
     'test/conftest.py', 'test/cuda_equivalents/input.py', 'grid_assets/input.py',
     'tools/check_installed_numerics.py',
+    'bindings/examples/consumer_artifact_migration.py',
 ])
 def test_correctness_edit_changes_fingerprint(repo, path):
     before = fingerprint(repo)

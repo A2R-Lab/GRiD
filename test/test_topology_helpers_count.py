@@ -39,7 +39,7 @@ def _gen(tmp_path, name, floating, debug):
 def _expected_count(robot):
     n = max(robot.get_num_pos(), robot.get_num_joints())
     count = 0 if robot.is_serial_chain() else 5 * n + 1
-    if not robot.are_Ss_identical(list(range(robot.get_num_pos()))):
+    if not robot.are_Ss_identical(list(range(robot.get_num_joints()))):
         count += n
     return count
 

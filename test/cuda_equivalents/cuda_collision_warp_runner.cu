@@ -37,7 +37,7 @@ constexpr int NX = grid::NUM_JOINTS;
 
 __global__ void cmp_kernel(const T *d_q, const grid::robotModel<T> *m,
                            const gc::Sphere<T> *d_sph, int n_sph, const gc::Capsule<T> *d_cap, int n_cap,
-                           const gc::Cuboid<T> *d_cub, int n_cub, float margin, int check_self,
+                           const gc::Cuboid<T> *d_cub, int n_cub, gc::CollisionMargins<float> margins, int check_self,
                            int *d_block_free, int *d_warp_free, T *d_block_dist, float *d_warp_dist,
                            T *d_block_normal, float *d_warp_normal, T *d_self_dist) {
     extern __shared__ T s_dyn[];
@@ -59,10 +59,20 @@ __global__ void cmp_kernel(const T *d_q, const grid::robotModel<T> *m,
 #if GRID_COLLISION_NUM_TIERS > 1
     __shared__ T s_bpos[3*gc::NUM_COLLISION_SPHERES_BROAD];
     __shared__ T s_br[gc::NUM_COLLISION_SPHERES_BROAD];
-    bool is_free = gc::config_free<T>(d_q, m, env, s_bpos, s_br, s_pos, s_r, nullptr, nullptr, static_cast<T>(margin), self_on);
+    #define BLOCK_CHECK(e, mg, self) gc::config_free<T>(d_q, m, e, s_bpos, s_br, s_pos, s_r, nullptr, nullptr, mg, self)
 #else
-    bool is_free = gc::config_free<T>(d_q, m, env, s_pos, s_r, nullptr, static_cast<T>(margin), self_on);
+    #define BLOCK_CHECK(e, mg, self) gc::config_free<T>(d_q, m, e, s_pos, s_r, nullptr, mg, self)
 #endif
+    const bool is_free = BLOCK_CHECK(env, margins, self_on);
+    __syncthreads();
+    // Consumer migration referee: old scalar environment-only + empty-env self call.
+    gc::Environment<T> empty{};
+    const bool env_free = BLOCK_CHECK(env, margins.environment_margin, false);
+    __syncthreads();
+    const bool self_free = BLOCK_CHECK(empty, margins.self_margin, self_on);
+    __syncthreads();
+    const bool parity = is_free == (env_free && self_free);
+    #undef BLOCK_CHECK
     __syncthreads();
     gc::collision_distance<T>(s_dist, s_normal, d_q, m, env, s_pos, s_r, nullptr);
     __syncthreads();
@@ -76,12 +86,15 @@ __global__ void cmp_kernel(const T *d_q, const grid::robotModel<T> *m,
     if (threadIdx.x < 32) {
         grid::ee_pose_inner_warp<T>(s_jointX, s_XmatsHom, d_q, 0);
         __syncwarp();
-        w_free = gc::warp::config_free<T>(s_jointX, env, w_scratch, margin, self_on) ? 1 : 0;
+        w_free = gc::warp::config_free<T>(s_jointX, env, w_scratch, margins, self_on) ? 1 : 0;
+        const bool we = gc::warp::config_free<T>(s_jointX, env, w_scratch, margins.environment_margin, false);
+        const bool ws = gc::warp::config_free<T>(s_jointX, empty, w_scratch, margins.self_margin, self_on);
+        if (w_free != int(we && ws)) w_free = -2;
         gc::warp::collision_distance<T>(s_jointX, env, w_dist, w_normal, w_scratch);
     }
     __syncthreads();
     if (threadIdx.x == 0) {
-        *d_block_free = is_free ? 1 : 0;
+        *d_block_free = parity ? int(is_free) : -2;
         *d_warp_free = w_free;
         for (int i = 0; i < NS; ++i) { d_block_dist[i] = s_dist[i]; d_warp_dist[i] = w_dist[i]; d_self_dist[i] = s_sdist[i]; }
         for (int i = 0; i < 3*NS; ++i) { d_block_normal[i] = s_normal[i]; d_warp_normal[i] = w_normal[i]; }
@@ -121,6 +134,10 @@ int main(int argc, char **argv){
     const float margin = argc > 6 ? (float)atof(argv[6]) : 0.f;
     const int check_self = argc > 7 ? atoi(argv[7]) : 1;
     const int boundary = argc > 8 ? atoi(argv[8]) : 0;
+    // Optional explicit overrides; zero is a real override, not an inheritance sentinel.
+    const auto overrides = gc::make_collision_margins<float>(margin,
+        argc > 9 ? std::optional<float>(atof(argv[9])) : std::nullopt,
+        argc > 10 ? std::optional<float>(atof(argv[10])) : std::nullopt);
     const float eps = 1e-5f;        // the rounding band between squared-gap tests and square-root distances
     const float step = 1e-4f;       // the boundary sweep's offset on either side of the threshold
     const bool exact_ok = exact_boundary_rule();
@@ -150,7 +167,8 @@ int main(int argc, char **argv){
         int n_cap = urand() < 0.6f ? 1 : 0, n_cub = urand() < 0.6f ? 1 : 0;
         // one launch at a given margin; returns the two verdicts and fills the distance vectors
         auto launch = [&](float mg, int &bf, int &wf) -> int {
-            cmp_kernel<<<1, threads, smem>>>(d_q, d_m, d_sph, n_sph, d_cap, n_cap, d_cub, n_cub, mg, check_self, d_bf, d_wf, d_bd, d_wd, d_bn, d_wn, d_sd);
+            const gc::CollisionMargins<float> effective = argc > 9 ? overrides : gc::CollisionMargins<float>(mg);
+            cmp_kernel<<<1, threads, smem>>>(d_q, d_m, d_sph, n_sph, d_cap, n_cap, d_cub, n_cub, effective, check_self, d_bf, d_wf, d_bd, d_wd, d_bn, d_wn, d_sd);
             CK(cudaDeviceSynchronize());
             CK(cudaMemcpy(&bf, d_bf, sizeof(int), cudaMemcpyDeviceToHost)); CK(cudaMemcpy(&wf, d_wf, sizeof(int), cudaMemcpyDeviceToHost));
             CK(cudaMemcpy(bd.data(), d_bd, NS*sizeof(T), cudaMemcpyDeviceToHost)); CK(cudaMemcpy(wd.data(), d_wd, NS*sizeof(float), cudaMemcpyDeviceToHost));
@@ -166,8 +184,13 @@ int main(int argc, char **argv){
         // reference clearance: environment on every sphere, self pairs only when they are checked
         float c = FLT_MAX;
         for (int i = 0; i < NS; ++i) { c = fminf(c, (float)bd[i]); if (check_self) c = fminf(c, (float)sd[i]); }
+        float residual = FLT_MAX;
+        for (int i = 0; i < NS; ++i) {
+            residual = fminf(residual, bd[i] - overrides.environment_margin);
+            if (check_self) residual = fminf(residual, sd[i] - overrides.self_margin);
+        }
         int ref = -1;                                  // -1 = inside the rounding band
-        if (c > margin + eps) ref = 1; else if (c < margin - eps) ref = 0;
+        if (residual > eps) ref = 1; else if (residual < -eps) ref = 0;
         if (bf != wf) ++n_mismatch;
         if (ref < 0) ++n_band; else if (bf != ref) ++n_ref_mismatch;
         if (!bf) ++n_hit;

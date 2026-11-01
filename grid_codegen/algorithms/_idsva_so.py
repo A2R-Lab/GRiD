@@ -84,7 +84,8 @@ def _idsva_so_fold_jobs(groups, alphas, NV, NB):
     as an index into a tiny distinct-value table (products of mimic
     multipliers; almost all 1.0).
 
-    Returns (job_start[NV^3+1], job_src[NB^3], job_wid[NB^3], wvals)."""
+    Constant columns have no reduced destination and contribute no jobs.
+    Returns (job_start[NV^3+1], job_src, job_wid, wvals)."""
     job_start, job_src, job_wid = [0], [], []
     wvals, windex = [], {}
     for va in range(NV):
@@ -92,9 +93,15 @@ def _idsva_so_fold_jobs(groups, alphas, NV, NB):
             for vc in range(NV):
                 for ii in groups[va]:
                     wa = alphas[ii]
+                    if wa == 0.0:
+                        continue
                     for jj in groups[vb]:
+                        if alphas[jj] == 0.0:
+                            continue
                         wab = wa * alphas[jj]
                         for kk in groups[vc]:
+                            if alphas[kk] == 0.0:
+                                continue
                             w = wab * alphas[kk]
                             if w not in windex:
                                 windex[w] = len(wvals)
@@ -102,7 +109,8 @@ def _idsva_so_fold_jobs(groups, alphas, NV, NB):
                             job_src.append(ii * NB * NB + jj * NB + kk)
                             job_wid.append(windex[w])
                 job_start.append(len(job_src))
-    assert len(job_src) == NB ** 3, "idsva_so mimic fold: job list must cover the full internal tensor"
+    active = sum(a != 0.0 for a in alphas)
+    assert len(job_src) == active ** 3, "idsva_so mimic fold: job list must cover every active internal cell"
     assert len(wvals) <= 256, "idsva_so mimic fold: >256 distinct fold weights (widen so_fold_wid)"
     return job_start, job_src, job_wid, wvals
 
@@ -110,6 +118,8 @@ def _idsva_so_fold_jobs(groups, alphas, NV, NB):
 def _idsva_so_emit_baked_array(self, decl, values, fmt=str, per_line=32):
     """Emit `decl = { ... };` with the initializer chunked across lines (the
     fold job tables are ~NB^3 entries — a single joined line would be MBs)."""
+    # Empty-coordinate models have no jobs; keep a legal inert storage element.
+    values = values if len(values) else [0]
     chunks = [", ".join(fmt(v) for v in values[i:i + per_line])
               for i in range(0, len(values), per_line)]
     self.gen_add_code_lines([decl + " = {"]
@@ -1580,6 +1590,8 @@ def gen_idsva_so_body_frame_floating_reference_inner(self):
         # slot and scale by the joint's mimic multiplier (mirrors the oracle's
         # `_qd = alpha_i * qd[inds_v_true]`). The fold below applies the remaining alpha
         # factors on the OTHER axes.
+        if 0.0 in metadata['int_alpha']:
+            self.gen_add_code_line("if (int_alpha[vel] == static_cast<T>(0)) continue;")
         self.gen_add_code_line("T qd_v = int_alpha[vel] * s_qd[int_true_vel[vel]];")
         self.gen_add_code_line("T qdd_v = int_alpha[vel] * s_qdd[int_true_vel[vel]];")
         self.gen_add_code_line("vJ[jid*6 + row] += S_vel[vel*6 + row] * qd_v;")
@@ -1783,6 +1795,8 @@ def gen_idsva_so_body_frame_floating_reference_inner(self):
         self.gen_add_code_line("for (int ii = 0; ii < SO_N_INT; ++ii) {", True)
         self.gen_add_code_line("for (int jj = 0; jj < SO_N_INT; ++jj) {", True)
         self.gen_add_code_line("for (int kk = 0; kk < SO_N_INT; ++kk) {", True)
+        if 0.0 in metadata['int_alpha']:
+            self.gen_add_code_line("if (int_alpha[ii] == static_cast<T>(0) || int_alpha[jj] == static_cast<T>(0) || int_alpha[kk] == static_cast<T>(0)) continue;")
         self.gen_add_code_line("T val = so_internal[blk*SO_N_INT*SO_N_INT*SO_N_INT + ii*SO_N_INT*SO_N_INT + jj*SO_N_INT + kk];")
         self.gen_add_code_line("if (val != static_cast<T>(0)) {", True)
         self.gen_add_code_line("T w = int_alpha[ii] * int_alpha[jj] * int_alpha[kk];")
@@ -2191,8 +2205,12 @@ def gen_idsva_so_body_frame_inner(self):
     self.gen_add_parallel_loop('i','2*6*NUM_BODIES')
     self.gen_add_code_line('int joint = i / 6;')
     if is_mimic:
-        self.gen_add_code_line('if (joint < NUM_BODIES) vJ[i] = S[i] * (body_alpha[joint] * s_qd[body_vslot[joint]]);')
-        self.gen_add_code_line('else { int jj = joint - NUM_BODIES; aJ[i - 6*NUM_BODIES] = S[i - 6*NUM_BODIES] * (body_alpha[jj] * s_qdd[body_vslot[jj]]); }')
+        if 0.0 in body_alpha:
+            self.gen_add_code_line('if (joint < NUM_BODIES) vJ[i] = body_alpha[joint] == T(0) ? T(0) : S[i] * (body_alpha[joint] * s_qd[body_vslot[joint]]);')
+            self.gen_add_code_line('else { int jj = joint - NUM_BODIES; aJ[i - 6*NUM_BODIES] = body_alpha[jj] == T(0) ? T(0) : S[i - 6*NUM_BODIES] * (body_alpha[jj] * s_qdd[body_vslot[jj]]); }')
+        else:
+            self.gen_add_code_line('if (joint < NUM_BODIES) vJ[i] = S[i] * (body_alpha[joint] * s_qd[body_vslot[joint]]);')
+            self.gen_add_code_line('else { int jj = joint - NUM_BODIES; aJ[i - 6*NUM_BODIES] = S[i - 6*NUM_BODIES] * (body_alpha[jj] * s_qdd[body_vslot[jj]]); }')
     else:
         self.gen_add_code_line('if (joint < NUM_BODIES) vJ[i] = S[i] * s_qd[joint];')
         self.gen_add_code_line('else aJ[i - 6*NUM_BODIES] = S[i - 6*NUM_BODIES] * s_qdd[joint - NUM_BODIES];')
@@ -2766,6 +2784,8 @@ def gen_idsva_so_body_frame_inner(self):
         # the identical fixed sum order in a single unrollable loop.
         groups = {}
         for b in range(NB):
+            if fold_alpha[b] == 0.0:
+                continue
             groups.setdefault(fold_vslot[b], []).append(b)
         assert sorted(groups) == list(range(NV)), \
             "idsva_so mimic fold: v-slot groups must cover 0..NV-1"
@@ -3486,6 +3506,8 @@ def gen_idsva_so_world_frame_inner(self):
     if is_mimic:
         # vel is an INTERNAL slot; read the (shared) reduced qd/qdd slot and scale by the
         # body's mimic multiplier (mirrors oracle's `_qd = alpha_i * qd[inds_v_true]`).
+        if 0.0 in metadata['int_alpha']:
+            self.gen_add_code_line("if (wf_int_alpha[vel] == static_cast<T>(0)) continue;")
         self.gen_add_code_line("T a_qd = wf_int_alpha[vel] * s_qd[wf_int_true[vel]]; T a_qdd = wf_int_alpha[vel] * s_qdd[wf_int_true[vel]];")
         self.gen_add_code_line("for (int row = 0; row < 6; ++row) { fs_vJ[row] += S_vel[vel*6 + row] * a_qd; fs_aJ[row] += S_vel[vel*6 + row] * a_qdd; }")
     else:
@@ -3872,6 +3894,8 @@ def gen_idsva_so_world_frame_inner(self):
         # written exactly once, so the zeroing pass is gone too.
         wf_groups = {}
         for s, tv in enumerate(metadata['int_true_vel']):
+            if metadata['int_alpha'][s] == 0.0:
+                continue
             wf_groups.setdefault(tv, []).append(s)
         assert sorted(wf_groups) == list(range(NV)), \
             "idsva_so world fold: true-vel groups must cover 0..NV-1"

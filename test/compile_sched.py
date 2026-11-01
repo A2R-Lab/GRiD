@@ -37,7 +37,7 @@ import signal
 import subprocess
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 _TIME_BIN = "/usr/bin/time"
@@ -131,7 +131,15 @@ class Ledger:
                 self.dropped_legacy = len(raw)
 
     def predict_kb(self, key: str, default_kb: int, margin: float) -> int:
-        base = self.data.get(key, {}).get("peak_kb", default_kb)
+        # A warm variant may have measured only a cheap relink. Other variants
+        # of the same robot provide a lower bound for a later cold object build.
+        # Keep the default for unseen variants; do not group prewarm job keys.
+        with self._lock:
+            base = self.data.get(key, {}).get("peak_kb", default_kb)
+            if key.startswith("warm:"):
+                robot_key = key.split(",", 1)[0]
+                base = max(base, *(v["peak_kb"] for k, v in self.data.items()
+                                  if k == robot_key or k.startswith(robot_key + ",")), 0)
         return int(base * margin)
 
     def predict_secs(self, key: str, default_secs: float = DEFAULT_SECS) -> float:

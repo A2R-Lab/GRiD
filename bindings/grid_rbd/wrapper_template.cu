@@ -3221,7 +3221,7 @@ static void launch_plant_step(GridCtx *ctx, int batch, T gravity, T dt) {
 }
 
 extern "C" int grid_plant_step(long long ctx_id, 
-    const T* x, const T* u, T* x_kp1, int batch, float gravity, float dt, int it) {
+    const T* x, const T* u, T* x_kp1, int batch, T gravity, T dt, int it) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -3255,7 +3255,7 @@ static void launch_plant_step_mujoco(GridCtx *ctx, int batch, T gravity, T dt) {
             nx, grid::NUM_VEL, g_robot, gravity, dt, batch);
 }
 extern "C" int grid_plant_step_mujoco(long long ctx_id, 
-    const T* x, const T* u, T* x_kp1, int batch, float gravity, float dt, int it) {
+    const T* x, const T* u, T* x_kp1, int batch, T gravity, T dt, int it) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -3516,7 +3516,7 @@ static void launch_plant_step_gradient(GridCtx *ctx, int batch, T gravity, T dt)
     dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_gradient_kernel<T, IT>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(g_ctx, batch));
     // the dAB output band + fdsva-grad scratch arena exceeds the 48 KB static-smem
     // default -> raise the per-kernel dynamic-smem cap (else cudaErrorInvalidValue/rc=201).
-    const size_t smem = grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>();
+    const size_t smem = grid_plant::PLANT_STEP_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(grid_plant::plant_step_gradient_kernel<T, IT>,
                          cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
     grid_plant::plant_step_gradient_kernel<T, IT><<<grid_dim, thr,
@@ -3526,10 +3526,11 @@ static void launch_plant_step_gradient(GridCtx *ctx, int batch, T gravity, T dt)
 }
 
 extern "C" int grid_plant_step_gradient(long long ctx_id, 
-    const T* x, const T* u, T* dAB, int batch, float gravity, float dt, int it) {
+    const T* x, const T* u, T* dAB, int batch, T gravity, T dt, int it) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
+    if (cudaError_t err = grid_plant::plant_step_gradient_check_shared_memory<T>(); err != cudaSuccess) return 200 + (int)err;
     if (plant_alloc(g_ctx)) return 4;
     const int nx = grid::NUM_POS + grid::NUM_VEL;
     const int nv = grid::NUM_VEL;
@@ -3555,7 +3556,7 @@ static void launch_plant_step_gradient_mujoco(GridCtx *ctx, int batch, T gravity
     dim3 grid_dim = grid_rbd_grid_for(g_ctx, batch);
     dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_gradient_kernel<T, IT, true>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(g_ctx, batch));
     // raise the per-kernel dynamic-smem cap (arena > 48 KB; else rc=201).
-    const size_t smem = grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>();
+    const size_t smem = grid_plant::PLANT_STEP_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(grid_plant::plant_step_gradient_kernel<T, IT, true>,
                          cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
     grid_plant::plant_step_gradient_kernel<T, IT, /*MUJOCO_OUTPUT=*/true><<<grid_dim, thr,
@@ -3564,10 +3565,11 @@ static void launch_plant_step_gradient_mujoco(GridCtx *ctx, int batch, T gravity
             nx, nv, g_robot, gravity, dt, batch);
 }
 extern "C" int grid_plant_step_gradient_mujoco(long long ctx_id, 
-    const T* x, const T* u, T* dAB, int batch, float gravity, float dt, int it) {
+    const T* x, const T* u, T* dAB, int batch, T gravity, T dt, int it) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
+    if (cudaError_t err = grid_plant::plant_step_gradient_check_shared_memory<T>(); err != cudaSuccess) return 200 + (int)err;
     if (plant_alloc(g_ctx)) return 4;
     const int nx = grid::NUM_POS + grid::NUM_VEL;
     const int nv = grid::NUM_VEL;
@@ -3613,7 +3615,7 @@ static void launch_plant_step_hessian(GridCtx *ctx, int batch, T gravity, T dt) 
 }
 
 extern "C" int grid_plant_step_hessian(long long ctx_id, 
-    const T* x, const T* u, T* d2AB, int batch, float gravity, float dt, int it) {
+    const T* x, const T* u, T* d2AB, int batch, T gravity, T dt, int it) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -3667,7 +3669,7 @@ static void launch_plant_step_hessian_mujoco(GridCtx *ctx, int batch, T gravity,
         g_plant.d_d2AB, g_plant.d_d2AB_workspace, g_plant.d_in_a, g_plant.d_in_b, nx, nv, g_robot, gravity, dt, batch);
 }
 extern "C" int grid_plant_step_hessian_mujoco(long long ctx_id, 
-    const T* x, const T* u, T* d2AB, int batch, float gravity, float dt, int it) {
+    const T* x, const T* u, T* d2AB, int batch, T gravity, T dt, int it) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -6246,7 +6248,7 @@ static void launch_plant_step_gradient_jax(GridCtx *ctx, cudaStream_t stream, in
     const int nx = grid::NUM_POS + grid::NUM_VEL;
     const int nv = grid::NUM_VEL;
     dim3 grid_dim = grid_rbd_grid_for(g_ctx, batch);
-    const size_t smem = grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>();
+    const size_t smem = grid_plant::PLANT_STEP_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(grid_plant::plant_step_gradient_kernel<T, IT, MUJOCO>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
     dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_gradient_kernel<T, IT, MUJOCO>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(g_ctx, batch));
     grid_plant::plant_step_gradient_kernel<T, IT, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr,
@@ -6268,6 +6270,7 @@ static ffi::Error grid_rbd_jax_plant_step_gradient_impl(
     const int nx = grid::NUM_POS + grid::NUM_VEL;
     const int nv = grid::NUM_VEL;
     const int dab = 2 * nv * 3 * nv;
+    if (grid_plant::plant_step_gradient_check_shared_memory<T>() != cudaSuccess) return ffi::Error::Internal("plant_step_gradient full-shared arena exceeds device capacity; use integrator_gradient");
     auto dims = x.dimensions();
     if (dims.size() != 2 || (int)dims[1] != nx)
         return ffi::Error::InvalidArgument("plant_step_gradient: x must be 2D (B, NX)");
@@ -7653,7 +7656,7 @@ static void torch_launch_plant_step_gradient(GridCtx *ctx, cudaStream_t stream, 
     GRID_RBD_CTX_LOCALS(ctx);
     const int nx = grid::NUM_POS + grid::NUM_VEL, nv = grid::NUM_VEL;
     dim3 grid_dim = grid_rbd_grid_for(g_ctx, batch);
-    const size_t smem = grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>();
+    const size_t smem = grid_plant::PLANT_STEP_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(grid_plant::plant_step_gradient_kernel<T, IT, MUJOCO>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
     dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_gradient_kernel<T, IT, MUJOCO>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(g_ctx, batch));
     grid_plant::plant_step_gradient_kernel<T, IT, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr,
@@ -7668,6 +7671,7 @@ static torch::Tensor torch_plant_step_gradient(torch::Tensor x, torch::Tensor u,
     grid_torch_plant_init(g_ctx);
     const int nx = grid::NUM_POS + grid::NUM_VEL, nv = grid::NUM_VEL;
     const int dab = 2 * nv * 3 * nv;
+    TORCH_CHECK(grid_plant::plant_step_gradient_check_shared_memory<T>() == cudaSuccess, "plant_step_gradient full-shared arena exceeds device capacity; use integrator_gradient");
     grid_torch_check_n(x, "plant_step_gradient: x", nx);
     grid_torch_check_n(u, "plant_step_gradient: u", nv);
     int batch = grid_torch_batch(x);

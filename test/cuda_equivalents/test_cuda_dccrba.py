@@ -128,7 +128,7 @@ def _compile_runner(build_dir: Path, floating_base: bool):
     arch = _detect_cuda_arch()
     executable = build_dir / "cuda_dccrba_runner.exe"
     cmd = [
-        nvcc, "-std=c++11", "-O0",
+        nvcc, "-std=c++17", "-O0",
         f"-DGRID_CUDA_FLOATING_BASE={1 if floating_base else 0}",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",

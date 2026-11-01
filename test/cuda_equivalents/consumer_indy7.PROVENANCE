@@ -1,0 +1,5 @@
+Test fixture copied from A2R-Lab/GATO commit
+a5eb91f0520e9e30e54e9009fef52a310f3b7a3f, examples/indy7_description/indy7.urdf.
+Preserved for reproducible Package 3 menu composition validation; not a new
+bundled-model API. Source license is preserved as consumer_indy7.LICENSE.
+Mesh references are unused by these numerical tests.

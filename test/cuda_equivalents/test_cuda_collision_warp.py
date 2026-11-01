@@ -20,8 +20,6 @@ G10 config_free(..., check_self = false) skips the self-pair ranges; the referen
     environment clearance alone.
 """
 from __future__ import annotations
-import contextlib
-import os
 import re
 import shutil
 import subprocess
@@ -30,14 +28,12 @@ from pathlib import Path
 
 import pytest
 
-from grid_codegen import GRiDCodeGenerator
 from grid_codegen.algorithms._collision import build_self_cc_ranges
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from test.cuda_equivalents.test_cuda_collision_config_free import _robot, _gen_header
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
-from grid_assets import robot_urdf  # noqa: E402
 
 COLLISION_INCLUDE = REPO_ROOT / "grid_codegen" / "collision"
 RUNNER_SOURCE = Path(__file__).with_name("cuda_collision_warp_runner.cu")
@@ -87,10 +83,15 @@ def _compile(build_dir):
     return exe
 
 
-def _run(exe, threads, n_cfg, seed, amplitude=None, margin=0.0, check_self=True, boundary=False):
+def _run(exe, threads, n_cfg, seed, amplitude=None, margin=0.0, check_self=True, boundary=False,
+         environment_margin=None, self_margin=None):
     args = [str(exe), str(threads), str(n_cfg), str(seed),
             str(amplitude if amplitude is not None else 3.14159265), "0",
             repr(float(margin)), "1" if check_self else "0", "1" if boundary else "0"]
+    if environment_margin is not None or self_margin is not None:
+        assert not boundary  # old common-margin boundary sweep has separate coverage
+        args += [str(margin if environment_margin is None else environment_margin),
+                 str(margin if self_margin is None else self_margin)]
     run = subprocess.run(args, capture_output=True, text=True)
     assert run.returncode == 0, f"warp runner FAILED (threads={threads}, margin={margin}, check_self={check_self}):\nstdout:\n{run.stdout[-3000:]}\nstderr:\n{run.stderr}"
     summary = [l for l in run.stdout.splitlines() if l.startswith("SUMMARY")][0]
@@ -173,6 +174,22 @@ def test_warp_matches_block_two_tier_cascade(tmp_path, threads):
 
 
 MARGINS = (0.0, 0.005, 0.02)
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.robot_smoke
+@pytest.mark.parametrize("two_tier", [False, True])
+def test_separate_environment_self_margins(tmp_path, two_tier):
+    robot = _robot()
+    build_dir = tmp_path / "warp_separate"
+    _gen_header(robot, build_dir, _two_tier_spec(robot) if two_tier else _mixed_spec(robot))
+    exe = _compile(build_dir)
+    for threads in (32, 64, 128):
+        for environment, self_margin in ((0, 0.02), (0.02, 0), (0.005, 0.02), (0.02, 0.005)):
+            for check_self in (False, True):
+                _run(exe, threads, 200, 7, margin=0.01, check_self=check_self,
+                     environment_margin=environment, self_margin=self_margin)
 
 
 @pytest.mark.cuda_equivalence

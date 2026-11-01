@@ -66,6 +66,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from ._store import atomic_write_text
+
 try:
     import platformdirs
     _DEFAULT_DIR = Path(platformdirs.user_cache_dir("grid-rbd"))
@@ -202,13 +204,14 @@ def _codegen_source_hash() -> str:
     # flags here silently reuses a stale .so (this is how an enable_idsva_so_world_frame
     # default change went unbuilt). Hash it explicitly; keep the rest of the binding
     # package out so runtime-only file churn doesn't force needless rebuilds.
-    compile_py = Path(__file__).resolve().parent / "_compile.py"
-    try:
-        h.update(b"bindings/grid_rbd/_compile.py")
-        h.update(compile_py.read_bytes())
-        found = True
-    except OSError:
-        pass
+    for name in ("_compile.py", "_model.py"):
+        compile_py = Path(__file__).resolve().parent / name
+        try:
+            h.update(("bindings/grid_rbd/" + name).encode())
+            h.update(compile_py.read_bytes())
+            found = True
+        except OSError:
+            pass
     return h.hexdigest() if found else ""
 
 
@@ -312,9 +315,13 @@ _NVCC_VERSION_TAG: str | None = None
 
 
 def _compile_source_hash() -> str:
-    """sha256 of _compile.py — the compile-flag logic is a compile input."""
+    """Compile and publication helpers participate in the fast-path identity."""
     try:
-        return hashlib.sha256((Path(__file__).parent / "_compile.py").read_bytes()).hexdigest()
+        h = hashlib.sha256()
+        for name in ("_compile.py", "_store.py", "_model.py"):
+            h.update(name.encode() + b"\0")
+            h.update((Path(__file__).parent / name).read_bytes())
+        return h.hexdigest()
     except FileNotFoundError:
         return ""
 
@@ -518,16 +525,15 @@ def build_identity(cuda_arch: int) -> dict[str, Any]:
 # the identity existed (no sidecar) or by a process whose identity did not
 # include everything (older key schema).
 def write_build_inputs(entry_dir: Path, identity: dict[str, Any]) -> None:
-    tmp = entry_dir / f".{BUILD_INPUTS_FILE}.{os.getpid()}.tmp"
-    tmp.write_text(json.dumps(identity, indent=2, sort_keys=True))
-    tmp.replace(entry_dir / BUILD_INPUTS_FILE)
+    atomic_write_text(entry_dir / BUILD_INPUTS_FILE, json.dumps(identity, indent=2, sort_keys=True))
 
 
 def read_build_inputs(entry_dir: Path) -> dict[str, Any] | None:
     try:
-        return json.loads((entry_dir / BUILD_INPUTS_FILE).read_text())
-    except (OSError, ValueError):
+        recorded = json.loads((entry_dir / BUILD_INPUTS_FILE).read_text())
+    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
         return None
+    return recorded if isinstance(recorded, dict) else None
 
 
 def stale_hit_reasons(entry_dir: Path, identity: dict[str, Any]) -> list[str]:
@@ -624,16 +630,14 @@ def keymap_lookup(cache_dir: Path, input_key: str) -> str | None:
     path = cache_dir / "bykey" / input_key
     try:
         return path.read_text().strip() or None
-    except OSError:
+    except FileNotFoundError:
         return None
 
 
 def keymap_record(cache_dir: Path, input_key: str, content_key: str) -> None:
     bykey = cache_dir / "bykey"
     bykey.mkdir(parents=True, exist_ok=True)
-    tmp = bykey / f".{input_key}.{os.getpid()}.tmp"
-    tmp.write_text(content_key + "\n")
-    tmp.replace(bykey / input_key)  # atomic; last-writer-wins with same value
+    atomic_write_text(bykey / input_key, content_key + "\n")
 
 
 def load_manifest(cache_dir: Path) -> dict[str, Any]:

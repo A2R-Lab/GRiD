@@ -2003,28 +2003,24 @@ def _plant_step_gradient_extra_t_buffers(self):
     gen_plant_step_gradient_kernel and the plant_step_gradient_arena carve
     struct so the two cannot drift."""
     n = self.robot.get_num_vel()
-    fb = 1 if self.robot.floating_base else 0
-    nx = self.robot.get_num_pos() + self.robot.get_num_vel()
-    from ._integrator import _max_stages_in_use
-    max_stages = _max_stages_in_use()
-    d_qdd_count = max_stages * n * 3 * n
-    vaf_cnt = 18 * (self.robot.get_num_joints() if self.robot_has_mimic_joints() else n)
-    return [
-        ("s_x", nx),
-        ("s_u", n),
-        ("s_dAB", 2 * n * 3 * n),
-        ("s_df_du", n * 2 * n),
-        ("s_dc_du", n * 2 * n),
-        ("s_vaf", vaf_cnt),
-        ("s_Minv", n * n),
-        ("s_qdd", n),
-        ("s_q_orig", n + fb),
-        ("s_qd_orig", n),
-        ("s_stage_grad_qdd", max_stages * n),
-        ("s_D_qdd_stage", d_qdd_count),
-        ("s_dInt_q_6x6", 36),
-        ("s_dInt_v_6x6", 36),
-    ]
+    nq = self.robot.get_num_pos()
+    from ._integrator_gradient import _integrator_du_extra_t_buffers
+    # Only input packing differs: plant uses [q;qd] plus u, integrator uses
+    # three nq-wide slots. Share all scratch dimensions, including spherical
+    # q_orig and multi-joint SO(3) dIntegrate storage.
+    scratch = _integrator_du_extra_t_buffers(
+        self, nq, n, int(self.robot.floating_base), True, True, False)[1:]
+    return [("s_x", nq + n), ("s_u", n)] + scratch
+
+
+def _plant_step_gradient_layout(self):
+    """Full-shared layout; never substitute the tier-selected integrator layout."""
+    return self._resolve_arena_layout(
+        _plant_step_gradient_extra_t_buffers(self),
+        self.gen_integrator_gradient_inner_temp_mem_size(),
+        include_topology_helpers=self.gen_topology_helpers_size() > 0,
+        ximat_size=self.gen_get_XI_size(False, False),
+        apply_runtime_transform_band=getattr(self, "runtime_transform", False))
 
 
 def gen_plant_step_gradient_arena_carve_struct(self):
@@ -2032,27 +2028,30 @@ def gen_plant_step_gradient_arena_carve_struct(self):
     (GATO ASK6): the full-smem sub-buffer layout plant_step_gradient_kernel
     carves — the struct's members ARE plant_step_gradient's caller-placed
     buffer arguments, so an external kernel can allocate
-    grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T, TIER_SHARED>() bytes (the
-    same reservation the kernel launches with), carve(), and forward. No exact
-    t-count tie exists for this surface (it reserves the du sizer, which may be
-    a spilled rung on big robots while this layout is always full-smem), so the
-    carve assert is the <= allocation-safety form only."""
-    layout = self._resolve_arena_layout(
-        _plant_step_gradient_extra_t_buffers(self),
-        self.gen_integrator_gradient_inner_temp_mem_size(),
-        include_topology_helpers = (not self.robot.is_serial_chain()
-                                    or not self.robot.are_Ss_identical(list(range(self.robot.get_num_pos())))),
-        ximat_size = self.gen_get_XI_size(False, False),
-        apply_runtime_transform_band = getattr(self, "runtime_transform", False))
+    PLANT_STEP_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>() bytes, carve(), and forward.
+    This surface does not spill. The tiered integrator kernel remains available
+    for models that cannot admit the full-shared plant layout."""
+    layout = _plant_step_gradient_layout(self)
+    t_count = sum(count for _, count in layout.t_buffers) + layout.ximat_size + layout.temp_mem_size
+    self.gen_add_code_lines([
+        "// Full-shared plant layout, NOT the tier-selected integrator allocation.",
+        "template <typename T> __host__ __device__ constexpr size_t PLANT_STEP_GRADIENT_DYNAMIC_SHARED_MEM_BYTES() {",
+        "    return grid::grid_shared_arena_bytes<T>(" + str(t_count) + ", " + str(layout.topology_count) + ");",
+        "}",
+        "template <typename T> __host__ inline cudaError_t plant_step_gradient_check_shared_memory() {",
+        '    return grid::grid_check_dynamic_shared_memory_bytes("plant_step_gradient (full shared; use tiered integrator_gradient if unsupported)", PLANT_STEP_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>());',
+        "}",
+    ])
     self.gen_arena_carve_struct(
         "plant_step_gradient_arena", layout,
-        "grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T, grid::TIER_SHARED>()",
-        expected_t_count = None,
-        helper_ns = "grid::",  # emitted in namespace grid_plant; the arena helpers live in grid::
+        "PLANT_STEP_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()",
+        expected_t_count = t_count,
+        helper_ns = "grid::", host_device=True, checked_bind=True,
         doc = "plant_step_gradient_arena: carve struct mirroring plant_step_gradient_kernel's "
               "full-smem scratch layout; members map 1:1 onto plant_step_gradient's caller-placed "
-              "buffer arguments. Allocate INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T, TIER_SHARED>() "
-              "bytes and call carve(base).")
+              "buffer arguments. Allocate PLANT_STEP_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>() "
+              "bytes and call carve(base). No spill support: check device admission before launch; "
+              "composed callers must also budget their own static/dynamic storage.")
 
 
 def gen_plant_step_gradient_kernel(self):
@@ -2065,21 +2064,13 @@ def gen_plant_step_gradient_kernel(self):
     body (every band in smem: SCRATCH_IN_SMEM=true, no workspace/spill) — then
     calls grid_plant::plant_step_gradient (the thin pass-through). The emitted
     s_dAB is byte-identical to grid::integrator_gradient's. Inputs/outputs are
-    global; the launch reserves grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES.
+    global; the launch reserves PLANT_STEP_GRADIENT_DYNAMIC_SHARED_MEM_BYTES.
 
     x = [q (NUM_POS); qd (NUM_VEL)] (NON-const: the multi-stage RK path mutates
     q/qd across stages in smem); u = control torque (NUM_VEL)."""
     n = self.robot.get_num_vel()
-    fb = 1 if self.robot.floating_base else 0
     nx = self.robot.get_num_pos() + self.robot.get_num_vel()
-    from ._integrator import _max_stages_in_use
-    max_stages = _max_stages_in_use()
-    d_qdd_count = max_stages * n * 3 * n
     inner_temp_full = self.gen_integrator_gradient_inner_temp_mem_size()
-    # s_vaf is body-indexed (NB bodies, stride 6); size by NB for mimic robots
-    # (NB>nv) so the composed FD-grad ID sub-inner's 18*NB writes don't overflow
-    # the adjacent buffers (mirrors integrator_gradient_kernel's vaf sizing).
-    vaf_cnt = 18 * (self.robot.get_num_joints() if self.robot_has_mimic_joints() else n)
     self.gen_add_func_doc("plant_step_gradient kernel: [A|B] = integrator_gradient([q;qd], u, dt) per timestep "
                           "(full-smem scratch arena; pass-through to grid::integrator_gradient_device)",
                           [],
@@ -2166,6 +2157,109 @@ _PLANT_HESSIAN_PICK_FLAGS = [
 ]
 
 
+def _plant_hessian_pool_size(self):
+    """Shared-tier scratch pool of the plant Hessian: the largest of the
+    idsva_so inner, the 4 nv^3 fdsva_so contraction and the inline fd gradient,
+    raised to the SE(3) and SO(3) floors on floating or spherical models."""
+    inner = max(self.gen_idsva_so_body_frame_inner_temp_mem_size(),
+                self.gen_fdsva_so_contract_temp_mem_size(),
+                self.gen_fdsva_so_fd_gradient_inline_temp_mem_size())
+    if self.robot.floating_base:
+        from ._integrator_gradient import FLOATING_HESSIAN_SE3_SCRATCH
+        inner = max(inner, FLOATING_HESSIAN_SE3_SCRATCH)
+    elif any(j.jtype == 'spherical' for j in self.robot.get_joints_ordered_by_id()):
+        from ._integrator_gradient import SPHERICAL_HESSIAN_SCRATCH
+        inner = max(inner, SPHERICAL_HESSIAN_SCRATCH)
+    return inner
+
+
+def _plant_hessian_shared_slots(self, spill_d2ab, spill_tensors):
+    n = self.robot.get_num_vel()
+    slots = [("s_x", self.robot.get_num_pos() + n), ("s_u", n)]
+    if not spill_d2ab:
+        slots.append(("s_d2AB", 18 * n ** 3))
+    if not spill_tensors:
+        slots.extend([("s_df2", 4 * n ** 3), ("s_idsva_so", 4 * n ** 3)])
+    return slots + [("s_Minv", n * n), ("s_df_du", 2 * n * n), ("s_qdd", n)]
+
+
+def _plant_hessian_layout(self, spill_d2ab, spill_tensors, spill_pool):
+    """Resolve the same reserve/floor/topology as the production kernel carve."""
+    from ..helpers._topology_helpers import _helpers_sincos_temp_floor
+    temp = 0 if spill_pool else max(_plant_hessian_pool_size(self), _helpers_sincos_temp_floor(self))
+    return self._resolve_arena_layout(
+        _plant_hessian_shared_slots(self, spill_d2ab, spill_tensors), temp,
+        include_topology_helpers=self.gen_topology_helpers_size() > 0,
+        ximat_size=self.gen_get_XI_size(),
+        apply_runtime_transform_band=getattr(self, "runtime_transform", False))
+
+
+def gen_plant_step_hessian_arena(self):
+    """Explicit full/deep composition; never infer storage from a resource tier."""
+    n = self.robot.get_num_vel()
+    self.gen_add_code_line("// Plant Hessian workspace begins.")
+    supported = n > 0 and not self.robot.floating_base and self.robot.get_num_pos() == n
+    self.gen_add_code_line("#define GRID_PLANT_HAS_HESSIAN_ARENA " + str(int(supported)))
+    if not supported:
+        self.gen_add_code_line("// Composed Hessian views currently require fixed-base nq == nv > 0. Existing kernel support is unchanged.")
+        self.gen_add_code_line("// Plant Hessian workspace ends.")
+        return
+    self.gen_add_code_lines([
+        "enum class plant_hessian_layout { full_shared, deep_spill };",
+        "template <typename T, plant_hessian_layout Layout> struct plant_step_hessian_arena;",
+    ])
+    pool = _plant_hessian_pool_size(self)
+    for spill in (False, True):
+        tag = "deep_spill" if spill else "full_shared"
+        storage = "plant_hessian_" + tag + "_storage"
+        layout = _plant_hessian_layout(self, spill, spill, spill)
+        count = sum(c for _, c in layout.t_buffers) + layout.ximat_size + layout.temp_mem_size
+        sizer = f"grid::grid_shared_arena_bytes<T>({count}, {layout.topology_count})"
+        self.gen_arena_carve_struct(storage, layout, sizer,
+                                   expected_t_count=count, helper_ns="grid::", host_device=True)
+        ws_count = 26 * n ** 3 + pool if spill else 0
+        self.gen_add_code_lines([
+            "template <typename T>",
+            f"struct plant_step_hessian_arena<T, plant_hessian_layout::{tag}> : {storage}<T> {{",
+            '    static_assert(sizeof(T) == 4 || sizeof(T) == 8, "float or double storage required");',
+            "    T *s_fdsva_pool;",
+        ] + (["    T *s_d2AB; T *s_df2; T *s_idsva_so;"] if spill else []) + [
+            "    static __host__ __device__ constexpr size_t alignment() { return 16; }",
+            f"    static __host__ __device__ constexpr size_t shared_bytes() {{ return {sizer}; }}",
+            f"    static __host__ __device__ constexpr size_t workspace_bytes() {{ return grid::grid_align_up(sizeof(T) * size_t({ws_count}), 16); }}",
+            "    // Capacity and alignment only; enclosing-kernel resource admission is separate.",
+            "    static __host__ __device__ bool bind(void *shared, size_t shared_capacity, void *workspace, size_t workspace_capacity, plant_step_hessian_arena &out) {",
+            "        if (!shared || shared_capacity < shared_bytes() || reinterpret_cast<uintptr_t>(shared) % 16) return false;",
+            "        if (workspace_bytes() && (!workspace || workspace_capacity < workspace_bytes() || reinterpret_cast<uintptr_t>(workspace) % 16)) return false;",
+            "        plant_step_hessian_arena a;",
+            f"        static_cast<{storage}<T>&>(a) = {storage}<T>::carve(shared);",
+        ])
+        if spill:
+            self.gen_add_code_lines([
+                "        T *w = reinterpret_cast<T *>(workspace);",
+                "        a.s_d2AB = w;",
+                f"        a.s_df2 = w + {18*n**3};",
+                f"        a.s_idsva_so = w + {22*n**3};",
+                f"        a.s_fdsva_pool = w + {26*n**3};",
+            ])
+        else:
+            self.gen_add_code_line("        a.s_fdsva_pool = nullptr;")
+        flag = "false" if spill else "true"
+        topology = "this->s_topology_helpers, "
+        self.gen_add_code_lines([
+            "        out = a; return true;",
+            "    }",
+            "    // Block collective. Caller initializes s_x/s_u and fences input/output reuse.",
+            "    template <grid::IntegratorType IT = grid::IntegratorType::EULER>",
+            "    __device__ void evaluate(const grid::robotModel<T> *model, T gravity, T dt) const {",
+            '        static_assert(IT == grid::IntegratorType::EULER || IT == grid::IntegratorType::SEMI_IMPLICIT_EULER, "Hessian composition supports Euler and SI-Euler");',
+            f"        plant_step_hessian<T, IT, {flag}, false, {flag}>(this->s_d2AB, this->s_x, this->s_u, this->s_df2, this->s_idsva_so, this->s_Minv, this->s_df_du, this->s_qdd, this->s_XImats, " + topology + "this->s_temp, this->s_fdsva_pool, nullptr, this->s_fdsva_pool, model, gravity, dt);",
+            "    }",
+            "};",
+        ])
+    self.gen_add_code_line("// Plant Hessian workspace ends.")
+
+
 def _emit_plant_step_hessian_kernel_body_for_flags(self, n, nx, d2ab_count,
                                                    spill_d2AB, spill_tensors, spill_fdsva_pool):
     """Emit the plant_step_hessian_kernel body for one tier's spill flags.
@@ -2175,28 +2269,11 @@ def _emit_plant_step_hessian_kernel_body_for_flags(self, n, nx, d2ab_count,
     for the spilled buffers, then call grid_plant::plant_step_hessian with the
     matching SCRATCH_IN_SMEM/CONTRACT_IN_SMEM flags, then (if d2AB is in smem)
     scatter it to the global output."""
-    # SHARED-tier fdsva_so inner pool: max(idsva_so inner, 4*nv^3 contract,
-    # fd_grad inline) -- the same sizing GCG.py's _temp_full uses for fdsva_so.
-    inner_idsva = self.gen_idsva_so_body_frame_inner_temp_mem_size()
-    inner_temp_full = max(inner_idsva,
-                          self.gen_fdsva_so_contract_temp_mem_size(),
-                          self.gen_fdsva_so_fd_gradient_inline_temp_mem_size())
-    if self.robot.floating_base:
-        from ._integrator_gradient import FLOATING_HESSIAN_SE3_SCRATCH
-        inner_temp_full = max(inner_temp_full, FLOATING_HESSIAN_SE3_SCRATCH)
+    inner_temp_full = _plant_hessian_pool_size(self)
     # When the pool spills, the smem s_temp slot is unused (size 0); the whole
     # pool (incl. the contraction scratch) routes to d_workspace.
     shared_temp_size = 0 if spill_fdsva_pool else inner_temp_full
-    extra_t_buffers = [("s_x", nx), ("s_u", n)]
-    if not spill_d2AB:
-        extra_t_buffers.append(("s_d2AB", d2ab_count))
-    if not spill_tensors:
-        extra_t_buffers.append(("s_df2", 4 * n * n * n))
-        extra_t_buffers.append(("s_idsva_so", 4 * n * n * n))
-    # df_du / Minv / qdd are small + hot — always smem (surgical-spill rule).
-    extra_t_buffers.append(("s_Minv", n * n))
-    extra_t_buffers.append(("s_df_du", 2 * n * n))
-    extra_t_buffers.append(("s_qdd", n))
+    extra_t_buffers = _plant_hessian_shared_slots(self, spill_d2AB, spill_tensors)
     self.gen_XImats_helpers_temp_shared_memory_code(
         shared_temp_size, extra_t_buffers=extra_t_buffers)
     # Floating mjx always needs d_workspace (the dedicated d_mjx_ws band), even at the
@@ -2289,14 +2366,7 @@ def gen_plant_step_hessian_kernel(self):
     nx = self.robot.get_num_pos() + self.robot.get_num_vel()
     nz = 3 * n
     d2ab_count = 2 * n * nz * nz
-    xi_size = self.gen_get_XI_size()
-    inner_idsva = self.gen_idsva_so_body_frame_inner_temp_mem_size()
-    inner_temp_full = max(inner_idsva,
-                          self.gen_fdsva_so_contract_temp_mem_size(),
-                          self.gen_fdsva_so_fd_gradient_inline_temp_mem_size())
-    if self.robot.floating_base:
-        from ._integrator_gradient import FLOATING_HESSIAN_SE3_SCRATCH
-        inner_temp_full = max(inner_temp_full, FLOATING_HESSIAN_SE3_SCRATCH)
+    inner_temp_full = _plant_hessian_pool_size(self)
     # Per-timestep workspace band for the spilled tiers: s_d2AB (18*nv^3) +
     # s_df2 + s_idsva_so (8*nv^3) + the fdsva_so pool/contraction scratch. Sized
     # for the MAX a tier might spill, so the allocation always covers any tier the
@@ -2349,18 +2419,9 @@ def gen_plant_step_hessian_kernel(self):
     # binding launch MUST size the dynamic smem with this macro AND raise the
     # per-kernel max via cudaFuncSetAttribute. The t_count mirrors each tier's
     # arena exactly (the in-smem extra_t_buffers + s_XImats + s_temp pool).
-    base_t = nx + n + n * n + 2 * n * n + n + xi_size
-
     def _tier_t_count(pick):
-        spill_d2AB, spill_tensors, spill_fdsva_pool = _PLANT_HESSIAN_PICK_FLAGS[pick]
-        t = base_t
-        if not spill_d2AB:
-            t += d2ab_count
-        if not spill_tensors:
-            t += 8 * n * n * n
-        if not spill_fdsva_pool:
-            t += inner_temp_full
-        return t
+        layout = _plant_hessian_layout(self, *_PLANT_HESSIAN_PICK_FLAGS[pick])
+        return sum(count for _, count in layout.t_buffers) + layout.ximat_size + layout.temp_mem_size
 
     t0 = _tier_t_count(picks[0])
     t1 = _tier_t_count(picks[1])
@@ -2368,8 +2429,7 @@ def gen_plant_step_hessian_kernel(self):
     self.gen_add_code_line(
         "template <typename T, int TIER = grid::GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t "
         "INTEGRATOR_HESSIAN_DYNAMIC_SHARED_MEM_BYTES() { "
-        # ONE return (nested ternary): constexpr under the runners' -std=c++11
-        # (same tier values as the if-constexpr chain it replaced, 2026-09-23).
+        # One return expression (a nested ternary) so the sizer is constexpr.
         "return (TIER == grid::TIER_SHARED) ? grid::grid_shared_arena_bytes<T>(" + str(t0) + ", grid::TOPOLOGY_HELPERS_COUNT) "
         ": (TIER == grid::TIER_LITE) ? grid::grid_shared_arena_bytes<T>(" + str(t1) + ", grid::TOPOLOGY_HELPERS_COUNT) "
         ": grid::grid_shared_arena_bytes<T>(" + str(t2) + ", grid::TOPOLOGY_HELPERS_COUNT); "
@@ -2672,6 +2732,7 @@ def gen_plant_kernels(self, algorithms):
     # fdsva_so TU): the kernel emits but `grid::IntegratorType` is undefined.
     if ("fdsva_so" in algorithms) and ("integrator" in algorithms):
         gen_plant_step_hessian_kernel(self)
+        gen_plant_step_hessian_arena(self)
         self.gen_add_code_line("#define GRID_PLANT_HAS_STEP_HESSIAN 1")
     if ("end_effector_pose" in algorithms) and ("end_effector_pose_gradient" in algorithms):
         gen_ee_pos_cost_kernel(self)

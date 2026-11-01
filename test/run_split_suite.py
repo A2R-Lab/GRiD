@@ -949,6 +949,7 @@ def aggregate_header_keys(rdir: Path, results: list[dict],
 STATE_PATH = REPO_ROOT / "test" / ".split-suite-state.json"
 WRAPPER_HELPER_PATHS = {
     "test_release_numerics": ["tools/check_installed_numerics.py"],
+    "test_consumer_artifact": ["bindings/examples/consumer_artifact_migration.py"],
 }
 
 

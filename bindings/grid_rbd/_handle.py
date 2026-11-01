@@ -337,8 +337,23 @@ class RobotHandle:
         return bool(self._meta.get("floating_base", False))
 
     @property
+    def model_descriptor(self):
+        """Nominal GRiD-native coordinates, irrespective of output_convention.
+
+        Returns an independent copy. Runtime origin updates do not mutate this
+        baked descriptor; runtime_transform marks those placements as nominal.
+        """
+        from copy import deepcopy
+        from grid_codegen.model_descriptor import validate_descriptor
+        descriptor = self._meta.get('model_descriptor')
+        if descriptor is None:
+            raise RuntimeError('cached robot predates the model descriptor; rebuild it')
+        return deepcopy(validate_descriptor(descriptor))
+
+    @property
     def configuration_layout(self):
-        """Independent joint blocks mapping public positions to tangent slots."""
+        """Configuration layout: one coordinate block per independent joint,
+        mapping public positions to tangent slots."""
         from ._configuration import configuration_layout_from_meta
         return configuration_layout_from_meta(self._meta, self.num_joints, self.num_vel)
 
@@ -462,8 +477,12 @@ class RobotHandle:
 
     @property
     def joint_names(self):
-        """Joint names, index == joint id (the input-vector ordering). ``None``
-        on a .so registered before names were persisted."""
+        """Names indexed by effective joint ID, not by q/v coordinate slot.
+
+        Mimic joints own no inputs; spherical/floating joints own multiple
+        entries. Use model_descriptor/configuration_layout for coordinate
+        ownership. ``None`` on an artifact predating persisted names.
+        """
         names = self._meta.get("joint_names")
         return list(names) if names else None
 
@@ -1870,16 +1889,22 @@ class RobotHandle:
         x is (B, NUM_POS + NUM_VEL); u is (B, NUM_VEL). Returns the s_d2AB
         surface of shape (B, 2*NV, 3*NV, 3*NV):
 
-            H[b, o, a, b'] = d^2 x_{k+1}[o] / dz[a] dz[b'],  z = [dq; dqd; du]
+            H[batch, o, a, c] = d G(perturb(z, epsilon*e_a))[o,c] / d epsilon
 
-        with output rows split as [position-tangent (NV); velocity (NV)].
+        with z = [dq; dv; du] and output rows [position-tangent; velocity].
+        Each G uses its own input tangent basis and predicted-output anchor.
+        On manifold coordinates this moving-gradient sensitivity can be
+        asymmetric: it is NOT the fixed-chart Hessian or a shooting-defect
+        Hessian. Symmetrization does not supply the missing transport terms.
+        See the public integration-conventions reference for the precise maps.
         Matches ``RBDReference.plant_step_hessian``. Pass-through to
         grid::integrator_hessian_device (composes fdsva_so + dt-scaled assembly).
 
         Scope: euler / semi_implicit_euler on fixed and floating bases (multi-stage
         step Hessians are not generated; those codes return the rc=3 error).
-        Floating-base and multi-stage RK are deferred (the C-ABI returns rc=3 /
-        raises for any other ``integrator_type``).
+        Fixed-base spherical coordinates use their SO(3) retract as well.
+        Other integrators return rc=3; this NumPy method does not imply a
+        JAX/Torch second-derivative handle method or general manifold support.
         """
         x = np.ascontiguousarray(x, dtype=self._dt)
         u = np.ascontiguousarray(u, dtype=self._dt)

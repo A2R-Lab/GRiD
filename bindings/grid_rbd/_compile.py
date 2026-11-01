@@ -30,6 +30,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from ._store import publish_object
 
 
 # Package logger. Quiet by default (no handler) — the host app opts in via
@@ -132,14 +133,9 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
             if _p not in sys.path:
                 sys.path.insert(0, _p)
 
-    from URDFParser import URDFParser
     from grid_codegen import GRiDCodeGenerator
-
-    parser = URDFParser()
-    robot = parser.parse(
-        str(urdf_path),
-        floating_base=options.get("floating_base", False),
-    )
+    from ._model import parse_model
+    robot = parse_model(urdf_path, floating_base=options.get("floating_base", False))
 
     file_namespace = options.get("file_namespace", "grid")
     debug_mode = options.get("debug_mode", 0)
@@ -307,8 +303,10 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # names a sphere model that must pass validate_sphere_model against the URDF, and
     # `collision_native` uses the URDF's native primitives as capsule rows. The caller
     # folds the sphere model's bytes into the options (build_artifact does), so the key
-    # follows the model's content. register_robot never sets these.
+    # follows the model's content. register_robot never sets these. `strict_collision`
+    # is recorded only when a consumer opts out of the spherizer's errors.
     collision_spec = None
+    strict_collision = bool(options.get("strict_collision", True))
     if options.get("spherized_urdf"):
         from grid_codegen.algorithms._collision import resolve_spherized_urdf, build_sphere_tiers
         path = resolve_spherized_urdf(str(options["spherized_urdf"]), str(urdf_path))
@@ -318,12 +316,12 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         from grid_codegen.algorithms._collision import native_collision_spec_from_urdf
         res = options.get("collision_res", 0.05)
         res = list(res)[-1] if isinstance(res, (list, tuple)) else float(res)
-        collision_spec = native_collision_spec_from_urdf(robot, str(urdf_path), res)
+        collision_spec = native_collision_spec_from_urdf(robot, str(urdf_path), res, strict=strict_collision)
     elif options.get("collision"):
         from grid_codegen.algorithms._collision import multi_tier_collision_spec_from_urdf
         res = options.get("collision_res", 0.05)
         res = list(res) if isinstance(res, (list, tuple)) else [float(res)]
-        collision_spec = multi_tier_collision_spec_from_urdf(robot, str(urdf_path), res)
+        collision_spec = multi_tier_collision_spec_from_urdf(robot, str(urdf_path), res, strict=strict_collision)
     with contextlib.redirect_stdout(io.StringIO()):
         cg.gen_all_code(
             output_path=str(out_path),
@@ -361,33 +359,17 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # joint_names (index == joint id) + leaf_jids let the handle's runtime-target
     # list API resolve ee_joint_names -> jids (mirrors RBDReference
     # select_end_effector_joints) without a robot model on the Python side.
-    import math
-
-    def _jsafe(v):
-        # ±inf is not valid JSON; serialize unbounded / unspecified limits as null.
-        if v is None:
-            return None
-        try:
-            return None if math.isinf(float(v)) else float(v)
-        except (TypeError, ValueError):
-            return None
-
-    joint_names = []
-    # per-joint limits (index == jid), surfaced on the handle as metadata only
-    # (not consumed by any kernel). pos = [lower, upper], vel/effort = scalar.
-    joint_pos_limits = []
-    joint_vel_limits = []
-    joint_effort_limits = []
-    for jid in range(robot.get_num_joints()):
-        joint = robot.get_joint_by_id(jid)
-        joint_names.append(joint.get_name() if joint is not None else "")
-        lim = robot.get_joint_limits_by_id(jid) or []
-        joint_pos_limits.append([_jsafe(lim[0]), _jsafe(lim[1])] if len(lim) == 2 else None)
-        joint_vel_limits.append(_jsafe(robot.get_velocity_limit_by_id(jid)))
-        joint_effort_limits.append(_jsafe(robot.get_effort_limit_by_id(jid)))
+    descriptor = cg.model_descriptor
+    if descriptor is None:
+        raise RuntimeError('bindings generation requires a quaternion model descriptor')
+    (out_path.parent/'model_descriptor.json').write_text(
+        json.dumps(descriptor, ensure_ascii=False, allow_nan=False, indent=2))
+    joints = descriptor['joints']
     meta = {
-        "num_joints": robot.get_num_pos(),
-        "num_vel": robot.get_num_vel(),
+        "model_descriptor": descriptor,
+        "num_joints": descriptor['nq'],  # historical name means position width
+        "num_vel": descriptor['nv'],
+        "num_bodies": descriptor['nb'],
         # A single named fixed target exposes ONE EE (the named flange) — mirror the
         # codegen's GRID_RBD_NUM_EES so meta matches the .so's grid_rbd_num_ees().
         # "" / "all" keep the all-leaf count.
@@ -398,11 +380,11 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         # handle locate grid_assets/launch_configs/<key>/<gpu>.json for the E6 profile overlay.
         "launch_config_robot": launch_config_robot,
         "launch_config_gpu": launch_config_gpu,   # the profile actually baked (W15)
-        "joint_names": joint_names,
+        "joint_names": [j['name'] for j in joints],
         "leaf_jids": [int(j) for j in robot.get_leaf_nodes()],
-        "joint_pos_limits": joint_pos_limits,
-        "joint_vel_limits": joint_vel_limits,
-        "joint_effort_limits": joint_effort_limits,
+        "joint_pos_limits": [j['limits']['position'] for j in joints],
+        "joint_vel_limits": [j['limits']['velocity'] for j in joints],
+        "joint_effort_limits": [j['limits']['effort'] for j in joints],
         # A2 (N2.2, 2026-09-08): what this .so actually contains. algorithm_list
         # is the REQUESTED build list (the _DEFAULT full profile when the caller
         # passed None); generated_algorithms is the POST-dep-expansion emit set
@@ -411,7 +393,8 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         "generated_algorithms": sorted(cg.generated_algorithms),
         "enable_mujoco_kernels": bool(enable_mujoco_kernels),
     }
-    meta["configuration_layout"] = configuration_layout_from_robot(robot)
+    meta["configuration_layout"] = [tuple(b[k] for k in ('kind', 'q_start', 'v_start', 'nq', 'nv'))
+                                    for b in descriptor['configuration_layout']]
     # Multi-contact f_ext: echo the registered contact frames (registration
     # order == the contact_fext f_c column order) so the handle can validate
     # shapes and report frames without reopening the URDF.
@@ -873,9 +856,7 @@ def _build_units(cmd: list[str], source_dir: Path, out_so: Path, arch: str,
             log.write(f"[{unit.stem}] rc={r.returncode} {secs:.1f}s\n")
         if r.returncode == 0 and cached is not None:
             # publish atomically (another build may be producing the same key)
-            tmp = cached.with_name(cached.name + f".{os.getpid()}.tmp")
-            shutil.move(str(obj), str(tmp))
-            os.replace(tmp, cached)
+            publish_object(obj, cached)
             obj = cached
         return obj, r.returncode, secs, ulog.read_text()
 

@@ -2,9 +2,9 @@
 # and PyTorch CUDA builds, and the generated iiwa14 header baked in.
 #
 # Build from the repository root (the build context supplies the sample URDF):
-#   docker build -f install/docker/Dockerfile -t grid:0.5.1 .
+#   docker build -f install/docker/Dockerfile -t grid:0.7.0 .
 # Run with the NVIDIA Container Toolkit:
-#   docker run --rm -it --gpus all -v grid-cache:/var/cache/grid-rbd grid:0.5.1
+#   docker run --rm -it --gpus all -v grid-cache:/var/cache/grid-rbd grid:0.7.0
 #
 # The image's cache store carries one compiled iiwa14 library: a fat binary for
 # the compute capabilities in GRID_ARCHS (default sm_86, sm_89, sm_90 and
@@ -26,7 +26,7 @@
 ARG CUDA_IMAGE=nvidia/cuda:13.2.0-devel-ubuntu24.04
 FROM ${CUDA_IMAGE}
 
-ARG GRID_RBD_VERSION=0.5.1
+ARG GRID_RBD_VERSION=0.7.0
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
 # Compute capabilities the precompiled iiwa14 library embeds (GRID_RBD_CUDA_ARCHS).
 ARG GRID_ARCHS=86,89,90,120

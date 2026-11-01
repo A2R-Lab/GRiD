@@ -114,7 +114,7 @@ def _gen_and_compile(proj, build_dir, floating_base, codegen_profile="all"):
     shutil.copyfile(RUNNER_SOURCE, runner_copy)
     exe = build_dir / "cuda_f_ext_gradient_runner.exe"
     cmd = [
-        nvcc, "-std=c++11", "-O0",
+        nvcc, "-std=c++17", "-O0",
         f"-DGRID_CUDA_FLOATING_BASE={1 if floating_base else 0}",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
         "-I", str(Path(__file__).resolve().parents[2]),

@@ -152,7 +152,7 @@ def _compile_header_consumer(
     source: str,
     label: str,
     *,
-    cxx_standard: str = "-std=c++11",
+    cxx_standard: str = "-std=c++17",
     extra_flags: list[str] | None = None,
     expect_success: bool = True,
     expected_error: str | None = None,
@@ -657,10 +657,10 @@ def test_linalg_backend_controls_and_helpers_are_generated(tmp_path):
 
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
-def test_linalg_backend_default_cxx11_compiles_without_mathdx(tmp_path):
+def test_linalg_backend_default_cxx17_compiles_without_mathdx(tmp_path):
     header = _generate_header(tmp_path, "fr3", "fixed", codegen_profile="dynamics-core")
     # v2.0: cuBLASDx/mathDx was removed; the default header is SIMT-only GLASS and
-    # must compile under -std=c++11 with no mathDx headers present; referencing
+    # must compile under -std=c++17 with no mathDx headers present; referencing
     # the arena sizer proves the SIMT-only arena path compiles clean.
     source = r'''
 #include "grid.cuh"
@@ -680,7 +680,7 @@ int main() {
         tmp_path,
         header,
         source,
-        "linalg_backend_default_cxx11",
+        "linalg_backend_default_cxx17",
     )
 
 

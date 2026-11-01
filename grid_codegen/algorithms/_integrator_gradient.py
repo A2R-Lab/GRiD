@@ -1287,8 +1287,7 @@ def gen_integrator_du_arena_carve_struct(self):
         _integrator_du_extra_t_buffers(self, nq, n, fb, dqdd_in_smem, dab_in_smem,
                                        compute_x_kp1 = True),
         inner_temp_size,
-        include_topology_helpers = (not self.robot.is_serial_chain()
-                                    or not self.robot.are_Ss_identical(list(range(nq)))),
+        include_topology_helpers = self.gen_topology_helpers_size() > 0,
         ximat_size = self.gen_get_XI_size(False, False),
         apply_runtime_transform_band = getattr(self, "runtime_transform", False))
     self.gen_arena_carve_struct(
@@ -2114,6 +2113,86 @@ def _integ_hess_colblock(self, n, half, off, dst, ddst, Pv, Pd, with_cross):
 
 
 
+SPHERICAL_HESSIAN_SCRATCH = 6 + 36 + 2 * 216
+
+
+def _gen_integrator_hessian_spherical_body(self):
+    """Compose admitted fixed-spherical moving-G derivatives, not chart Hessians.
+
+    Reuse the dead fdsva pool after its trailing fence. One SO(3) block at a
+    time uses the public GLASS SE(3) restriction, avoiding a second derivative
+    formula and any model-sized thread-local tensor.
+    """
+    n = self.robot.get_num_vel()
+    nz = 3*n
+    # _plant_hessian_pool_size owns this floor for shared and spilled storage.
+    add = self.gen_add_code_line
+    self.gen_fdsva_so_device_function_call(
+        scratch_in_smem_expr='SCRATCH_IN_SMEM', fd_grad_use_spill_expr='FD_GRAD_USE_SPILL',
+        contract_in_smem_expr='CONTRACT_IN_SMEM', d_workspace_pool_name='d_workspace',
+        d_fd_grad_spill_name='d_fd_grad_spill', s_fdsva_temp_name='s_fdsva_temp')
+    self.gen_add_sync()
+    add('const bool si = IT == IntegratorType::SEMI_IMPLICIT_EULER;')
+    add('auto D2 = [&](int i, int p, int q) -> T {')
+    add(f'  int pb=p/{n}, qb=q/{n}, j=p%{n}, k=q%{n};')
+    add(f'  const int nn={n*n}, nnn={n*n*n};')
+    add(f'  if(pb==0 && qb==0) return s_df2[i*nn+j*{n}+k];')
+    add(f'  if(pb==1 && qb==1) return s_df2[2*nnn+i*nn+j*{n}+k];')
+    add(f'  if(pb==1 && qb==0) return s_df2[nnn+i*nn+j*{n}+k];')
+    add(f'  if(pb==0 && qb==1) return s_df2[nnn+i*nn+k*{n}+j];')
+    add(f'  if(pb==2 && qb==0) return s_df2[3*nnn+i*nn+j*{n}+k];')
+    add(f'  if(pb==0 && qb==2) return s_df2[3*nnn+i*nn+k*{n}+j];')
+    add('  return T(0); };')
+    add('auto Vgrad = [&](int i, int a) -> T {')
+    add(f'  int block=a/{n}, j=a%{n};')
+    add(f'  if(block==0) return dt*s_df_du[j*{n}+i];')
+    add(f'  if(block==1) return T(i==j)+dt*s_df_du[{n*n}+j*{n}+i];')
+    add(f'  return dt*s_Minv[(i<=j)?j*{n}+i:i*{n}+j]; }};')
+    self.gen_add_parallel_loop('index', str(2*n*nz*nz))
+    add(f'int o=index/{nz*nz}, a=(index/{nz})%{nz}, b=index%{nz};')
+    add(f's_d2AB[index]=(o>={n}?dt:(si?dt*dt:T(0)))*D2(o%{n},b,a);')
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+    add('T *pool=SCRATCH_IN_SMEM?s_temp:d_workspace;')
+    add('T *w=pool, *J=pool+6, *Hq=pool+42, *Hv=pool+258;')
+    for joint in self.robot.get_joints_ordered_by_id():
+        if joint.jtype != 'spherical':
+            continue
+        indices = self.robot.get_joint_index_v(joint.get_id())
+        start = indices[0]
+        add('{')
+        add(f'constexpr int offset={start};')
+        self.gen_add_serial_ops()
+        add('for(int k=0;k<3;++k) { w[k]=T(0); w[k+3]=dt*(s_qd[offset+k]+(si?dt*s_qdd[offset+k]:T(0))); }')
+        add('glass::thread::se3_retract_jacobian_v<T>(w,w+3,J);')
+        add('glass::thread::se3_retract_hessian<T,true>(w,w+3,Hq);')
+        add('glass::thread::se3_retract_hessian<T,false>(w,w+3,Hv);')
+        self.gen_add_end_control_flow()
+        self.gen_add_sync()
+        self.gen_add_parallel_loop('index', str(3*nz*nz))
+        add(f'int i=index/{nz*nz}, a=(index/{nz})%{nz}, b=index%{nz};')
+        add('T value=T(0);')
+        add('if(!si) {')
+        add(f'  int k=a-{n}-offset, col=b-offset;')
+        add('  if(k>=0 && k<3) {')
+        add('    if(col>=0 && col<3) value=dt*Hq[(k+3)*36+(col+3)*6+i+3];')
+        add(f'    col=b-{n}-offset;')
+        add('    if(col>=0 && col<3) value=dt*dt*Hv[(k+3)*36+(col+3)*6+i+3];')
+        add('  }')
+        add('} else {')
+        add('  for(int k=0;k<3;++k) {')
+        add('    T va=Vgrad(offset+k,a); int col=b-offset;')
+        add('    if(col>=0 && col<3) value+=dt*Hq[(k+3)*36+(col+3)*6+i+3]*va;')
+        add('    for(int m=0;m<3;++m) value+=dt*dt*Hv[(k+3)*36+(m+3)*6+i+3]*va*Vgrad(offset+m,b);')
+        add('    value+=dt*dt*J[(k+3)*6+i+3]*D2(offset+k,b,a);')
+        add('  }')
+        add('}')
+        add(f's_d2AB[(offset+i)*{nz*nz}+a*{nz}+b]=value;')
+        self.gen_add_end_control_flow()
+        self.gen_add_sync()
+        add('}')
+
+
 def gen_integrator_hessian_device(self):
     """Emit `integrator_hessian_device` — the second-order sensitivity of the
     integrator step x_{k+1} = [q; v] as ONE inner that composes
@@ -2121,7 +2200,7 @@ def gen_integrator_hessian_device(self):
     s_df2) and assembles the s_d2AB surface (the plant_step_hessian output).
 
     Output s_d2AB has shape (2*NUM_VEL, 3*NUM_VEL, 3*NUM_VEL) in row-major
-    (C-order) flat layout: H[o*nz*nz + a*nz + b] = d^2 x_{k+1}[o] / dz[a] dz[b],
+    (C-order) flat layout: H[o*nz*nz + a*nz + b] = d G[o,b] / dz[a],
     z = [dq(nv); dqd(nv); du(nv)], output rows = [position-tangent(nv); velocity(nv)].
 
     Assembly (mirrors RBDReference._PlantMixin._d2qdd_tangent + plant_step_hessian):
@@ -2130,8 +2209,9 @@ def gen_integrator_hessian_device(self):
     (each nv^3, laid out [i*nv*nv + j*nv + k]) with the z-block structure
         [q,q]=d2a_dqdq; [qd,qd]=d2a_dvdv; [qd,q]=d2a_dvdq, [q,qd]=d2a_dvdq^T(jk);
         [u,q]=d2a_dtdq, [q,u]=d2a_dtdq^T(jk); all u-u / u-qd / qd-u blocks = 0.
-    Velocity rows (bottom nv) = dt*D2 (both Euler and SI-Euler). Position rows
-    (top nv) = 0 (Euler) or dt*dt*D2 (SI-Euler, q_{k+1}=q+dt*v_{k+1}).
+    Scalar fixed-base rows use the affine assembly below. Spherical/floating
+    position rows include their retract derivatives; moving input/output bases
+    make this tensor distinct from a fixed-chart Hessian on a manifold.
 
     Scope: EULER + SEMI_IMPLICIT_EULER, BOTH fixed and floating base (floating is
     routed to gen_integrator_hessian_device_floating, the SE(3)-retract Hessian, at
@@ -2195,6 +2275,10 @@ def gen_integrator_hessian_device(self):
     self.gen_add_code_line("    \"(multi-stage RK 2nd-order chain rule is deferred; see f1_plant_step_hessian_plan.md).\");")
     if self.robot.floating_base:
         gen_integrator_hessian_device_floating(self)
+        self.gen_add_end_function()
+        return
+    if self.robot.robot_has_spherical():
+        _gen_integrator_hessian_spherical_body(self)
         self.gen_add_end_function()
         return
     # The four 2nd-order forward-dynamics blocks (fdsva_so output), each nv^3.

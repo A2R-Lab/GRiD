@@ -105,7 +105,7 @@ def _gen_and_compile(proj, build_dir, floating_base):
                     build_dir / "grid_runner_select.cuh")
     exe = build_dir / "cuda_fext_runner.exe"
     cmd = [
-        nvcc, "-std=c++11", "-O0",
+        nvcc, "-std=c++17", "-O0",
         f"-DGRID_CUDA_FLOATING_BASE={1 if floating_base else 0}",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",

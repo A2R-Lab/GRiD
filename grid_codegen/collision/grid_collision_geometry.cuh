@@ -15,12 +15,39 @@
 #include <cuda_runtime.h>
 #include <cmath>   // sqrtf/sqrt for the differentiable (true-distance + normal) path
 #include <limits>
+#include <optional>
 #include <stdexcept>   // the host-side environment builders throw on bad geometry
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace grid_collision {
+
+// Effective feasibility clearances, in metres. A scalar applies to both sides;
+// self clearance inflates only ONE member of a pair. Device callers must supply
+// finite, nonnegative values. The host factory below validates user input.
+template <typename T>
+struct CollisionMargins {
+    using type = CollisionMargins<T>;  // non-deduced parameter preserves scalar calls
+    using value_type = T;
+    T environment_margin, self_margin;
+    __host__ __device__ constexpr CollisionMargins(T margin = T(0))
+        : environment_margin(margin), self_margin(margin) {}
+    __host__ __device__ constexpr CollisionMargins(T environment, T self)
+        : environment_margin(environment), self_margin(self) {}
+};
+
+template <typename T>
+inline CollisionMargins<T> make_collision_margins(
+        T margin = T(0),
+        std::optional<typename CollisionMargins<T>::value_type> environment_margin = std::nullopt,
+        std::optional<typename CollisionMargins<T>::value_type> self_margin = std::nullopt) {
+    const auto valid = [](T value) { return std::isfinite(value) && value >= T(0); };
+    if (!valid(margin) || (environment_margin && !valid(*environment_margin)) ||
+            (self_margin && !valid(*self_margin)))
+        throw std::invalid_argument("collision margins must be finite and nonnegative");
+    return {environment_margin.value_or(margin), self_margin.value_or(margin)};
+}
 
 // ------------------------------------------------------------------ shapes
 template <typename T>
@@ -512,15 +539,15 @@ __host__ __device__ bool grid_cc_config_free(
         const int *broad_sphere_link,
         const T *s_fine_pos,  const T *s_fine_r,  const int *fine_self_ranges,  int n_fine_ranges,  int n_fine,
         const int *fine_sphere_link, int *dbg_fine_rechecked = nullptr,
-        T margin = static_cast<T>(0), bool check_self = true) {
-    // margin: a hit iff a raw clearance is below it (robot spheres tested at r + margin on both tiers,
-    // which keeps the covering argument); check_self = false skips both self-range scans (G7/G10).
+        typename CollisionMargins<T>::type margins = {}, bool check_self = true) {
+    // Each side uses its own margin on BOTH tiers, preserving the covering argument.
+    // check_self = false skips both self-range scans, irrespective of self_margin.
     unsigned long long hit_mask = 0ull;
     // Broad self-collision: full scan (NO early-out — the mask needs every hit), flag BOTH endpoints'
     // links of each hit range (a self-pair's two spheres may sit on different links).
     if (check_self) for (int k = 0; k < n_broad_ranges; ++k) {
         int i = broad_self_ranges[3*k], j0 = broad_self_ranges[3*k+1], j1 = broad_self_ranges[3*k+2];
-        T ix = s_broad_pos[3*i], iy = s_broad_pos[3*i+1], iz = s_broad_pos[3*i+2], ir = s_broad_r[i] + margin;
+        T ix = s_broad_pos[3*i], iy = s_broad_pos[3*i+1], iz = s_broad_pos[3*i+2], ir = s_broad_r[i] + margins.self_margin;
         for (int j = j0; j <= j1; ++j)
             if (grid_cc_sphere_sphere<T>(ix, iy, iz, ir,
                     s_broad_pos[3*j], s_broad_pos[3*j+1], s_broad_pos[3*j+2], s_broad_r[j]) < static_cast<T>(0)) {
@@ -530,7 +557,7 @@ __host__ __device__ bool grid_cc_config_free(
     }
     // Broad vs environment: full scan, flag each hit sphere's link.
     for (int i = 0; i < n_broad; ++i)
-        if (grid_cc_sphere_in_environment<T>(env, s_broad_pos[3*i], s_broad_pos[3*i+1], s_broad_pos[3*i+2], s_broad_r[i] + margin))
+        if (grid_cc_sphere_in_environment<T>(env, s_broad_pos[3*i], s_broad_pos[3*i+1], s_broad_pos[3*i+2], s_broad_r[i] + margins.environment_margin))
             hit_mask |= (1ull << broad_sphere_link[i]);
 
     // Narrowing measure (non-vacuous-gate hook): fine spheres surviving the mask. Written before the
@@ -549,7 +576,7 @@ __host__ __device__ bool grid_cc_config_free(
     if (check_self) for (int k = 0; k < n_fine_ranges; ++k) {
         int i = fine_self_ranges[3*k], j0 = fine_self_ranges[3*k+1], j1 = fine_self_ranges[3*k+2];
         if (((hit_mask >> fine_sphere_link[i]) & 1ull) == 0ull) continue;
-        T ix = s_fine_pos[3*i], iy = s_fine_pos[3*i+1], iz = s_fine_pos[3*i+2], ir = s_fine_r[i] + margin;
+        T ix = s_fine_pos[3*i], iy = s_fine_pos[3*i+1], iz = s_fine_pos[3*i+2], ir = s_fine_r[i] + margins.self_margin;
         for (int j = j0; j <= j1; ++j)
             if (grid_cc_sphere_sphere<T>(ix, iy, iz, ir,
                     s_fine_pos[3*j], s_fine_pos[3*j+1], s_fine_pos[3*j+2], s_fine_r[j]) < static_cast<T>(0)) return false;
@@ -557,7 +584,7 @@ __host__ __device__ bool grid_cc_config_free(
     // Fine vs environment: skip spheres on unflagged links.
     for (int i = 0; i < n_fine; ++i) {
         if (((hit_mask >> fine_sphere_link[i]) & 1ull) == 0ull) continue;
-        if (grid_cc_sphere_in_environment<T>(env, s_fine_pos[3*i], s_fine_pos[3*i+1], s_fine_pos[3*i+2], s_fine_r[i] + margin))
+        if (grid_cc_sphere_in_environment<T>(env, s_fine_pos[3*i], s_fine_pos[3*i+1], s_fine_pos[3*i+2], s_fine_r[i] + margins.environment_margin))
             return false;
     }
     return true;
@@ -577,11 +604,11 @@ __host__ __device__ bool grid_cc_config_free_capsule(
         const int *broad_sphere_link,
         const T *s_fine_seg,  const T *s_fine_r,  const int *fine_self_ranges,  int n_fine_ranges,  int n_fine,
         const int *fine_row_link, int *dbg_fine_rechecked = nullptr,
-        T margin = static_cast<T>(0), bool check_self = true) {
+        typename CollisionMargins<T>::type margins = {}, bool check_self = true) {
     unsigned long long hit_mask = 0ull;
     if (check_self) for (int k = 0; k < n_broad_ranges; ++k) {
         int i = broad_self_ranges[3*k], j0 = broad_self_ranges[3*k+1], j1 = broad_self_ranges[3*k+2];
-        T ix = s_broad_pos[3*i], iy = s_broad_pos[3*i+1], iz = s_broad_pos[3*i+2], ir = s_broad_r[i] + margin;
+        T ix = s_broad_pos[3*i], iy = s_broad_pos[3*i+1], iz = s_broad_pos[3*i+2], ir = s_broad_r[i] + margins.self_margin;
         for (int j = j0; j <= j1; ++j)
             if (grid_cc_sphere_sphere<T>(ix, iy, iz, ir,
                     s_broad_pos[3*j], s_broad_pos[3*j+1], s_broad_pos[3*j+2], s_broad_r[j]) < static_cast<T>(0)) {
@@ -590,7 +617,7 @@ __host__ __device__ bool grid_cc_config_free_capsule(
             }
     }
     for (int i = 0; i < n_broad; ++i)
-        if (grid_cc_sphere_in_environment<T>(env, s_broad_pos[3*i], s_broad_pos[3*i+1], s_broad_pos[3*i+2], s_broad_r[i] + margin))
+        if (grid_cc_sphere_in_environment<T>(env, s_broad_pos[3*i], s_broad_pos[3*i+1], s_broad_pos[3*i+2], s_broad_r[i] + margins.environment_margin))
             hit_mask |= (1ull << broad_sphere_link[i]);
 
     if (dbg_fine_rechecked != nullptr) {
@@ -604,14 +631,14 @@ __host__ __device__ bool grid_cc_config_free_capsule(
     if (check_self) for (int k = 0; k < n_fine_ranges; ++k) {
         int i = fine_self_ranges[3*k], j0 = fine_self_ranges[3*k+1], j1 = fine_self_ranges[3*k+2];
         if (((hit_mask >> fine_row_link[i]) & 1ull) == 0ull) continue;
-        Capsule<T> ci = grid_cc_row_capsule<T>(s_fine_seg, s_fine_r, i, margin);
+        Capsule<T> ci = grid_cc_row_capsule<T>(s_fine_seg, s_fine_r, i, margins.self_margin);
         for (int j = j0; j <= j1; ++j)
             if (grid_cc_capsule_capsule<T>(ci, grid_cc_row_capsule<T>(s_fine_seg, s_fine_r, j))
                 < static_cast<T>(0)) return false;
     }
     for (int i = 0; i < n_fine; ++i) {
         if (((hit_mask >> fine_row_link[i]) & 1ull) == 0ull) continue;
-        if (grid_cc_capsule_in_environment<T>(env, grid_cc_row_capsule<T>(s_fine_seg, s_fine_r, i, margin)))
+        if (grid_cc_capsule_in_environment<T>(env, grid_cc_row_capsule<T>(s_fine_seg, s_fine_r, i, margins.environment_margin)))
             return false;
     }
     return true;

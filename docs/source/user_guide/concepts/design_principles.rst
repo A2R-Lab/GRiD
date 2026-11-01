@@ -90,7 +90,7 @@ otherwise guarantee it a valid pointer; never pass it a ``nullptr``
 ``s_temp`` (see the anti-patterns below).
 
 Reference points that follow this: ``aba_inner``,
-``forward_dynamics_inner``, ``minv_inner``, ``fdsva_so_inner`` (the
+``forward_dynamics_inner``, ``minv_inner``, ``fdsva_so_contract`` (the
 rank-3 contraction sub-step), ``fdsva_so_device``,
 ``inverse_dynamics_gradient_device``, ``forward_dynamics_gradient_device``,
 ``integrator_gradient_device``, ``end_effector_pose_gradient_inner``, and the

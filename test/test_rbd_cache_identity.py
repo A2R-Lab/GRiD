@@ -237,11 +237,42 @@ def test_pointer_without_sidecar_is_a_miss(stubs):
     assert (so.parent / _cache.BUILD_INPUTS_FILE).exists(), "sidecar back-filled"
 
 
-def test_incomplete_entry_rebuilds(stubs):
+@pytest.mark.parametrize("missing", ["robot.so", "meta.json", "grid.cuh"])
+def test_incomplete_entry_rebuilds(stubs, missing):
     key, so, _ = _warm(stubs)
-    so.unlink()
+    (so.parent / missing).unlink()
     _warm(stubs)
     assert (stubs.generate_calls, stubs.compile_calls) == (2, 2)
+    assert so.is_file() and (so.parent / missing).is_file()
+
+
+def test_corrupt_metadata_rebuilds(stubs):
+    _, so, _ = _warm(stubs)
+    (so.parent / "meta.json").write_text("{broken")
+    _warm(stubs)
+    assert (stubs.generate_calls, stubs.compile_calls) == (2, 2)
+    assert isinstance(json.loads((so.parent / "meta.json").read_text()), dict)
+
+
+def test_concurrent_wrapper_builds_keep_private_staging(stubs, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    barrier = threading.Barrier(2)
+    paths = []
+    original = stubs.generate_sources
+
+    def generate(urdf, options, out):
+        meta = original(urdf, options, out)
+        paths.append(out)
+        barrier.wait(timeout=10)
+        assert (out / "grid.cuh").is_file()
+        return meta
+
+    monkeypatch.setattr(grid_rbd, "generate_sources", generate)
+    with ThreadPoolExecutor(2) as pool:
+        results = list(pool.map(lambda _: _warm(stubs), range(2)))
+    assert len(set(paths)) == 2
+    assert results[0][:2] == results[1][:2]
+    assert results[0][1].is_file()
 
 
 def test_stale_reasons_are_readable(tmp_path):

@@ -169,6 +169,11 @@ class BaseDelegateMixin:
     thread-count control, metadata, and the shared output-convention contract."""
 
     @property
+    def model_descriptor(self):
+        """Baked GRiD-native coordinate/frame metadata, independent of IO adapter."""
+        return self._base.model_descriptor
+
+    @property
     def output_convention(self) -> str:
         """Default IO convention for this handle: ``"pinocchio"`` or ``"mujoco"``.
         Settable. ``"mujoco"`` on a FIXED base is a deliberate no-op (no

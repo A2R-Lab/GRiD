@@ -20,7 +20,10 @@ The rule set
      - Members
      - Not checked
    * - ``configuration``
-     - ``(B, num_joints)``; the handle dtype; ``1 <= B <= max_batch``;
+     - ``(B, num_joints)`` for ``q`` and the position-width operands,
+       ``(B, num_vel)`` for ``qd``, ``qdd``, ``qdd_opt``, ``u`` and ``u_des``
+       (the tangent width, as in Pinocchio and MuJoCo); the handle dtype;
+       ``1 <= B <= max_batch``;
        every operand of a call carries the same ``B`` as the leading one.
        A per-sample ``(num_joints,)`` input is accepted on numpy (batch of
        one, 1D result) and on JAX under ``vmap``
@@ -60,10 +63,10 @@ The rule set
      - none
      - finiteness, ``dt > 0``
 
-A wrong ``num_joints`` versus ``num_vel`` width on a floating base (an
-``nv``-wide ``qd`` / ``u``, the mjx and Pinocchio habit) is refused by name
-on the numpy and JAX surfaces (the ``num_vel`` message) and by the generic
-last-dimension rule on torch.
+An ``nq``-wide ``qd`` / ``qdd`` / ``u`` on a floating or spherical model (the
+padded layout of releases before 2026-09-26) is refused with a migration hint
+naming ``nv`` on the numpy and JAX surfaces and by the generic last-dimension
+rule on torch. Nothing is padded or sliced for the caller.
 
 Where each surface enforces the rules
 -------------------------------------

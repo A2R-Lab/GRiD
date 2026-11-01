@@ -26,6 +26,13 @@ def test_installed_numerics_helper_is_fingerprinted_and_warmed():
     assert '"${REPO_ROOT}/tools/check_installed_numerics.py"' in source
 
 
+def test_consumer_migration_example_is_fingerprinted():
+    path = "bindings/examples/consumer_artifact_migration.py"
+    assert path in rss.wrapper_fingerprint_paths("test_consumer_artifact")
+    assert path in (rss.REPO_ROOT / "pyproject.toml").read_text()
+    assert path in (rss.REPO_ROOT / "test/gpu-proof-policy-release.yaml").read_text()
+
+
 @pytest.fixture(autouse=True)
 def unchanged_oracle_for_synthetic_receipts(monkeypatch):
     # Synthetic receipts below use fictitious commit SHAs; isolate their
@@ -863,6 +870,20 @@ def test_fingerprint_follows_named_runners_and_local_helpers():
     assert "test/cuda_equivalents/executable_cache.py" not in narrow
 
 
+def test_manifold_and_descriptor_oracles_are_in_narrow_gpu_scope():
+    """The descriptor, manifold and constant-model oracles are helper modules under
+    test/cuda_equivalents, so the helper-import rule fingerprints them into every
+    shard that imports them; no test module is imported for its helpers."""
+    from test import run_split_suite as R
+    paths=R._shard_fingerprint_paths({"test_cuda_model_primitives"})
+    for helper in ("descriptor_oracle", "manifold_oracle", "constant_model"):
+        assert f"test/cuda_equivalents/{helper}.py" in paths
+    assert not [p for p in paths if p.startswith("test/test_")]
+    for module, helper in (("test_cuda_joint_transform_suffix", "descriptor_oracle"),
+                           ("test_cuda_spherical_plant_hessian", "manifold_oracle")):
+        assert f"test/cuda_equivalents/{helper}.py" in R._shard_fingerprint_paths({module})
+
+
 def test_resume_prunes_dirty_recorded_clean_rows(tmp_path):
     """2026-10-10: a clean resume row whose per-shard receipt recorded
     repo.dirty re-runs (the merge would fold the dirty flag into the merged
@@ -924,12 +945,11 @@ def test_driver_import_puts_repo_root_ahead_of_stdlib_test_package(tmp_path):
 
 
 def test_plan_refresh_uses_the_real_plan_carry(tmp_path, monkeypatch):
-    """Integration with pytest-gpu-proof's OWN `plan_carry` (0.4.1): the base
+    """Integration with pytest-gpu-proof's OWN `plan_carry`: the base
     verdicts plan_refresh consumes come from the tool against a real git repo,
     so a clean shard carries, a touched test file stales exactly that shard,
     and a dirty recording tree stales everything."""
     import subprocess
-    pytest.importorskip("pytest_gpu_proof")  # needs CPython 3.11 or newer
     from pytest_gpu_proof.fingerprint import compute_fingerprint
     from pytest_gpu_proof.merge import plan_carry
 

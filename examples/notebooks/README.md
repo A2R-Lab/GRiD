@@ -70,7 +70,7 @@ pytest --nbval-lax examples/notebooks/
 ```
 
 The first `register_robot` of a robot pays a one-time `nvcc` build. The
-measured cold/warm numbers per robot are in the *What to expect: cold vs. warm*
+measured cold/warm numbers per robot are in the *Cold and warm build times*
 table of the
 [Fast Robot Setup](https://a2r-lab.org/GRiD/docs/user_guide/getting_started/fast_robot_setup.html)
 page (iiwa14, the robot these notebooks use, is the cheapest). A kernel

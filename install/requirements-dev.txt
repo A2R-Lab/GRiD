@@ -1,6 +1,6 @@
 pytest
 setuptools>=77  # packaging-hook unit tests run outside the isolated build env
-pytest-gpu-proof==0.4.1   # pinned 2026-10-13 (re-pin batch; CI installs the same pin) — signed GPU-equivalence receipts (test/run_gpu_proof.sh); was the test/pytest-gpu-proof submodule, now on PyPI
+pytest-gpu-proof==0.5.0   # pinned 2026-10-29; CI uses this pin (Python 3.10 support and signed nvcc metadata)
 nbval            # execute example notebooks as smoke tests (pytest --nbval-lax examples/notebooks/)
 # Pinocchio oracle (CPU): the peers' LOAD-BEARING pins — plain `pin` resolves 4.x,
 # breaks `import pinocchio` and the pin_so_ext build (external/URDFParser CI note).

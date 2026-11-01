@@ -55,17 +55,36 @@ Two device entry points share the same baked sphere batch (``NUM_COLLISION_SPHER
   ``T = double``. The two surfaces are gated against each other on random configurations and
   environments (``test/cuda_equivalents/test_cuda_collision_warp.py``).
 
-Both checkers take two trailing optional arguments. ``margin`` (metres, default 0) makes the
-verdict a hit as soon as any raw clearance is below the margin: robot spheres are tested at
-``r + margin`` against the environment and the margin is added to one side of every self pair, so
-exact contact at the margin is free and the default reproduces the zero-margin rule exactly.
-``collision_distance`` and the cost derivatives are untouched by it; they keep returning the
-geometric signed clearance, and ``collision_cost`` applies its own margin. ``check_self`` (default
-``true``) set to ``false`` skips the self-pair ranges so the verdict reflects the environment
-alone; ``collision_distance`` is environment-only already. On a two-tier model the margin inflates
-both tiers, which keeps the broad-to-fine covering argument intact. The gate runs the warp and
-block paths against the distance surfaces at 0, 5 mm and 2 cm, with and without the self pairs,
-and sweeps each configuration's own minimum clearance from just below to just above the threshold.
+Both checkers take two trailing optional arguments: ``margins`` and ``check_self``.
+A scalar in the margin position still applies to both environment and self checks;
+the default is zero. To choose them independently, pass ``CollisionMargins<T>``
+(``CollisionMargins<float>`` for the warp surface). Its fields are
+``environment_margin`` and ``self_margin``, in metres. The host factory validates
+finite, nonnegative inputs and resolves optional overrides:
+
+.. code-block:: cpp
+
+   auto same = grid_collision::make_collision_margins<float>(0.02f);
+   auto separate = grid_collision::make_collision_margins<float>(0.02f, 0.03f, 0.0f);
+   // Common 2cm, environment 3cm, self explicitly zero.
+   auto self_only = grid_collision::make_collision_margins<float>(0.02f, std::nullopt, 0.005f);
+   // Environment inherits 2cm; self overrides to 5mm.
+
+Pass the resolved value into the kernel and then into the existing margin position.
+Direct host/device construction ``CollisionMargins<T>{environment, self}`` is a
+low-level path with the same finite/nonnegative precondition, without runtime
+validation. No negative or NaN sentinel means inheritance. ``check_self`` remains
+the final argument (default ``true``); setting it to ``false`` skips both self
+passes irrespective of ``self_margin``.
+
+A hit occurs when a raw clearance is below the corresponding margin. Environment
+checks inflate the robot radius; self checks inflate only one pair member, not
+both. Exact contact at the threshold is free, subject to floating-point rounding.
+Both tiers use the same per-side values, preserving the covering argument.
+``collision_distance``, normals and derivatives still report raw geometric values;
+``collision_cost`` retains its own independent scalar margin. Tests cover asymmetric
+and inherited margins, explicit zero, the previous two-call consumer pattern,
+block/warp agreement, capsule rows and exactly representable boundary cases.
 
 The obstacle set itself comes from plain arrays. ``grid_collision::make_host_environment``
 takes one row per obstacle (spheres as ``x y z r``, capsules as the two endpoints and a
@@ -86,9 +105,13 @@ Geometry coverage and correctness
   are intended to match the fine-only verdict for the same representation.
 * Covering geometry is an approximation of the original robot. Agreement with
   a fine-tier sphere check is not proof of exact mesh collision detection.
-* Missing or unusable meshes fail generation. A failed voxel fill may use an
-  explicitly warned bounding-box cover, but geometry is never dropped to
-  produce a partial model. Self-collision pair exclusions must also match your application.
+* Missing or unusable meshes fail generation. A failed voxel fill and a model
+  with no spheres are errors as well, because either would silently change the
+  clearance rows a consumer bakes; ``strict_collision=False`` on
+  ``build_artifact`` (``--no-strict-collision`` on ``grid-generate`` and
+  ``grid-spherize``) accepts the bounding-box cover or the empty model with a
+  warning instead. Geometry is never dropped to produce a partial model.
+  Self-collision pair exclusions must also match your application.
 * Correctness tests live under ``test/cuda_equivalents/test_cuda_collision_*``;
   they cover geometry, pairs, tiering, costs, and native representations.
 

@@ -3268,3 +3268,529 @@ Symptom: the last shard of the Orin receipt failed both cells of `test_cuda_mjx_
 Diagnosis: the test read `GRID_CUDA_ARCH` with a default of 120 and passed `-arch sm_120` to nvcc, while the sixty-one other compile sites go through `detect_cuda_arch`, which probes the first GPU and lets the variable override it. The test dates from July and had only ever run on the 5090; the sm_87 table row had no earlier receipt to catch it.
 
 Fix: the test probes like the others. For the v0.5.4 receipt, whose tree cannot change, the shard is resumed with `GRID_CUDA_ARCH=87` in the environment, which is the override the test documents and gives the harness sites the same answer as the probe. Audit before any new architecture row: `grep -n '"-arch"' test/cuda_equivalents/test_*.py test/python_wrappers/test_*.py | grep -v 'sm_{arch}\|cuda_arch()'` must come back empty.
+
+### 7.z63 Compile-pool peak ledger: a same-robot warm variant measured after its sibling is a near-free relink, and its tiny peak admits it concurrently next time
+
+The Orin v0.6.0 receipt (10-24) died six minutes in and the box hard-rebooted
+with no shutdown record. The pool had admitted warm00 (iiwa14, mb=8), warm01
+(go2), warm08 (iiwa14, mb=64) and warm20 (iiwa14, mb=256) together because the
+ledger predicted the two extra iiwa14 variants at under 1 GiB. Those numbers
+came from the v0.5.4 run, where the pool happened to start them after warm00
+had finished: the object cache made each a 15 s relink at 0.7 GiB, status
+BUILT, so `report_pool` recorded them as real builds. On a cold cache the same
+three iiwa14 specs are three full 14 GiB compiles, plus go2, about 56 GiB on a
+61 GB Jetson with 2 GB of swap; the 10 GiB MemAvailable floor is checked only
+at admission. Symptoms: `[pool] + ...` lines whose `avail` falls by tens of
+GiB per minute, a log that stops mid-pool, `last -x reboot` with no matching
+shutdown, and `~/GRiD/test/.split_suite/compile_rss.json` entries for
+`warm:<robot>,mb=NN` keys far below their `warm:<robot>,mb=8` sibling.
+Rule: a warm job's peak is a property of the robot family and the cache state,
+not of the key, so a warm prediction must not fall below the largest recorded
+peak of any key for the same robot. Until that lands in `compile_sched`, launch
+Jetson receipts with `GRID_SPLIT_COMPILE_JOBS=2` (two full compiles fit with
+30 GiB to spare). Cause confirmation needs the user: `sudo journalctl -b -1`
+grep for oom or panic; the agent cannot read the journal.
+
+### 7.z64 All-prismatic fixed tools reach previously hidden no-trig paths
+
+HJCD G13 reproduces with a single prismatic joint and a fixed tool, each with
+nonzero origin rotation and translation. The homogeneous transform list mixes
+symbolic movable transforms with NumPy fixed transforms. Calling `.atoms` on
+every matrix crashes when no earlier revolute transform short-circuits the trig
+scan. Normalize each matrix to a symbolic matrix for the scan only.
+
+Do not stop at removing the exception. The no-trig XI loader still emitted an
+undeclared cooperative group `tgrp`, and passed element counts to a byte-copy
+API. Use typed block loads. Mimic coordinate substitution reads folded scratch
+even when all joints are prismatic, so both XI and homogeneous loaders need
+the mimic fold on their no-trig paths. A one-DoF full-profile generation also
+exposed an empty contraction-tile candidate set; the untiled width of one is
+valid. CPU FK/Jacobian checks for the skew slider match an independent transform.
+The direct CUDA gate passes pose/Jacobian, thread/warp FK, and thread-count
+invariance for the slider and its negative-multiplier, nonzero-offset mimic
+variant at 1/32/64/128 threads. A runner's target is a body index:
+`NUM_JOINTS` is the reduced coordinate count here, so the last articulated
+frame is `NUM_BODIES - 1`, not `NUM_JOINTS - 1`. Request the gradient explicitly
+and use the named fixed-target entry points when checking the tool frame.
+
+### 7.z65 A content key does not make incomplete-entry repair race safe
+
+Both wrapper and consumer stores could rebuild after a missing binary, then
+interpret a failed directory rename as evidence that another builder had
+published a complete winner. The old incomplete directory could instead win
+again. Metadata loss could also fail on a content hit before any repair.
+Use shared completeness checks and a per-content lock whose inode is outside
+the replaceable entry. Keep the old entry until publication succeeds, restore
+it after a failed replacement, and propagate I/O errors. Use unique staging
+and object temporary names even within one process. A process ID alone does
+not distinguish concurrent threads. The same rule applies after the artifact
+publish: `bykey` pointers and legacy identity-sidecar backfills also need private
+temporaries. Barrier tests reproduced their rename races. Identity readers must
+validate the JSON object type and must not turn permission errors into cache
+misses; otherwise repair can hide a real access failure.
+
+Consumer object names must retain the source suffix: `kernel.cu` and
+`kernel.cpp` are distinct units even when their stems or bytes coincide.
+Collision mesh bytes and resolution paths are request inputs, not just the
+URDF text. Validate detected input changes before publishing objects as well
+as the final artifact; rejecting only the final publication can leave a bad
+object cached under an earlier key. Caller inputs must remain immutable:
+before/after comparisons cannot rule out edits restored between the reads.
+
+### 7.z66 Consumer extensions need ABI identity before lookup and private statics
+
+A generated header and unchanged consumer source do not imply a reusable Python
+extension. The interpreter ABI must enter the input pointer, content and per-unit
+object keys before lookup. Checking only at prepared load leaves incompatible
+content/object reuse open. `python_extension=True` declares the build up front;
+the exported `PyInit_*` symbols validate the declaration before publication.
+Native C artifacts do not need a Python ABI dependency. Prepared loads require
+the recorded declaration but not a compiler. The focused fixture separates its
+pybind `.cpp` unit from its generated-header `.cu` unit: including CUDA device
+code in a `.cpp` unit makes nvcc select the wrong source language.
+
+Consumer-only hidden visibility and GCC's `-fno-gnu-unique` keep function-local
+template state private across robot modules. Explicit C exports and pybind's
+initialization export remain visible. Do not copy this policy blindly to the
+wrapper, whose dlsym/framework exports have their own contract. The consumer
+test loads two robots in both orders in fresh processes, checks distinct state
+addresses and independent writes, and inspects dynamic symbols.
+
+Resolve the actual nvcc host compiler, not whichever `c++` happens to be first
+on PATH. Compile and link must use the same selected driver. Preserve its driver
+spelling (a `clang++` symlink can select different link behavior from `clang`),
+record its binary and version, and distinguish GCC from Clang before selecting
+GNU-only flags. Flatten nvcc prepend/append flags once so the compiler choice
+and flags used by child processes agree with the recorded identity.
+
+The full CPU oracle also exposed a naming assumption in the new mimic fixture:
+URDF joints and links may share a name. Pinocchio frame lookup must request the
+BODY frame explicitly, not search every frame type. Keep the inertia/FK
+comparisons and their tolerances unchanged.
+
+Both pointer and content hits must check agreement between ABI metadata and the
+identity sidecar. Checking only prepared loads permits a fast build lookup to
+return an artifact its own loader refuses. Fault injection into each file is
+needed; a sidecar-only test does not cover damaged metadata.
+
+Consumer paths are compile inputs too: nvcc receives an absolute source path and
+`__FILE__` exposes it. Same basename, suffix and bytes in two directories must not
+alias in pointer, content or unit-object keys. The compiled regression exports
+`__FILE__` and checks both actual locations, not just key inequality.
+
+### 7.z67 Separate feasibility margins must reach every tier and surface
+
+Resolve a common margin and optional environment/self overrides once on the host.
+Zero is an explicit override, never an inheritance sentinel. Pass the effective
+pair to block, warp and native-capsule feasibility checks; the same per-side
+margin must reach broad and fine tiers. Self inflation belongs to one member of
+the pair, not both. Keep distance, normal and cost paths independent.
+
+Replacing a templated scalar parameter with a value object can break inferred
+template calls even if the object has a converting constructor. Put that argument
+in a non-deduced context, and compile tests for inferred as well as explicit T.
+Keep the trailing boolean in place so an existing self-toggle call is not silently
+reinterpreted as another scalar. Test the consumer's environment-only plus empty-env
+self calls against the combined call, and use independent raw clearances and
+exactly representable boundary cases rather than relying on mutual agreement alone.
+
+### 7.z68 Compose joint properties in the projection, not only the forward pass
+
+A skew-axis joint and a mimic joint can each work alone while their combination
+fails. The mimic RNEA force extraction still selected a single signed S row;
+fixed-base mimic CRBA did the same for IC*S and both diagonal/ancestor S^T*f
+projections. Use the full motion column, scaled by the mimic multiplier at each
+reduced-coordinate projection. Preserve the existing cardinal emission rather
+than changing its arithmetic during a targeted repair.
+
+The all-prismatic two-body fixture gives an independent check: a mass-1 slider
+and mass-.7 follower with absolute displacement q/2+offset have generalized mass
+1+.7/4, not 1+.7/2 or 1+.7. Gravity projects with 1+.7/2. Test mass, inverse mass,
+inverse/forward dynamics and ABA at rest and nonzero state/input, with thread
+invariance. This fixture's zero q/qd derivatives do not prove nonzero curvature,
+floating-base skew-mimic support or general skew-mimic gradients.
+
+### 7.z69 Process death is not a caught publication exception
+
+Fault injection that raises OSError exercises rollback, not abrupt termination.
+Spawn a writer and exit it at each rename boundary while it holds the entry
+lock, then recover from a separate process with bounded waits. The lock inode
+must remain stable and the OS must release its ownership. A crash after moving
+the previous entry may leave a missing entry and a `.replaced_*` backup; a crash
+after installation leaves a complete winner and possibly a backup. Retry must
+repair/adopt correctly without deleting reusable objects. This is recovery,
+not durable atomic replacement or reader snapshot isolation. Do not purge
+backups or shared caches automatically as part of a regression test.
+
+### 7.z70 Header selection is a build input, not just a directory name
+
+Hashing a caller's source and explicit header list misses unlisted transitive
+headers and a new header earlier on the include path. Discover dependencies
+with the actual compiler and effective flags on every consumer build lookup,
+then hash selected paths and bytes per unit. A stored list alone cannot detect
+a previously absent earlier match. Generated staging paths must be normalized
+so a fresh generation directory does not defeat content reuse.
+Retain the compiler-selected spelling as well as the resolved target: a new
+symlink alias can change a header's `__FILE__` while its bytes stay identical.
+
+Parse the compiler's Make format, including whitespace before the target colon,
+escaped spaces and line continuations. nvcc leaves `#` and `$` literal, so do not
+apply Make variable/comment evaluation or dollar unescaping. Its POSIX backslash
+filename rewriting can yield an unreadable dependency; report that failure rather
+than guessing or accepting an old artifact. Fail closed on preprocessing failure;
+never return the old artifact as a fallback. Recheck before publishing objects
+and the completed entry while inputs are immutable. This does not create a
+filesystem snapshot. Prepared loading is a separate compiler-free operation.
+Check each unit's own dependencies around its compilation and all dependencies
+before artifact publication; rescanning every unit around every other unit makes
+the number of preprocessor invocations quadratic without protecting that unit's
+object any better. No stat-based digest reuse is needed for this reduction.
+`-MM` deliberately omits system headers: compiler identity is not evidence that
+all development packages stayed unchanged. Record that assumption explicitly.
+
+### 7.z71 Cooperative barriers do not cancel restricted-pointer load reuse
+
+GLASS fix `e537364` reloads values published by other threads through narrowly
+volatile cooperative loads. An inlined restricted caller can otherwise reuse a
+thread's earlier value across a barrier. The barrier remains necessary; volatile
+does not grant arbitrary pointer aliasing or make an unsynchronized read safe.
+The single-thread barrier specialization retains ordinary loads.
+
+GRiD embeds the affected triangular solve, pivoted inverse and adaptive symmetric
+eigensolve bodies. Test the generated header, not only the standalone dependency:
+`test_cuda_glass_handoff.py` uses disjoint restricted inputs/arena/outputs, two
+independent blocks, poisoned/reused shared and global scratch, FP32/FP64 independent
+NumPy references and 1/17/32/64/128/256 threads. The existing robot PSD-clamp gate
+checks the enclosing cost path. This does not certify other consumer algorithms
+or pre-Blackwell hardware. A compiler-version field in a receipt describes PATH
+nvcc; it must agree with the compiler selected by the actual build.
+
+### 7.z72 Constant mimic joints have no input coordinate
+
+A mimic chain ending at a fixed joint has a constant local coordinate, not a
+scaled read from dense slot zero. Resolve its effective multiplier to zero and
+retain the composed offset. Return/emit the offset before indexing q: zero times
+an invalid read is still invalid, and zero times NaN is still NaN. The ordinary
+transform fold and thread/warp FK must use the same rule; the latter previously
+looked up target -1 directly.
+
+The body still transmits ancestor motion and inertia. Omit only its zero local
+derivative contribution, not the whole body traversal. A retained dense scatter
+placeholder is not coordinate ownership. Test fixed leaders both before and
+after the follower, chains, poisoned/empty q, and an independent rigidly locked
+model. A constant-only FK pass does not establish zero-DoF support for every
+dynamics routine; audit velocity reads and reduced-output writes separately.
+
+### 7.z73 A tier name does not imply a full-shared layout
+
+The plant-gradient kernel and binder kept every band in shared memory, but
+advertised the integrator's tier-selected reservation. G1 FP32 carved 124256
+bytes from an advertised 84128. A debug inequality using that same wrong sizer
+does not repair the allocation. Give the full-shared surface its own exact
+sizer and reject unsupported device admission; retain the separately validated
+tiered integrator path. Composed callers must budget their own additional storage.
+
+Use the common integrator scratch definitions rather than copying older
+``nv+floating`` pose dimensions or a fixed 36-element spherical derivative slab.
+Exercise the actual emitted carve with field-end writes, canaries and sanitizer,
+and test both fitting and rejected public calls. Enabling debug layout also
+exposed ``assert(expr<T, TIER>())``: wrap the whole expression in parentheses so
+the preprocessor does not treat the template comma as a second macro argument.
+
+### 7.z74 C ABI scalar arguments must match the selected precision
+
+The six handwritten plant step/gradient/Hessian entry points declared gravity
+and timestep as float, while the CAbi<CT> function pointer passed CT. FP32 tests
+therefore passed and FP64 calls corrupted the scalar values without a linker
+error. Match these parameters to T, just like their typed array arguments and
+the generated launchers. Include the MuJoCo twins in the signature regression.
+
+Test an actual FP64 binding against both the typed integrator and the reference;
+a source-only declaration test cannot establish runtime agreement. The failing
+iiwa gradient had reference agreement near 1e-14 through the integrator, but plant
+errors near 1e17 through the mismatched C boundary. Keep this distinct from an
+arena sizing defect or numerical tolerance issue.
+
+### 7.z75 A constant body's placeholder slot is not a derivative column
+
+A zero mimic multiplier removes local coordinate ownership, not the body. Skip
+its local velocity reads, derivative columns and reduced force/tensor projection
+before evaluating the expression. Multiplying an unrelated NaN or an invalid
+empty-buffer read by zero is not safe. Preserve inherited motion, derivatives
+and force transmission: removing the complete body traversal would lose the
+inertial contribution of a rigid attachment.
+
+Apply this rule to metadata job lists as well as scalar expressions. Frame
+Jacobian and Coriolis columns exclude constant bodies; second-order folds cover
+only active internal tensor cells. An empty fold has no jobs but still needs a
+legal inert initializer in generated device storage. Topology allocation and
+loading must use the same body-based query for mimic models, not a reduced
+coordinate count that may be zero.
+
+The constant derivative regressions compare with an independently locked robot,
+use NaNs in an unrelated branch without sanitizing the owning branch, and pass
+actual null q/v/a pointers when their lengths are zero. Output canaries and
+1/17/32/64/256-thread checks complement memcheck and synccheck. Composed inners
+need their own caller kernel for this thread matrix; a generated kernel's
+explicit launch bound is not permission to launch it with more threads.
+
+Keep the support claim bounded. These checks exercise ID gradients, frame
+Jacobians/Jdot, body/world ID second derivatives, Coriolis and frame-velocity
+cost pieces. They do not certify every zero-DoF dynamics wrapper, floating
+constant-joint derivative combination or timing kernel. Generated zero-trip
+timing expressions can still contain division by zero; do not suppress warnings
+or infer support from a different inner's successful compilation.
+
+The broader generation audit exposed the same error in homogeneous derivative
+ownership and EE gradient/Hessian job lists. A retained constant joint must not
+overwrite a real q owner's entry (including the floating quaternion block) or
+create a Hessian pair. The empty pose-Hessian device test caught a real output
+canary overwrite before this correction. Follow generation tests with actual
+device calls: successful header emission alone did not detect that write.
+The zero-DoF Euler plant-gradient call is separately checked at its emitted
+32-thread maximum; this is not a blanket claim about all integrator modes or
+Python empty-batch/empty-coordinate handling.
+
+Do not stop at unchanged canaries: FP64 memcheck found an invalid shared read
+through Minv/CRBA even though the zero-DoF plant-gradient numerical test passed.
+CRBA emitted `s_M[0] += 0 * ...` into a zero-sized reduced matrix. Skip the
+constant body's mass projection after propagating composite inertia. When an
+active body's ancestor is constant, keep the spatial transport through that
+ancestor but omit its reduced matrix entry. Use a nonempty locked-model control
+as well as the empty call; a global early return would not test this distinction.
+
+Filtering jobs can change which emission path a surviving column takes. The
+pose-Jacobian disjoint-column path writes an unscaled axis; a lone non-unit mimic
+job must still take the weighted path. A constant intermediary followed by a
+cross-branch mimic with multiplier -0.5 reproduced a yaw derivative of +1 before
+this correction. Test the survivor's scale, not just removal of the zero job.
+
+The floating CRBA fold follows the same ownership rule: accumulate every body's
+composite inertia, but omit a constant body's reduced projection. A constant
+ancestor still transports an active descendant's force to earlier active joints
+and the floating base. The bounded dynamics audit covers both precisions,
+nontrivial base quaternion/velocity/acceleration and five thread counts against
+independently locked models for CRBA, ID gradients and body/world second order.
+
+When composing these tests, obey the selected entry point's contract. A kernel's
+arena-byte query does not size a differently carved device wrapper. The optimized
+fixed-base body-SO inner intentionally uses a transposed mixed-derivative block;
+the generated public-output epilogue restores the public layout. Floating
+body-SO also requires its gravity-Hessian global workspace even on a small model.
+Supply that workspace and reuse the generator's epilogue in a composed audit;
+do not transpose the oracle opportunistically or change production math to fix
+an incomplete caller. Preserve failed harness evidence separately from defects.
+
+### 7.z76 Coordinate identity is not physical identity or a prepared-artifact proof
+
+The schema-1 descriptor owns coordinate/frame meaning, not inertia, actuation or
+compiled-code identity. Changing mass should preserve descriptor ID while changing
+artifact identity. A dependent joint has null owned slices even when its leader
+owns slot zero. Test descriptor-only FK against an independent reference and hand
+anchors; comparing two emitters from one wrong table is not enough.
+
+Prepared consumer loading validates descriptor structure/digest, the embedded
+header representation, and header/binary hashes. Parse the saved finite literal
+grammar; do not regenerate headers or require URDF/compiler access to check a
+prepared artifact. These hashes detect stale/mixed files, not an attacker who
+replaces a complete coherent store. Check pointer hits, content hits, concurrent
+publication winners and prepared loads, not just the first build.
+
+Metadata is an additive generated fragment before the final suggested-thread
+block. Strip only its marked block when proving prior algorithm bytes unchanged.
+An independently emitted metadata-only header can compile with an ordinary host
+C++ compiler; the complete grid.cuh remains CUDA and needs a `.cu` translation
+unit (or an explicit CUDA language selection), even for a host-only accessor.
+
+### 7.z77 Workspace views need composition tests, not just size equality
+
+Share the ordered slots and scratch authorities with the production caller.
+Resource-tier names do not identify storage: a shared tier can select deep
+Hessian spill. Pair an explicit full/deep view with its evaluator flags and give
+each concurrent invocation its own global slot. Capacity/alignment validation
+does not establish that static plus dynamic storage fits the enclosing kernel.
+
+Poison and reuse the allocation, keep other caller regions live, check guards and
+run 1/17/32/64/256 threads. Gradient composition must initialize the full public
+vaf extent. Menu bounds remain valid even when their weights are zero. An input
+initialization loop followed by a single-thread override needs a barrier; the
+workspace test's quaternion/activation initialization exposed this under
+racecheck although its numerical checks passed. Fence between collective calls
+when their scratch is reused, even if today's specialization happens to fence.
+
+Use the agreed numerical policy. The extra strict entrywise FP32 diagnostic on
+iiwa found near-zero cancellation in both the new caller and the byte-identical
+stock-kernel output; it did not establish a binder regression. Preserve the
+diagnostic failure, compare with the stock kernel exactly, and retain the pinned
+consumer's tensor-norm Hessian criterion alongside its entrywise step/gradient,
+symmetry, zero-block and finite-difference tests. FP64 keeps its tighter analytic
+criterion. Do not silently relabel an exploratory diagnostic as a passed gate.
+
+Include a branched runtime-transform configuration. Its stock plant-Hessian
+launch query omitted the extra 36 scalars per retained body while the actual
+carve included them; FP64 memcheck found topology writes beyond dynamic shared
+memory. Resolve the launch count through the same layout authority. The composed
+view was already sized correctly, so a successful composed call alone would have
+missed the production-kernel defect. A manually composed transform loader must
+also select the runtime-transform template flag; the default baked loader is not
+the same operation in a runtime-transform header.
+
+Separate cross-kernel rounding from nondeterminism. The extra branched FP64
+runtime-transform composition test differed from the stock kernel in six entries
+by at most 8.14e-20, while reference error was below 1e-15 and both storage layouts
+and all thread counts were bit-identical. Brian approved a 64-epsilon relative
+cross-kernel bound for this one fixture on 2026-10-30, with no absolute floor;
+other stock comparisons remain exact. Independent oracle/finite-difference,
+finite-output, poison/reuse and exact thread/storage checks are unchanged.
+Negative controls reject nonfinite results, zero/nonzero differences and an
+above-bound perturbation. Preserve the original diagnostic failures.
+
+The exact EE scratch tests also reproduce section 1r's homogeneous constant-slot
+WAR warning in FP32, not FP64. Keep detailed raw reports and the known-warning
+disposition distinct from clean sanitizer passes. The narrow classifier in
+test/ee_constant_slot_warnings.py requires the reviewed call sites, counts and
+equal constant bytes; malformed reports, other hazards or errors fail closed.
+Do not generalize that classifier into permission to ignore racecheck warnings.
+
+### 7.z78 Fixed base does not mean affine coordinates
+
+A fixed-base spherical joint retracts on SO(3). Do not select the affine
+second-order path using only `floating_base`: use the independent manifold
+blocks. Package 4 reproduced zero spherical d2Integrate and missing plant
+position-row curvature, then checked the repair against Pinocchio derivatives
+and finite differences of the moving gradient. Test the minimum single spherical
+joint as well as shifted/mixed blocks. Its topology has one joint, four stored
+coordinates and three velocities; topology subspace queries must use joint IDs,
+not `range(nq)`. The public shared/spilled pool authority must also cover the
+minimum model's retract scratch, not merely larger typical robots.
+
+The plant tensor differentiates moving-basis G; it is not a fixed-chart or
+shooting-defect Hessian. A scalarized fixed-chart finite difference and a
+nonzero antisymmetric moving-G component make this distinction executable.
+For differences near identity, direct `(1-cos(theta))/theta**2` can cancel well
+above 1e-8. Compare independent matrix series and Pinocchio, use stable
+coefficients, and do not enlarge tolerances to accommodate the cancellation.
+
+### 7.z79 Standalone thread primitives do not prove composed callers
+
+The Package 4 scalar transform passed standalone divergent-lane tests but gave
+incorrect FP32 matrices in a suffix caller that selects between local and shared
+transform pointers before thread GEMM. The legacy helper passed. Memcheck,
+racecheck, synccheck and initcheck all reported clean: none is an arithmetic
+oracle for register/local-value reuse. Independent descriptor-only FK caught it.
+Forcing inline, initializing the local output, adding an output restrict qualifier
+and consolidating return sites did not fix the reproducer. A scalar device-call
+boundary, a private always-local input copy, and a private plain multiplication
+each passed. This isolates an optimization-sensitive composition, not a general
+proof of a GLASS or compiler defect. Keep the scalar writer call boundary and
+the permanent actual-shape suffix regression; do not silently replace consumer
+GEMM, require an extra full-q copy, or waive the failed arithmetic.
+
+The tested seven-joint FP32 caller used 96 local bytes versus 32 for the legacy
+helper (registers 62/64 versus 56); the 32-joint caller used 62 versus 66 registers
+but retained the extra local storage. These are resource measurements, not
+timings. Consumer acceptance and a separately authorized focused runtime check
+must resolve whether the new path is suitable for production adoption.
+
+Root cause found 2026-10-31. The failure is not FP32-specific and not a GRiD
+emitter defect: a standalone 241-line reproducer with no GRiD or GLASS include
+(docs/open-tasks/z79_restrict_select_miscompile_2026-10-31/repro.cu) fails the
+same way in FP32 and FP64, nondeterministically between two repeats of one
+launch, with `-Xptxas -O0` still failing and `-G` passing, so the fault is in
+nvcc 13.2's NVVM stage. The enabler is `__restrict__` on the B operand of the
+single-thread product: with the writer inlined, the noalias scopes let the
+optimiser treat the writer's stores to the local array as unrelated to the
+loads through B, which is that array on one path of the local-or-shared select
+(twelve fewer `st.local` in the failing PTX). Removing `__restrict__` from B
+alone on `gemm_impl_ct` (GLASS gemm.cuh line 325 at 9a24f37) makes the inlined
+writer pass at 56 registers and 32 local bytes; removing it from A or C alone
+does nothing; the full-q `joint_transform` route passes in the same pattern.
+Fix lands in GLASS (handoff_to_glass_restrict_select_miscompile_2026-10-31.md);
+GRiD keeps the boundary until the re-pin, then removes it and relies on the
+suffix regression, which fails without the boundary on the unfixed GLASS.
+Lesson: a read operand that a caller may select between address spaces or
+objects must not be `__restrict__`; this is the third restrict incident on this
+toolchain after 1g and the GATO bdsv case.
+
+Fixed upstream 2026-10-31. GLASS `ef4533c` (receipt `6a82320`) declares no
+`__restrict__` on any parameter of its own functions and carries the
+regression (`test/cuda/test_select.cu`, both precisions); GRiD re-pinned to
+`6a82320` and removed the `__noinline__` boundary from `joint_transform_scalar`
+(5f3f219). The GLASS agent reproduced the class on sm_120 / CUDA 13.2, sm_87 /
+CUDA 13.2 and sm_72 / CUDA 11.4, so it is long-standing NVVM behaviour, not a
+13.2 regression. Verified on the re-pinned wheel: the suffix regression passes
+in both precisions, and HJCD's Package 4 probe (Panda and the 24-joint high
+fixture; build, check and prepared modes) passes with the HJCD suffix kernel
+losing its call frame: Panda FP32 48 registers / 64 stack bytes to 56 / 0, FP64
+80 / 176 to 94 / 40; high24 FP32 56 / 64 to 72 / 0, FP64 88 / 176 to 144 / 40.
+The FP64 register growth lowers that probe kernel's thread ceiling (Panda 768
+to 640, high24 640 to 384); the solver kernels are unchanged. Whether the
+inlined writer is faster is the timing night's question, not a correctness one.
+Policy for GRiD's own emitters stays: no `__restrict__` on a read operand a
+caller may select between address spaces or objects.
+
+### 7.z80 A consumer-probe wave does not run the equivalence runners
+
+Found 2026-10-31 by the Package 6 skew revolute mimic fixture: its CUDA test
+failed to compile with "statement may not appear in a constexpr function" at
+the generated `joint(int id, joint_record &)` accessor. The accessor has a
+`switch` body and is `constexpr`, legal from C++14 on; the equivalence runner
+harness (`cuda_harness._linalg_backend_compile_flags`) and eleven test files
+still compiled with `-std=c++11`, a cuBLASDx-era pin. Every generated header
+failed the same way (iiwa14: 101 errors under C++11, none under C++17), so the
+whole `cuda_equivalents` domain had been red since d559d3e (Codex Package 1,
+2026-10-26) and nobody saw it: the wave closed packages on exact-wheel
+consumer probes, which compile with the consumers' own C++17 flags, and no
+receipt or split-suite run happened between 10-24 and 10-31. Two generator
+comments (`_constants_arena.py`, `_plant.py`) recorded the C++11 single-return
+rule the accessors broke. Fix: the runners compile with `-std=c++17`, the
+header's documented standard; the accessors are an accepted public contract
+and stay as they are. Lessons: a generated construct that raises the language
+floor must be checked against the harness standard, not only against consumer
+builds; and a wave that changes codegen must run at least one equivalence
+shard before a package closes, whatever the probes say. The two-pass receipt
+would have caught this on pass one, at the cost of a pass.
+
+### 7.z81 An opt-out that does not change the header is in the input key, not the content key (2026-10-31, strict_collision)
+
+`build_artifact(strict_collision=False)` is recorded in the code options only when
+a consumer opts out, so it is part of the artifact's input key. It is not in the
+content key unless the spherizer actually took a different route, because the
+content key hashes the generated header and the consumer's units, and a spherizer
+that raised no warning generates the same header either way. A CPU test that asserts
+`lenient.content_key != strict.content_key` for a model without mesh trouble is
+asserting the wrong key; the right assertions are a different input key and the
+same content key. The same holds for any switch whose effect is "fail instead of
+warn": it changes what can be built, not what was built.
+
+Two harness conventions from the same day. First, a CUDA test that compiles its own
+probe goes through `test/cuda_equivalents/executable_cache.py::cached_nvcc_executable`
+with `sources=[runner]`, `include_dirs=[dir holding grid.cuh]` and every nvcc flag
+except `-I`, `-o` and the source path; the key follows the quoted-include closure
+through the include directories, so the generated header's bytes are in it, and a
+second receipt pass or a sweep reuses the executable. Hand-rolled `subprocess.run`
+nvcc calls cost the second pass every compile again. Second, helpers shared between
+CPU tests and GPU suites (the descriptor-only forward kinematics, the manifold
+oracle, the constant-joint fixture robot) live in helper modules under
+`test/cuda_equivalents/`, where the split driver's helper-import rule fingerprints
+them into every shard that imports them. Importing a test module for its helper
+needs a hand-written special case in `run_split_suite._module_fingerprint_paths`,
+which is exactly what rotted last time.
+
+### 7.z82 A lifetime probe must be process-local; device-global free memory moves under a shared GPU (2026-11-01, collision environment runner)
+
+The environment runner's lifetime check compared `cudaMemGetInfo` free memory before
+the owned environment was built and after it was destroyed. Free memory is a
+device-global counter: the receipt runs two GPU shards side by side, and a sibling
+shard's allocations between the two readings failed the check in pass 1 of the
+0.7.0 receipt (deltas of 256 KiB and 2 MiB, both cases, the shard that overlapped
+another cuda shard and a wrapper shard). The runner passes alone and failed five of
+six runs next to a process that only allocates and frees.
+
+The probe now captures the environment's four device pointers before destruction,
+confirms each is `cudaMemoryTypeDevice`, and after destruction confirms each reports
+`cudaMemoryTypeUnregistered` from `cudaPointerGetAttributes`, queried before anything
+can reuse the address. That is process-local and deterministic. The same rule applies
+to any runner: never compare `cudaMemGetInfo`, `nvidia-smi` memory or any other
+device-wide counter across a window in which another process may run; a receipt
+shard always has to assume a neighbour.

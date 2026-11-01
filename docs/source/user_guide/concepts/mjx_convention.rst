@@ -146,7 +146,7 @@ no equivalent. The implementation is ``bindings/grid_rbd/_mujoco.py``
    | **end_effector_pose_hessian** ⚠REVISED | H_mjx[i,a,k]=Σ H_pin[i,b,c]G^{-1}[b,a]G^{-1}[c,k] + sym(dpose_pin·∂(G^{-1})/∂θ_k); ∂(G^{-1})/∂θ_a base-lin block=−[e_a]×R^T; **symmetrize** in the 2 tangent idx (GRiD analytic hess IS symmetric; raw Lie 2nd-deriv isn't) | tensor-slab + frame | FD-mjx 2.1e-10 |
    | **integrator** (euler+rk) | mjx retract: floating pos += dt·qvel[:3] GLOBAL (vs pin SE(3) V(φ), O(dt²) wrong) | retract | mj_integratePos **0.0** |
    | integrator_gradient | mjx_dIntegrate (base-lin→I, no lin↔ang) + fd value transform + minv_pin_to_mjx velocity rows | retract | FD-mjx 2.7e-10 |
-   | plant_step | composes fd qdd transform (ω×v) + mjx retract | retract | mj_step (si_euler) 1e-16 |
+   | plant_step | composes fd qdd transform (ω×v) + mjx retract | retract | mj_step (semi_implicit_euler) 1e-16 |
    | plant_step_gradient | == integrator_gradient (byte-identical) | retract | diff 0.0 |
    | plant_step_hessian | retract Jacobian + fdsva_so SO transform, base-localized | retract | ~loc base-rot |
    | quadratic_state_cost | VALUE qd-convention-DEPENDENT (user supplies mjx x_des/Q); grad/hess qd-block reframe G | composite | 6.42 vs 3.92 |

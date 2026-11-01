@@ -57,6 +57,8 @@ def main():
     urdf = args.work / 'probe.urdf'
     urdf.write_text(URDF)
     robot = URDFParser.URDFParser().parse(str(urdf))
+    descriptor = grid_rbd.describe_model(urdf)
+    assert descriptor['nq'] == robot.get_num_pos() and descriptor['nv'] == robot.get_num_vel()
     if not args.reload:
         grid_codegen.GRiDCodeGenerator(robot).gen_all_code(
             algorithm_list=['inverse_dynamics', 'inverse_dynamics_gradient'],
@@ -83,6 +85,10 @@ def main():
         expected = np.stack([ref.inverse_dynamics(a, b, c)[0] for a,b,c in zip(q,qd,qdd)]).reshape(2,1)
         handles = {b: grid_rbd.register_robot('package_probe', backend=b, **options)
                    for b in ('numpy', 'jax', 'torch')}
+        for handle in handles.values():
+            assert handle.model_descriptor == descriptor
+            handle.model_descriptor['model_name'] = 'mutated caller copy'
+            assert handle.model_descriptor == descriptor
         value = handles['numpy'].inverse_dynamics(q, qd, qdd)
         np.testing.assert_allclose(value, expected, rtol=2e-5, atol=2e-6)
         jvalue = handles['jax'].inverse_dynamics(jnp.asarray(q), jnp.asarray(qd), jnp.asarray(qdd))

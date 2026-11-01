@@ -73,7 +73,7 @@ to the harness's real skip strings by `test/test_suite_floor.py`. GPU test outco
 test fingerprints (red when correctness inputs change without a refreshed receipt).
 Main requires a receipt whose collection EQUALS `test/gpu-proof-tests.txt` (policy
 `required_test_manifest`); diagnostic smoke receipts do not replace that evidence. A release needs one fresh full run
-verified under the RELEASE policy. pytest-gpu-proof is pinned at 0.4.1 (`install/requirements-dev.txt`, CI installs
+verified under the RELEASE policy. pytest-gpu-proof is pinned at 0.5.0 (`install/requirements-dev.txt`, CI installs
 the same pin): the driver takes its BASE carry verdicts from the tool's `plan_carry` (ancestry, receipt and per-shard
 dirty flags, narrow fingerprint) and only demotes on top (oracle pin, recorded failures, wrapper fingerprint schema,
 cuda byte-neutrality); `gpu-proof merge --verify-inputs` authenticates every shard receipt; the merged receipt is

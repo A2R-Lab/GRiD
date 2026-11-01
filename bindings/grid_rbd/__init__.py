@@ -45,7 +45,9 @@ from ._cache import (
     write_build_inputs,
 )
 from ._compile import compile_sources, generate_sources
+from ._store import entry_metadata, publish_entry, staging_dir
 from ._handle import RobotHandle, SecondOrderID, SecondOrderFD
+from ._model import describe_model
 
 _log = logging.getLogger("grid_rbd")
 
@@ -303,8 +305,8 @@ def register_robot(
         ``"torch"``/``None`` (what the torch/jax registrars pass — jax's baked
         defaults already ARE its tuned config). Runtime-only.
     runtime_inertia : bool, optional
-        Build the robot with a runtime-mutable inertia table (D.4 / Phase 5,
-        numpy backend only). Default False ⇒ the per-link spatial inertia is
+        Build the robot with a runtime-mutable inertia table shared by the
+        NumPy, JAX and PyTorch surfaces of the loaded module. Default False ⇒ the per-link spatial inertia is
         baked into the .so (byte-identical to a plain build, same cache key).
         When True, the codegen emits a ``d_inertia_params`` table + on-device
         6x6 rebuild + a host mutator, and the handle gains
@@ -519,7 +521,7 @@ def _build_notice_start(name: str, meta: dict, gen_dir: Path, cache_dir: Path) -
     from ._compile import _build_jobs
     nv = int(meta.get("num_vel", meta.get("NUM_VEL", 0)) or 0)
     units = len(list(gen_dir.glob("wrapper_*.cu")))
-    size = "about 10 min for a humanoid" if nv >= 20 else "typically 1–3 min for an arm or quadruped"
+    size = "6 to 10 min for a humanoid" if nv >= 20 else "typically 1–3 min for an arm or quadruped"
     _notice(f"grid_rbd: compiling the dynamics of {name!r} ({nv} velocity DOF) — a one-time nvcc build "
             f"of {units} units on up to {_build_jobs()} cores, {size}; the result is cached under "
             f"{cache_dir} for every later run (progress: robot.build.log in the cache entry).")
@@ -719,7 +721,6 @@ def warm_robot(
             code_options["launch_config"] = {k: dict(v) for k, v in sorted(_lc.items())}
     except Exception:
         pass  # un-resolvable config -> conservative fallback bakes; key stays urdf-derived
-    import json
     import shutil as _shutil
 
     # Two-stage content-addressed store (2026-08-19, see _cache.py): the input
@@ -737,7 +738,7 @@ def warm_robot(
         entry_dir = store_dir(cache_dir, mapped) if mapped else None
         stale = None
         if entry_dir is not None:
-            stale = ([] if ((entry_dir / "robot.so").exists() and (entry_dir / "meta.json").exists())
+            stale = ([] if entry_metadata(entry_dir, "robot.so") is not None
                      else ["entry incomplete (robot.so or meta.json missing)"])
             stale = stale or stale_hit_reasons(entry_dir, identity)
         return {
@@ -759,15 +760,14 @@ def warm_robot(
         if mapped:
             entry_dir = store_dir(cache_dir, mapped)
             so_path = entry_dir / "robot.so"
-            meta_path = entry_dir / "meta.json"
             # Audit W05: a pointer is honoured only when the entry is whole AND
             # its recorded build identity equals ours — never hand back a .so
             # built by another toolchain / GLASS content / key schema.
-            stale = ([] if (so_path.exists() and meta_path.exists())
+            meta = entry_metadata(entry_dir, "robot.so")
+            stale = ([] if meta is not None
                      else ["entry incomplete (robot.so or meta.json missing)"])
             stale = stale or stale_hit_reasons(entry_dir, identity)
             if not stale:
-                meta = json.loads(meta_path.read_text())
                 manifest_register(cache_dir, name, mapped, meta)
                 return mapped, so_path, meta
             _log.info("grid_rbd: cache pointer for %s rejected (%s); regenerating",
@@ -775,9 +775,7 @@ def warm_robot(
 
     # Generate sources into a private staging dir, then content-address them.
     _sweep_dead_staging_dirs(cache_dir / "store")
-    gen_dir = cache_dir / "store" / f".gen_{os.getpid()}_{input_key[:8]}"
-    _shutil.rmtree(gen_dir, ignore_errors=True)
-    gen_dir.mkdir(parents=True, exist_ok=True)
+    gen_dir = staging_dir(cache_dir / "store", input_key)
     try:
         # generate_sources takes a Path. For an inline URDF, persist the string
         # in the staging dir (published with the entry for re-runs/debugging).
@@ -787,14 +785,17 @@ def warm_robot(
             gen_urdf_path = gen_dir / "robot.urdf"
             gen_urdf_path.write_text(urdf_string)
         meta = generate_sources(gen_urdf_path, code_options, gen_dir)
+        if gen_urdf_path.read_bytes() != urdf_bytes:
+            raise RuntimeError("URDF changed during generation; retry with immutable inputs")
         content_key = compute_content_key(
             gen_dir, code_options, cuda_arch, max_batch_size)
         entry_dir = store_dir(cache_dir, content_key)
         so_path = entry_dir / "robot.so"
-        if so_path.exists() and not force_rebuild:
+        cached_meta = entry_metadata(entry_dir, "robot.so")
+        if cached_meta is not None and not force_rebuild:
             # Identical build already in the store (e.g. a codegen edit whose
             # emitted bytes are unchanged) — generation-only reuse, no nvcc.
-            meta = json.loads((entry_dir / "meta.json").read_text())
+            meta = cached_meta
             if read_build_inputs(entry_dir) is None:
                 write_build_inputs(entry_dir, identity)  # entry predates W05
         else:
@@ -811,16 +812,11 @@ def warm_robot(
                 torch_op_key="k" + content_key[:12],
                 object_cache_dir=cache_dir / "objects",
                 reuse_objects=not force_rebuild)
+            if gen_urdf_path.read_bytes() != urdf_bytes:
+                raise RuntimeError("URDF changed during compilation; no artifact published")
             _build_notice_end(name, time.monotonic() - t_build, cache_dir)
             write_build_inputs(gen_dir, identity)  # published with the entry
-            if force_rebuild and entry_dir.exists():
-                _shutil.rmtree(entry_dir)
-            try:
-                os.replace(gen_dir, entry_dir)  # atomic publish
-            except OSError:
-                # A concurrent builder published the same content first —
-                # theirs is complete (rename is the last step); use it.
-                meta = json.loads((entry_dir / "meta.json").read_text())
+            meta = publish_entry(gen_dir, entry_dir, "robot.so", force=force_rebuild)
     finally:
         _shutil.rmtree(gen_dir, ignore_errors=True)  # no-op when published
 
@@ -1102,6 +1098,7 @@ from ._artifacts import (ArtifactIncompatibleError, ArtifactNotFoundError, Consu
                          ConsumerArtifactError, build_artifact, list_artifacts, load_artifact)
 
 __all__ = [
+    "describe_model",
     "gc_cache",
     "build_artifact",
     "load_artifact",

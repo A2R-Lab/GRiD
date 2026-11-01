@@ -38,8 +38,7 @@ The output is shaped nv x 10*NB. R2: it is a gridData field (hd_data->d_Y, sized
 back into hd_data->h_Y (uniform `(hd_data, model, ...)` host signature).
 """
 
-from ._frame_jacobian import _emit_world_transform_chainup
-from grid_codegen.helpers._code_generation_helpers import host_q_input_transfer_lines, _gen_mjx_build_R_lines, gen_workspace_repoint_line, gen_workspace_cast_expr, host_mode_flags, host_q_qd_input_transfer_lines, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_mode_flags, mangle_host_func_defs, wrap_host_single_call_timing
 from grid_codegen.helpers._code_generation_helpers import gen_host_wrapper_head
 
 # The 10 basis spatial-inertia derivatives dI/dpi_k in GRiD [angular; linear]

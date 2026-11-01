@@ -11,7 +11,9 @@ Design choices (why custom, not foam-only):
     NO external mesh assets. go2 uses boxes/cylinders/spheres. The bundled
     iiwa14 model also references Drake meshes for links 6 and 7.
   * MESHES are voxel-filled via trimesh, or use the opt-in bounded-bulge fit.
-    Missing/unusable collision geometry is an error, never a partial model.
+    Missing/unusable collision geometry is an error, never a partial model. A failed
+    voxel fill and a model with no spheres are errors as well while `strict` holds
+    (the default); `strict=False` warns and keeps the bounding-box cover instead.
 
 `resolution` is the target sphere SPACING in meters: coarser -> fewer/larger spheres (broad tier),
 finer -> more/smaller spheres (fine tier). Primitive covers are analytic;
@@ -137,10 +139,11 @@ def _load_mesh(mesh_elem, urdf_dir, link_name):
         raise ValueError(f"spherize: link '{link_name}' mesh '{filename}' unusable: {exc}") from exc
 
 
-def _cover_mesh(mesh_elem, urdf_dir, spacing, link_name, mesh_mode='voxel'):
+def _cover_mesh(mesh_elem, urdf_dir, spacing, link_name, mesh_mode='voxel', strict=True):
     """Voxel-fill a collision mesh -> one sphere per occupied interior voxel (radius = half the
-    voxel space-diagonal). Falls back to a bounding-box cover if voxel fill
-    fails. Unresolvable meshes fail before a model can be written."""
+    voxel space-diagonal). A failed voxel fill is an error under `strict`; otherwise it
+    warns and falls back to a bounding-box cover. Unresolvable meshes fail before a
+    model can be written."""
     try:
         import trimesh  # local import: primitive-only robots never reach this
     except ImportError as e:  # a declared base dependency, but name it for a hand-rolled env
@@ -164,6 +167,9 @@ def _cover_mesh(mesh_elem, urdf_dir, spacing, link_name, mesh_mode='voxel'):
         sr = pitch * math.sqrt(3.0) / 2.0
         return [(float(p[0]), float(p[1]), float(p[2]), sr) for p in pts]
     except Exception as exc:
+        if strict:
+            raise ValueError(f"spherize: link '{link_name}' voxelization failed ({exc}); a bounding-box "
+                             "cover would replace the mesh (strict_collision=False accepts it with a warning)") from exc
         ext = np.asarray(mesh.bounding_box.extents, dtype=float)
         ctr = np.asarray(mesh.bounding_box.centroid, dtype=float)
         warnings.warn(f"spherize: link '{link_name}' voxelization failed ({exc}); using a bounding-box cover")
@@ -189,7 +195,7 @@ def _collision_geometry(col_elem, link_name):
     return prim
 
 
-def _cover_collision(col_elem, spacing, mesh_spacing, urdf_dir, link_name, mesh_mode='voxel'):
+def _cover_collision(col_elem, spacing, mesh_spacing, urdf_dir, link_name, mesh_mode='voxel', strict=True):
     """All covering spheres for ONE <collision>, in the LINK frame (its <origin> applied)."""
     prim = _collision_geometry(col_elem, link_name)
     tag = prim.tag
@@ -200,7 +206,7 @@ def _cover_collision(col_elem, spacing, mesh_spacing, urdf_dir, link_name, mesh_
     elif tag == "box":
         local = _cover_box([float(v) for v in prim.get("size").split()], spacing)
     elif tag == "mesh":
-        local = _cover_mesh(prim, urdf_dir, mesh_spacing, link_name, mesh_mode)
+        local = _cover_mesh(prim, urdf_dir, mesh_spacing, link_name, mesh_mode, strict)
     else:
         raise ValueError(f"spherize: link '{link_name}' unsupported collision geometry <{tag}>")
     R, t = _origin_of(col_elem)
@@ -212,11 +218,15 @@ def _cover_collision(col_elem, spacing, mesh_spacing, urdf_dir, link_name, mesh_
 
 
 # --------------------------------------------------------------------------- public API
-def spherize_urdf(urdf_path, resolution, out_path=None, mesh_resolution=None, *, mesh_mode='voxel'):
+def spherize_urdf(urdf_path, resolution, out_path=None, mesh_resolution=None, *, mesh_mode='voxel',
+                  strict=True):
     """Rewrite `urdf_path` with covering-sphere collisions and return the output path. `resolution`
     = sphere spacing (m) for primitives; `mesh_resolution` = voxel pitch for meshes (defaults to
     `resolution`). Links, joints, visuals and inertials are preserved; only `<collision>` geometry
-    is replaced. Output is a valid URDF in the foam spherized interchange format."""
+    is replaced. Output is a valid URDF in the foam spherized interchange format. `strict` (the
+    default) raises where the spherizer would otherwise warn: a failed voxel fill replaced by a
+    bounding-box cover, and a model with no spheres at all. Either silently changes the
+    clearance rows a consumer bakes, so an opt-out has to be explicit."""
     if mesh_resolution is None:
         mesh_resolution = resolution
     if any(not math.isfinite(x) or x <= 0 for x in (resolution, mesh_resolution)):
@@ -233,7 +243,7 @@ def spherize_urdf(urdf_path, resolution, out_path=None, mesh_resolution=None, *,
         cols = link.findall("collision")
         spheres = []
         for col in cols:
-            spheres.extend(_cover_collision(col, resolution, mesh_resolution, urdf_dir, name, mesh_mode))
+            spheres.extend(_cover_collision(col, resolution, mesh_resolution, urdf_dir, name, mesh_mode, strict))
         if any(not np.isfinite(s).all() or s[3] <= 0 for s in spheres):
             raise ValueError(f"spherize: link '{name}' has invalid collision spheres")
         for col in cols:
@@ -253,6 +263,9 @@ def spherize_urdf(urdf_path, resolution, out_path=None, mesh_resolution=None, *,
         os.close(fd)
     tree.write(out_path, encoding="unicode", xml_declaration=False)
     if total == 0:
-        warnings.warn(f"spherize: '{urdf_path}' produced 0 collision spheres (no supported "
-                      f"collision geometry resolved).")
+        message = (f"spherize: '{urdf_path}' produced 0 collision spheres (no supported "
+                   f"collision geometry resolved).")
+        if strict:
+            raise ValueError(message + " strict_collision=False accepts an empty model with a warning.")
+        warnings.warn(message)
     return out_path

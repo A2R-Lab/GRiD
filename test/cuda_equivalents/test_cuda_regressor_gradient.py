@@ -34,8 +34,7 @@ from test.cuda_equivalents.cuda_harness import (
     _sample_to_stdin,
     GPU_UNAVAILABLE_PATTERNS,
 )
-from RBDReference.tests import MANIFEST_PATH
-from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec
+from RBDReference.tests.model_sources import resolve_robot_spec
 from RBDReference.equivalents.reference_backend import build_project_adapter
 from RBDReference.tests.tolerances import get_tolerance
 
@@ -75,7 +74,7 @@ def _compile_runner(build_dir: Path, floating_base: bool):
     executable = build_dir / "cuda_regressor_gradient_runner.exe"
     thread_count = _random_thread_count()
     cmd = [
-        nvcc, "-std=c++11", "-O0",
+        nvcc, "-std=c++17", "-O0",
         f"-DGRID_CUDA_FLOATING_BASE={1 if floating_base else 0}",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
         f"-DGRID_CUDA_REGRESSOR_GRADIENT_TEST_THREADS={thread_count}",

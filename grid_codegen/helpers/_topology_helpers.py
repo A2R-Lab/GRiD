@@ -40,6 +40,8 @@ def _global_hom_derivative_matrices_by_q(self):
     mats = [sp.zeros(4, 4) for _ in range(n)]
     owners = [None for _ in range(n)]
     for jid in range(self.robot.get_num_joints()):
+        if self._alpha_for_jid(jid) == 0.0:
+            continue  # A constant body's dense placeholder owns no q slot.
         qinds = _qinds_to_list(self, self.robot.get_joint_index_q(jid))
         for local_ind, qind in enumerate(qinds):
             mats[qind] = self.robot.get_dXmat_hom_local_by_id(jid, local_ind)
@@ -76,6 +78,8 @@ def _global_hom_second_derivative_matrices(self):
     mats = [sp.zeros(4, 4) for _ in range(n*n)]
     owners = [None for _ in range(n*n)]
     for jid in range(self.robot.get_num_joints()):
+        if self._alpha_for_jid(jid) == 0.0:
+            continue  # Do not overwrite another joint's quaternion/q block.
         qinds = _qinds_to_list(self, self.robot.get_joint_index_q(jid))
         for local_i, qind_i in enumerate(qinds):
             for local_j, qind_j in enumerate(qinds):
@@ -721,7 +725,7 @@ def gen_XImats_helpers_temp_shared_memory_code(self, temp_mem_size = 0, include_
     # inside [0, inner+36*NB) since inner >= 2*num_pos.
     layout = self._resolve_arena_layout(
         extra_t_buffers, temp_mem_size,
-        include_topology_helpers = (not self.robot.is_serial_chain() or not self.robot.are_Ss_identical(list(range(n)))),
+        include_topology_helpers = self.gen_topology_helpers_size() > 0,
         ximat_size = XI_size,
         apply_runtime_transform_band = (getattr(self, "runtime_transform", False) and not include_homogenous_transforms))
     self.gen_declare_shared_arena(layout.t_buffers, layout.temp_mem_size,
@@ -763,9 +767,14 @@ def _emit_mimic_q_fold(self):
         if getattr(j, "is_mimic", False):
             mult = j.get_mimic_multiplier()
             off = j.get_mimic_offset()
-            expr = "static_cast<T>(" + repr(mult) + ") * s_q[" + str(qslot) + "]"
-            if off != 0.0:
-                expr += " + static_cast<T>(" + repr(off) + ")"
+            if j.get_mimic_target_id() == -1 or mult == 0.0:
+                # Constant mimics have no input coordinate, including when
+                # nq==0. Zero times an invalid/poisoned read is not safe.
+                expr = "static_cast<T>(" + repr(off) + ")"
+            else:
+                expr = "static_cast<T>(" + repr(mult) + ") * s_q[" + str(qslot) + "]"
+                if off != 0.0:
+                    expr += " + static_cast<T>(" + repr(off) + ")"
             self.gen_add_code_line("s_temp[" + str(ind) + "] = " + expr + ";")
         else:
             self.gen_add_code_line("s_temp[" + str(ind) + "] = s_q[" + str(qslot) + "];")
@@ -977,7 +986,7 @@ def gen_load_update_XImats_helpers(self, include_base_inertia = False, include_h
             _emit_runtime_inertia_rebuild(self, n)
         if runtime_transform:
             _emit_runtime_transform_rebuild(self, n)
-        if not self.robot.is_serial_chain() or not self.robot.are_Ss_identical(list(range(n))):
+        if self.gen_topology_helpers_size() > 0:
             self.gen_add_parallel_loop("ind",str(self.gen_topology_helpers_size()))
             self.gen_add_code_line("s_topology_helpers[ind] = d_robotModel->d_topology_helpers[ind];")
             self.gen_add_end_control_flow()
@@ -996,27 +1005,23 @@ def gen_load_update_XImats_helpers(self, include_base_inertia = False, include_h
             self.gen_add_sync()
     # else just load in XI from global to shared efficiently
     else:
+        # Block-wide typed element copy, the same loader as the trig branch.
+        self.gen_add_parallel_loop("ind", str(XI_size))
         if runtime_inertia:
-            # RUNTIME_INERTIA: copy only the X-region [0,36*n) and any Xhom tail
-            # [36*2*n, XI_size); rebuild the I-region [36*n,36*2*n) from the
-            # param table. Default: one contiguous memcpy_async of the whole XI.
-            self.gen_add_code_line("if constexpr (RUNTIME_INERTIA) {", True)
-            self.gen_add_code_line("cgrps::memcpy_async(tgrp,s_XImats,d_robotModel->d_XImats," + str(i_region_lo) + ");")
-            if XI_size > i_region_hi:
-                self.gen_add_code_line("cgrps::memcpy_async(tgrp,s_XImats+" + str(i_region_hi) + ",d_robotModel->d_XImats+" + str(i_region_hi) + "," + str(XI_size - i_region_hi) + ");")
+            self.gen_add_code_line("if constexpr (RUNTIME_INERTIA) { if (ind >= " + str(i_region_lo) + " && ind < " + str(i_region_hi) + ") { continue; } }")
+        self.gen_add_code_line("s_XImats[ind] = d_robotModel->d_XImats[ind];")
+        self.gen_add_end_control_flow()
+        if self.gen_topology_helpers_size() > 0:
+            self.gen_add_parallel_loop("ind", str(self.gen_topology_helpers_size()))
+            self.gen_add_code_line("s_topology_helpers[ind] = d_robotModel->d_topology_helpers[ind];")
             self.gen_add_end_control_flow()
-            self.gen_add_code_line("else {", True)
-            self.gen_add_code_line("cgrps::memcpy_async(tgrp,s_XImats,d_robotModel->d_XImats," + str(XI_size) + ");")
-            self.gen_add_end_control_flow()
-        else:
-            self.gen_add_code_line("cgrps::memcpy_async(tgrp,s_XImats,d_robotModel->d_XImats," + str(XI_size) + ");")
-        if not self.robot.is_serial_chain() or not self.robot.are_Ss_identical(list(range(n))):
-            self.gen_add_code_line("cgrps::memcpy_async(tgrp,s_topology_helpers,d_robotModel->d_topology_helpers," + str(self.gen_topology_helpers_size()) + "*sizeof(int));")
-        self.gen_add_code_line("cgrps::wait(tgrp);")
+        self.gen_add_sync()
         if runtime_inertia:
             _emit_runtime_inertia_rebuild(self, n)
         if runtime_transform:
             _emit_runtime_transform_rebuild(self, n)
+        if self.robot_has_mimic_joints():
+            _emit_mimic_q_fold(self)
     # loop through Xmats and update all non-constant values serially
     # runtime_transform: source the X cells from the symbolic-Xfixed transforms
     # (dense rpy pattern, origin carried as xf_* symbols) so the origin literals
@@ -1253,7 +1258,9 @@ def gen_load_update_XmatsHom_helpers(self, include_base_inertia = False, include
     Xmats_hom = self.robot.get_Xmats_hom_ordered_by_id(include_fixed_joints = self.include_fixed_kinematic_targets)
     use_trig = False
     for mat in Xmats_hom:
-        if len(mat.atoms(sp.sin, sp.cos)) > 0:
+        # Movable transforms are symbolic; fixed tool transforms can be NumPy
+        # arrays. Normalize for the scan without changing their stored values.
+        if len(sp.Matrix(mat).atoms(sp.sin, sp.cos)) > 0:
             use_trig = True
             break
     # if trig is needed, compute sin/cos while loading XImats from global to shared
@@ -1269,7 +1276,7 @@ def gen_load_update_XmatsHom_helpers(self, include_base_inertia = False, include
             self.gen_add_parallel_loop("ind",str(d2Xhom_size))
             self.gen_add_code_line("s_d2XmatsHom[ind] = d_robotModel->d_XImats[ind+" + str(baseXI_size + Xhom_size + dXhom_size) + "];")
             self.gen_add_end_control_flow()
-        if not self.robot.is_serial_chain() or not self.robot.are_Ss_identical(list(range(n))):
+        if self.gen_topology_helpers_size() > 0:
             self.gen_add_parallel_loop("ind",str(self.gen_topology_helpers_size()))
             self.gen_add_code_line("s_topology_helpers[ind] = d_robotModel->d_topology_helpers[ind];")
             self.gen_add_end_control_flow()
@@ -1299,11 +1306,13 @@ def gen_load_update_XmatsHom_helpers(self, include_base_inertia = False, include
             self.gen_add_parallel_loop("ind",str(d2Xhom_size))
             self.gen_add_code_line("s_d2XmatsHom[ind] = d_robotModel->d_XImats[ind+" + str(baseXI_size + Xhom_size + dXhom_size) + "];")
             self.gen_add_end_control_flow()
-        if not self.robot.is_serial_chain() or not self.robot.are_Ss_identical(list(range(n))):
+        if self.gen_topology_helpers_size() > 0:
             self.gen_add_parallel_loop("ind",str(self.gen_topology_helpers_size()))
             self.gen_add_code_line("s_topology_helpers[ind] = d_robotModel->d_topology_helpers[ind];")
             self.gen_add_end_control_flow()
         self.gen_add_sync()
+        if self.robot_has_mimic_joints():
+            _emit_mimic_q_fold(self)
     # loop through Xmats and update all non-constant values serially
     def replace_hom_config_symbols(str_val, ind):
         return _config_symbol_subst(self, str_val, ind, spherical = self.robot.joint_is_spherical(ind), ccode = True)
@@ -1393,11 +1402,12 @@ def gen_topology_helpers_size(self):
     size = 0
     if not self.robot.is_serial_chain():
         size += 5*n + 1
-    # Preserve the legacy are_Ss_identical query set (get_num_pos()) so the
-    # boolean — and thus whether the S_inds section exists at all — is unchanged
-    # for non-mimic robots (Gate A byte-identical). Only the allocated WIDTH (n)
-    # grows to cover the NJ-wide build for mimic models.
-    if not self.robot.are_Ss_identical(list(range(self.robot.get_num_pos()))):
+    # Subspaces belong to joints, not configuration coordinates: a spherical
+    # joint contributes four q entries but only one subspace. Match the builder's
+    # body set, including mimic/constant bodies. The allocation width above
+    # stays n.
+    query_count = self.robot.get_num_joints()
+    if not self.robot.are_Ss_identical(list(range(query_count))):
         size += n
     return size
 
@@ -1510,19 +1520,19 @@ def gen_topology_helpers_pointers_for_cpp(self, inds = None, updated_var_names =
             var_names[key] = value
     n = self.robot.get_num_vel()
     NJ = self.robot.get_num_joints()
-    # FIXED-BASE MIMIC: the topology-helper sections are built NJ-wide, but the
+    # Fixed-base mimic/spherical: helper sections are built NJ-wide, but the
     # OFFSET=True section strides below use `n` (= get_num_vel()). For a mimic
-    # model NJ > nv, so the device would read parent/S-index at the wrong stride
+    # model NJ differs from nv, so the device would read parent/S-index at the wrong stride
     # at multi-joint BFS levels. Use NJ as the stride here (the algorithms also
-    # iterate over NJ bodies for mimic-fixed). Floating-base keeps the legacy
-    # nv stride (its sections + reads are already NJ-consistent via the
-    # floating-specific path, and a swap breaks the byte-identical Gate A).
-    if self.robot_has_mimic_joints() and not self.robot.floating_base:
+    # iterate over NJ bodies for mimic-fixed). Floating-base uses the nv
+    # stride; its sections and reads are NJ-consistent through the
+    # floating-specific path.
+    if (self.robot_has_mimic_joints() or self.robot.robot_has_spherical()) and not self.robot.floating_base:
         n = NJ
     if inds == None:
-        inds = list(range(n))
+        inds = list(range(NJ))
     IDENTICAL_S_FLAG_INDS = self.robot.are_Ss_identical(inds)
-    IDENTICAL_S_FLAG_GLOBAL = self.robot.are_Ss_identical(list(range(n)))
+    IDENTICAL_S_FLAG_GLOBAL = self.robot.are_Ss_identical(list(range(NJ)))
 
     # check for one ind
     if len(inds) == 1:

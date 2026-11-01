@@ -161,8 +161,8 @@ The full reference for the rest of the surface lives in the
 
 ## Install
 
-`grid_rbd` ships inside the `grid-rbd` distribution on PyPI (0.5.1: Linux
-x86-64 wheels and an sdist, CPython 3.10–3.13) together with the code
+`grid_rbd` ships inside the `grid-rbd` distribution on PyPI (Linux
+x86-64 wheels and an sdist, CPython 3.10 to 3.13) together with the code
 generator and the `grid-generate` / `grid-spherize` CLIs. Each GPU backend is
 an opt-in extra on top of the numpy base; pick the row for the wrapper surface
 you need:
@@ -254,6 +254,14 @@ the collision options (`collision`, `collision_res`, `collision_native`, `spheri
 GRiD never binds the consumer's symbols; load the artifact with `ctypes` or your own binding.
 See the agent integration guide for the full description.
 
+Consumer build lookups use `nvcc -MM` to rediscover and hash selected non-system
+headers, including transitive headers and newly shadowing include-path matches.
+`headers=[...]` adds explicit file inputs rather than replacing discovery.
+Unchanged build lookups and cached `plan_only` checks preprocess but do not
+compile. Prepared `load_artifact` remains compiler-free. System development
+headers omitted by `-MM` require an immutable build environment or explicit
+header declarations; compiler version alone is not a complete environment hash.
+
 Registration failures (a failed device allocation, a bad toolkit) raise a Python
 exception naming the failed operation; the generated initializers never
 `exit()` or reset the CUDA context inside the interpreter (they use the
@@ -264,7 +272,7 @@ nvcc/ptxas output can be inspected for warnings.
 A first use announces itself: a one-line `WARNING` on the `grid_rbd` logger
 (printed to stderr with no logging setup) says which robot is being compiled,
 how many units on how many cores, roughly how long (1–3 min for an arm or
-quadruped, ~10 min for a humanoid) and where it is cached; a second line reports
+quadruped, 6 to 10 min for a humanoid) and where it is cached; a second line reports
 the elapsed time. `GRID_RBD_QUIET=1` silences it. `get_robot(name, urdf_path=...)`
 compiles and registers on a *miss* (a hit ignores the URDF), so a script can be
 written as "get or build". `python -m grid_rbd.gc_cache` reports store entries

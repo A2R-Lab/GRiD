@@ -23,7 +23,7 @@ The full documentation is the website, <https://a2r-lab.org/GRiD/>: installation
 [How do I…?](https://a2r-lab.org/GRiD/docs/how_do_i.html) index, concepts, API reference, benchmarks and validation.
 This README points to it.
 
-Version 0.5.1 is on [PyPI](https://pypi.org/project/grid-rbd/); 0.5.0 was the first packaged release. GRiD is alpha
+Version 0.7.0 is on [PyPI](https://pypi.org/project/grid-rbd/); 0.5.0 was the first packaged release. GRiD is alpha
 software and APIs may change between minor versions (see the
 [changelog](https://github.com/A2R-Lab/GRiD/blob/main/CHANGELOG.md)). The GPU test receipt and the release timing ran on
 Linux x86-64 with CPython 3.12, CUDA toolkit 13.2 and one RTX 5090 (sm_120); CPython 3.10, 3.11 and 3.13 wheels are built and
@@ -45,7 +45,7 @@ pip install "grid-rbd[jax]"     # or "grid-rbd[torch]", "grid-rbd[all]"
 ```
 ```python
 import numpy as np, grid_rbd
-robot = grid_rbd.load_robot("grid_assets/robots/iiwa14.urdf",
+robot = grid_rbd.load_robot("robot.urdf",      # any URDF; samples: grid_assets/robots/ in the repository
                             algorithm_list=["forward_dynamics"], enable_mujoco_kernels=False)
 q = np.zeros((8, robot.nq), dtype=np.float32)
 qd, tau = (np.zeros((8, robot.nv), dtype=np.float32) for _ in range(2))
@@ -100,7 +100,7 @@ A Docker image with grid-rbd, `jax[cuda12]`, a cu128 torch wheel and the generat
 |-----------|------|
 | `grid_codegen/` | the code-generation engine: emits `grid.cuh` and the checked-in generated binding regions, driven by the `abi_specs.py` table |
 | `bindings/` | the `grid-rbd` Python package (NumPy/JAX/torch handles over a cached per-robot `.so`); see [`bindings/README.md`](https://github.com/A2R-Lab/GRiD/blob/main/bindings/README.md) |
-| `grid_assets/` | ten sample URDFs (`robots/`) + tuned per-GPU launch configs (`launch_configs/`) |
+| `grid_assets/` | ten sample robots and three test fixtures (`robots/`) + tuned per-GPU launch configs (`launch_configs/`) |
 | `test/` | pytest suites + the split-suite/receipt machinery |
 | `examples/` | `notebooks/` (Python tour), `codegen/`, `cuda/`; see [`examples/README.md`](https://github.com/A2R-Lab/GRiD/blob/main/examples/README.md) |
 | `docs/` | the Sphinx site (`source/`), the cover page (`landing/`), `agent_debugging_guide.md`, `design_history/` |

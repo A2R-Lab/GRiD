@@ -8,7 +8,7 @@ import numpy as np
 
 from .helpers._gpu_err import legacy_wrapper_lines
 from .algorithms._idsva_so import idsva_so_body_frame_tot_span
-from .algo_registry import (ALGO_DESCRIPTORS, arena_ctx_from_codegen, compose_arena_full,
+from .algo_registry import (arena_ctx_from_codegen, compose_arena_full,
                             compose_arena_rungs, ARENA_COMPOSED_KEYS, ARENA_RUNG_KEYS)
 
 
@@ -17,10 +17,8 @@ def _tier_bytes_lines(macro, counts):
     source line: three if-constexpr branches over the per-tier t_counts.
     String-for-string identical to the hand-written wall it replaced (C3
     table-drive, 2026-09-08)."""
-    # ONE return statement (a nested ternary), not an `if constexpr` chain: the
-    # sizers are constexpr (GATO ask 2026-09-20) and the equivalence runners
-    # compile with -std=c++11, where a constexpr function body must be exactly
-    # one return. Same values per tier as the chain it replaced.
+    # One return expression (a nested ternary) so the sizer is constexpr;
+    # the same per-tier values as an if-constexpr chain.
     return ["template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t " + macro + "() { "
             "return (TIER == TIER_SHARED) ? grid_shared_arena_bytes<T>(" + str(counts[0]) + ", TOPOLOGY_HELPERS_COUNT) "
             ": (TIER == TIER_LITE) ? grid_shared_arena_bytes<T>(" + str(counts[1]) + ", TOPOLOGY_HELPERS_COUNT) "
@@ -396,19 +394,8 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
     self._integrator_gradient_dqdd_count = _integrator_gradient_D_qdd_count
     self._integrator_gradient_dAB_count = _integrator_gradient_dAB_count
     inverse_dynamics_gradient_temp_layout = self.gen_inverse_dynamics_gradient_temp_layout()
-    # Mimic robots emit a DENSE serial inverse_dynamics_gradient inner (no sparse-band spill), so
-    # its inner scratch is the dense count; the selective-spill tier doesn't
-    # apply (its band offsets are meaningless for the dense layout). Use the
-    # dense count for full AND selective so the kernel always sizes smem for
-    # the dense buffers and never selects a too-small selective arena.
-    _inverse_dynamics_gradient_has_mimic = self.robot_has_mimic_joints()
     inverse_dynamics_gradient_temp_count = self.gen_inverse_dynamics_gradient_inner_temp_mem_size()
-    inverse_dynamics_gradient_selective_temp_count = (
-        inverse_dynamics_gradient_temp_count if _inverse_dynamics_gradient_has_mimic
-        else inverse_dynamics_gradient_temp_layout["selective_shared_count"]
-    )
     forward_dynamics_gradient_temp_count = self.gen_forward_dynamics_gradient_inner_temp_mem_size()
-    forward_dynamics_gradient_selective_temp_count = max(self.gen_minv_inner_temp_mem_size(), inverse_dynamics_gradient_selective_temp_count)
     # s_vaf is body-indexed (NB bodies). For a MIMIC robot NB > nv so size
     # 18*NB; non-mimic keeps 18*nv/18*n (byte-identical; floating non-mimic has
     # nv > NB so 18*nv already covers the body writes). The id_device path uses
@@ -429,19 +416,6 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
     # byte-identical; FLOATING n>nv reserves the wider input slot (old 3*nv+fb
     # under-reserved -> smem overrun on the s_q_qd_u load).
     forward_dynamics_gradient_t_count_full = (3*n) + (2*nv*nv) + (_vaf_cnt) + nv + (nv*nv) + forward_dynamics_gradient_temp_count + XI_size + rt_xfixed_reserve
-    inverse_dynamics_gradient_t_count_selective = inverse_dynamics_gradient_t_count_full - inverse_dynamics_gradient_temp_count + inverse_dynamics_gradient_selective_temp_count
-    forward_dynamics_gradient_t_count_selective = forward_dynamics_gradient_t_count_full - forward_dynamics_gradient_temp_count + forward_dynamics_gradient_selective_temp_count
-    inverse_dynamics_gradient_t_count_emergency = inverse_dynamics_gradient_t_count_full - inverse_dynamics_gradient_temp_count
-    forward_dynamics_gradient_t_count_emergency = forward_dynamics_gradient_t_count_full - forward_dynamics_gradient_temp_count
-    # fd_du OUTPUT-spill rung (h2_plus de-gate): the emergency rung routes the
-    # whole inner s_temp pool to d_workspace but keeps the OUTPUT bands s_dc_du
-    # (2*nv*nv id-gradient band) + s_Minv (nv*nv mass matrix) in smem -> on a big
-    # floating robot (h2_plus) those 3*nv*nv floats leave the arena at ~105KB,
-    # still over sm_120's ~99KB. This rung additionally repoints s_dc_du/s_Minv
-    # to the L2-pinned SO band (crba/fdsva_so output-spill style), shrinking the
-    # arena by 3*nv*nv (~77KB) so h2_plus launches (~28KB). Inner pool stays in
-    # the GRAD section (offset 0); the outputs sit in the disjoint SO section.
-    forward_dynamics_gradient_t_count_output_spill = forward_dynamics_gradient_t_count_emergency - (2*nv*nv + nv*nv)
     # Per-tier picks (perf, lite, minimal). The existing single-pick flags
     # (inverse_dynamics_gradient_spill_tier etc.) are kept = perf pick so today's emit paths
     # are byte-for-byte unchanged; the lite/minimal indices are exposed
@@ -481,7 +455,6 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
     # spherical/floating (nq>nv) base the n+2*nv form under-sizes the launch smem
     # by 3*(nq-nv) floats -> the aba batch kernel OOBs in
     # load_update_XImats_helpers. Mirrors the fd/minv 3*n input slots.
-    crba_input_t_count = n + nv
     # ABA surgical-spill ladder, 3 rungs. The 140*NJ+138 inner scratch band
     # keeps its hot recursion in smem and spills only the cold sub-band when
     # possible:
@@ -1314,6 +1287,9 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              _tier_ternary_line("CRBA_TEMP_IN_SMEM", "bool", (("true" if self.crba_spill_tier_3way[0] <= 1 else "false"), ("true" if self.crba_spill_tier_3way[1] <= 1 else "false"), ("true" if self.crba_spill_tier_3way[2] <= 1 else "false"))),
                              # s_M output in smem ONLY at rung0; spilled to the SO band at rung1/rung2. Mirror DCCRBA_OUTPUT_IN_SMEM's ==0.
                              _tier_ternary_line("CRBA_M_IN_SMEM", "bool", (("true" if self.crba_spill_tier_3way[0] == 0 else "false"), ("true" if self.crba_spill_tier_3way[1] == 0 else "false"), ("true" if self.crba_spill_tier_3way[2] == 0 else "false"))),
+                             "// EE pose scratch query begins.",
+                             "template <typename T> __host__ __device__ constexpr size_t EE_POSE_INNER_SCRATCH_BYTES() { return sizeof(T) * static_cast<size_t>(" + str(self.gen_end_effector_pose_inner_temp_mem_size()) + "); }",
+                             "// EE pose scratch query ends.",
                              "// --- end_effector_pose_gradient_inner (chain workspace) ---",
                              "template <typename T, bool TEMP_IN_SMEM = true> __host__ __device__ constexpr size_t EE_GRAD_INNER_SMEM_BYTES() { return TEMP_IN_SMEM ? sizeof(T) * static_cast<size_t>(" + str(self.gen_end_effector_pose_gradient_inner_temp_mem_size()) + ") : static_cast<size_t>(0); }",
                              "template <typename T, bool TEMP_IN_SMEM = true> __host__ __device__ constexpr size_t EE_GRAD_INNER_WORKSPACE_BYTES() { return TEMP_IN_SMEM ? static_cast<size_t>(0) : sizeof(T) * static_cast<size_t>(" + str(self.gen_end_effector_pose_gradient_inner_temp_mem_size()) + "); }",

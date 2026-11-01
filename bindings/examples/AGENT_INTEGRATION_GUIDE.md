@@ -1,6 +1,6 @@
 # Integrating GRiD via `grid_rbd`: a guide for agents and users
 
-*Last reviewed 2026-10-14 against main `f4f72e7` (grid-rbd 0.5.1). The API surface below (entry points, `get_robot` compile-on-miss, cache layout and `gc_cache`, build knobs, method shapes) was re-checked against `bindings/grid_rbd` and `docs/source/user_guide/tutorials/python_wrappers.rst`. The measured numbers quoted inline (the 2026-10-01 host-copy timings, the iiwa14 FFI block-size figure, the CUDA-graph submit costs) were not re-measured. If the code and this guide disagree, trust the code and fix the guide.*
+*Last reviewed 2026-10-14 against main `f4f72e7` (grid-rbd 0.5.1); method shapes, integrator names, precision tiers and the batch-overlay API re-checked 2026-10-31 against 0.7.0. The API surface below (entry points, `get_robot` compile-on-miss, cache layout and `gc_cache`, build knobs, method shapes) was re-checked against `bindings/grid_rbd` and `docs/source/user_guide/tutorials/python_wrappers.rst`. The measured numbers quoted inline (the 2026-10-01 host-copy timings, the iiwa14 FFI block-size figure, the CUDA-graph submit costs) were not re-measured. If the code and this guide disagree, trust the code and fix the guide.*
 
 This guide covers how to call GRiD's GPU rigid-body dynamics from Python
 effectively. The governing rule is to place your data on the GPU once and keep it
@@ -110,24 +110,97 @@ art = grid_rbd.build_artifact(
     include_dirs=["csrc"], defines={"HJCD_BATCH": 64},
     algorithm_list=["end_effector_pose"],        # the codegen keywords of register_robot
     collision=True, collision_res=[0.10, 0.06],  # or spherized_urdf=<validated sphere model>, collision_native=True
+                                                 # the spherizer's warnings are errors; strict_collision=False accepts them
     emit_plant=None)                             # the generator's rule: a kinematics header carries no plant block
 lib = ctypes.CDLL(str(art.path))                 # art.header is the grid.cuh it was compiled against
 ```
 
 The identity covers the URDF, the codegen options and the codegen tree, the sources and
-headers by content, the defines and flags, the toolchain, the CUDA architecture and the
-package version. A second call with the same inputs is a pointer hit (no generation, no
-`nvcc`); a changed define or source re-keys the artifact, and a unit whose exact inputs were
+headers by content, resolved source paths (including `__FILE__` expansions),
+the defines and flags, the toolchain, the CUDA architecture and the
+package version. Collision requests also fingerprint the resolved collision mesh paths
+and bytes before consulting a cached pointer. Consumer builds run `nvcc -MM` with
+their effective compile flags and record the selected non-system dependencies
+and their content hashes per translation unit in `meta.json`. Discovery runs on
+build lookups too: changing a transitive header, upgrading pybind headers in
+place or adding an earlier include-path match invalidates affected reuse.
+Explicit `headers` supplement this discovery for additional file inputs.
+System development headers omitted by `-MM` remain an environment assumption;
+compiler identity does not fingerprint every toolkit/host package file. Use an
+immutable build environment, or explicitly list relevant omitted headers.
+Dependency output must name readable files. Literal backslashes in POSIX filenames
+are not supported: nvcc rewrites them as slashes in its report. Use ordinary path
+separators and names; spaces, `#` and `$` are tested. An unreadable dependency is
+an error, never a reason to accept an old cached artifact.
+Keep all inputs
+immutable throughout a build. Detected input changes abort publication, but these checks
+are not a filesystem snapshot and cannot detect a concurrent edit restored between reads.
+A second call with the same inputs is a pointer hit (no generation or compilation,
+but dependency preprocessing still runs); a changed define or source re-keys the artifact, and a unit whose exact inputs were
 compiled before links from the per-consumer object cache. The artifact, its `grid.cuh`,
-`meta.json`, `build_inputs.json` and `build.log` are published atomically under
+`meta.json`, `build_inputs.json` and `build.log` are staged together and published under
 `consumers/<consumer>/store/<content_key>/`, and the consumer's manifest binds the name under
 a lock. `grid_rbd.load_artifact("hjcd", "panda")` returns a prepared artifact without a
 toolchain, refusing one recorded for another device or key schema;
 `build_artifact(..., plan_only=True)` reports what a build would use and whether it is
-already there; `grid_rbd.list_artifacts("hjcd")` lists the manifest. The gate is
+already there. Checking a cached plan performs dependency preprocessing; a cold
+plan does not generate or compile. `grid_rbd.list_artifacts("hjcd")` lists the manifest. The gate is
 `test/python_wrappers/test_consumer_artifact.py`.
-Ship the cache dir (`grid_rbd.default_cache_dir()`, default `~/.cache/grid-rbd/` or
-`$GRID_RBD_CACHE_DIR`) and every later run starts in well under a second.
+Keep the cache dir (`grid_rbd.default_cache_dir()`, default `~/.cache/grid-rbd/` or
+`$GRID_RBD_CACHE_DIR`) to reuse a compatible prepared build without compiling again.
+Cold loading time depends on the filesystem, CUDA context and consuming application.
+Incomplete entries are rebuilt without clearing reusable object files. Concurrent
+publishers coordinate per content key, and private staging directories distinguish
+threads as well as processes. Replacing a damaged or forced entry can briefly make
+that path unavailable to a concurrent prepared reader; it does not expose a partly
+written new directory. `force_rebuild` replaces the store entry; it does not
+unload or replace a shared library already loaded by the application. Restart that
+process to adopt a rebuilt library at the same path.
+
+For a Python extension (including pybind11), pass `python_extension=True` before
+the first build. GRiD records the interpreter implementation, major/minor version,
+SOABI, extension suffix and debug/free-threaded ABI settings in pointer, content
+and object identity. Prepared loading checks that ABI without requiring a compiler.
+Native libraries keep the default `False` and do not depend on Python's ABI.
+The caller still supplies matching Python/pybind headers and flags; this is not
+an automatic extension builder or an `abi3` compatibility promise. Consumer builds
+require `nm` to verify the declaration against exported `PyInit_*` symbols before
+publication. Prepared entries without an ABI declaration must be rebuilt once;
+do not relabel an old entry manually.
+
+Consumer modules compile with hidden symbol visibility, including inline
+functions. GCC builds also disable GNU-unique statics so one robot's template
+state cannot bind to another module's state. Export intended C entry points
+explicitly, for example
+`extern "C" __attribute__((visibility("default"))) int num_pos();`.
+pybind11 exports its `PyInit_*` entry point itself. This policy applies to
+consumer units only; the wrapper's C ABI and framework exports are unchanged.
+
+The consumer build resolves nvcc's host selection from `-ccbin` /
+`--compiler-bindir`, `NVCC_CCBIN` and prepend/append flags, records the selected
+compiler's path, bytes and version, and pins that compiler for compilation and
+linking. GCC and Clang are recognized separately; Clang does not receive the
+GCC-only GNU-unique option. An explicitly conflicting link compiler is rejected.
+The current native/CUDA integration gates exercise Linux with GCC; recognition
+of Clang flags alone is not evidence of a validated Clang/CUDA configuration.
+Expand nvcc option files into the explicit flag lists rather than passing
+`--options-file`, `-optf` or `@file`; hidden compiler selections/dependencies in
+those files are not supported by this consumer build path.
+
+For an executable migration example, run `consumer_artifact_migration.py` from
+this directory with `--urdf /absolute/robot.urdf --work /tmp/new-probe --cuda-arch 120`
+(select your actual architecture). It requires pybind11 as a consumer build
+dependency, builds explicit native exports and a declared Python extension,
+then checks pointer reuse and prepared loading. It is a build/load contract
+example, not a numerical or performance benchmark.
+
+Publication is recoverable, not a durable filesystem transaction. An abrupt
+process death after displacing an entry can leave a `.replaced_*` backup and a
+missing entry; the next build repairs the entry and retains reusable objects.
+Death after installing the new entry can leave a complete winner and its backup.
+The OS releases the writer lock on exit. Backups are not automatically purged;
+do not delete shared entries or assume concurrent readers see a snapshot. Normal
+rename errors attempt rollback, but process death cannot execute that rollback.
 
 - `max_batch_size` is a compile-time cap. Calls with `batch ≤ max_batch` run in one launch;
   larger batches must be chunked by the caller. Bake in the largest batch you will run.
@@ -210,7 +283,7 @@ t = torch.utils.dlpack.from_dlpack(jax_array)    # JAX → torch
 j = jax.dlpack.from_dlpack(torch_tensor.contiguous())   # torch → JAX
 ```
 
-## Methods (all batched on axis 0; jax/torch are fp32)
+## Methods (all batched on axis 0; fp32 is the validated tier on every surface)
 
 `B` = batch, `NJ` = `num_joints` (= `nq`), `NV` = `num_vel` (tangent space). On a fixed base,
 `NV == NJ` and all shapes coincide; on a floating base, `NJ > NV` (the free-flyer adds a quat slot).
@@ -219,9 +292,9 @@ Dynamics and kinematics:
 
 | Method | Returns | Notes |
 |--------|---------|-------|
-| `inverse_dynamics(q,qd,qdd=None)` | `(B,NJ)` | alias `rnea`; `qdd=None` gives the bias `c=h−g`, nonzero adds `M·qdd` |
-| `forward_dynamics(q,qd,u)` | `(B,NJ)` | alias `fd` |
-| `aba(q,qd,u)` | `(B,NJ)` | |
+| `inverse_dynamics(q,qd,qdd=None)` | `(B,NV)` | alias `rnea`; `qdd=None` gives the bias `c=h−g`, nonzero adds `M·qdd` |
+| `forward_dynamics(q,qd,u)` | `(B,NV)` | alias `fd` |
+| `aba(q,qd,u)` | `(B,NV)` | |
 | `crba(q)` | `(B,NV,NV)` | |
 | `minv(q)` | `(B,NV,NV)` | |
 | `end_effector_pose(q)`/`_gradient`/`_hessian` | `(B,6·num_ees[,NV[,NV]])` | |
@@ -238,8 +311,8 @@ Trajectory optimization (`grid_plant`):
 
 | Method | Returns | Notes |
 |--------|---------|-------|
-| `integrator(q,qd,u,dt)` / `integrator_gradient` | | `integrator_type=` is `euler` (default) / `semi_implicit_euler` / `midpoint` / `rk3` / `rk4` |
-| `plant_step(x,u,dt)` | `(B,NX)` | state `x=[q;qd]` (`NX=2·NV`) |
+| `integrator(q,qd,u,dt)` / `integrator_gradient` | | `integrator_type=` is `euler` (default) / `semi_implicit_euler` / `midpoint` / `rk4` / `trapezoidal` / `constant_acceleration` |
+| `plant_step(x,u,dt)` | `(B,NX)` | state `x=[q;qd]` (`NX=NJ+NV`; `2·NV` on a fixed base) |
 | `plant_step_gradient(x,u,dt)` | `(B,2·NV,3·NV)` | `[A\|B]` |
 
 Cost terms return `(value, grad, hess)`: `quadratic_state_cost(x,x_des,Q)`,
@@ -271,9 +344,9 @@ Properties: `num_joints`, `num_vel`, `num_ees`, `num_bodies`, `floating_base`, `
 `output_convention`, plus the aliases `nq` / `nv` / `nb` (configuration width /
 tangent width / body count).
 
-The jax/torch surfaces are strictly fp32 (compute and I/O). The numpy
-handle defaults to fp32 too but supports a true fp64 tier via `dtype="float64"` (separate `.so`)
-(the fp32 compute path is the validated one).
+All three surfaces default to fp32, the validated tier. `dtype="float64"` builds a
+separate `.so` and the handle's arrays, gravity and `dt` follow it; fp64 is the alpha tier
+outside the signed receipt.
 
 ## Gradients are analytic
 
@@ -371,8 +444,8 @@ fastest at 128 threads but the FFI path is fastest at ~768: the same kernel, ~1.
 Per-algo introspection: `handle.kernel_max_threads(key)` returns the real compiled
 `__launch_bounds__` ceiling for that algo's baked-tier kernel (keys = the autotune
 short names: id, fd, minv, id_du, fd_du, ee_pose, idsva_so, ...; -1 = unknown/absent).
-Batch-regime switching: `set_threads_for_n`/`apply_batch_overlay`/`get_batch_switch`
-apply per-algo small-batch thread overrides from the config's `ffi_bases_by_n` block.
+Batch-regime switching: `apply_batch_overlay`
+applies per-algo small-batch thread overrides from the config's `ffi_bases_by_n` block.
 
 
 ## Fusing GRiD into your own CUDA kernel

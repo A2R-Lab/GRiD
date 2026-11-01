@@ -32,10 +32,14 @@ required_fingerprint_paths:
   - MANIFEST.in
   - tools/check_installed_package.py
   - tools/check_installed_numerics.py
+  - bindings/examples/consumer_artifact_migration.py
   - test/cuda_equivalents
   - test/python_wrappers
   - test/conftest.py
   - test/helpers.py
+  - test/test_model_descriptor.py
+  - test/test_manifold_conventions.py
+  - test/ee_constant_slot_warnings.py
   - test/run_gpu_proof.sh
   - test/run_split_suite.py
   - test/compile_sched.py

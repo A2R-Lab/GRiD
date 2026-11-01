@@ -1,5 +1,4 @@
 import numpy as np
-import copy
 
 from grid_codegen.helpers._code_generation_helpers import gen_launch_pair, gen_emit_host_result_transfer, gen_workspace_repoint_line, host_mode_flags, host_q_qd_input_transfer_lines, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
 from grid_codegen.helpers._code_generation_helpers import gen_host_wrapper_head
@@ -118,14 +117,24 @@ def _gen_crba_inner_mimic_fixed(self, NB):
     for ind in range(NB):
         vi = self._v_slot_cpp(ind)
         alpha_i = self._alpha_for_jid(ind)
-        s_ind = self.robot.get_S_index_by_id(ind)
-        s_sign = self.robot.get_S_sign_by_id(ind)
+        if alpha_i == 0.0:
+            continue  # IC was propagated above; no reduced row/column is owned.
         # fh = IC[ind] * S[ind] = S_sign * column s_ind of IC[ind]
         self.gen_add_code_line("// body " + str(ind) + " -> v-slot " + str(vi) + " (alpha=" + repr(alpha_i) + ")")
-        self.gen_add_code_line("for (int r = 0; r < 6; r++) { s_fh[r] = static_cast<T>(" + repr(float(s_sign)) + ") * s_temp[" + str(36*ind + 6*s_ind) + " + r]; }")
-        # diagonal: H[vi,vi] += alpha_i^2 * (S^T fh) = alpha_i^2 * S_sign * fh[s_ind]
-        diag_coeff = float(alpha_i) * float(alpha_i) * float(s_sign)
-        self.gen_add_code_line("s_M[" + str(vi + nv*vi) + "] += static_cast<T>(" + repr(diag_coeff) + ") * s_fh[" + str(s_ind) + "];")
+        if self.robot.S_is_cardinal_by_id(ind):
+            s_ind = self.robot.get_S_index_by_id(ind)
+            s_sign = self.robot.get_S_sign_by_id(ind)
+            self.gen_add_code_line("for (int r = 0; r < 6; r++) { s_fh[r] = static_cast<T>(" + repr(float(s_sign)) + ") * s_temp[" + str(36*ind + 6*s_ind) + " + r]; }")
+            diag_coeff = float(alpha_i) * float(alpha_i) * float(s_sign)
+            self.gen_add_code_line("s_M[" + str(vi + nv*vi) + "] += static_cast<T>(" + repr(diag_coeff) + ") * s_fh[" + str(s_ind) + "];")
+        else:
+            motion = self.robot._get_flat_S_by_id(ind)
+            terms = ["static_cast<T>(" + repr(float(v)) + ") * s_temp[" + str(36*ind + 6*r) + " + r]"
+                     for r, v in enumerate(motion) if v != 0]
+            self.gen_add_code_line("for (int r = 0; r < 6; r++) { s_fh[r] = " + " + ".join(terms) + "; }")
+            terms = ["static_cast<T>(" + repr(float(alpha_i)**2 * float(v)) + ") * s_fh[" + str(r) + "]"
+                     for r, v in enumerate(motion) if v != 0]
+            self.gen_add_code_line("s_M[" + str(vi + nv*vi) + "] += " + " + ".join(terms) + ";")
         # walk ancestors
         j = ind
         cur = "s_fh"
@@ -136,10 +145,18 @@ def _gen_crba_inner_mimic_fixed(self, NB):
             j = self.robot.get_parent_id(j)
             vj = self._v_slot_cpp(j)
             alpha_j = self._alpha_for_jid(j)
-            sj_ind = self.robot.get_S_index_by_id(j)
-            sj_sign = self.robot.get_S_sign_by_id(j)
-            contrib_coeff = float(alpha_i) * float(alpha_j) * float(sj_sign)
-            self.gen_add_code_line("{ T contribution = static_cast<T>(" + repr(contrib_coeff) + ") * " + nxt + "[" + str(sj_ind) + "];")
+            if alpha_j == 0.0:
+                cur, nxt = nxt, cur  # Keep transport through the constant body.
+                continue
+            if self.robot.S_is_cardinal_by_id(j):
+                sj_ind = self.robot.get_S_index_by_id(j)
+                sj_sign = self.robot.get_S_sign_by_id(j)
+                contrib_coeff = float(alpha_i) * float(alpha_j) * float(sj_sign)
+                self.gen_add_code_line("{ T contribution = static_cast<T>(" + repr(contrib_coeff) + ") * " + nxt + "[" + str(sj_ind) + "];")
+            else:
+                terms = ["static_cast<T>(" + repr(float(alpha_i) * float(alpha_j) * float(v)) + ") * " + nxt + "[" + str(r) + "]"
+                         for r, v in enumerate(self.robot._get_flat_S_by_id(j)) if v != 0]
+                self.gen_add_code_line("{ T contribution = " + " + ".join(terms) + ";")
             self.gen_add_code_line("  s_M[" + str(vi + nv*vj) + "] += contribution; s_M[" + str(vj + nv*vi) + "] += contribution; }")
             cur, nxt = nxt, cur
     self.gen_add_end_control_flow()
@@ -734,6 +751,8 @@ def _gen_crba_mimic_floating_phase2(self, NJ):
     for ind in range(1, NJ):
         vi = self._v_slot_cpp(ind)
         alpha_i = self._alpha_for_jid(ind)
+        if alpha_i == 0.0:
+            continue  # Phase 1 already propagated IC; this body owns no column.
         s_ind = self.robot.get_S_index_by_id(ind)
         s_sign = self.robot.get_S_sign_by_id(ind)
         self.gen_add_code_line("// body " + str(ind) + " -> v-slot " + str(vi) + " (alpha=" + repr(alpha_i) + ")")
@@ -751,6 +770,9 @@ def _gen_crba_mimic_floating_phase2(self, NJ):
             j = self.robot.get_parent_id(j)
             vj = self._v_slot_cpp(j)
             alpha_j = self._alpha_for_jid(j)
+            if alpha_j == 0.0:
+                cur, nxt = nxt, cur  # Transport through it without projecting.
+                continue
             sj_ind = self.robot.get_S_index_by_id(j)
             sj_sign = self.robot.get_S_sign_by_id(j)
             contrib_coeff = float(alpha_i) * float(alpha_j) * float(sj_sign)

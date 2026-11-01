@@ -68,7 +68,7 @@ def main():
         result = subprocess.run(
             [
                 "nvcc",
-                "-std=c++11",
+                "-std=c++17",
                 "-o",
                 "printGRiD.exe",
                 "printGRiD.cu",

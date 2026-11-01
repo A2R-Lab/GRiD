@@ -1,0 +1,54 @@
+<?xml version="1.0"?>
+<!-- Acrobot: a 2-link serial pendulum (shoulder + elbow, both revolute about y). 2-DOF:
+     q = [theta1, theta2]. theta=0 hangs down (-z); [pi, 0] is the upright swing-up goal.
+     Classic Spong parameters: two uniform 1 m / 1 kg rods, COM at z=-0.5,
+     I_perp = mL^2/12 = 0.0833. Fully actuated here (GRiD generates fully-actuated
+     dynamics); the acrobot's classic elbow-only underactuation is approximated at the
+     PROBLEM level with a large shoulder-torque cost R (see robot_config.cuh) — the strongly
+     nonlinear swing-up this produces is the DDP-vs-iLQR showcase problem. -->
+<robot name="acrobot">
+
+  <!-- world-fixed shoulder mount (dropped from the fixed-base dynamics) -->
+  <link name="base_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.01" ixy="0.0" ixz="0.0" iyy="0.01" iyz="0.0" izz="0.01"/>
+    </inertial>
+  </link>
+
+  <!-- upper link (shoulder to elbow) -->
+  <link name="upper_link">
+    <inertial>
+      <origin xyz="0 0 -0.5" rpy="0 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.0833333" ixy="0.0" ixz="0.0" iyy="0.0833333" iyz="0.0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <!-- lower link (elbow to tip) -->
+  <link name="lower_link">
+    <inertial>
+      <origin xyz="0 0 -0.5" rpy="0 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="0.0833333" ixy="0.0" ixz="0.0" iyy="0.0833333" iyz="0.0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <joint name="shoulder" type="revolute">
+    <parent link="base_link"/>
+    <child link="upper_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="100.0" velocity="100.0" lower="-100.0" upper="100.0"/>
+  </joint>
+
+  <joint name="elbow" type="revolute">
+    <parent link="upper_link"/>
+    <child link="lower_link"/>
+    <origin xyz="0 0 -1.0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit effort="100.0" velocity="100.0" lower="-100.0" upper="100.0"/>
+  </joint>
+
+</robot>

@@ -37,7 +37,8 @@ def _parse(path):
 
 
 def _pin_joint_of_body(model, link_name):
-    return model.frames[model.getFrameId(link_name)].parentJoint
+    # URDF joint and link names occupy distinct namespaces and may coincide.
+    return model.frames[model.getFrameId(link_name, pin.FrameType.BODY)].parentJoint
 
 
 def _snapped_pin_model(path):
