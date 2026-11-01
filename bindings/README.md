@@ -161,8 +161,8 @@ The full reference for the rest of the surface lives in the
 
 ## Install
 
-`grid_rbd` ships inside the `grid-rbd` distribution on PyPI (0.5.1: Linux
-x86-64 wheels and an sdist, CPython 3.10–3.13) together with the code
+`grid_rbd` ships inside the `grid-rbd` distribution on PyPI (Linux
+x86-64 wheels and an sdist, CPython 3.10 to 3.13) together with the code
 generator and the `grid-generate` / `grid-spherize` CLIs. Each GPU backend is
 an opt-in extra on top of the numpy base; pick the row for the wrapper surface
 you need:
@@ -272,7 +272,7 @@ nvcc/ptxas output can be inspected for warnings.
 A first use announces itself: a one-line `WARNING` on the `grid_rbd` logger
 (printed to stderr with no logging setup) says which robot is being compiled,
 how many units on how many cores, roughly how long (1–3 min for an arm or
-quadruped, ~10 min for a humanoid) and where it is cached; a second line reports
+quadruped, 6 to 10 min for a humanoid) and where it is cached; a second line reports
 the elapsed time. `GRID_RBD_QUIET=1` silences it. `get_robot(name, urdf_path=...)`
 compiles and registers on a *miss* (a hit ignores the URDF), so a script can be
 written as "get or build". `python -m grid_rbd.gc_cache` reports store entries

@@ -235,7 +235,7 @@ pull access or GPU runtime correctness. Before announcing the container:
    visibility in the package settings. Do not work around failed anonymous access
    with a personal token and then call the public release verified.
 2. On an exclusively available GPU host with Docker and NVIDIA Container Toolkit,
-   run `sudo bash tools/check_container_image.sh 0.5.3` (substitute the released
+   run `sudo bash tools/check_container_image.sh 0.7.0` (substitute the released
    version). Omit sudo if Docker is already accessible. No host packages, drivers,
    group permissions or registry settings are changed by this checker.
    It uses an empty Docker CLI configuration for the anonymous pull, resolves

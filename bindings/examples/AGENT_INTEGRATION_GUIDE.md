@@ -1,6 +1,6 @@
 # Integrating GRiD via `grid_rbd`: a guide for agents and users
 
-*Last reviewed 2026-10-14 against main `f4f72e7` (grid-rbd 0.5.1). The API surface below (entry points, `get_robot` compile-on-miss, cache layout and `gc_cache`, build knobs, method shapes) was re-checked against `bindings/grid_rbd` and `docs/source/user_guide/tutorials/python_wrappers.rst`. The measured numbers quoted inline (the 2026-10-01 host-copy timings, the iiwa14 FFI block-size figure, the CUDA-graph submit costs) were not re-measured. If the code and this guide disagree, trust the code and fix the guide.*
+*Last reviewed 2026-10-14 against main `f4f72e7` (grid-rbd 0.5.1); method shapes, integrator names, precision tiers and the batch-overlay API re-checked 2026-10-31 against 0.7.0. The API surface below (entry points, `get_robot` compile-on-miss, cache layout and `gc_cache`, build knobs, method shapes) was re-checked against `bindings/grid_rbd` and `docs/source/user_guide/tutorials/python_wrappers.rst`. The measured numbers quoted inline (the 2026-10-01 host-copy timings, the iiwa14 FFI block-size figure, the CUDA-graph submit costs) were not re-measured. If the code and this guide disagree, trust the code and fix the guide.*
 
 This guide covers how to call GRiD's GPU rigid-body dynamics from Python
 effectively. The governing rule is to place your data on the GPU once and keep it
@@ -282,7 +282,7 @@ t = torch.utils.dlpack.from_dlpack(jax_array)    # JAX → torch
 j = jax.dlpack.from_dlpack(torch_tensor.contiguous())   # torch → JAX
 ```
 
-## Methods (all batched on axis 0; jax/torch are fp32)
+## Methods (all batched on axis 0; fp32 is the validated tier on every surface)
 
 `B` = batch, `NJ` = `num_joints` (= `nq`), `NV` = `num_vel` (tangent space). On a fixed base,
 `NV == NJ` and all shapes coincide; on a floating base, `NJ > NV` (the free-flyer adds a quat slot).
@@ -291,9 +291,9 @@ Dynamics and kinematics:
 
 | Method | Returns | Notes |
 |--------|---------|-------|
-| `inverse_dynamics(q,qd,qdd=None)` | `(B,NJ)` | alias `rnea`; `qdd=None` gives the bias `c=h−g`, nonzero adds `M·qdd` |
-| `forward_dynamics(q,qd,u)` | `(B,NJ)` | alias `fd` |
-| `aba(q,qd,u)` | `(B,NJ)` | |
+| `inverse_dynamics(q,qd,qdd=None)` | `(B,NV)` | alias `rnea`; `qdd=None` gives the bias `c=h−g`, nonzero adds `M·qdd` |
+| `forward_dynamics(q,qd,u)` | `(B,NV)` | alias `fd` |
+| `aba(q,qd,u)` | `(B,NV)` | |
 | `crba(q)` | `(B,NV,NV)` | |
 | `minv(q)` | `(B,NV,NV)` | |
 | `end_effector_pose(q)`/`_gradient`/`_hessian` | `(B,6·num_ees[,NV[,NV]])` | |
@@ -310,8 +310,8 @@ Trajectory optimization (`grid_plant`):
 
 | Method | Returns | Notes |
 |--------|---------|-------|
-| `integrator(q,qd,u,dt)` / `integrator_gradient` | | `integrator_type=` is `euler` (default) / `semi_implicit_euler` / `midpoint` / `rk3` / `rk4` |
-| `plant_step(x,u,dt)` | `(B,NX)` | state `x=[q;qd]` (`NX=2·NV`) |
+| `integrator(q,qd,u,dt)` / `integrator_gradient` | | `integrator_type=` is `euler` (default) / `semi_implicit_euler` / `midpoint` / `rk4` / `trapezoidal` / `constant_acceleration` |
+| `plant_step(x,u,dt)` | `(B,NX)` | state `x=[q;qd]` (`NX=NJ+NV`; `2·NV` on a fixed base) |
 | `plant_step_gradient(x,u,dt)` | `(B,2·NV,3·NV)` | `[A\|B]` |
 
 Cost terms return `(value, grad, hess)`: `quadratic_state_cost(x,x_des,Q)`,
@@ -343,9 +343,9 @@ Properties: `num_joints`, `num_vel`, `num_ees`, `num_bodies`, `floating_base`, `
 `output_convention`, plus the aliases `nq` / `nv` / `nb` (configuration width /
 tangent width / body count).
 
-The jax/torch surfaces are strictly fp32 (compute and I/O). The numpy
-handle defaults to fp32 too but supports a true fp64 tier via `dtype="float64"` (separate `.so`)
-(the fp32 compute path is the validated one).
+All three surfaces default to fp32, the validated tier. `dtype="float64"` builds a
+separate `.so` and the handle's arrays, gravity and `dt` follow it; fp64 is the alpha tier
+outside the signed receipt.
 
 ## Gradients are analytic
 
@@ -443,8 +443,8 @@ fastest at 128 threads but the FFI path is fastest at ~768: the same kernel, ~1.
 Per-algo introspection: `handle.kernel_max_threads(key)` returns the real compiled
 `__launch_bounds__` ceiling for that algo's baked-tier kernel (keys = the autotune
 short names: id, fd, minv, id_du, fd_du, ee_pose, idsva_so, ...; -1 = unknown/absent).
-Batch-regime switching: `set_threads_for_n`/`apply_batch_overlay`/`get_batch_switch`
-apply per-algo small-batch thread overrides from the config's `ffi_bases_by_n` block.
+Batch-regime switching: `apply_batch_overlay`
+applies per-algo small-batch thread overrides from the config's `ffi_bases_by_n` block.
 
 
 ## Fusing GRiD into your own CUDA kernel

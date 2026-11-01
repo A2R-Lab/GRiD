@@ -100,7 +100,7 @@ A Docker image with grid-rbd, `jax[cuda12]`, a cu128 torch wheel and the generat
 |-----------|------|
 | `grid_codegen/` | the code-generation engine: emits `grid.cuh` and the checked-in generated binding regions, driven by the `abi_specs.py` table |
 | `bindings/` | the `grid-rbd` Python package (NumPy/JAX/torch handles over a cached per-robot `.so`); see [`bindings/README.md`](https://github.com/A2R-Lab/GRiD/blob/main/bindings/README.md) |
-| `grid_assets/` | ten sample URDFs (`robots/`) + tuned per-GPU launch configs (`launch_configs/`) |
+| `grid_assets/` | ten sample robots and three test fixtures (`robots/`) + tuned per-GPU launch configs (`launch_configs/`) |
 | `test/` | pytest suites + the split-suite/receipt machinery |
 | `examples/` | `notebooks/` (Python tour), `codegen/`, `cuda/`; see [`examples/README.md`](https://github.com/A2R-Lab/GRiD/blob/main/examples/README.md) |
 | `docs/` | the Sphinx site (`source/`), the cover page (`landing/`), `agent_debugging_guide.md`, `design_history/` |

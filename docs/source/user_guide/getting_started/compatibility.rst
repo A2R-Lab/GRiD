@@ -4,8 +4,9 @@ Compatibility and known limitations
 Platforms and toolchain
 -----------------------
 
-* There is one artifact per GPU architecture. A robot ``.so`` is compiled for the
-  ``sm_XX`` of the GPU that registers it (or ``cuda_arch=``); loading it on a
+* There is one artifact per GPU architecture unless ``GRID_RBD_CUDA_ARCHS`` names
+  several and the build is a fat binary. A robot ``.so`` is otherwise compiled for
+  the ``sm_XX`` of the GPU that registers it (or ``cuda_arch=``); loading it on a
   different architecture is refused at context creation with a clear error.
   The model, the API and the generated code carry over between machines; the
   binary does not.
@@ -19,7 +20,8 @@ Platforms and toolchain
   numpy-only build. With the ``[torch]`` extra the wrapper reads the standard
   that torch's ATen header guard demands and compiles with it. The torch we run
   (2.12.0, cu128) compiles with C++17. A torch that demands C++20 needs an nvcc
-  and host compiler accepting C++20, and that path is untested here.
+  and host compiler accepting C++20; that path has run only in the Orin smoke
+  below (torch 2.14.0+cu130), never under a receipt.
   ``GRID_RBD_CXX_STD`` forces the standard.
 * The ``[jax]`` / ``[torch]`` extras pin the CPU packages; install the CUDA
   wheel yourself. We run ``jax[cuda12]`` (``jax-cuda12-plugin`` 0.10.0) and a
@@ -98,9 +100,10 @@ carries its own CUDA 12.8 runtime libraries for torch's kernels, and the
 615.71.09 does. A ``jax[cuda13]`` plugin, a torch wheel other than cu128, a
 CUDA 12 toolkit and CPython 3.10, 3.11 or 3.13 on a GPU are untested; the CI
 wheel builds for CPython 3.10, 3.11 and 3.13 and the CPU test lane on 3.10 and
-3.13 run on CPU only. The Jetson rows record smoke runs, not receipts. The
-Orin receipt is recorded under ``receipts/`` once the per-architecture receipt
-table is on main; the Xavier stays header-only because JetPack 5 ships CUDA
+3.13 run on CPU only. The Jetson rows record smoke runs, not receipts. No
+secondary receipt has been recorded yet; the first Orin receipt lands under
+``receipts/`` through the per-architecture table in
+``test/gpu-proof-receipts.yaml``; the Xavier stays header-only because JetPack 5 ships CUDA
 11.4 and Python 3.8, below the floors of the generator and the bindings.
 
 Runtime contexts

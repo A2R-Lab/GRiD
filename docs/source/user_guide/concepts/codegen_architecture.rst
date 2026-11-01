@@ -95,7 +95,7 @@ idsva_so −20% and fdsva_so −18% of compute on g1-floating, −13…−52% on
      ├── forward_dynamics_inner()   # reuses s_XImats
      ├── fd_gradient_inline()       # may surgically spill to d_fd_grad_spill
      ├── idsva_so_{world,body}_inner()
-     └── fdsva_so_inner()           # the rank-3 contraction step
+     └── fdsva_so_contract()        # the rank-3 contraction step
 
 If the ``_inner`` building blocks were collapsed into their owning
 ``_device``, the compositional algorithms would pay the XImats load three

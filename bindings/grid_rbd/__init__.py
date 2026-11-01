@@ -521,7 +521,7 @@ def _build_notice_start(name: str, meta: dict, gen_dir: Path, cache_dir: Path) -
     from ._compile import _build_jobs
     nv = int(meta.get("num_vel", meta.get("NUM_VEL", 0)) or 0)
     units = len(list(gen_dir.glob("wrapper_*.cu")))
-    size = "about 10 min for a humanoid" if nv >= 20 else "typically 1–3 min for an arm or quadruped"
+    size = "6 to 10 min for a humanoid" if nv >= 20 else "typically 1–3 min for an arm or quadruped"
     _notice(f"grid_rbd: compiling the dynamics of {name!r} ({nv} velocity DOF) — a one-time nvcc build "
             f"of {units} units on up to {_build_jobs()} cores, {size}; the result is cached under "
             f"{cache_dir} for every later run (progress: robot.build.log in the cache entry).")
@@ -721,7 +721,6 @@ def warm_robot(
             code_options["launch_config"] = {k: dict(v) for k, v in sorted(_lc.items())}
     except Exception:
         pass  # un-resolvable config -> conservative fallback bakes; key stays urdf-derived
-    import json
     import shutil as _shutil
 
     # Two-stage content-addressed store (2026-08-19, see _cache.py): the input
@@ -761,7 +760,6 @@ def warm_robot(
         if mapped:
             entry_dir = store_dir(cache_dir, mapped)
             so_path = entry_dir / "robot.so"
-            meta_path = entry_dir / "meta.json"
             # Audit W05: a pointer is honoured only when the entry is whole AND
             # its recorded build identity equals ours — never hand back a .so
             # built by another toolchain / GLASS content / key schema.

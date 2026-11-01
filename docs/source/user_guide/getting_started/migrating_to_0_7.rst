@@ -32,6 +32,7 @@ because the association check compares hashes and will reject the pair.
 
    model = describe_model("robot.urdf")
    art = build_artifact("myapp", "robot", "robot.urdf",
+                        sources=["kernel.cu"],
                         algorithm_list=["end_effector_pose"],
                         expected_descriptor_id=model["descriptor_id"])
    # later, without a compiler or the URDF:
@@ -52,9 +53,9 @@ A consumer that compiles a pybind11 module through ``build_artifact`` now
 passes ``python_extension=True``. The build then records the interpreter ABI in
 the artifact identity, exports only the module entry point and keeps the
 module's static state private, so two revisions or two robots loaded in one
-process do not share symbols. Without the flag the artifact is treated as a
-plain native library and a later ``load_artifact`` from another Python ABI is
-refused. There is no stable-ABI promise: a module built for CPython 3.12 is
+process do not share symbols. Without the flag a build whose object
+exports a ``PyInit_*`` symbol is refused before publication, so a pybind module
+cannot be recorded as a plain native library. There is no stable-ABI promise: a module built for CPython 3.12 is
 reused by CPython 3.12 only.
 
 Loading a second revision of a module under the same name in one process is

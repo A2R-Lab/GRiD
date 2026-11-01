@@ -19,6 +19,6 @@ dependencies:
   - pip
   - pip:
       - --extra-index-url https://download.pytorch.org/whl/cu128
-      - grid-rbd[jax,torch]==0.5.1
+      - grid-rbd[jax,torch]==0.7.0
       - jax[cuda12]
       - torch

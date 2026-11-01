@@ -187,8 +187,8 @@ change.
 
          r = grid_rbd.load_robot("grid_assets/robots/iiwa14.urdf", backend="torch")
          q = torch.zeros(8, r.nq, device="cuda", requires_grad=True)
-         qd = torch.zeros(8, r.nq, device="cuda")
-         u = torch.zeros(8, r.nq, device="cuda")
+         qd = torch.zeros(8, r.nv, device="cuda")
+         u = torch.zeros(8, r.nv, device="cuda")
          qdd = r.forward_dynamics(q, qd, u)                 # CUDA tensors in and out
          qdd.sum().backward()                               # analytic backward
          step = r.capture("forward_dynamics", q.detach(), qd, u)   # CUDA-graph replay

@@ -14,6 +14,11 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [0.7.0] — 2026-10-31
 
+Consumers rebuild their prepared artifacts (schema 2), declare pybind modules
+with `python_extension=True` and pass `CollisionMargins` where a scalar margin
+went before; the migration steps are on the documentation's *Migrating to 0.7*
+page, which this changelog does not repeat.
+
 - Add the skew revolute mimic fixture `revolute_mimic_fixed_tool` with
   closed-form mechanics checks of the numpy oracle and the generated CUDA
   inverse dynamics, forward dynamics, ABA, mass matrix and its inverse.
@@ -33,7 +38,6 @@ repository. Everything below describes the packaged A2R-Lab releases.
   in the CPU reference and generated CUDA. Stabilize small-angle reference
   Rodrigues coefficients. Clarify that `plant_step_hessian` differentiates the
   moving-basis gradient: it is not a fixed-chart or shooting-defect Hessian.
-
 - Add checked generated cost-menu views, explicit full-shared/deep-spill
   fixed-base plant-Hessian views with matched evaluators, gradient initialization
   extents, and exact target EE inner scratch queries. Keep allocation, collective
@@ -41,7 +45,6 @@ repository. Everything below describes the packaged A2R-Lab releases.
   admission explicit. Correct the plant-Hessian launch-size query's missing
   runtime-transform reserve using the same resolved layout as its kernel.
   Numerical arithmetic and tier selection are unchanged.
-
 - Add CPU model inspection and generated host/device coordinate/frame metadata
   with explicit independent ownership, xyzw conventions and typed canonical
   identity. A single-body-pose frame composer requires no FK pass or shared
@@ -50,7 +53,6 @@ repository. Everything below describes the packaged A2R-Lab releases.
   descriptor/header/binary association on build, reuse and source-free prepared
   load; older prepared artifacts require rebuilding. Descriptor identity is
   not complete dynamics or artifact identity.
-
 - Omit zero-weight reduced projections in floating-base constant-joint CRBA
   while retaining composite inertia and transport through constant ancestors.
   Add FP32/FP64 floating and fixed-base descendant dynamics tests against
@@ -85,8 +87,8 @@ repository. Everything below describes the packaged A2R-Lab releases.
 - Do not read placeholder velocity/acceleration slots or project zero local
   contributions in generated inverse dynamics for constant joints. Add a
   branched FP32/FP64 poison regression that preserves genuine NaN inputs.
-- Update GLASS to `9a24f37` for cooperative handoff reloads under restricted
-  callers. Add embedded FP32/FP64 solve, eigenvalue-clamp and pivoted-inverse
+- Update GLASS first to `9a24f37` for cooperative handoff reloads under
+  restricted callers (the release pin is `6a82320`, above). Add embedded FP32/FP64 solve, eigenvalue-clamp and pivoted-inverse
   regressions with poisoned scratch and thread-count checks. Update
   pytest-gpu-proof to 0.5.0, enable receipt-tooling CPU checks on Python 3.10,
   and test compiler-metadata merge refusal and legacy-field compatibility.
