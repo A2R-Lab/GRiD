@@ -40,7 +40,7 @@ def prepared_phase():
     python = load_artifact("migration", "python", cache_dir=spec["cache_dir"], cuda_arch=spec["cuda_arch"],
                            expected_descriptor_id=spec["descriptor_id"])
     assert not native.compiled and not python.compiled
-    assert native.descriptor["descriptor_id"] == python.descriptor["descriptor_id"] == spec["descriptor_id"]
+    assert native.model_descriptor["descriptor_id"] == python.model_descriptor["descriptor_id"] == spec["descriptor_id"]
     lib = ctypes.CDLL(str(native.path))
     lib.consumer_num_pos.restype = ctypes.c_int
     module_spec = importlib.util.spec_from_file_location("grid_migration_probe", str(python.path))

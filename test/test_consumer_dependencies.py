@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from grid_rbd import _artifacts as artifacts
-from test._consumer_model_fixture import generate_metadata_header
+from test._consumer_model_fixture import FakeToolchain, generate_metadata_header
 from grid_rbd._consumer_dependencies import parse_dependencies, discover_dependencies
 
 
@@ -56,7 +56,7 @@ def case(tmp_path, monkeypatch):
     monkeypatch.setattr(artifacts, "artifact_identity", lambda arch: {
         "key_schema": artifacts._KEY_SCHEMA, "artifact_schema": artifacts.ARTIFACT_SCHEMA,
         "cuda_arch": arch})
-    monkeypatch.setattr(artifacts, "resolve_consumer_toolchain", lambda *a: None)
+    monkeypatch.setattr(artifacts, "resolve_consumer_toolchain", lambda *a: FakeToolchain())
     monkeypatch.setattr(artifacts, "_toolchain_tag", lambda: "fake")
     monkeypatch.setattr(artifacts, "_build_jobs", lambda: 1)
     monkeypatch.setattr(artifacts, "_validate_python_exports", lambda *a: None)

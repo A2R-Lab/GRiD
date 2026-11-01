@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from grid_rbd import _artifacts as artifacts
-from test._consumer_model_fixture import generate_metadata_header
+from test._consumer_model_fixture import FakeToolchain, generate_metadata_header
 
 
 @pytest.fixture
@@ -24,7 +24,7 @@ def build_case(tmp_path, monkeypatch):
     monkeypatch.setattr(artifacts, "_toolchain_tag", lambda: "fake")
     monkeypatch.setattr(artifacts, "generate_grid_cuh", generate_metadata_header)
     monkeypatch.setattr(artifacts, "_validate_python_exports", lambda *a: None, raising=False)
-    monkeypatch.setattr(artifacts, "resolve_consumer_toolchain", lambda *a: None)
+    monkeypatch.setattr(artifacts, "resolve_consumer_toolchain", lambda *a: FakeToolchain())
     monkeypatch.setattr(artifacts, "discover_dependencies", lambda *a: {
         "schema": 1, "mode": "nvcc-MM", "units": {str(source): []}})
 
@@ -73,7 +73,8 @@ def test_python_abi_participates_in_unit_key(tmp_path, monkeypatch):
     unit = tmp_path / "module.cpp"
     unit.write_text("// identical source")
     monkeypatch.setattr(artifacts, "_toolchain_tag", lambda: "fake")
-    keys = [artifacts._unit_object_key(unit, tmp_path, [], ["nvcc"], python_abi=abi)
+    keys = [artifacts._unit_object_key(unit, tmp_path, [], ["nvcc"], python_abi=abi, toolchain=None,
+                                       dependencies=None)
             for abi in (None, {"soabi": "a"}, {"soabi": "b"})]
     assert len(set(keys)) == 3
 

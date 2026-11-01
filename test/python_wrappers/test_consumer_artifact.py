@@ -60,7 +60,7 @@ def test_descriptor_matches_exported_cpp_and_source_free_prepared_load(tmp_path,
     first=_grid_rbd.build_artifact('model','probe',urdf,**opts)
     lib=ctypes.CDLL(str(first.path))
     lib.model_json.restype=ctypes.c_char_p
-    assert json.loads(lib.model_json().decode())==model==first.descriptor
+    assert json.loads(lib.model_json().decode())==model==first.model_descriptor
     assert not _grid_rbd.build_artifact('model','probe',urdf,**opts).compiled
     urdf.unlink(); source.unlink()
     from grid_rbd import _artifacts, _model
@@ -68,10 +68,10 @@ def test_descriptor_matches_exported_cpp_and_source_free_prepared_load(tmp_path,
     monkeypatch.setattr(_artifacts,'find_nvcc',lambda *a: pytest.fail('prepared looked for nvcc'))
     loaded=_grid_rbd.load_artifact('model','probe',cache_dir=tmp_path/'cache',cuda_arch=arch,
                                    expected_descriptor_id=model['descriptor_id'])
-    assert loaded.descriptor==model
+    assert loaded.model_descriptor==model
     # Public access returns a fresh value, not a mutable alias to cached metadata.
-    loaded.descriptor['joints'][0]['name']='caller mutation'
-    assert loaded.descriptor==model
+    loaded.model_descriptor['joints'][0]['name']='caller mutation'
+    assert loaded.model_descriptor==model
 
 
 def test_compiler_discovered_headers_rekey_native_values(tmp_path):

@@ -159,7 +159,7 @@ its values are recursively tagged. The top-level digest field alone is omitted.
 
 ``build_artifact(..., expected_descriptor_id=model["descriptor_id"])`` checks
 a previously inspected model on cold and reused builds. The returned
-``ConsumerArtifact.descriptor`` is validated metadata. Prepared
+``ConsumerArtifact.model_descriptor`` is validated metadata. Prepared
 ``load_artifact(..., expected_descriptor_id=...)`` checks the saved descriptor,
 its generated-header representation, and the header/binary hashes without
 reading the original source or invoking a compiler. These are consistency

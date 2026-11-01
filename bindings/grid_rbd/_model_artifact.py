@@ -15,7 +15,7 @@ def check_expected_id(value):
         raise ValueError('expected_descriptor_id must be a lowercase SHA256 hex string')
 
 
-def _digest(path):
+def file_digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -52,7 +52,7 @@ def _association_snapshot(entry, artifact_name):
         raise ValueError('model descriptor disagrees with generated header')
     association=dict(schema=1,descriptor_id=descriptor['descriptor_id'],
                      header_sha256=hashlib.sha256(header_bytes).hexdigest(),
-                     artifact_sha256=_digest(entry/artifact_name))
+                     artifact_sha256=file_digest(entry/artifact_name))
     return descriptor, association
 
 

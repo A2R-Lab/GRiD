@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from grid_rbd import _artifacts as artifacts
-from test._consumer_model_fixture import generate_metadata_header
+from test._consumer_model_fixture import FakeToolchain, generate_metadata_header
 
 
 @pytest.fixture
@@ -21,7 +21,7 @@ def consumer(tmp_path, monkeypatch):
     monkeypatch.setattr(artifacts, "_compile_command", lambda gen, *a: ["fake-nvcc", f"-I{gen}"])
     monkeypatch.setattr(artifacts, "_toolchain_tag", lambda: "fake-toolchain")
     monkeypatch.setattr(artifacts, "_validate_python_exports", lambda *a: None)
-    monkeypatch.setattr(artifacts, "resolve_consumer_toolchain", lambda *a: None)
+    monkeypatch.setattr(artifacts, "resolve_consumer_toolchain", lambda *a: FakeToolchain())
     monkeypatch.setattr(artifacts, "discover_dependencies", lambda *a: {
         "schema": 1, "mode": "nvcc-MM", "units": {str(source): []}})
 
@@ -29,8 +29,7 @@ def consumer(tmp_path, monkeypatch):
         state.generated += 1
         generate_metadata_header(urdf, opts, out)
 
-    def build(gen, sources, headers, cmd, flags, out, objects, reuse_objects, validate_inputs=None,
-                    python_abi=None, toolchain=None, dependencies=None, validate_unit_inputs=None):
+    def build(gen, sources, headers, cmd, flags, out, objects, reuse_objects, **kw):
         state.compiled += 1
         out.write_bytes(b"artifact")
         return {"compiled_units": 1, "units": {}}
@@ -67,7 +66,7 @@ def test_bad_metadata_is_repaired(consumer):
 def test_model_association_rejects_and_repairs_swapped_files(consumer, damage):
     from grid_codegen.model_descriptor import descriptor_id
     first=consumer.build()
-    original=first.descriptor
+    original=first.model_descriptor
     if damage in ('descriptor', 'rehash'):
         path=first.store_dir/'model_descriptor.json'
         d=json.loads(path.read_text())
@@ -86,7 +85,7 @@ def test_model_association_rejects_and_repairs_swapped_files(consumer, damage):
         artifacts.load_artifact('cpu-probe', 'robot', cache_dir=consumer.urdf.parent/'cache', cuda_arch=120)
     assert not consumer.build(plan_only=True)['cached']
     repaired=consumer.build()
-    assert repaired.descriptor==original
+    assert repaired.model_descriptor==original
     assert consumer.compiled==2
     assert not consumer.build().compiled
 
@@ -103,7 +102,7 @@ def test_schema_damage_cannot_hide_in_content_reuse(consumer,sidecar,value):
     rebuilt=consumer.build()
     assert rebuilt.content_key==first.content_key
     assert artifacts.load_artifact('cpu-probe','robot',cache_dir=first.store_dir.parents[3],
-                                    cuda_arch=120).descriptor==first.descriptor
+                                    cuda_arch=120).model_descriptor==first.model_descriptor
     assert not consumer.build().compiled
 
 
@@ -124,7 +123,7 @@ def test_expected_descriptor_checked_on_cold_warm_content_and_prepared_paths(con
     monkeypatch.setattr(model_metadata_cpp,'emit_model_metadata',lambda *a: pytest.fail('prepared regenerated metadata'))
     loaded=artifacts.load_artifact('cpu-probe','robot',cache_dir=first.store_dir.parents[3],
                                    cuda_arch=120,expected_descriptor_id=expected)
-    assert loaded.descriptor['descriptor_id']==expected
+    assert loaded.model_descriptor['descriptor_id']==expected
     with pytest.raises(artifacts.ArtifactIncompatibleError,match='expected_descriptor_id'):
         artifacts.load_artifact('cpu-probe','robot',cache_dir=first.store_dir.parents[3],
                                  cuda_arch=120,expected_descriptor_id='0'*64)
@@ -167,7 +166,9 @@ def test_same_stem_sources_produce_distinct_objects_and_links(tmp_path, monkeypa
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(artifacts.subprocess, "run", nvcc)
-    artifacts._build(gen, sources, [], ["fake"], [], gen / "artifact.so", tmp_path / "objects", True)
+    artifacts._build(gen, sources, [], ["fake"], [], gen / "artifact.so", tmp_path / "objects", True,
+                     validate_unit=lambda unit: None, python_abi=None, toolchain=FakeToolchain(),
+                     dependencies={"units": {str(p): [] for p in sources}})
     assert len(set(paths)) == 2
     assert linked == [b"kernel.cu", b"kernel.cpp"]
 
@@ -178,7 +179,8 @@ def test_source_language_participates_in_object_key(tmp_path, monkeypatch):
     for source in sources:
         source.write_text("same")
     monkeypatch.setattr(artifacts, "_toolchain_tag", lambda: "fake")
-    keys = [artifacts._unit_object_key(p, tmp_path, [], ["nvcc"]) for p in sources]
+    keys = [artifacts._unit_object_key(p, tmp_path, [], ["nvcc"], python_abi=None, toolchain=None,
+                                       dependencies=None) for p in sources]
     assert keys[0] != keys[1]
 
 
@@ -193,8 +195,10 @@ def test_source_location_participates_in_all_reuse_keys(tmp_path, monkeypatch):
         sources.append(source)
     monkeypatch.setattr(artifacts, "_toolchain_tag", lambda: "fake")
     inputs = [artifacts._input_key(b"urdf", {}, [p], [], [], [], [], [], "artifact.so", {}) for p in sources]
-    contents = [artifacts._content_key(tmp_path, [p], [], ["nvcc"], [], "artifact.so") for p in sources]
-    units = [artifacts._unit_object_key(p, tmp_path, [], ["nvcc"]) for p in sources]
+    contents = [artifacts._content_key(tmp_path, [p], [], ["nvcc"], [], "artifact.so", python_abi=None,
+                                       toolchain=None, dependencies=None) for p in sources]
+    units = [artifacts._unit_object_key(p, tmp_path, [], ["nvcc"], python_abi=None, toolchain=None,
+                                        dependencies=None) for p in sources]
     for keys in (inputs, contents, units):
         assert len(set(keys)) == 2
 
@@ -274,6 +278,23 @@ def test_changed_source_is_rejected_before_object_publication(tmp_path, monkeypa
 
     monkeypatch.setattr(artifacts.subprocess, "run", nvcc)
     with pytest.raises(RuntimeError, match="changed source"):
-        artifacts._build(gen, [source], [], ["fake"], [], gen / "artifact.so", objects,
-                         True, validate_inputs=validate)
+        artifacts._build(gen, [source], [], ["fake"], [], gen / "artifact.so", objects, True,
+                         validate_unit=lambda unit: validate(), python_abi=None, toolchain=FakeToolchain(),
+                         dependencies={"units": {str(source): []}})
     assert not list(objects.glob("*.o"))
+
+
+def test_strict_collision_opt_out_is_keyed_and_bounded(consumer, tmp_path):
+    """The default records nothing; the opt-out is part of the artifact's options, and it
+    has no meaning on a supplied sphere model, which is validated rather than spherized."""
+    strict = consumer.build(collision=True)
+    assert "strict_collision" not in strict.meta["code_options"]
+    lenient = consumer.build(collision=True, strict_collision=False)
+    # The opt-out is an input of the build, so it is in the input key; the artifact is
+    # content keyed, and a spherizer that raised no warning generates the same header.
+    assert lenient.input_key != strict.input_key
+    assert lenient.content_key == strict.content_key
+    spheres = tmp_path / "spheres.urdf"
+    spheres.write_text('<robot name="probe"><link name="base"/></robot>')
+    with pytest.raises(ValueError, match="strict_collision=False applies to the spherizer"):
+        consumer.build(spherized_urdf=spheres, strict_collision=False)
