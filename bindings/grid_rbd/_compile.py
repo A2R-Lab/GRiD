@@ -303,8 +303,10 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # names a sphere model that must pass validate_sphere_model against the URDF, and
     # `collision_native` uses the URDF's native primitives as capsule rows. The caller
     # folds the sphere model's bytes into the options (build_artifact does), so the key
-    # follows the model's content. register_robot never sets these.
+    # follows the model's content. register_robot never sets these. `strict_collision`
+    # is recorded only when a consumer opts out of the spherizer's errors.
     collision_spec = None
+    strict_collision = bool(options.get("strict_collision", True))
     if options.get("spherized_urdf"):
         from grid_codegen.algorithms._collision import resolve_spherized_urdf, build_sphere_tiers
         path = resolve_spherized_urdf(str(options["spherized_urdf"]), str(urdf_path))
@@ -314,12 +316,12 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         from grid_codegen.algorithms._collision import native_collision_spec_from_urdf
         res = options.get("collision_res", 0.05)
         res = list(res)[-1] if isinstance(res, (list, tuple)) else float(res)
-        collision_spec = native_collision_spec_from_urdf(robot, str(urdf_path), res)
+        collision_spec = native_collision_spec_from_urdf(robot, str(urdf_path), res, strict=strict_collision)
     elif options.get("collision"):
         from grid_codegen.algorithms._collision import multi_tier_collision_spec_from_urdf
         res = options.get("collision_res", 0.05)
         res = list(res) if isinstance(res, (list, tuple)) else [float(res)]
-        collision_spec = multi_tier_collision_spec_from_urdf(robot, str(urdf_path), res)
+        collision_spec = multi_tier_collision_spec_from_urdf(robot, str(urdf_path), res, strict=strict_collision)
     with contextlib.redirect_stdout(io.StringIO()):
         cg.gen_all_code(
             output_path=str(out_path),

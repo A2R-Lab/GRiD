@@ -66,6 +66,9 @@ def parseInputs(NO_ARG_OPTION=False):
                              "Comma-separate multiple densities for a broad->fine cascade, e.g. "
                              "'0.10,0.05' (config_free uses coarsest to reject + finest to confirm). "
                              "Default 0.05")
+    parser.add_argument("--no-strict-collision", dest="strict_collision", default=True, action="store_false",
+                        help="Accept the spherizer's warnings (a voxel fill replaced by a bounding-box "
+                             "cover, a model with no spheres) instead of stopping; the default stops")
     parser.add_argument("--collision-native", default=False, action="store_true",
                         help="Use the URDF's own collision primitives as NATIVE capsule rows "
                              "(sphere -> degenerate row; cylinder -> containing capsule, conservative; "
@@ -221,12 +224,14 @@ def _collision_spec(args, robot):
         collision_spec = {key: tier[key] for key in ('anchor', 'offset', 'radius', 'self_cc_ranges')}
     elif args.collision_native:
         from grid_codegen.algorithms._collision import native_collision_spec_from_urdf
-        collision_spec = native_collision_spec_from_urdf(robot, args.urdf_path, args.collision_res[-1])
+        collision_spec = native_collision_spec_from_urdf(robot, args.urdf_path, args.collision_res[-1],
+                                                         strict=args.strict_collision)
         print("      collision rows = " + ", ".join(
             "%s:%d" % (t["name"], len(t["anchor"])) for t in collision_spec["tiers"]))
     elif args.collision:
         from grid_codegen.algorithms._collision import multi_tier_collision_spec_from_urdf
-        collision_spec = multi_tier_collision_spec_from_urdf(robot, args.urdf_path, args.collision_res)
+        collision_spec = multi_tier_collision_spec_from_urdf(robot, args.urdf_path, args.collision_res,
+                                                             strict=args.strict_collision)
         if "tiers" in collision_spec:
             print("      collision spheres = " + ", ".join(
                 "%s:%d" % (t["name"], len(t["anchor"])) for t in collision_spec["tiers"]))

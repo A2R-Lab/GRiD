@@ -110,6 +110,7 @@ art = grid_rbd.build_artifact(
     include_dirs=["csrc"], defines={"HJCD_BATCH": 64},
     algorithm_list=["end_effector_pose"],        # the codegen keywords of register_robot
     collision=True, collision_res=[0.10, 0.06],  # or spherized_urdf=<validated sphere model>, collision_native=True
+                                                 # the spherizer's warnings are errors; strict_collision=False accepts them
     emit_plant=None)                             # the generator's rule: a kinematics header carries no plant block
 lib = ctypes.CDLL(str(art.path))                 # art.header is the grid.cuh it was compiled against
 ```

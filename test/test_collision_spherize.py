@@ -112,3 +112,37 @@ def test_spherize_urdf_roundtrip_go2():
     # joint tree preserved (go2 is a quadruped with many joints)
     joints_in = urdf_joint_tree(urdf)
     assert set(joints_out) == set(joints_in), "spherize must preserve the URDF joint tree"
+
+
+def test_strict_spherize_rejects_an_empty_model(tmp_path):
+    """A URDF with no collision geometry is an error by default: an empty sphere model
+    would bake zero clearance rows without a word. The opt-out keeps the warning."""
+    urdf = tmp_path / "empty.urdf"
+    urdf.write_text('<robot name="empty"><link name="base"/></robot>')
+    with pytest.raises(ValueError, match="0 collision spheres"):
+        spherize_urdf(str(urdf), 0.05, out_path=str(tmp_path / "strict.urdf"))
+    with pytest.warns(UserWarning, match="0 collision spheres"):
+        out = spherize_urdf(str(urdf), 0.05, out_path=str(tmp_path / "lenient.urdf"), strict=False)
+    assert parse_spherized_urdf(out) == {}
+
+
+def test_strict_spherize_rejects_a_voxel_fill_fallback(tmp_path, monkeypatch):
+    """A failed voxel fill is an error by default; strict=False warns and keeps the
+    bounding-box cover, which still covers the mesh surface."""
+    trimesh = pytest.importorskip("trimesh")
+    import xml.etree.ElementTree as ET
+    mesh = trimesh.creation.box(extents=[0.2, 0.12, 0.3])
+    obj = tmp_path / "boxmesh.obj"
+    mesh.export(str(obj))
+    elem = ET.fromstring(f'<mesh filename="{obj}"/>')
+
+    def broken(self, pitch):
+        raise RuntimeError("probe: voxel fill unavailable")
+    monkeypatch.setattr(trimesh.Trimesh, "voxelized", broken)
+    with pytest.raises(ValueError, match="voxelization failed .*probe"):
+        _cover_mesh(elem, str(tmp_path), spacing=0.05, link_name="boxmesh")
+    with pytest.warns(UserWarning, match="bounding-box cover"):
+        spheres = _cover_mesh(elem, str(tmp_path), spacing=0.05, link_name="boxmesh", strict=False)
+    assert spheres
+    gap = _max_uncovered_gap([tuple(p) for p in mesh.sample(2000)], spheres)
+    assert gap <= 1e-6, f"bounding-box cover left the mesh surface uncovered (worst gap {gap:.2e})"

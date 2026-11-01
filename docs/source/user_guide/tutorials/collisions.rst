@@ -105,9 +105,13 @@ Geometry coverage and correctness
   are intended to match the fine-only verdict for the same representation.
 * Covering geometry is an approximation of the original robot. Agreement with
   a fine-tier sphere check is not proof of exact mesh collision detection.
-* Missing or unusable meshes fail generation. A failed voxel fill may use an
-  explicitly warned bounding-box cover, but geometry is never dropped to
-  produce a partial model. Self-collision pair exclusions must also match your application.
+* Missing or unusable meshes fail generation. A failed voxel fill and a model
+  with no spheres are errors as well, because either would silently change the
+  clearance rows a consumer bakes; ``strict_collision=False`` on
+  ``build_artifact`` (``--no-strict-collision`` on ``grid-generate`` and
+  ``grid-spherize``) accepts the bounding-box cover or the empty model with a
+  warning instead. Geometry is never dropped to produce a partial model.
+  Self-collision pair exclusions must also match your application.
 * Correctness tests live under ``test/cuda_equivalents/test_cuda_collision_*``;
   they cover geometry, pairs, tiering, costs, and native representations.
 

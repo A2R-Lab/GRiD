@@ -69,6 +69,9 @@ def main():
     parser.add_argument('--out', type=Path)
     parser.add_argument('--resolution', type=float, default=0.05, help='Primitive/voxel spacing in metres')
     parser.add_argument('--mesh-mode', choices=('voxel', 'bounded-bulge'), default='voxel')
+    parser.add_argument('--no-strict-collision', dest='strict', default=True, action='store_false',
+                        help='Accept a voxel fill replaced by a bounding-box cover, or a model with no '
+                             'spheres, with a warning instead of an error')
     parser.add_argument('--report', nargs='?', const='', metavar='SPHERE_URDF',
                         help='Report the generated model, or an existing sphere URDF')
     parser.add_argument('--geometry', choices=('collision', 'visual'), default='collision',
@@ -94,7 +97,7 @@ def main():
     if args.out:
         if args.out.resolve() == args.urdf.resolve():
             parser.error('Keep the original URDF; --out must be a different path')
-        spherize_urdf(args.urdf, args.resolution, args.out, mesh_mode=args.mesh_mode)
+        spherize_urdf(args.urdf, args.resolution, args.out, mesh_mode=args.mesh_mode, strict=args.strict)
     if args.report is not None:
         sphere_path = Path(args.report) if args.report else args.out
         print(f'Sampled fidelity against {args.geometry} geometry; not a continuous-coverage certificate.')

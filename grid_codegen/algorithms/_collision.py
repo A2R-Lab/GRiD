@@ -323,13 +323,15 @@ def build_self_cc_ranges(robot, anchor):
     return ranges
 
 
-def collision_spec_from_urdf(robot, urdf_path, resolution, mesh_resolution=None, out_path=None):
+def collision_spec_from_urdf(robot, urdf_path, resolution, mesh_resolution=None, out_path=None, strict=True):
     """One-call URDF -> single-tier collision_spec (for gen_all_code). Spherizes `urdf_path`
     (custom trimesh/analytic spherizer, foam-compatible output) then binds the spheres to GRiD
     frames via build_sphere_tiers. Returns {anchor, offset, radius, self_cc_ranges} -- the dict
-    gen_all_code's collision_spec kwarg expects. `resolution` = sphere spacing (m)."""
+    gen_all_code's collision_spec kwarg expects. `resolution` = sphere spacing (m). `strict`
+    is the spherizer's: a voxel-fill fallback or an empty model is an error unless False."""
     from ._spherize import spherize_urdf
-    sph_path = spherize_urdf(urdf_path, resolution, out_path=out_path, mesh_resolution=mesh_resolution)
+    sph_path = spherize_urdf(urdf_path, resolution, out_path=out_path, mesh_resolution=mesh_resolution,
+                             strict=strict)
     tier = build_sphere_tiers(robot, {"all": sph_path})["all"]
     return {"anchor": tier["anchor"], "offset": tier["offset"],
             "radius": tier["radius"], "self_cc_ranges": tier["self_cc_ranges"]}
@@ -425,7 +427,7 @@ def _broad_tier_from_rows(robot, anchor, pa, pb, radius):
             "self_cc_ranges": build_self_cc_ranges(robot, b_anchor)}
 
 
-def native_collision_spec_from_urdf(robot, urdf_path, resolution=0.05, mesh_resolution=None):
+def native_collision_spec_from_urdf(robot, urdf_path, resolution=0.05, mesh_resolution=None, strict=True):
     """URDF -> NATIVE capsule-row collision spec (opt-in, `--collision-native`):
     {"tiers": [broad sphere tier, fine CAPSULE tier]}. The fine tier carries "pb" (endpoint-b
     offsets) alongside "offset" (endpoint a) — "pb" present is what flags a capsule tier all
@@ -439,7 +441,7 @@ def native_collision_spec_from_urdf(robot, urdf_path, resolution=0.05, mesh_reso
     residual_spheres = {}
     if residual_links:
         from ._spherize import spherize_urdf
-        sph_path = spherize_urdf(urdf_path, resolution, mesh_resolution=mesh_resolution)
+        sph_path = spherize_urdf(urdf_path, resolution, mesh_resolution=mesh_resolution, strict=strict)
         parsed = parse_spherized_urdf(sph_path)
         residual_spheres = {ln: parsed.get(ln, []) for ln in residual_links}
     frames = sphere_anchor_frames(robot, list(native.keys()), urdf_path)
@@ -465,7 +467,7 @@ def native_collision_spec_from_urdf(robot, urdf_path, resolution=0.05, mesh_reso
     return {"tiers": [broad, fine]}
 
 
-def multi_tier_collision_spec_from_urdf(robot, urdf_path, resolutions, mesh_resolution=None):
+def multi_tier_collision_spec_from_urdf(robot, urdf_path, resolutions, mesh_resolution=None, strict=True):
     """One-call URDF -> MULTI-tier collision_spec (`{"tiers": [...]}` for gen_all_code). Spherizes
     `urdf_path` once per resolution and binds each to GRiD frames. `resolutions` = iterable of
     sphere spacings (m); sorted DESCENDING so the returned tiers run COARSEST->FINEST (config_free
@@ -474,10 +476,10 @@ def multi_tier_collision_spec_from_urdf(robot, urdf_path, resolutions, mesh_reso
     spec (byte-identical to collision_spec_from_urdf)."""
     res = sorted({float(r) for r in resolutions}, reverse=True)  # coarsest (largest spacing) first
     if len(res) == 1:
-        return collision_spec_from_urdf(robot, urdf_path, res[0], mesh_resolution=mesh_resolution)
+        return collision_spec_from_urdf(robot, urdf_path, res[0], mesh_resolution=mesh_resolution, strict=strict)
     names = ["broad", "fine"] if len(res) == 2 else ["tier%d" % i for i in range(len(res))]
     from ._spherize import spherize_urdf
-    outputs = {names[i]: spherize_urdf(urdf_path, res[i], mesh_resolution=mesh_resolution)
+    outputs = {names[i]: spherize_urdf(urdf_path, res[i], mesh_resolution=mesh_resolution, strict=strict)
                for i in range(len(res))}
     built = build_sphere_tiers(robot, outputs)
     tiers = []
