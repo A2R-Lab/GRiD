@@ -1,7 +1,8 @@
 """Resolve one explicit host compiler and consumer-only symbol policy.
 
 nvcc environment flags are flattened once, then removed from child environments
-so compile and link use the same recorded selection. Wrapper builds are unchanged.
+so compile and link use the same recorded selection. Wrapper builds do not use
+this module.
 """
 from __future__ import annotations
 

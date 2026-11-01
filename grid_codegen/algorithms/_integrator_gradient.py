@@ -2121,8 +2121,7 @@ def _gen_integrator_hessian_spherical_body(self):
 
     Reuse the dead fdsva pool after its trailing fence. One SO(3) block at a
     time uses the public GLASS SE(3) restriction, avoiding a second derivative
-    formula and any model-sized thread-local tensor. Existing scalar/floating
-    emission is unchanged.
+    formula and any model-sized thread-local tensor.
     """
     n = self.robot.get_num_vel()
     nz = 3*n

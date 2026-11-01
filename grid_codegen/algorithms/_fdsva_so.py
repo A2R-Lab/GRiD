@@ -10,7 +10,7 @@ composes adds the smooth term's qd-qd triple diagonal, so fdsva_so follows.
 
 # Shared block-parallel emit primitives (also used by _idsva_so). See _mjx_blockpar.
 import os
-from ._mjx_blockpar import bpfor as _bpfor, bpctrl as _bpctrl, stride_rc as _fbp
+from ._mjx_blockpar import bpfor as _bpfor, stride_rc as _fbp
 from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
 
 
@@ -758,12 +758,6 @@ def _emit_fdsva_so_kernel_body_for_flags(self, n, NUM_POS, use_global_tensors, u
     # Inner-controlled placement: forward_dynamics_inner slices its own Minv-F
     # from s_temp (smem; this kernel does not surgically spill Minv/FD-F — its
     # tiers spill the SO outputs / df_du / Minv instead).
-    # Canonical: build the shared helper ARGS via gen_insert_helpers_function_call
-    # (was a bespoke "make a def-params string then .replace() the types out" hack,
-    # which silently dropped/duplicated args when the helper signature changed).
-    fd_start = "forward_dynamics_inner<T, true>(s_qdd, s_q, s_qd, s_u, " + self.gen_insert_helpers_function_call()
-    fd_end = "s_temp, nullptr, nullptr, gravity);"  # trailing nullptr = no external forces
-
     # B3 dedup (so_audit_plan): the timed (single_call_timing) and untimed kernel
     # bodies differed ONLY by the per-timestep `k*...PER_TIMESTEP +` offset prefix
     # on the global/workspace pointers (the untimed body indexes per-timestep k;

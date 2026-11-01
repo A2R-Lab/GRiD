@@ -2069,16 +2069,8 @@ def gen_plant_step_gradient_kernel(self):
     x = [q (NUM_POS); qd (NUM_VEL)] (NON-const: the multi-stage RK path mutates
     q/qd across stages in smem); u = control torque (NUM_VEL)."""
     n = self.robot.get_num_vel()
-    fb = 1 if self.robot.floating_base else 0
     nx = self.robot.get_num_pos() + self.robot.get_num_vel()
-    from ._integrator import _max_stages_in_use
-    max_stages = _max_stages_in_use()
-    d_qdd_count = max_stages * n * 3 * n
     inner_temp_full = self.gen_integrator_gradient_inner_temp_mem_size()
-    # s_vaf is body-indexed (NB bodies, stride 6); size by NB for mimic robots
-    # (NB>nv) so the composed FD-grad ID sub-inner's 18*NB writes don't overflow
-    # the adjacent buffers (mirrors integrator_gradient_kernel's vaf sizing).
-    vaf_cnt = 18 * (self.robot.get_num_joints() if self.robot_has_mimic_joints() else n)
     self.gen_add_func_doc("plant_step_gradient kernel: [A|B] = integrator_gradient([q;qd], u, dt) per timestep "
                           "(full-smem scratch arena; pass-through to grid::integrator_gradient_device)",
                           [],
@@ -2166,6 +2158,9 @@ _PLANT_HESSIAN_PICK_FLAGS = [
 
 
 def _plant_hessian_pool_size(self):
+    """Shared-tier scratch pool of the plant Hessian: the largest of the
+    idsva_so inner, the 4 nv^3 fdsva_so contraction and the inline fd gradient,
+    raised to the SE(3) and SO(3) floors on floating or spherical models."""
     inner = max(self.gen_idsva_so_body_frame_inner_temp_mem_size(),
                 self.gen_fdsva_so_contract_temp_mem_size(),
                 self.gen_fdsva_so_fd_gradient_inline_temp_mem_size())
@@ -2274,8 +2269,6 @@ def _emit_plant_step_hessian_kernel_body_for_flags(self, n, nx, d2ab_count,
     for the spilled buffers, then call grid_plant::plant_step_hessian with the
     matching SCRATCH_IN_SMEM/CONTRACT_IN_SMEM flags, then (if d2AB is in smem)
     scatter it to the global output."""
-    # SHARED-tier fdsva_so inner pool: max(idsva_so inner, 4*nv^3 contract,
-    # fd_grad inline) -- the same sizing GCG.py's _temp_full uses for fdsva_so.
     inner_temp_full = _plant_hessian_pool_size(self)
     # When the pool spills, the smem s_temp slot is unused (size 0); the whole
     # pool (incl. the contraction scratch) routes to d_workspace.
@@ -2373,7 +2366,6 @@ def gen_plant_step_hessian_kernel(self):
     nx = self.robot.get_num_pos() + self.robot.get_num_vel()
     nz = 3 * n
     d2ab_count = 2 * n * nz * nz
-    xi_size = self.gen_get_XI_size()
     inner_temp_full = _plant_hessian_pool_size(self)
     # Per-timestep workspace band for the spilled tiers: s_d2AB (18*nv^3) +
     # s_df2 + s_idsva_so (8*nv^3) + the fdsva_so pool/contraction scratch. Sized
@@ -2437,9 +2429,7 @@ def gen_plant_step_hessian_kernel(self):
     self.gen_add_code_line(
         "template <typename T, int TIER = grid::GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t "
         "INTEGRATOR_HESSIAN_DYNAMIC_SHARED_MEM_BYTES() { "
-        # ONE return (nested ternary), the C++11-constexpr form kept from the
-        # runners' -std=c++11 days; they compile with -std=c++17 since
-        # 2026-10-31 (same tier values as the if-constexpr chain, 2026-09-23).
+        # One return expression (a nested ternary) so the sizer is constexpr.
         "return (TIER == grid::TIER_SHARED) ? grid::grid_shared_arena_bytes<T>(" + str(t0) + ", grid::TOPOLOGY_HELPERS_COUNT) "
         ": (TIER == grid::TIER_LITE) ? grid::grid_shared_arena_bytes<T>(" + str(t1) + ", grid::TOPOLOGY_HELPERS_COUNT) "
         ": grid::grid_shared_arena_bytes<T>(" + str(t2) + ", grid::TOPOLOGY_HELPERS_COUNT); "

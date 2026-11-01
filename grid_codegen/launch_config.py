@@ -4,9 +4,8 @@ verbatim). Module-level names are re-exported from GRiDCodeGenerator for
 the external importers (bindings, autotune_ffi, parity goldens)."""
 import os
 import json
-import warnings
 
-from .algo_registry import ALGO_DESCRIPTORS, build_launch_config_algo_to_symbol, launch_config_descriptors
+from .algo_registry import build_launch_config_algo_to_symbol, launch_config_descriptors
 
 # ─── A1b launch-config bake (single source of truth) ─────────────────────────
 # The autotuned per-(robot,base,algo) {tier,threads} live in

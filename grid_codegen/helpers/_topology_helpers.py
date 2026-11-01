@@ -1005,9 +1005,7 @@ def gen_load_update_XImats_helpers(self, include_base_inertia = False, include_h
             self.gen_add_sync()
     # else just load in XI from global to shared efficiently
     else:
-        # This helper has a block API, not a cooperative-group parameter. The
-        # old no-trig branch referred to an undeclared tgrp and copied element
-        # counts as byte counts. Use the same typed load as the trig branch.
+        # Block-wide typed element copy, the same loader as the trig branch.
         self.gen_add_parallel_loop("ind", str(XI_size))
         if runtime_inertia:
             self.gen_add_code_line("if constexpr (RUNTIME_INERTIA) { if (ind >= " + str(i_region_lo) + " && ind < " + str(i_region_hi) + ") { continue; } }")
@@ -1406,8 +1404,8 @@ def gen_topology_helpers_size(self):
         size += 5*n + 1
     # Subspaces belong to joints, not configuration coordinates: a spherical
     # joint contributes four q entries but only one subspace. Match the builder's
-    # body set, including mimic/constant bodies. Keep the allocation width above
-    # unchanged for existing representative headers.
+    # body set, including mimic/constant bodies. The allocation width above
+    # stays n.
     query_count = self.robot.get_num_joints()
     if not self.robot.are_Ss_identical(list(range(query_count))):
         size += n
@@ -1526,9 +1524,9 @@ def gen_topology_helpers_pointers_for_cpp(self, inds = None, updated_var_names =
     # OFFSET=True section strides below use `n` (= get_num_vel()). For a mimic
     # model NJ differs from nv, so the device would read parent/S-index at the wrong stride
     # at multi-joint BFS levels. Use NJ as the stride here (the algorithms also
-    # iterate over NJ bodies for mimic-fixed). Floating-base keeps the legacy
-    # nv stride (its sections + reads are already NJ-consistent via the
-    # floating-specific path, and a swap breaks the byte-identical Gate A).
+    # iterate over NJ bodies for mimic-fixed). Floating-base uses the nv
+    # stride; its sections and reads are NJ-consistent through the
+    # floating-specific path.
     if (self.robot_has_mimic_joints() or self.robot.robot_has_spherical()) and not self.robot.floating_base:
         n = NJ
     if inds == None:

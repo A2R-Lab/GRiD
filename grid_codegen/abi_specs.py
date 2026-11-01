@@ -32,7 +32,7 @@ Vocabulary (observed variance, 2026-08-28 wrapper audit):
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)

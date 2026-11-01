@@ -352,7 +352,8 @@ class RobotHandle:
 
     @property
     def configuration_layout(self):
-        """Independent joint blocks mapping public positions to tangent slots."""
+        """Configuration layout: one coordinate block per independent joint,
+        mapping public positions to tangent slots."""
         from ._configuration import configuration_layout_from_meta
         return configuration_layout_from_meta(self._meta, self.num_joints, self.num_vel)
 

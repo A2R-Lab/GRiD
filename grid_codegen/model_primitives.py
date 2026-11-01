@@ -10,7 +10,8 @@ from .helpers._topology_helpers import _xi_spherical_quat_subst
 
 
 def emit_joint_transforms(gen):
-    """Both input routes use the same parser-resolved homogeneous matrices."""
+    """joint_transform reads s_q; joint_transform_scalar takes one coordinate value.
+    Both emit the parser's homogeneous joint matrices."""
     lines = [f'namespace {gen.file_namespace} {{ namespace model {{',
              '// Thread scope, all 16 column-major cells written; disjoint output.',
              '// Invalid IDs/modes leave output untouched. Unit xyzw inputs required.']
@@ -18,13 +19,7 @@ def emit_joint_transforms(gen):
     for scalar in (False, True):
         name = 'joint_transform_scalar' if scalar else 'joint_transform'
         arg = 'T coordinate' if scalar else 'const T *s_q'
-        # Both writers inline. The scalar writer once sat behind a device
-        # call boundary because GLASS's single-thread gemm declared its read
-        # operands __restrict__ and nvcc dropped the writer's stores when the
-        # B operand selected this array (guide 7.z79); GLASS 6a82320 declares
-        # no __restrict__ on its interfaces and carries the regression.
-        qualifier = '__forceinline__'
-        lines += ['template<class T> __device__ '+qualifier+' bool '+name+'(',
+        lines += ['template<class T> __device__ __forceinline__ bool '+name+'(',
                   f'    int joint_id, {arg}, T *out) {{',
                   '  if (runtime_transform) return false;', '  switch(joint_id) {']
         for j in gen.model_descriptor['joints']:

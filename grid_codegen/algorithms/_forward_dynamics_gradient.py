@@ -21,7 +21,6 @@ def gen_forward_dynamics_gradient_inner_python(self, use_qdd_Minv_input = False,
         # is the inverse_dynamics_gradient da_df band, handled separately). After Minv returns, the
         # c+vaf/ID code reuses these bytes (the steps run sequentially).
         self.gen_minv_inner_function_call(f_in_smem_expr = "true")
-        # updated_var_names = dict(s_c_name = "s_temp", s_vaf_name = "&s_temp[" + str(n) + "]", s_temp_name = "&s_temp[" + str(19*n) + "]")
         updated_var_names = dict(s_c_name = "s_temp", s_temp_name = "&s_temp[" + str(n) + "]", d_f_ext_name = d_f_ext_name)
         self.gen_inverse_dynamics_inner_function_call(compute_c = True, use_qdd_input = False, updated_var_names = updated_var_names)
         self.gen_forward_dynamics_finish_function_call(updated_var_names)

@@ -105,7 +105,6 @@ def validate_descriptor(d):
         _keys(j, _JOINT, "joint")
     blocks, qend, vend, names = [], 0, 0, set()
     for i, j in enumerate(joints):
-        _keys(j, _JOINT, "joint")
         _check(type(j['id']) is int and j['id'] == i and type(j['child_body']) is int
                and j['child_body'] == i, "joint/body ordering")
         _check(_integer(j['parent_body'], -1) and j['parent_body'] < i, "joint parent")
@@ -131,7 +130,7 @@ def validate_descriptor(d):
                "coordinate ownership flag")
         if m is None:
             _check(type(j['q_start']) is int and type(j['v_start']) is int and
-                   (j['q_start'], j['v_start']) == (qend, vend), "owned slice partition")
+                   (j['q_start'], j['v_start']) == (qend, vend), "configuration layout")
             blocks.append(dict(kind=kind if nq > 1 else 'euclidean', q_start=qend,
                                v_start=vend, nq=nq, nv=nv))
             qend, vend = qend+nq, vend+nv
@@ -190,7 +189,7 @@ def validate_descriptor(d):
 
 
 def descriptor_from_robot(robot, *, runtime_transform=False):
-    """Extract effective placements and independent ownership from one parsed model."""
+    """Extract effective placements and the configuration layout from one parsed model."""
     import numpy as np
     if not robot.using_quaternion:
         raise ValueError("schema 1 requires quaternion coordinates")
