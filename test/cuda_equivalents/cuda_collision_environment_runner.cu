@@ -13,8 +13,11 @@
 //               config_free verdicts and collision_distance outputs on random configurations.
 //   host        grid_cc_sphere_in_environment on the host view equals the device evaluation on the
 //               owned view at the same points.
-//   lifetime    free device memory after destruction equals the value before construction; a moved
-//               from object is empty and the destination keeps the lists.
+//   lifetime    the owned environment's four device lists are live device allocations before its
+//               destruction and unregistered addresses after it (cudaPointerGetAttributes, which is
+//               process-local; device-global free memory is not compared because a sibling process
+//               sharing the GPU moves it between two readings); a moved from object is empty and
+//               the destination keeps the lists.
 // argv[1] = block threads (default 64), argv[2] = configs (default 100), argv[3] = seed.
 #define GRID_HEADER
 #include "grid.cuh"
@@ -116,8 +119,15 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 2; ++i) { cap.insert(cap.end(), { (urand()-0.5f)*1.2f, (urand()-0.5f)*1.2f, urand()*1.0f, (urand()-0.5f)*1.2f, (urand()-0.5f)*1.2f, urand()*1.0f, 0.04f + 0.06f*urand() }); }
     for (int i = 0; i < 2; ++i) { float a = urand() * 3.14159f; cub.insert(cub.end(), { (urand()-0.5f)*1.2f, (urand()-0.5f)*1.2f, urand()*1.0f, cosf(a/2), 0, 0, sinf(a/2), 0.1f + 0.2f*urand(), 0.1f + 0.2f*urand(), 0.1f + 0.2f*urand() }); }
     pla.insert(pla.end(), { 0, 0, 1, -0.05f });   // floor just below the base
-    size_t free_before = 0, total = 0;
-    CK(cudaDeviceSynchronize()); CK(cudaMemGetInfo(&free_before, &total));
+    // Process-local lifetime probe: a freed allocation reports cudaMemoryTypeUnregistered, queried
+    // right after the release and before anything can reuse the address.
+    auto memory_type = [](const void *p) -> int {
+        cudaPointerAttributes a{};
+        if (cudaPointerGetAttributes(&a, p) != cudaSuccess) { cudaGetLastError(); return -1; }
+        return (int)a.type;
+    };
+    const void *lists[4] = { nullptr, nullptr, nullptr, nullptr };
+    int live_before = 0;
     {
         gc::HostEnvironment<T> host = gc::make_host_environment<T>(sph.data(), 3, cap.data(), 2, cub.data(), 2, pla.data(), 1);
         gc::DeviceEnvironment<T> owned(host);
@@ -176,13 +186,16 @@ int main(int argc, char **argv) {
         eval_kernel<<<1, threads, smem>>>(d_q, d_m, assigned.view(), d_free[0], d_dist[0], d_normal[0]);
         CK(cudaDeviceSynchronize());
         report("move", move_ok);
+        lists[0] = assigned.view().spheres; lists[1] = assigned.view().capsules;
+        lists[2] = assigned.view().cuboids; lists[3] = assigned.view().planes;
+        for (const void *p : lists) live_before += (p != nullptr && memory_type(p) == (int)cudaMemoryTypeDevice);
         CK(cudaFree(d_s)); CK(cudaFree(d_c)); CK(cudaFree(d_b)); CK(cudaFree(d_p)); CK(cudaFree(d_q)); CK(cudaFree(d_pts)); CK(cudaFree(d_hit));
         for (int k = 0; k < 2; ++k) { CK(cudaFree(d_dist[k])); CK(cudaFree(d_normal[k])); CK(cudaFree(d_free[k])); }
     }   // `assigned` releases here
-    size_t free_after = 0;
-    CK(cudaDeviceSynchronize()); CK(cudaMemGetInfo(&free_after, &total));
-    printf("LIFETIME free_before=%zu free_after=%zu\n", free_before, free_after);
-    report("lifetime", free_after == free_before);
+    int live_after = 0;
+    for (const void *p : lists) live_after += (memory_type(p) != (int)cudaMemoryTypeUnregistered);
+    printf("LIFETIME lists=4 live_before=%d live_after=%d\n", live_before, live_after);
+    report("lifetime", live_before == 4 && live_after == 0);
     printf("RESULT %s\n", all_ok ? "PASS" : "FAIL");
     return all_ok ? 0 : 1;
 }

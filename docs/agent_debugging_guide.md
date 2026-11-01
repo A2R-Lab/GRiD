@@ -3776,3 +3776,21 @@ oracle, the constant-joint fixture robot) live in helper modules under
 them into every shard that imports them. Importing a test module for its helper
 needs a hand-written special case in `run_split_suite._module_fingerprint_paths`,
 which is exactly what rotted last time.
+
+### 7.z82 A lifetime probe must be process-local; device-global free memory moves under a shared GPU (2026-11-01, collision environment runner)
+
+The environment runner's lifetime check compared `cudaMemGetInfo` free memory before
+the owned environment was built and after it was destroyed. Free memory is a
+device-global counter: the receipt runs two GPU shards side by side, and a sibling
+shard's allocations between the two readings failed the check in pass 1 of the
+0.7.0 receipt (deltas of 256 KiB and 2 MiB, both cases, the shard that overlapped
+another cuda shard and a wrapper shard). The runner passes alone and failed five of
+six runs next to a process that only allocates and frees.
+
+The probe now captures the environment's four device pointers before destruction,
+confirms each is `cudaMemoryTypeDevice`, and after destruction confirms each reports
+`cudaMemoryTypeUnregistered` from `cudaPointerGetAttributes`, queried before anything
+can reuse the address. That is process-local and deterministic. The same rule applies
+to any runner: never compare `cudaMemGetInfo`, `nvidia-smi` memory or any other
+device-wide counter across a window in which another process may run; a receipt
+shard always has to assume a neighbour.

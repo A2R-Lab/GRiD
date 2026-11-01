@@ -6,7 +6,8 @@ feeds the host primitives; `DeviceEnvironment` deep-copies the lists to the curr
 records it, frees on destruction and moves but never copies. The runner checks the row layouts
 and the quaternion box, the rejections, bit-identical verdicts and clearances against a hand
 upload of the same lists, host-versus-device agreement of the primitives, move semantics and
-that destruction returns the device memory (cuda_collision_environment_runner.cu).
+that destruction releases the four device lists, probed per pointer so a sibling process on
+the same GPU cannot disturb the verdict (cuda_collision_environment_runner.cu).
 """
 from __future__ import annotations
 import re
