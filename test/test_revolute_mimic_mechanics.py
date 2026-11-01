@@ -2,7 +2,7 @@
 
 Pinocchio has no revolute mimic with a nonunit multiplier, so this fixture's
 inverse dynamics and mass matrix are pinned to the independent closed form in
-``test/revolute_mimic_mechanics.py`` instead (placements and inertias are still
+``test/cuda_equivalents/revolute_mimic_mechanics.py`` instead (placements and inertias are still
 checked against Pinocchio by ``test_urdf_oracle``). The CUDA twin is
 ``test/cuda_equivalents/test_cuda_revolute_mimic_mechanics.py``.
 """
@@ -11,7 +11,7 @@ import pytest
 from URDFParser import URDFParser
 from RBDReference import RBDReference
 from grid_assets import robot_urdf
-from test import revolute_mimic_mechanics as mech
+from test.cuda_equivalents import revolute_mimic_mechanics as mech
 
 CASES = ((0., 0., 0.), (.13, -.4, 2.), (.5, .7, -3.), (-1.2, .25, .4))
 

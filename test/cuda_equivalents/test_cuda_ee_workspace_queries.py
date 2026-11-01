@@ -1,5 +1,4 @@
 """Exact target scratch: guarded allocations, independent pose/Jacobian oracle."""
-from pathlib import Path
 import shutil
 import subprocess
 import numpy as np

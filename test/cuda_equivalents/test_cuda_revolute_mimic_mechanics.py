@@ -2,7 +2,7 @@
 
 The revolute twin of ``test_prismatic_dynamics_against_independent_mechanics``:
 two bodies on one skew axis, the follower a revolute mimic with multiplier -0.5
-and offset 0.17. Expectations come from ``test/revolute_mimic_mechanics.py``,
+and offset 0.17. Expectations come from ``test/cuda_equivalents/revolute_mimic_mechanics.py``,
 which uses neither generator nor RBDReference; the numpy oracle is pinned to
 the same closed form by ``test/test_revolute_mimic_mechanics.py``. Outputs must
 be thread-count invariant.
@@ -12,7 +12,7 @@ import pytest
 from grid_assets import robot_urdf
 from grid_codegen import GRiDCodeGenerator
 from URDFParser import URDFParser
-from test import revolute_mimic_mechanics as mech
+from test.cuda_equivalents import revolute_mimic_mechanics as mech
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 

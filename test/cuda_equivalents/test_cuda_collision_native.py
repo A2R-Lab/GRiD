@@ -23,7 +23,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from grid_codegen import GRiDCodeGenerator
 from grid_codegen.algorithms._collision import (
     build_self_cc_ranges, native_collision_spec_from_urdf, parse_native_urdf)
 from test.cuda_equivalents.test_cuda_collision_config_free import (

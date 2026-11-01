@@ -34,8 +34,7 @@ from test.cuda_equivalents.cuda_harness import (
     _sample_to_stdin,
     GPU_UNAVAILABLE_PATTERNS,
 )
-from RBDReference.tests import MANIFEST_PATH
-from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec
+from RBDReference.tests.model_sources import resolve_robot_spec
 from RBDReference.equivalents.reference_backend import build_project_adapter
 from RBDReference.tests.tolerances import get_tolerance
 

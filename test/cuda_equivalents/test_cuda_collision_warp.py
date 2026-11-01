@@ -20,8 +20,6 @@ G10 config_free(..., check_self = false) skips the self-pair ranges; the referen
     environment clearance alone.
 """
 from __future__ import annotations
-import contextlib
-import os
 import re
 import shutil
 import subprocess
@@ -30,14 +28,12 @@ from pathlib import Path
 
 import pytest
 
-from grid_codegen import GRiDCodeGenerator
 from grid_codegen.algorithms._collision import build_self_cc_ranges
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from test.cuda_equivalents.test_cuda_collision_config_free import _robot, _gen_header
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
-from grid_assets import robot_urdf  # noqa: E402
 
 COLLISION_INCLUDE = REPO_ROOT / "grid_codegen" / "collision"
 RUNNER_SOURCE = Path(__file__).with_name("cuda_collision_warp_runner.cu")
@@ -192,8 +188,8 @@ def test_separate_environment_self_margins(tmp_path, two_tier):
     for threads in (32, 64, 128):
         for environment, self_margin in ((0, 0.02), (0.02, 0), (0.005, 0.02), (0.02, 0.005)):
             for check_self in (False, True):
-                print(_run(exe, threads, 200, 7, margin=0.01, check_self=check_self,
-                           environment_margin=environment, self_margin=self_margin))
+                _run(exe, threads, 200, 7, margin=0.01, check_self=check_self,
+                     environment_margin=environment, self_margin=self_margin)
 
 
 @pytest.mark.cuda_equivalence

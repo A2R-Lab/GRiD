@@ -23,4 +23,4 @@ def test_native_separate_margins(tmp_path, two_tier):
     fine["pb"] = [v + (.02 if i % 3 == 2 else 0) for i, v in enumerate(fine["offset"])]
     _gen_header(robot, tmp_path, spec)
     (tmp_path / "margin_config.h").write_text(f"#define TEST_NATIVE_TWO_TIERS {int(two_tier)}\n")
-    print(_compile_and_run(tmp_path, Path(__file__).with_name("cuda_collision_native_margins_runner.cu")))
+    _compile_and_run(tmp_path, Path(__file__).with_name("cuda_collision_native_margins_runner.cu"))

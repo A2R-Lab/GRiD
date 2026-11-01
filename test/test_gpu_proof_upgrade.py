@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-pytest.importorskip("pytest_gpu_proof")
 from pytest_gpu_proof.merge import MergeError, merge_payloads
 
 
