@@ -1,6 +1,5 @@
 """Constant-body second-order folds and Coriolis projection, including nv=0."""
 from pathlib import Path
-import shutil
 import subprocess
 
 import numpy as np
@@ -8,7 +7,8 @@ import pytest
 from RBDReference import RBDReference
 from grid_codegen import GRiDCodeGenerator
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
-from test.cuda_equivalents.test_cuda_constant_derivatives import constant_model
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
+from test.cuda_equivalents.constant_model import constant_model
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
@@ -23,17 +23,11 @@ def second_probe(request, tmp_path_factory):
                      algorithm_list=['idsva_so_body_frame', 'idsva_so_world_frame', 'coriolis_matrix'],
                      enable_idsva_so_world_frame=True, enable_idsva_so_body_frame=True,
                      enable_mujoco_kernels=False)
-    exe = path / 'probe'
-    nvcc = shutil.which('nvcc')
-    assert nvcc, 'CUDA toolkit required'
-    result = subprocess.run([nvcc, '-std=c++17', '-O2', f'-arch=sm_{_detect_cuda_arch()}',
-                             f'-I{path}', f'-DDTYPE={precision}',
-                             f'-DBODY_TEMP={gen.gen_idsva_so_body_frame_inner_temp_mem_size()}',
-                             f'-DWORLD_TEMP={gen.gen_idsva_so_world_frame_temp_mem_size()}',
-                             str(Path(__file__).with_name('cuda_constant_second_order_runner.cu')),
-                             '-o', str(exe)], capture_output=True, text=True)
-    (path / 'compile.log').write_text(result.stdout + result.stderr)
-    assert result.returncode == 0, result.stderr
+    exe, _ = cached_nvcc_executable([Path(__file__).with_name('cuda_constant_second_order_runner.cu')], [
+        '-std=c++17', '-O2', f'-arch=sm_{_detect_cuda_arch()}', f'-DDTYPE={precision}',
+        f'-DBODY_TEMP={gen.gen_idsva_so_body_frame_inner_temp_mem_size()}',
+        f'-DWORLD_TEMP={gen.gen_idsva_so_world_frame_temp_mem_size()}'],
+        exe_name='probe', fallback_dir=path, include_dirs=[path], what='constant second order runner')
     return robot, path, exe, precision, zero
 
 

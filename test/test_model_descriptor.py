@@ -14,7 +14,8 @@ from grid_codegen.model_descriptor import (canonical_bytes, descriptor_from_robo
 from grid_rbd._compile import configuration_layout_from_robot
 from grid_codegen.model_metadata_cpp import emit_model_metadata
 from grid_rbd import describe_model
-from test.cuda_equivalents.test_cuda_constant_derivatives import constant_model
+from test.cuda_equivalents.constant_model import constant_model
+from test.cuda_equivalents.descriptor_oracle import assert_reference, descriptor_fk
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -68,54 +69,6 @@ def test_generated_wrapper_metadata_has_one_coordinate_source(tmp_path,fixture,f
     assert handle.model_descriptor==d
     assert tuple(handle.configuration_layout)==tuple(tuple(b[k] for k in
         ('kind','q_start','v_start','nq','nv')) for b in d['configuration_layout'])
-
-
-def descriptor_fk(d, q):
-    """No parser objects or transform helpers: fields, elementary trig and q only."""
-    world = []
-    for j in d['joints']:
-        local = q[j['q_start']:j['q_start']+j['local_nq']] if j['mimic'] is None else None
-        if j['mimic'] is not None:
-            m = j['mimic']
-            value = m['offset']
-            if m['leader_joint'] is not None:
-                value += m['multiplier']*q[d['joints'][m['leader_joint']]['q_start']]
-            local = np.array([value])
-        motion = np.eye(4)
-        if j['kind'] in ('floating', 'spherical'):
-            x, y, z, w = local[-4:]
-            motion[:3, :3] = [[1-2*(y*y+z*z), 2*(x*y-z*w), 2*(x*z+y*w)],
-                              [2*(x*y+z*w), 1-2*(x*x+z*z), 2*(y*z-x*w)],
-                              [2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y)]]
-            if j['kind'] == 'floating':
-                motion[:3, 3] = local[:3]
-        else:
-            axis = np.array(j['axis'])
-            angle = local[0]
-            if j['kind'] == 'prismatic':
-                motion[:3, 3] = axis*angle
-            else:
-                x, y, z = axis
-                cross = np.array([[0., -z, y], [z, 0., -x], [-y, x, 0.]])
-                motion[:3, :3] = np.eye(3)+np.sin(angle)*cross+(1-np.cos(angle))*(cross@cross)
-                if j['pitch'] is not None:
-                    motion[:3, 3] = axis*angle*j['pitch']
-        parent = np.eye(4) if j['parent_body'] == -1 else world[j['parent_body']]
-        world.append(parent@np.array(j['T_parent_joint_zero'])@motion)
-    return [(np.eye(4) if f['attached_body'] == -1 else world[f['attached_body']])
-            @np.array(f['T_body_frame']) for f in d['frames']]
-
-
-def assert_reference(d, robot, q):
-    ref = RBDReference(robot)
-    world, _ = ref._frame_world_placement_and_chain(q)
-    for f, actual in zip(d['frames'], descriptor_fk(d, q)):
-        if f['kind'] == 'root':
-            expected = np.eye(4)
-        else:
-            jid, offset = ref._resolve_frame_joint(f['name'])
-            expected = (np.eye(4) if jid == -1 else world[jid])@offset
-        np.testing.assert_allclose(actual, expected, atol=1e-11, rtol=1e-11)
 
 
 def test_canonical_encoding_golden():

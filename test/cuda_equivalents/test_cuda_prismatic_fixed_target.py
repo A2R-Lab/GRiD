@@ -1,6 +1,5 @@
 """G13 numerical gate: all-prismatic fixed tool, block and warp/thread FK."""
 from pathlib import Path
-import shutil
 import subprocess
 
 import numpy as np
@@ -11,6 +10,7 @@ from grid_assets import robot_urdf
 from grid_codegen import GRiDCodeGenerator
 from URDFParser import URDFParser
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
@@ -24,14 +24,9 @@ def test_prismatic_fixed_tool_values_and_thread_invariance(tmp_path, mimic):
                      include_homogenous_transforms=True, fixed_target_name="tool",
                      enable_mujoco_kernels=False)
     runner = Path(__file__).with_name("cuda_prismatic_fixed_target_runner.cu")
-    exe = tmp_path / "slider.exe"
-    arch = _detect_cuda_arch()
-    nvcc = shutil.which("nvcc")
-    assert nvcc, "CUDA toolkit required for this numerical gate"
-    compiled = subprocess.run([nvcc, "-std=c++17", "-O2", f"-arch=sm_{arch}",
-                               f"-I{tmp_path}", str(runner), "-o", str(exe)],
-                              capture_output=True, text=True)
-    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    exe, _ = cached_nvcc_executable([runner], ["-std=c++17", "-O2", f"-arch=sm_{_detect_cuda_arch()}"],
+                                    exe_name="slider.exe", fallback_dir=tmp_path, include_dirs=[tmp_path],
+                                    what="prismatic fixed target runner")
     r = Rotation.from_euler("xyz", [0.3, 0.2, 0.1])
     p, axis = np.array([0.04, 0.01, 0.02]), np.array([0.6, 0., 0.8])
     for q in (0., 0.13, 0.5):

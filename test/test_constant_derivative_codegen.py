@@ -13,7 +13,7 @@ from grid_codegen.helpers._topology_helpers import (
 from grid_codegen.algorithms._eepose_gradient_hessian import (
     _eepose_grad_chain_metadata, _eepose_hessian_chain_metadata, group_jacobian_jobs,
 )
-from test.cuda_equivalents.test_cuda_constant_derivatives import constant_model
+from test.cuda_equivalents.constant_model import constant_model
 
 
 def test_constant_tensor_fold_never_reads_zero_weight_cells():

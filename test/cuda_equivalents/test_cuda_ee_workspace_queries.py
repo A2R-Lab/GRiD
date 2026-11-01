@@ -1,5 +1,4 @@
 """Exact target scratch: guarded allocations, independent pose/Jacobian oracle."""
-import shutil
 import subprocess
 import numpy as np
 import pytest
@@ -8,6 +7,7 @@ from RBDReference import RBDReference
 from grid_assets import robot_urdf
 from grid_codegen import GRiDCodeGenerator
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 
 pytestmark=[pytest.mark.cuda_equivalence,pytest.mark.robot_smoke]
 
@@ -61,7 +61,7 @@ int main(int argc,char**argv){
 
 
 @pytest.mark.parametrize('name,target',[('iiwa14','iiwa_joint_ee'),('go2','FR_foot_joint'),('go2','')])
-@pytest.mark.parametrize('scalar',['float','double'])
+@pytest.mark.parametrize('scalar',['float',pytest.param('double', marks=pytest.mark.fp64_alpha)])
 def test_exact_target_scratch(tmp_path,name,target,scalar):
     robot=URDFParser().parse(str(robot_urdf(name)),floating_base=name=='go2')
     gen=GRiDCodeGenerator(robot,dtype=scalar)
@@ -69,11 +69,9 @@ def test_exact_target_scratch(tmp_path,name,target,scalar):
                      fixed_target_name=target,include_homogenous_transforms=True,
                      enable_mujoco_kernels=False,output_path=str(tmp_path/'grid.cuh'))
     (tmp_path/'probe.cu').write_text(SOURCE)
-    exe=tmp_path/'probe'
-    result=subprocess.run([shutil.which('nvcc'),'-std=c++17','-O2','-lineinfo','-arch=sm_'+_detect_cuda_arch(),
-        '-DTEST_SCALAR='+scalar,str(tmp_path/'probe.cu'),'-o',str(exe)],capture_output=True,text=True)
-    (tmp_path/'compile.log').write_text(result.stdout+result.stderr)
-    assert result.returncode==0,result.stderr
+    exe,_=cached_nvcc_executable([tmp_path/'probe.cu'],
+        ['-std=c++17','-O2','-lineinfo','-arch=sm_'+_detect_cuda_arch(),'-DTEST_SCALAR='+scalar],
+        exe_name='probe',fallback_dir=tmp_path,include_dirs=[tmp_path],what='exact target scratch probe')
     dtype=np.float32 if scalar=='float' else np.float64
     q=np.linspace(.07,.23,robot.get_num_pos()).astype(dtype)
     if name=='go2':q[3:7]=[0,0,0,1]

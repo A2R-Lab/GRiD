@@ -1,6 +1,5 @@
 """Constant-body transport and floating-coordinate ownership against locked models."""
 from pathlib import Path
-import shutil
 import subprocess
 
 import numpy as np
@@ -10,7 +9,8 @@ from RBDReference import RBDReference
 from grid_codegen import GRiDCodeGenerator
 from grid_codegen.algorithms._idsva_so import gen_floating_gravity_d2tau_dq_spill_count
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
-from test.cuda_equivalents.test_cuda_constant_derivatives import constant_model
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
+from test.cuda_equivalents.constant_model import constant_model
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
@@ -45,7 +45,6 @@ def dynamics_probe(request, tmp_path_factory):
                                      'idsva_so_body_frame', 'idsva_so_world_frame'],
                      enable_idsva_so_body_frame=True, enable_idsva_so_world_frame=True,
                      enable_mujoco_kernels=False)
-    exe = path / 'probe'
     # Use the same public-output epilogue as the generated body-frame kernel;
     # its fixed-base inner intentionally has a different mixed-axis layout.
     gen.code_str = ''
@@ -53,19 +52,14 @@ def dynamics_probe(request, tmp_path_factory):
     runner = path / 'probe.cu'
     runner.write_text(Path(__file__).with_name('cuda_constant_dynamics_audit_runner.cu')
                       .read_text().replace('BODY_OUTPUT_REPAIR', gen.code_str))
-    nvcc = shutil.which('nvcc')
-    assert nvcc
-    built = subprocess.run([nvcc, '-std=c++17', '-O2', '-lineinfo',
-                            f'-arch=sm_{_detect_cuda_arch()}', f'-I{path}', f'-DDTYPE={precision}',
-                            f'-DID_TEMP={gen.gen_inverse_dynamics_gradient_inner_temp_mem_size()}',
-                            f'-DCRBA_TEMP={gen.gen_crba_inner_temp_mem_size()}',
-                            f'-DBODY_TEMP={gen.gen_idsva_so_body_frame_inner_temp_mem_size()}',
-                            f'-DWORLD_TEMP={gen.gen_idsva_so_world_frame_temp_mem_size()}',
-                            f'-DGRAV_TEMP={gen_floating_gravity_d2tau_dq_spill_count(gen)}',
-                            str(runner),
-                            '-o', str(exe)], capture_output=True, text=True)
-    (path / 'compile.log').write_text(built.stdout + built.stderr)
-    assert built.returncode == 0, built.stderr
+    exe, _ = cached_nvcc_executable([runner], [
+        '-std=c++17', '-O2', '-lineinfo', f'-arch=sm_{_detect_cuda_arch()}', f'-DDTYPE={precision}',
+        f'-DID_TEMP={gen.gen_inverse_dynamics_gradient_inner_temp_mem_size()}',
+        f'-DCRBA_TEMP={gen.gen_crba_inner_temp_mem_size()}',
+        f'-DBODY_TEMP={gen.gen_idsva_so_body_frame_inner_temp_mem_size()}',
+        f'-DWORLD_TEMP={gen.gen_idsva_so_world_frame_temp_mem_size()}',
+        f'-DGRAV_TEMP={gen_floating_gravity_d2tau_dq_spill_count(gen)}'],
+        exe_name='probe', fallback_dir=path, include_dirs=[path], what='constant dynamics audit runner')
     q = np.linspace(.13, .37, robot.get_num_pos())
     if floating:
         q[3:7] = np.array([.1, -.2, .3, .9]) / np.linalg.norm([.1, -.2, .3, .9])

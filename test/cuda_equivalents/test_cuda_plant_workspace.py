@@ -1,7 +1,6 @@
 """Bounded public binder acceptance, not timing or downstream acceptance."""
 from pathlib import Path
 import subprocess
-import shutil
 
 import numpy as np
 import pytest
@@ -10,13 +9,20 @@ from RBDReference import RBDReference
 from grid_assets import robot_urdf
 from grid_codegen import GRiDCodeGenerator
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
 
-@pytest.fixture(scope='module', params=[('acrobot','float',False,'euler'),('acrobot','double',False,'euler'),
-    ('iiwa14','float',False,'euler'),('iiwa14','double',False,'euler'),
-    ('acrobot','double',True,'semi_implicit_euler'),('branching','double',True,'euler')])
+@pytest.fixture(scope='module', params=[('acrobot','float',False,'euler'),
+    pytest.param(('acrobot','double',False,'euler'),marks=pytest.mark.fp64_alpha),
+    ('iiwa14','float',False,'euler'),
+    pytest.param(('iiwa14','double',False,'euler'),marks=pytest.mark.fp64_alpha),
+    ('acrobot','float',True,'semi_implicit_euler'),
+    pytest.param(('acrobot','double',True,'semi_implicit_euler'),marks=pytest.mark.fp64_alpha),
+    ('branching','double',True,'euler')],
+    ids=['acrobot-float','acrobot-double','iiwa14-float','iiwa14-double','acrobot-semi-runtime-float',
+         'acrobot-semi-runtime-double','branching-runtime-double'])
 def workspace_case(request,tmp_path_factory):
     name,scalar,runtime,integrator=request.param
     path=tmp_path_factory.mktemp('workspace_'+name+'_'+scalar)
@@ -29,15 +35,12 @@ def workspace_case(request,tmp_path_factory):
     gen.gen_all_code(algorithm_list=['integrator_hessian','integrator_gradient'],emit_plant=True,
                      enable_mujoco_kernels=False,fixed_target_name='iiwa_joint_ee' if name=='iiwa14' else '',
                      runtime_transform=runtime,output_path=str(path/'grid.cuh'))
-    exe=path/'probe'
-    command=[shutil.which('nvcc'),'-std=c++17','-O3','-lineinfo','-arch=sm_'+_detect_cuda_arch(),'-Xptxas=-v',
-             '-DTEST_INTEGRATOR='+integrator.upper(),
-             '-DTEST_RUNTIME_TRANSFORM='+str(int(runtime)),
-             '-DTEST_CROSS_KERNEL_ROUNDOFF='+str(int(name=='branching' and scalar=='double' and runtime)),
-             '-DTEST_SCALAR='+scalar,'-I'+str(path),str(Path(__file__).with_name('cuda_plant_workspace_runner.cu')),'-o',str(exe)]
-    compiled=subprocess.run(command,capture_output=True,text=True)
-    (path/'compile.log').write_text(compiled.stdout+compiled.stderr)
-    assert compiled.returncode==0,compiled.stderr
+    exe,_=cached_nvcc_executable([Path(__file__).with_name('cuda_plant_workspace_runner.cu')],
+        ['-std=c++17','-O3','-lineinfo','-arch=sm_'+_detect_cuda_arch(),'-Xptxas=-v',
+         '-DTEST_INTEGRATOR='+integrator.upper(),'-DTEST_RUNTIME_TRANSFORM='+str(int(runtime)),
+         '-DTEST_CROSS_KERNEL_ROUNDOFF='+str(int(name=='branching' and scalar=='double' and runtime)),
+         '-DTEST_SCALAR='+scalar],
+        exe_name='probe',fallback_dir=path,include_dirs=[path],what='plant workspace runner')
     n=robot.get_num_vel()
     dtype=np.float32 if scalar=='float' else np.float64
     rng=np.random.default_rng(29103)

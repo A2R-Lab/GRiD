@@ -1,5 +1,4 @@
 """Independent numerical checks of embedded cooperative handoffs, not timing."""
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -10,23 +9,20 @@ from grid_assets import robot_urdf
 from grid_codegen import GRiDCodeGenerator
 from URDFParser import URDFParser
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 
 
 @pytest.mark.cuda_equivalence
-@pytest.mark.parametrize("scalar,atol,rtol", [("float", 3e-5, 3e-5), ("double", 2e-11, 2e-11)])
+@pytest.mark.parametrize("scalar,atol,rtol", [("float", 3e-5, 3e-5), pytest.param("double", 2e-11, 2e-11, marks=pytest.mark.fp64_alpha)])
 def test_embedded_glass_restricted_handoffs(tmp_path, scalar, atol, rtol):
-    nvcc = shutil.which("nvcc")
-    assert nvcc, "CUDA toolkit required for this numerical gate"
     robot = URDFParser().parse(str(robot_urdf("iiwa14")))
     GRiDCodeGenerator(robot, FILE_NAMESPACE="grid").gen_all_code(
         codegen_profile="kinematics", output_path=str(tmp_path / "grid.cuh"))
-    exe = tmp_path / "handoff.exe"
-    command = [nvcc, "-std=c++17", "-O3", "-Xptxas=-v", f"-DTEST_SCALAR={scalar}",
-               f"-arch=sm_{_detect_cuda_arch()}", f"-I{tmp_path}",
-               str(Path(__file__).with_name("cuda_glass_handoff_runner.cu")), "-o", str(exe)]
-    compiled = subprocess.run(command, capture_output=True, text=True)
-    (tmp_path / "compile.log").write_text(" ".join(command) + "\n" + compiled.stdout + compiled.stderr)
-    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    exe, _ = cached_nvcc_executable([Path(__file__).with_name("cuda_glass_handoff_runner.cu")],
+                                    ["-std=c++17", "-O3", "-Xptxas=-v", f"-DTEST_SCALAR={scalar}",
+                                     f"-arch=sm_{_detect_cuda_arch()}"],
+                                    exe_name="handoff.exe", fallback_dir=tmp_path, include_dirs=[tmp_path],
+                                    what="GLASS handoff runner")
     rng = np.random.default_rng(729)
     inputs, expected = [], []
     for _ in range(2):

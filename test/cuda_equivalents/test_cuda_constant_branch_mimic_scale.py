@@ -1,5 +1,4 @@
 """Removing a constant column must preserve a remaining mimic's multiplier."""
-import shutil
 import subprocess
 import numpy as np
 import pytest
@@ -7,12 +6,13 @@ from URDFParser import URDFParser
 from RBDReference import RBDReference
 from grid_codegen import GRiDCodeGenerator
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
-from test.cuda_equivalents.test_cuda_constant_derivatives import constant_model
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
+from test.cuda_equivalents.constant_model import constant_model
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
 
-@pytest.mark.parametrize('precision', ['float', 'double'])
+@pytest.mark.parametrize('precision', ['float', pytest.param('double', marks=pytest.mark.fp64_alpha)])
 def test_constant_branch_keeps_nonunit_mimic_scale(tmp_path, precision):
     constant_model(tmp_path, branched=True)
     path = tmp_path / 'model-False-False-True.urdf'
@@ -56,15 +56,11 @@ int main(int argc,char **argv){
     CK(cudaFree(out));CK(grid::free_robotModel_checked<T>(model));
 }
 '''.replace('DTYPE', precision)
-    runner, exe = tmp_path / 'probe.cu', tmp_path / 'probe'
+    runner = tmp_path / 'probe.cu'
     runner.write_text(source)
-    nvcc = shutil.which('nvcc')
-    assert nvcc
-    built = subprocess.run([nvcc, '-std=c++17', '-O2', '-lineinfo',
-                            f'-arch=sm_{_detect_cuda_arch()}', str(runner), '-o', str(exe)],
-                           capture_output=True, text=True)
-    (tmp_path / 'compile.log').write_text(built.stdout+built.stderr)
-    assert built.returncode == 0, built.stderr
+    exe, _ = cached_nvcc_executable([runner], ['-std=c++17', '-O2', '-lineinfo', f'-arch=sm_{_detect_cuda_arch()}'],
+                                    exe_name='probe', fallback_dir=tmp_path, include_dirs=[tmp_path],
+                                    what='constant branch mimic scale probe')
     expected = np.asarray(RBDReference(robot).end_effector_pose_gradient(np.array([.35]))).ravel()
     # Independent yaw derivative of the tip branch is exactly the mimic scale;
     # the other branch's angular velocity is around y and has zero yaw rate.

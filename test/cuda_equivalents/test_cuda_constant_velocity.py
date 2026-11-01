@@ -1,5 +1,4 @@
 """A constant branch must not read another branch's velocity placeholder."""
-import shutil
 import subprocess
 
 import numpy as np
@@ -8,11 +7,12 @@ from URDFParser import URDFParser
 from RBDReference import RBDReference
 from grid_codegen import GRiDCodeGenerator
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
 
-@pytest.mark.parametrize('precision', ['float', 'double'])
+@pytest.mark.parametrize('precision', ['float', pytest.param('double', marks=pytest.mark.fp64_alpha)])
 def test_constant_branch_velocity_isolation(tmp_path, precision):
     inertial = ('<inertial><mass value="1"/><origin xyz=".1 .2 .3"/>'
                 '<inertia ixx="1" iyy="1" izz="1" ixy="0" ixz="0" iyz="0"/></inertial>')
@@ -64,14 +64,11 @@ int main(int argc,char **argv) {
     CK(cudaFree(d_in));CK(cudaFree(out));CK(grid::free_robotModel_checked<T>(model));
 }
 '''.replace('DTYPE', precision)
-    runner, exe = tmp_path / 'probe.cu', tmp_path / 'probe'
+    runner = tmp_path / 'probe.cu'
     runner.write_text(source)
-    nvcc = shutil.which('nvcc')
-    assert nvcc, 'CUDA toolkit required'
-    built = subprocess.run([nvcc, '-std=c++17', '-O2', f'-arch=sm_{_detect_cuda_arch()}',
-                            str(runner), '-o', str(exe)], capture_output=True, text=True)
-    (tmp_path / 'compile.log').write_text(built.stdout + built.stderr)
-    assert built.returncode == 0, built.stderr
+    exe, _ = cached_nvcc_executable([runner], ['-std=c++17', '-O2', f'-arch=sm_{_detect_cuda_arch()}'],
+                                    exe_name='probe', fallback_dir=tmp_path, include_dirs=[tmp_path],
+                                    what='constant velocity probe')
     ref = RBDReference(robot)
     expected = np.asarray(ref.inverse_dynamics_fpass(np.array([.2]), np.zeros(1), np.zeros(1)))
     const = robot.get_joint_by_name('constant').jid

@@ -6,14 +6,15 @@ import pytest
 from URDFParser import URDFParser
 from grid_codegen import GRiDCodeGenerator
 from grid_codegen.model_descriptor import descriptor_from_robot
-from test.test_model_descriptor import descriptor_fk
+from test.cuda_equivalents.descriptor_oracle import descriptor_fk
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
 
 @pytest.mark.parametrize('n,general', [(7,False),(7,True),(32,True)])
-@pytest.mark.parametrize('precision', ['float','double'])
+@pytest.mark.parametrize('precision', ['float', pytest.param('double', marks=pytest.mark.fp64_alpha)])
 def test_scalar_transform_composed_suffix(tmp_path,n,general,precision):
     inertial='<inertial><mass value="1"/><inertia ixx=".3" iyy=".4" izz=".5" ixy="0" ixz="0" iyz="0"/></inertial>'
     xml='<robot name="suffix"><link name="base"/>'+''.join(f'<link name="b{i}">{inertial}</link>' for i in range(n))+'<link name="tool"/>'
@@ -43,15 +44,11 @@ def test_scalar_transform_composed_suffix(tmp_path,n,general,precision):
     dtype=np.float32 if precision=='float' else np.float64
     np.asarray(inputs,dtype).tofile(tmp_path/'input.bin')
     for legacy in (True,False):
-        name='legacy' if legacy else 'probe';exe=tmp_path/name
-        command=['nvcc','-O3','-std=c++17','-lineinfo','-Xptxas=-v',
-            '-arch=sm_'+_detect_cuda_arch(),'-DTEST_SCALAR='+precision,
-            '-DTEST_FRAME='+str(frame),'-I'+str(tmp_path),
-            str(Path(__file__).with_name('cuda_joint_transform_suffix_runner.cu')),'-o',str(exe)]
-        if legacy:command.append('-DTEST_LEGACY')
-        run=subprocess.run(command,capture_output=True,text=True)
-        (tmp_path/(name+'-compile.log')).write_text(run.stdout+run.stderr)
-        assert run.returncode==0,run.stderr
+        name='legacy' if legacy else 'probe'
+        flags=['-O3','-std=c++17','-lineinfo','-Xptxas=-v','-arch=sm_'+_detect_cuda_arch(),
+            '-DTEST_SCALAR='+precision,'-DTEST_FRAME='+str(frame)]+(['-DTEST_LEGACY'] if legacy else [])
+        exe,_=cached_nvcc_executable([Path(__file__).with_name('cuda_joint_transform_suffix_runner.cu')],flags,
+            exe_name=name,fallback_dir=tmp_path,include_dirs=[tmp_path],what='joint transform suffix runner')
         run=subprocess.run([str(exe),str(tmp_path/'input.bin'),str(tmp_path/(name+'.bin'))],capture_output=True,text=True)
         (tmp_path/(name+'-run.log')).write_text(run.stdout+run.stderr)
         assert run.returncode==0,run.stderr

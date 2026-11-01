@@ -1,6 +1,5 @@
 """Full-shared plant allocation must not borrow a spilled integrator sizer."""
 import json
-import shutil
 import subprocess
 
 import numpy as np
@@ -10,12 +9,14 @@ from grid_assets import robot_urdf
 from grid_codegen import GRiDCodeGenerator
 from grid_codegen.algorithms._plant import _plant_step_gradient_extra_t_buffers
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
 
 @pytest.mark.parametrize('name,floating,dtype,runtime', [
-    ('iiwa14', False, 'double', False),
+    ('iiwa14', False, 'float', False),
+    pytest.param('iiwa14', False, 'double', False, marks=pytest.mark.fp64_alpha),
     ('go2', True, 'float', False),
     ('go2', True, 'float', True),
     ('g1', False, 'float', False),
@@ -70,15 +71,12 @@ int main() {
     CK(cudaFree(ends)); CK(cudaFree(base));
 }
 '''.replace('DTYPE', dtype).replace('WRITES', writes).replace('NFIELDS', str(len(fields)))
-    runner, exe = tmp_path / 'probe.cu', tmp_path / 'probe'
+    runner = tmp_path / 'probe.cu'
     runner.write_text(source)
-    nvcc = shutil.which('nvcc')
-    assert nvcc, 'CUDA toolkit required'
-    compiled = subprocess.run([nvcc, '-std=c++17', '-O2', '-DGRID_CUDA_DEBUG_LAYOUT',
-                               f'-arch=sm_{_detect_cuda_arch()}', str(runner), '-o', str(exe)],
-                              capture_output=True, text=True)
-    (tmp_path / 'compile.log').write_text(compiled.stdout + compiled.stderr)
-    assert compiled.returncode == 0, compiled.stderr
+    exe, _ = cached_nvcc_executable([runner], ['-std=c++17', '-O2', '-DGRID_CUDA_DEBUG_LAYOUT',
+                                               f'-arch=sm_{_detect_cuda_arch()}'],
+                                    exe_name='probe', fallback_dir=tmp_path, include_dirs=[tmp_path],
+                                    what='plant gradient arena probe')
     ran = subprocess.run([str(exe)], capture_output=True, text=True)
     (tmp_path / 'run.log').write_text(ran.stdout + ran.stderr)
     assert ran.returncode == 0, ran.stdout + ran.stderr

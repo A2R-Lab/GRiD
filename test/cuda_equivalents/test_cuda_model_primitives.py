@@ -1,6 +1,5 @@
 """Thread-scope transforms and compact/dense manifold differences."""
 from pathlib import Path
-import shutil
 import subprocess
 
 import numpy as np
@@ -9,10 +8,11 @@ from URDFParser import URDFParser
 from RBDReference import RBDReference
 from grid_codegen import GRiDCodeGenerator
 from grid_codegen.model_descriptor import descriptor_from_robot
-from test.test_model_descriptor import descriptor_fk
-from test.test_manifold_conventions import derivative, state
+from test.cuda_equivalents.descriptor_oracle import descriptor_fk
+from test.cuda_equivalents.manifold_oracle import derivative, state
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
-from test.cuda_equivalents.test_cuda_constant_derivatives import constant_model
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
+from test.cuda_equivalents.constant_model import constant_model
 from grid_assets import robot_urdf
 
 pytestmark=[pytest.mark.cuda_equivalence,pytest.mark.robot_smoke]
@@ -25,7 +25,7 @@ ROOT=Path(__file__).resolve().parents[2]
     ('rotated_inertial_arm',False,True), ('constant',False,False),
     ('zero',False,False), ('slider_mimic_fixed_tool',False,False),
     ('fr3',False,False)])
-@pytest.mark.parametrize('precision',['float','double'])
+@pytest.mark.parametrize('precision',['float',pytest.param('double', marks=pytest.mark.fp64_alpha)])
 def test_model_primitives(tmp_path,name,floating,runtime,precision):
     if name in ('constant','zero'):
         robot=constant_model(tmp_path,zero=name=='zero')
@@ -36,12 +36,9 @@ def test_model_primitives(tmp_path,name,floating,runtime,precision):
     gen=GRiDCodeGenerator(robot,dtype=precision)
     gen.gen_all_code(algorithm_list=['integrator'],emit_plant=False,runtime_transform=runtime,
         include_homogenous_transforms=True,enable_mujoco_kernels=False,output_path=str(tmp_path/'grid.cuh'))
-    command=[shutil.which('nvcc'),'-std=c++17','-O2','-lineinfo','-Xptxas=-v',
-        '-arch=sm_'+_detect_cuda_arch(),'-DTEST_SCALAR='+precision,'-I'+str(tmp_path),
-        str(Path(__file__).with_name('cuda_model_primitives_runner.cu')),'-o',str(tmp_path/'probe')]
-    built=subprocess.run(command,capture_output=True,text=True)
-    (tmp_path/'compile.log').write_text(built.stdout+built.stderr)
-    assert built.returncode==0,built.stderr
+    exe,_=cached_nvcc_executable([Path(__file__).with_name('cuda_model_primitives_runner.cu')],
+        ['-std=c++17','-O2','-lineinfo','-Xptxas=-v','-arch=sm_'+_detect_cuda_arch(),'-DTEST_SCALAR='+precision],
+        exe_name='probe',fallback_dir=tmp_path,include_dirs=[tmp_path],what='model primitives runner')
     dtype=np.float32 if precision=='float' else np.float64
     inputs=[];expected=[];N=d['nv'];Q=d['nq']
     for s in range(35):
@@ -74,7 +71,7 @@ def test_model_primitives(tmp_path,name,floating,runtime,precision):
     baseline=None
     for threads in (1,17,32,64,128):
         output=tmp_path/f'out-{threads}.bin'
-        ran=subprocess.run([str(tmp_path/'probe'),str(tmp_path/'input.bin'),str(output),str(threads)],capture_output=True,text=True)
+        ran=subprocess.run([str(exe),str(tmp_path/'input.bin'),str(output),str(threads)],capture_output=True,text=True)
         (tmp_path/f'run-{threads}.log').write_text(ran.stdout+ran.stderr)
         assert ran.returncode==0,ran.stdout+ran.stderr
         actual=np.fromfile(output,dtype=dtype).reshape(np.shape(expected))

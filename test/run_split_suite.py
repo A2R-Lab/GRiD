@@ -346,14 +346,6 @@ def _module_local_dependencies(mod: str, exclude: set[str]) -> list[str]:
     for helper in _LOCAL_HELPER_IMPORT.findall(source):
         if helper != "cuda_harness" and (CUDA_DIR / f"{helper}.py").is_file():
             found.append(f"test/cuda_equivalents/{helper}.py")
-    # Public-metadata/manifold GPU oracles also import CPU helpers outside this
-    # directory. Their code must invalidate narrow shards, not only the global
-    # fingerprint. Descriptor FK's module imports the constant-model fixture.
-    for helper in ("test_model_descriptor", "test_manifold_conventions"):
-        if f"from test.{helper} import" in source:
-            found.append(f"test/{helper}.py")
-            if helper == "test_model_descriptor":
-                found.append("test/cuda_equivalents/test_cuda_constant_derivatives.py")
     return [path for path in dict.fromkeys(found) if path not in exclude]
 
 

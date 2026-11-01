@@ -1,6 +1,5 @@
 """Constant follower FK/Jacobian: block, thread and warp, both precisions."""
 from pathlib import Path
-import shutil
 import subprocess
 import numpy as np
 import pytest
@@ -9,12 +8,13 @@ from URDFParser import URDFParser
 from grid_assets import robot_urdf
 from grid_codegen import GRiDCodeGenerator
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
 
 @pytest.mark.parametrize('kind', ['prismatic', 'revolute'])
-@pytest.mark.parametrize('precision', ['float', 'double'])
+@pytest.mark.parametrize('precision', ['float', pytest.param('double', marks=pytest.mark.fp64_alpha)])
 def test_constant_mimic_kinematics(tmp_path, kind, precision):
     urdf = tmp_path / 'constant.urdf'
     urdf.write_text(robot_urdf('slider_mimic_fixed_tool').read_text()
@@ -27,15 +27,9 @@ def test_constant_mimic_kinematics(tmp_path, kind, precision):
                      include_homogenous_transforms=True, fixed_target_name='tool',
                      enable_mujoco_kernels=False)
     runner = Path(__file__).with_name('cuda_prismatic_fixed_target_runner.cu')
-    exe = tmp_path / 'constant.exe'
-    nvcc = shutil.which('nvcc')
-    assert nvcc, 'CUDA toolkit required'
-    command = [nvcc, '-std=c++17', '-O2', f'-arch=sm_{_detect_cuda_arch()}',
-               f'-I{tmp_path}', str(runner), '-o', str(exe)]
-    if precision == 'double':
-        command.append('-DUSE_DOUBLE')
-    result = subprocess.run(command, capture_output=True, text=True)
-    assert result.returncode == 0, result.stdout + result.stderr
+    flags = ['-std=c++17', '-O2', f'-arch=sm_{_detect_cuda_arch()}'] + (['-DUSE_DOUBLE'] if precision == 'double' else [])
+    exe, _ = cached_nvcc_executable([runner], flags, exe_name='constant.exe', fallback_dir=tmp_path,
+                                    include_dirs=[tmp_path], what='constant mimic runner')
     axis = np.array([.6, 0., .8])
     origin = np.eye(4)
     origin[:3, :3] = Rotation.from_euler('xyz', [.3, .2, .1]).as_matrix()

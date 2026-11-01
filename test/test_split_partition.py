@@ -871,15 +871,17 @@ def test_fingerprint_follows_named_runners_and_local_helpers():
 
 
 def test_manifold_and_descriptor_oracles_are_in_narrow_gpu_scope():
+    """The descriptor, manifold and constant-model oracles are helper modules under
+    test/cuda_equivalents, so the helper-import rule fingerprints them into every
+    shard that imports them; no test module is imported for its helpers."""
     from test import run_split_suite as R
     paths=R._shard_fingerprint_paths({"test_cuda_model_primitives"})
-    assert "test/test_model_descriptor.py" in paths
-    assert "test/test_manifold_conventions.py" in paths
-    assert "test/cuda_equivalents/test_cuda_constant_derivatives.py" in paths
-    for module in ("test_cuda_joint_transform_suffix", "test_cuda_spherical_plant_hessian"):
-        paths=R._shard_fingerprint_paths({module})
-        helper="test_model_descriptor" if "suffix" in module else "test_manifold_conventions"
-        assert f"test/{helper}.py" in paths
+    for helper in ("descriptor_oracle", "manifold_oracle", "constant_model"):
+        assert f"test/cuda_equivalents/{helper}.py" in paths
+    assert not [p for p in paths if p.startswith("test/test_")]
+    for module, helper in (("test_cuda_joint_transform_suffix", "descriptor_oracle"),
+                           ("test_cuda_spherical_plant_hessian", "manifold_oracle")):
+        assert f"test/cuda_equivalents/{helper}.py" in R._shard_fingerprint_paths({module})
 
 
 def test_resume_prunes_dirty_recorded_clean_rows(tmp_path):

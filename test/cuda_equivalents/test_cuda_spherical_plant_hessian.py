@@ -1,6 +1,5 @@
 """Repair audit of already-emitted fixed-spherical plant second derivatives."""
 from pathlib import Path
-import shutil
 import subprocess
 
 import numpy as np
@@ -9,14 +8,15 @@ from grid_codegen import GRiDCodeGenerator
 from URDFParser import URDFParser
 from RBDReference import RBDReference
 import xml.etree.ElementTree as ET
-from test.test_manifold_conventions import reference, state, derivative
+from test.cuda_equivalents.manifold_oracle import reference, state, derivative
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 
 pytestmark=[pytest.mark.cuda_equivalence,pytest.mark.robot_smoke]
 
 
 @pytest.mark.parametrize('name',['spherical_arm','mixed_spherical_arm','single_spherical','two_spherical'])
-@pytest.mark.parametrize('precision',['float','double'])
+@pytest.mark.parametrize('precision',['float',pytest.param('double', marks=pytest.mark.fp64_alpha)])
 @pytest.mark.parametrize('scheme',['euler','semi_implicit_euler'])
 @pytest.mark.parametrize('tier',[0,2],ids=['shared','minimal'])
 def test_spherical_plant_hessian(tmp_path,name,precision,scheme,tier):
@@ -39,14 +39,10 @@ def test_spherical_plant_hessian(tmp_path,name,precision,scheme,tier):
     gen=GRiDCodeGenerator(robot,dtype=precision)
     gen.gen_all_code(algorithm_list=['fdsva_so','integrator_gradient'],emit_plant=True,
         enable_mujoco_kernels=False,output_path=str(tmp_path/'grid.cuh'))
-    exe=tmp_path/'probe'
-    command=[shutil.which('nvcc'),'-std=c++17','-O2','-lineinfo','-Xptxas=-v',
-        '-arch=sm_'+_detect_cuda_arch(),'-DTEST_SCALAR='+precision,
-        '-DTEST_INTEGRATOR='+scheme.upper(),'-DTEST_TIER='+str(tier),'-I'+str(tmp_path),
-        str(Path(__file__).with_name('cuda_spherical_plant_hessian_runner.cu')),'-o',str(exe)]
-    result=subprocess.run(command,capture_output=True,text=True)
-    (tmp_path/'compile.log').write_text(result.stdout+result.stderr)
-    assert result.returncode==0,result.stderr
+    exe,_=cached_nvcc_executable([Path(__file__).with_name('cuda_spherical_plant_hessian_runner.cu')],
+        ['-std=c++17','-O2','-lineinfo','-Xptxas=-v','-arch=sm_'+_detect_cuda_arch(),'-DTEST_SCALAR='+precision,
+         '-DTEST_INTEGRATOR='+scheme.upper(),'-DTEST_TIER='+str(tier)],
+        exe_name='probe',fallback_dir=tmp_path,include_dirs=[tmp_path],what='spherical plant Hessian runner')
     dtype=np.float32 if precision=='float' else np.float64
     q,v=state(ref);u=np.linspace(-.4,.7,nv)
     z=np.r_[q,v,u].astype(dtype);z.tofile(tmp_path/'input.bin')

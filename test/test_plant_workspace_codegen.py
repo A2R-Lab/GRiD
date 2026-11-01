@@ -53,7 +53,7 @@ def test_runtime_hessian_query_matches_resolved_kernel_layout(tmp_path):
 
 
 def test_empty_coordinates_do_not_advertise_hessian_composition(tmp_path):
-    from test.cuda_equivalents.test_cuda_constant_derivatives import constant_model
+    from test.cuda_equivalents.constant_model import constant_model
     _,text=_gen(tmp_path,constant_model(tmp_path,zero=True),algorithm_list=['integrator_hessian'])
     assert '#define GRID_PLANT_HAS_HESSIAN_ARENA 0' in text
 
@@ -71,7 +71,8 @@ def _constant_slot_report(case):
     return detail * accesses + group * groups + f'========= RACECHECK SUMMARY: {total} hazards displayed (0 errors, {total} warnings)\n'
 
 
-@pytest.mark.parametrize('case', ['test_exact_target_scratch_floa0', 'test_exact_target_scratch_floa1', 'test_exact_target_scratch_floa2'])
+@pytest.mark.parametrize('case', ['test_exact_target_scratch[float-iiwa14-iiwa_joint_ee]',
+                                  'test_exact_target_scratch[float-go2-FR_foot_joint]', 'test_exact_target_scratch[float-go2-]'])
 def test_known_ee_warning_classification_is_narrow(case):
     from test.ee_constant_slot_warnings import known_constant_slot_warning
     report = _constant_slot_report(case)

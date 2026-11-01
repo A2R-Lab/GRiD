@@ -1,5 +1,4 @@
 """Empty outputs must not turn constant-body placeholders into device accesses."""
-import shutil
 import subprocess
 
 import numpy as np
@@ -7,12 +6,13 @@ import pytest
 from grid_codegen import GRiDCodeGenerator
 from RBDReference import RBDReference
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
-from test.cuda_equivalents.test_cuda_constant_derivatives import constant_model
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
+from test.cuda_equivalents.constant_model import constant_model
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
 
-@pytest.mark.parametrize('precision', ['float', 'double'])
+@pytest.mark.parametrize('precision', ['float', pytest.param('double', marks=pytest.mark.fp64_alpha)])
 @pytest.mark.parametrize('surface,zero', [('pose-hessian', True), ('pose-hessian', False),
                                         ('plant-gradient', True), ('plant-gradient', False)])
 def test_zero_dof_device_surfaces(tmp_path, precision, surface, zero):
@@ -70,14 +70,11 @@ int main(int argc,char **argv){
                      ('ATTRIBUTE', attribute), ('LAUNCH', launch),
                      ('OUTPUT_COUNT', '6*NV*NV+6*NV' if surface == 'pose-hessian' else '6*NV*NV')]:
         source = source.replace(old, new)
-    runner, exe = tmp_path / 'probe.cu', tmp_path / 'probe'
+    runner = tmp_path / 'probe.cu'
     runner.write_text(source)
-    nvcc = shutil.which('nvcc')
-    assert nvcc
-    built = subprocess.run([nvcc, '-std=c++17', '-O2', '-lineinfo', f'-arch=sm_{_detect_cuda_arch()}',
-                            str(runner), '-o', str(exe)], capture_output=True, text=True)
-    (tmp_path / 'compile.log').write_text(built.stdout + built.stderr)
-    assert built.returncode == 0, built.stderr
+    exe, _ = cached_nvcc_executable([runner], ['-std=c++17', '-O2', '-lineinfo', f'-arch=sm_{_detect_cuda_arch()}'],
+                                    exe_name='probe', fallback_dir=tmp_path, include_dirs=[tmp_path],
+                                    what='zero dof surfaces probe')
     expected = np.array([123, 456])
     if not zero:
         ref = RBDReference(robot)

@@ -8,9 +8,9 @@ never zero-hazard PASS. Brian approved this disposition on 2026-10-30.
 import re
 
 CASES = {
-    'test_exact_target_scratch_floa0': ('end_effector_pose_inner_iiwa_joint_ee', 24, 3),
-    'test_exact_target_scratch_floa1': ('end_effector_pose_inner_FR_foot_joint', 16, 2),
-    'test_exact_target_scratch_floa2': ('end_effector_pose_inner', 8, 1),
+    'test_exact_target_scratch[float-iiwa14-iiwa_joint_ee]': ('end_effector_pose_inner_iiwa_joint_ee', 24, 3),
+    'test_exact_target_scratch[float-go2-FR_foot_joint]': ('end_effector_pose_inner_FR_foot_joint', 16, 2),
+    'test_exact_target_scratch[float-go2-]': ('end_effector_pose_inner', 8, 1),
 }
 
 

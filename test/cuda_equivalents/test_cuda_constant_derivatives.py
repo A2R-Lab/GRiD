@@ -1,6 +1,5 @@
 """Constant-joint derivatives, including genuinely empty coordinate buffers."""
 from pathlib import Path
-import shutil
 import subprocess
 
 import numpy as np
@@ -9,33 +8,10 @@ from URDFParser import URDFParser
 from RBDReference import RBDReference
 from grid_codegen import GRiDCodeGenerator
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
+from test.cuda_equivalents.constant_model import constant_model
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
-
-
-def constant_model(directory, zero=False, locked=False, branched=False):
-    inertial = ('<inertial><origin xyz=".03 -.02 .07"/><mass value="1"/>'
-                '<inertia ixx=".3" iyy=".4" izz=".5" ixy="0" ixz="0" iyz="0"/></inertial>')
-    links = ''.join(f'<link name="{name}">{inertial}</link>'
-                    for name in ('base', 'mount', 'arm', 'follower'))
-    drive = ('<joint name="drive" type="fixed"><parent link="mount"/><child link="arm"/>'
-             '<origin xyz=".1 0 .2"/></joint>' if zero else
-             '<joint name="drive" type="revolute"><parent link="mount"/><child link="arm"/>'
-             '<origin xyz=".1 0 .2"/><axis xyz="0 1 0"/>'
-             '<limit lower="-3" upper="3" effort="10" velocity="10"/></joint>')
-    follower = ('<joint name="constant" type="fixed"><parent link="arm"/><child link="follower"/>'
-                '<origin xyz=".2 0 .3" rpy="0 0 .17"/></joint>' if locked else
-                '<joint name="constant" type="revolute"><parent link="arm"/><child link="follower"/>'
-                '<origin xyz=".2 0 .3"/><axis xyz="0 0 1"/>'
-                '<limit lower="-3" upper="3" effort="10" velocity="10"/>'
-                '<mimic joint="fixed" multiplier="2" offset=".17"/></joint>')
-    if branched:
-        follower = follower.replace('<parent link="arm"/>', '<parent link="mount"/>')
-    path = directory / f'model-{zero}-{locked}-{branched}.urdf'
-    path.write_text(f'<robot name="constant">{links}'
-                   '<joint name="fixed" type="fixed"><parent link="base"/><child link="mount"/></joint>'
-                   f'{drive}{follower}</robot>')
-    return URDFParser().parse(str(path))
 
 
 @pytest.fixture(scope='module', params=[(z, p) for z in ('chain', 'zero', 'branch') for p in ('float', 'double')])
@@ -49,15 +25,11 @@ def derivative_probe(request, tmp_path_factory):
                      algorithm_list=['inverse_dynamics_gradient', 'frame_jacobian', 'frame_jacobian_dot'],
                      include_homogenous_transforms=True, enable_mujoco_kernels=False)
     source = Path(__file__).with_name('cuda_constant_derivatives_runner.cu')
-    exe = path / 'probe'
-    nvcc = shutil.which('nvcc')
-    assert nvcc, 'CUDA toolkit required'
-    result = subprocess.run([nvcc, '-std=c++17', '-O2', f'-arch=sm_{_detect_cuda_arch()}',
-                             f'-I{path}', f'-DDTYPE={precision}',
-                             f'-DID_TEMP={gen.gen_inverse_dynamics_gradient_inner_temp_mem_size()}',
-                             str(source), '-o', str(exe)], capture_output=True, text=True)
-    (path / 'compile.log').write_text(result.stdout + result.stderr)
-    assert result.returncode == 0, result.stderr
+    exe, _ = cached_nvcc_executable([source], ['-std=c++17', '-O2', f'-arch=sm_{_detect_cuda_arch()}',
+                                              f'-DDTYPE={precision}',
+                                              f'-DID_TEMP={gen.gen_inverse_dynamics_gradient_inner_temp_mem_size()}'],
+                                    exe_name='probe', fallback_dir=path, include_dirs=[path],
+                                    what='constant derivatives runner')
     return robot, RBDReference(robot), path, exe, precision, layout
 
 

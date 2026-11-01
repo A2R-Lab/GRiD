@@ -1,6 +1,5 @@
 """Menu dimensions, alignment, poison and repeated B=2 composition."""
 from pathlib import Path
-import shutil
 import subprocess
 import numpy as np
 import pytest
@@ -8,11 +7,14 @@ from URDFParser import URDFParser
 from grid_assets import robot_urdf
 from grid_codegen import GRiDCodeGenerator
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 
 pytestmark=[pytest.mark.cuda_equivalence,pytest.mark.robot_smoke]
 
 
-@pytest.fixture(scope='module',params=[('iiwa14',False,'float'),('go2',True,'float'),('iiwa14',False,'double'),('indy7',False,'float')])
+@pytest.fixture(scope='module',params=[('iiwa14',False,'float'),('go2',True,'float'),
+    pytest.param(('iiwa14',False,'double'),marks=pytest.mark.fp64_alpha),('indy7',False,'float')],
+    ids=['iiwa14-float','go2-float','iiwa14-double','indy7-float'])
 def menu_case(request,tmp_path_factory):
     name,floating,scalar=request.param
     path=tmp_path_factory.mktemp('menu_workspace_'+name+'_'+scalar)
@@ -21,12 +23,9 @@ def menu_case(request,tmp_path_factory):
     gen=GRiDCodeGenerator(robot,dtype=scalar)
     gen.gen_all_code(algorithm_list=['integrator','frame_jacobian'],emit_plant=True,
                      enable_mujoco_kernels=False,output_path=str(path/'grid.cuh'))
-    exe=path/'probe'
-    result=subprocess.run([shutil.which('nvcc'),'-std=c++17','-O2','-lineinfo','-arch=sm_'+_detect_cuda_arch(),
-                           '-Xptxas=-v','-DTEST_SCALAR='+scalar,'-I'+str(path),
-                           str(Path(__file__).with_name('cuda_menu_workspace_runner.cu')),'-o',str(exe)],capture_output=True,text=True)
-    (path/'compile.log').write_text(result.stdout+result.stderr)
-    assert result.returncode==0,result.stderr
+    exe,_=cached_nvcc_executable([Path(__file__).with_name('cuda_menu_workspace_runner.cu')],
+        ['-std=c++17','-O2','-lineinfo','-arch=sm_'+_detect_cuda_arch(),'-Xptxas=-v','-DTEST_SCALAR='+scalar],
+        exe_name='probe',fallback_dir=path,include_dirs=[path],what='menu workspace runner')
     return path,exe,robot,np.float32 if scalar=='float' else np.float64
 
 

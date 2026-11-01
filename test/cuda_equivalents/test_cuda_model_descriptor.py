@@ -1,6 +1,5 @@
 """Public metadata device access and single-pose frame composition, no timing."""
 from pathlib import Path
-import shutil
 import subprocess
 
 import numpy as np
@@ -9,7 +8,8 @@ from URDFParser import URDFParser
 from grid_codegen.model_descriptor import descriptor_from_robot
 from grid_codegen.model_metadata_cpp import emit_model_metadata, JOINT_KINDS, FRAME_KINDS
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
-from test.cuda_equivalents.test_cuda_constant_derivatives import constant_model
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
+from test.cuda_equivalents.constant_model import constant_model
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,15 +27,9 @@ def case(request, tmp_path_factory):
             robot=URDFParser().parse(str(path/'model-False-False-False.urdf'),floating_base=True)
     descriptor=descriptor_from_robot(robot, runtime_transform=request.param=='runtime')
     (path/'metadata.cuh').write_text(emit_model_metadata(descriptor))
-    exe=path/'probe'
-    nvcc=shutil.which('nvcc')
-    if not nvcc:
-        pytest.skip('nvcc not found')
-    command=[nvcc,'-std=c++17','-O2','-arch=sm_'+_detect_cuda_arch(),'-I'+str(path),
-             str(Path(__file__).with_name('cuda_model_descriptor_runner.cu')),'-o',str(exe)]
-    result=subprocess.run(command,capture_output=True,text=True)
-    (path/'compile.log').write_text(result.stdout+result.stderr)
-    assert result.returncode==0,result.stderr
+    exe,_=cached_nvcc_executable([Path(__file__).with_name('cuda_model_descriptor_runner.cu')],
+        ['-std=c++17','-O2','-arch=sm_'+_detect_cuda_arch()],
+        exe_name='probe',fallback_dir=path,include_dirs=[path],what='model descriptor runner')
     return descriptor,exe
 
 
@@ -67,7 +61,7 @@ def expected(d):
     return values
 
 
-@pytest.mark.parametrize('precision',[0,1],ids=['fp32','fp64'])
+@pytest.mark.parametrize('precision',[0,pytest.param(1, marks=pytest.mark.fp64_alpha)],ids=['fp32','fp64'])
 def test_device_metadata_and_single_pose_composition(case,precision):
     descriptor,exe=case
     oracle=np.array(expected(descriptor),dtype=np.float64 if precision else np.float32)

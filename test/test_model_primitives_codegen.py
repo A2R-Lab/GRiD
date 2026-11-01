@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from grid_codegen import GRiDCodeGenerator
 from URDFParser import URDFParser
-from test.test_manifold_conventions import reference
+from test.cuda_equivalents.manifold_oracle import reference
 
 
 def test_kinematics_primitives_do_not_pull_in_plant(tmp_path):

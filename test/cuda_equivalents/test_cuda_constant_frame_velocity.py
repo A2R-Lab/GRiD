@@ -1,18 +1,18 @@
 """The cost-menu frame path shares constant-joint column ownership."""
-import shutil
 import subprocess
 import numpy as np
 import pytest
 from RBDReference import RBDReference
 from grid_codegen import GRiDCodeGenerator
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
-from test.cuda_equivalents.test_cuda_constant_derivatives import constant_model
+from test.cuda_equivalents.executable_cache import cached_nvcc_executable
+from test.cuda_equivalents.constant_model import constant_model
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
 
 @pytest.mark.parametrize('zero', [False, True])
-@pytest.mark.parametrize('precision', ['float', 'double'])
+@pytest.mark.parametrize('precision', ['float', pytest.param('double', marks=pytest.mark.fp64_alpha)])
 def test_constant_frame_velocity(tmp_path, zero, precision):
     robot = constant_model(tmp_path, zero=zero)
     gen = GRiDCodeGenerator(robot, dtype=precision)
@@ -48,14 +48,11 @@ int main(int argc,char **argv) {
     CK(cudaFree(in));CK(cudaFree(out));CK(grid::free_robotModel_checked<T>(model));
 }
 '''.replace('DTYPE', precision)
-    runner, exe = tmp_path / 'probe.cu', tmp_path / 'probe'
+    runner = tmp_path / 'probe.cu'
     runner.write_text(source)
-    nvcc = shutil.which('nvcc')
-    assert nvcc
-    built = subprocess.run([nvcc, '-std=c++17', '-O2', f'-arch=sm_{_detect_cuda_arch()}',
-                            str(runner), '-o', str(exe)], capture_output=True, text=True)
-    (tmp_path / 'compile.log').write_text(built.stdout + built.stderr)
-    assert built.returncode == 0, built.stderr
+    exe, _ = cached_nvcc_executable([runner], ['-std=c++17', '-O2', f'-arch=sm_{_detect_cuda_arch()}'],
+                                    exe_name='probe', fallback_dir=tmp_path, include_dirs=[tmp_path],
+                                    what='constant frame velocity probe')
     ref = RBDReference(robot)
     q, v = np.full(robot.get_num_pos(), .35), np.full(robot.get_num_vel(), .23)
     J = ref.frame_jacobian(q, 'constant', reference_frame='LOCAL_WORLD_ALIGNED')
