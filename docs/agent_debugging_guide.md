@@ -3750,3 +3750,29 @@ floor must be checked against the harness standard, not only against consumer
 builds; and a wave that changes codegen must run at least one equivalence
 shard before a package closes, whatever the probes say. The two-pass receipt
 would have caught this on pass one, at the cost of a pass.
+
+### 7.z81 An opt-out that does not change the header is in the input key, not the content key (2026-10-31, strict_collision)
+
+`build_artifact(strict_collision=False)` is recorded in the code options only when
+a consumer opts out, so it is part of the artifact's input key. It is not in the
+content key unless the spherizer actually took a different route, because the
+content key hashes the generated header and the consumer's units, and a spherizer
+that raised no warning generates the same header either way. A CPU test that asserts
+`lenient.content_key != strict.content_key` for a model without mesh trouble is
+asserting the wrong key; the right assertions are a different input key and the
+same content key. The same holds for any switch whose effect is "fail instead of
+warn": it changes what can be built, not what was built.
+
+Two harness conventions from the same day. First, a CUDA test that compiles its own
+probe goes through `test/cuda_equivalents/executable_cache.py::cached_nvcc_executable`
+with `sources=[runner]`, `include_dirs=[dir holding grid.cuh]` and every nvcc flag
+except `-I`, `-o` and the source path; the key follows the quoted-include closure
+through the include directories, so the generated header's bytes are in it, and a
+second receipt pass or a sweep reuses the executable. Hand-rolled `subprocess.run`
+nvcc calls cost the second pass every compile again. Second, helpers shared between
+CPU tests and GPU suites (the descriptor-only forward kinematics, the manifold
+oracle, the constant-joint fixture robot) live in helper modules under
+`test/cuda_equivalents/`, where the split driver's helper-import rule fingerprints
+them into every shard that imports them. Importing a test module for its helper
+needs a hand-written special case in `run_split_suite._module_fingerprint_paths`,
+which is exactly what rotted last time.

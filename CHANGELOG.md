@@ -19,6 +19,20 @@ with `python_extension=True` and pass `CollisionMargins` where a scalar margin
 went before; the migration steps are on the documentation's *Migrating to 0.7*
 page, which this changelog does not repeat.
 
+- Make the spherizer's warnings errors on the generated-from-mesh collision
+  routes (`collision=True`, `collision_native=True`, `grid-generate -c`,
+  `grid-spherize`): a mesh whose voxel fill failed and would be replaced by a
+  bounding-box cover, or a model with no spheres, stops generation because
+  either silently changes the clearance rows a consumer bakes.
+  `strict_collision=False` on `build_artifact`, `--no-strict-collision` on the
+  two command lines, and `strict=False` on `spherize_urdf` accept them with the
+  warning. The opt-out is part of the artifact's input key.
+- Rename `ConsumerArtifact.descriptor` to `model_descriptor`, the name the
+  robot handle uses for the same metadata.
+- Keep the double-precision cells of the suites added in this release in the
+  fp64 alpha lane (`make test-fp64`), outside the signed receipt, the policy
+  the fp64 tier has had since 0.5.3; the receipt keeps a float cell of every
+  configuration those suites cover.
 - Add the skew revolute mimic fixture `revolute_mimic_fixed_tool` with
   closed-form mechanics checks of the numpy oracle and the generated CUDA
   inverse dynamics, forward dynamics, ABA, mass matrix and its inverse.
