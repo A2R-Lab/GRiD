@@ -12,6 +12,13 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Receipts: the first Jetson AGX Orin (sm_87) receipt,
+  `receipts/gpu-proof-sm87.json` with its header-key ledger, recorded at the
+  0.7.0 receipt commit 607efc2: 2056 tests, 2055 passed and the one expected
+  racecheck skip; `make verify-all` verifies it next to the primary. The
+  compatibility page's Orin row records that receipt in place of the 0.5.1
+  smoke runs.
+
 ## [0.7.0] — 2026-10-31
 
 Consumers rebuild their prepared artifacts (schema 2), declare pybind modules
