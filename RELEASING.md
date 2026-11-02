@@ -141,6 +141,16 @@ baseline. To record a secondary receipt, install the dev requirements on the
 Jetson and run `SPLIT=1 test/run_gpu_proof.sh` on a clean checkout of the release
 tip; the driver detects the architecture, writes that row's path and never
 touches `gpu-proof.json`. Commit the receipt with its header-key ledger.
+The signing key stays on the desktop, so a Jetson records with
+`PYTEST_ARGS="--gpu-proof-signing-backend none"`; the driver's final merge then
+refuses the unsigned shards (rc=1 after a clean shard board) and writes neither
+the receipt nor the ledger. Copy the run directory's `receipts/` to the desktop,
+branch from the release tip, merge and sign there with
+`gpu-proof merge --out receipts/gpu-proof-sm87.json --repo . <shard receipts>`,
+build the ledger from the shard sidecars with the driver's
+`aggregate_header_keys` pointed at `receipts/gpu-proof-sm87-header-keys.json`,
+commit both, then run `make verify-all`: the policy refuses a dirty
+verification tree, and the receipt itself counts as dirt until it is committed.
 `make verify-all` verifies every receipt on disk, one line per architecture, and
 `test/receipt_integrity.py --table` prints their rows for the compatibility page.
 A release does not wait for secondary receipts; they are documentation of the

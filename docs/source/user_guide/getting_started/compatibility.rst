@@ -10,18 +10,18 @@ Platforms and toolchain
   different architecture is refused at context creation with a clear error.
   The model, the API and the generated code carry over between machines; the
   binary does not.
-* The GPU test receipt and the release timing ran on Linux x86-64 with CUDA
-  toolkit 13.2 and one RTX 5090 (sm_120); the table below lists that
-  environment. CUDA 12 toolkits and other GPUs are untested. Jetson-class
-  devices are within the design (single-block kernels, resource tiers, runtime
-  memory fitting); the Orin ran the smoke set listed below and the Xavier the
-  header-only example, but no receipt covers them yet.
+* The primary GPU test receipt and the release timing ran on Linux x86-64
+  with CUDA toolkit 13.2 and one RTX 5090 (sm_120). A secondary receipt of the
+  same 2056 tests at the same commit ran on a Jetson AGX Orin (sm_87, aarch64,
+  CUDA toolkit 13.2); the table below lists both environments. CUDA 12
+  toolkits and other GPUs are untested. The Xavier (sm_72) ran the header-only
+  example and has no receipt.
 * The host compiler standard is C++17 for the code generator, benchmarks and a
   numpy-only build. With the ``[torch]`` extra the wrapper reads the standard
   that torch's ATen header guard demands and compiles with it. The torch we run
   (2.12.0, cu128) compiles with C++17. A torch that demands C++20 needs an nvcc
-  and host compiler accepting C++20; that path has run only in the Orin smoke
-  below (torch 2.14.0+cu130), never under a receipt.
+  and host compiler accepting C++20; that path ran under the Orin receipt below
+  (torch 2.14.0+cu130).
   ``GRID_RBD_CXX_STD`` forces the standard.
 * The ``[jax]`` / ``[torch]`` extras pin the CPU packages; install the CUDA
   wheel yourself. We run ``jax[cuda12]`` (``jax-cuda12-plugin`` 0.10.0) and a
@@ -32,10 +32,13 @@ Platforms and toolchain
 What we ran
 -----------
 
-One machine produced every piece of GPU evidence in this release: the full
-test receipt (``gpu-proof.json``, verified by CI), the release timing on the
+The RTX 5090 produced the primary evidence in this release: the full test
+receipt (``gpu-proof.json``, verified by CI), the release timing on the
 :doc:`release measurements <../../release_measurements>` page, and the
-installed-wheel check of the release playbook. Everything validated ran in
+installed-wheel check of the release playbook. The Jetson AGX Orin recorded
+the secondary receipt ``receipts/gpu-proof-sm87.json``, the same collection
+at the same commit, which ``make verify-all`` checks against its own
+expected-skips baseline. Everything validated ran in
 fp32, the default compute precision; the fp64 tier (``dtype="float64"``) is
 an alpha feature outside the receipt.
 
@@ -63,21 +66,23 @@ an alpha feature outside the receipt.
      - Ubuntu 24.04.5, Linux 7.0.0-38, x86-64
      - full receipt; release timing; install check (a fresh venv with
        torch 2.11.0+cu128 and jax 0.11.2 from PyPI)
-     - receipt 2026-10-24; timing 2026-09-27 to 2026-10-07; install check
+     - receipt 2026-11-01; timing 2026-09-27 to 2026-10-07; install check
        2026-10-15
    * - sm_87 (compute capability 8.7)
      - NVIDIA Jetson AGX Orin, 64 GB
      - 13.2 (V13.2.78)
-     - L4T R39.2 (JetPack; driver API 13.2)
+     - L4T R39.2 (JetPack; driver 595.78)
      - CPython 3.12.3
      - 2.14.0+cu130 (NVIDIA Jetson build)
-     - jax 0.11.1 (NVIDIA Jetson build)
-     - Ubuntu 24.04.4, Linux 6.8.12-tegra, aarch64
-     - smoke runs on the 0.5.1 main checkout, no receipt: the iiwa14 numpy,
-       torch and jax wrappers (30, 25 and 60 tests), the CUDA equivalence
-       harness on iiwa14 fixed and go2 floating (72 tests), the g1 plant
-       Hessian; pinocchio 3.9.0 and mujoco 3.9.0 from PyPI aarch64 wheels
-     - 2026-10-16
+     - jax 0.11.1 with jax-cuda13-plugin 0.11.1 (NVIDIA Jetson build)
+     - Ubuntu 24.04.4, Linux 6.8.12-1021-tegra, aarch64
+     - secondary receipt ``receipts/gpu-proof-sm87.json`` at the 0.7.0
+       receipt commit 607efc2: 2056 tests, 2055 passed, 1 skipped (the
+       compute-sanitizer racecheck cell listed in
+       ``test/gpu-proof-expected-skips-sm87.txt``), 82 shards in 24 hours
+       with ``GRID_SPLIT_COMPILE_JOBS=2`` and ``GRID_RBD_BUILD_JOBS=4``;
+       pinocchio 3.9.0 and mujoco 3.9.0 from PyPI aarch64 wheels
+     - receipt 2026-11-01 to 2026-11-02
    * - sm_72 (compute capability 7.2)
      - NVIDIA Jetson AGX Xavier, 32 GB
      - 11.4 (V11.4.315)
@@ -97,14 +102,16 @@ compiles the generated kernels and the per-robot ``.so``. The torch wheel
 carries its own CUDA 12.8 runtime libraries for torch's kernels, and the
 ``jax-cuda12-plugin`` carries CUDA 12 runtime libraries for XLA; neither uses
 ``nvcc``. The driver has to satisfy every runtime in the process, and
-615.71.09 does. A ``jax[cuda13]`` plugin, a torch wheel other than cu128, a
-CUDA 12 toolkit and CPython 3.10, 3.11 or 3.13 on a GPU are untested; the CI
-wheel builds for CPython 3.10, 3.11 and 3.13 and the CPU test lane on 3.10 and
-3.13 run on CPU only. The Jetson rows record smoke runs, not receipts. No
-secondary receipt has been recorded yet; the first Orin receipt lands under
-``receipts/`` through the per-architecture table in
-``test/gpu-proof-receipts.yaml``; the Xavier stays header-only because JetPack 5 ships CUDA
-11.4 and Python 3.8, below the floors of the generator and the bindings.
+615.71.09 does. On x86-64, a ``jax[cuda13]`` plugin, a torch wheel other
+than cu128, a CUDA 12 toolkit and CPython 3.10, 3.11 or 3.13 on a GPU are
+untested; the CI wheel builds for CPython 3.10, 3.11 and 3.13 and the CPU test
+lane on 3.10 and 3.13 run on CPU only. The Orin receipt is the one run of
+``jax-cuda13-plugin`` and a cu130 torch wheel, on aarch64. The Orin row is a
+secondary receipt, recorded through the per-architecture table in
+``test/gpu-proof-receipts.yaml`` and verified by ``make verify-all``; it
+documents the architecture and does not gate CI. The Xavier stays header-only
+because JetPack 5 ships CUDA 11.4 and Python 3.8, below the floors of the
+generator and the bindings.
 
 Runtime contexts
 ----------------

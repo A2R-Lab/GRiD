@@ -3794,3 +3794,27 @@ can reuse the address. That is process-local and deterministic. The same rule ap
 to any runner: never compare `cudaMemGetInfo`, `nvidia-smi` memory or any other
 device-wide counter across a window in which another process may run; a receipt
 shard always has to assume a neighbour.
+
+### 7.z83 A Jetson receipt ends with the merge refused, not with a failure (2026-11-02, Orin sm_87 at 0.7.0)
+
+The Orin recorded the 0.7.0 collection at the receipt commit in 24 hours, 82
+shards, 2056 ids, one expected racecheck skip, and the driver still exited 1:
+its final `gpu-proof merge --verify-inputs` refuses the unsigned shards that
+`--gpu-proof-signing-backend none` produces, and because the merge failed the
+driver never wrote the receipt, the header-key ledger or the durations. A
+watcher keyed on the exit code reports the run dead; the shard board above the
+merge line is the truth to read first.
+
+The landing is done on the desktop, where the signing key is: copy the run
+directory's `receipts/` (the shard receipts and the 41 `*.header_keys.jsonl`
+sidecars, 4 MB without `compile/`), branch from the release tip, `gpu-proof
+merge --out receipts/gpu-proof-sm87.json --repo .` over the shard receipts,
+then build the ledger with the driver's own `aggregate_header_keys` after
+pointing its module-level `HEADER_KEYS_PATH` at
+`receipts/gpu-proof-sm87-header-keys.json` (load the module through
+`importlib` and register it in `sys.modules` before `exec_module`, or its
+dataclasses fail to resolve). Commit the receipt and the ledger together before
+`make verify-all`: the release policy refuses a dirty verification tree, and an
+untracked receipt is dirt, so the verify fails on both architectures until the
+commit exists. The primary ledger `test/gpu-proof-header-keys.json` must stay
+untouched by the secondary landing; check `git diff --stat` on it.
