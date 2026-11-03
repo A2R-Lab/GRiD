@@ -874,6 +874,34 @@ def refuse_cross_arch_carry(source: str, row) -> str | None:
             f"across architectures; record a fresh full pass on this GPU.")
 
 
+def shard_receipts_unsigned(paths: list[str]) -> bool | None:
+    """True when every shard receipt carries ``signature: null`` (recorded
+    with ``--gpu-proof-signing-backend none``, the Jetson route: the signing
+    key stays on the desktop), False when every shard is signed, None when
+    the shards disagree (a mixed set is refused before the merge)."""
+    flags: set[bool] = set()
+    for path in paths:
+        try:
+            flags.add(json.loads(Path(path).read_text()).get("signature") is None)
+        except (OSError, json.JSONDecodeError):
+            flags.add(False)
+    return flags.pop() if len(flags) == 1 else None
+
+
+def merge_command(shards: list[str], carry_from: str | None, unsigned: bool,
+                  out: Path, repo: Path = REPO_ROOT) -> list[str]:
+    """The ``gpu-proof merge`` invocation. Signed shards are authenticated
+    against the signer's GitHub keys (``--verify-inputs``); unsigned shards
+    merge into an unsigned receipt (``--unsigned``) that the desktop re-signs
+    from the same shards (guide 7.z83), so the scope gate, the durations and
+    the header-key ledger still run on the recording machine."""
+    cmd = [GPU_PROOF, "merge", "--unsigned" if unsigned else "--verify-inputs",
+           "--out", str(out), "--repo", str(repo)]
+    if carry_from:
+        cmd += ["--carry-from", carry_from]
+    return cmd + list(shards)
+
+
 def aggregate_header_keys(rdir: Path, results: list[dict],
                           merged_receipt: Path | None = None) -> None:
     """A4 (2026-09-11): fold the per-shard header content-key sidecars
@@ -2051,33 +2079,40 @@ def main() -> int:
         shards = sorted(str(p) for p in rdir.glob("*.json")) if rdir.exists() else []
         if shards:
             merged = out_dir / "gpu-proof.json"
-            # --verify-inputs (pytest-gpu-proof 0.4.1): every shard receipt's
-            # signature is authenticated against the signer's GitHub keys
-            # before it can contribute to the merged receipt.
-            cmd = [GPU_PROOF, "merge", "--verify-inputs",
-                   "--out", str(merged), "--repo", str(REPO_ROOT)]
-            if args.receipts_carry_from:
-                cmd += ["--carry-from", args.receipts_carry_from]
-            cmd += shards
-            mrc = subprocess.run(cmd, cwd=REPO_ROOT).returncode
-            print(f"  receipts: merged {len(shards)} shard(s) -> {merged} (rc={mrc})"
-                  + (f" carrying from {args.receipts_carry_from}"
-                     if args.receipts_carry_from else ""))
+            unsigned = shard_receipts_unsigned(shards)
+            if unsigned is None:
+                print("  receipts: shard receipts disagree on signing (some "
+                      "signed, some unsigned); refusing to merge")
+                mrc = 1
+            else:
+                cmd = merge_command(shards, args.receipts_carry_from, unsigned,
+                                    merged)
+                mrc = subprocess.run(cmd, cwd=REPO_ROOT).returncode
+                print(f"  receipts: merged {len(shards)} shard(s) -> {merged} "
+                      f"(rc={mrc}{', unsigned' if unsigned else ''})"
+                      + (f" carrying from {args.receipts_carry_from}"
+                         if args.receipts_carry_from else ""))
             if mrc == 0:
                 # The ONE scope/policy gate, fired here while the tree is
                 # still byte-clean (header keys are written below): the
                 # everyday policy's required_test_manifest (exact collection),
-                # expected-skips baseline, fingerprint, ancestry, signature.
-                # A short or drifted collection fails HERE, before the
-                # launcher promotes the receipt. --full runs re-verify under
-                # the release policy at --finalize.
+                # expected-skips baseline, fingerprint, ancestry, signature
+                # (an unsigned merge is accepted loudly and re-signed on the
+                # desktop; the launcher never publishes it).
                 vcmd = [GPU_PROOF, "verify", "--receipt", str(merged),
                         "--repo", str(REPO_ROOT),
                         "--policy", str(REPO_ROOT / "test/gpu-proof-policy.yaml"),
                         "--expected-skips",
                         str(REPO_ROOT / receipt_row.expected_skips)]
+                if unsigned:
+                    vcmd.append("--allow-unsigned")
                 vrc = subprocess.run(vcmd, cwd=REPO_ROOT).returncode
                 print(f"  receipts: everyday-policy verify of {merged} (rc={vrc})")
+                if unsigned and vrc == 0:
+                    print(f"  receipts: UNSIGNED merge verified; re-sign on the "
+                          f"desktop from the same shards: gpu-proof merge --out "
+                          f"{receipt_row.receipt} --repo . {rdir}/*.json and "
+                          f"commit it with {receipt_row.header_keys}")
                 mrc = vrc
             if mrc != 0:
                 bad += 1

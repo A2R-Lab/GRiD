@@ -3818,3 +3818,10 @@ dataclasses fail to resolve). Commit the receipt and the ledger together before
 untracked receipt is dirt, so the verify fails on both architectures until the
 commit exists. The primary ledger `test/gpu-proof-header-keys.json` must stay
 untouched by the secondary landing; check `git diff --stat` on it.
+
+Fixed 2026-11-03: `shard_receipts_unsigned` and `merge_command` in the driver
+merge an all-unsigned shard set with `--unsigned`, verify it with
+`--allow-unsigned`, and still write the durations and the ledger; a mixed set
+is refused before the merge; `run_gpu_proof.sh` never publishes an unsigned
+receipt and prints the desktop re-sign command; CI verifies every committed
+secondary receipt with `receipt_integrity.py --verify-all`.
