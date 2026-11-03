@@ -55,7 +55,14 @@ repository. Everything below describes the packaged A2R-Lab releases.
   checked on the GPU against the projection on both bases; so do the
   end-effector pose and its gradient and the frame Jacobian family (J,
   Jdot with its alpha' qd_l term, the task inertia, the frame velocity and
-  acceleration and their derivatives). Every other algorithm is refused for
+  acceleration and their derivatives), the six integrators with their
+  `[A | B]` gradients, the joint-torque regressor and the energy
+  regressors, the forward-dynamics parameter gradient, the generalized
+  gravity and bias, the CoM, the centroidal momentum matrix and the
+  energies. Every other algorithm (the Coriolis matrix, the momentum-matrix
+  derivatives, the external-force gradients, the runtime end-effector pose,
+  the pose Hessian, the regressor gradient, the second-order derivatives,
+  the plant layer and the joint damping and friction folds) is refused for
   a polynomial robot until its fold reads alpha at runtime. Headers of
   robots without polynomial followers are byte-identical.
 - Rotor armature: `register_robot(..., runtime_armature=True)` adds a

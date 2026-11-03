@@ -234,13 +234,19 @@ def gen_inverse_dynamics_regressor_inner(self):
 
     # walk up the tree per link_i. Emit a switch on link_i; each case unrolls the
     # ancestor chain projections + X^T propagations.
+    if self.robot_has_variable_couplings():
+        # polynomial followers: the projection weight alpha(q_l) at runtime
+        for j in range(NB):
+            if self._alpha_is_variable(j):
+                self.gen_add_code_line("const T cal_" + str(j) + " = " + self._coupling_alpha_cpp(j) + ";")
     self.gen_add_code_line("switch (link_i) {", True)
     for i in range(NB):
         chain = chains[i]
         self.gen_add_code_line("case " + str(i) + ": {", True)
         for depth, j in enumerate(chain):
             scale = _mimic_scale(j)
-            scale_pref = "" if scale == 1.0 else ("static_cast<T>(" + repr(scale) + ") * ")
+            variable = self._alpha_is_variable(j)
+            scale_pref = ("cal_" + str(j) + " * ") if variable else ("" if scale == 1.0 else ("static_cast<T>(" + repr(scale) + ") * "))
             # project f onto body j's DOF rows
             if self.robot.floating_base and j == 0:
                 # free-flyer root: S is identity over rows 0..5 -> Y[r, col] += f[r]
@@ -263,7 +269,7 @@ def gen_inverse_dynamics_regressor_inner(self):
                 if isinstance(fidx, (list, tuple)):
                     fidx = fidx[0]
                 S_vec = self.robot._get_flat_S_by_id(j)
-                terms = [("static_cast<T>(" + repr(float(S_vec[r]) * scale) + ") * f[" + str(r) + "]")
+                terms = [(scale_pref if variable else "") + ("static_cast<T>(" + repr(float(S_vec[r]) * (1.0 if variable else scale)) + ") * f[" + str(r) + "]")
                          for r in range(6) if S_vec[r] != 0.0]
                 self.gen_add_code_line(
                     "s_Y[" + str(fidx) + "*" + str(10 * NB) + " + col] += " +
@@ -273,6 +279,8 @@ def gen_inverse_dynamics_regressor_inner(self):
                 s_sign = self.robot.get_S_sign_by_id(j)
                 coeff = float(s_sign) * scale
                 coeff_pref = "" if coeff == 1.0 else ("static_cast<T>(" + repr(coeff) + ") * ")
+                if variable:
+                    coeff_pref = scale_pref + ("" if float(s_sign) == 1.0 else ("static_cast<T>(" + repr(float(s_sign)) + ") * "))
                 fidx = self.robot.get_joint_index_f(j)
                 if isinstance(fidx, (list, tuple)):
                     fidx = fidx[0]

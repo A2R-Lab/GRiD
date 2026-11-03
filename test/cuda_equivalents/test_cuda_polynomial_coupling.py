@@ -228,3 +228,83 @@ def test_polynomial_coupling_integrators_match_projection(tmp_path, floating):
             return np.concatenate(flat)
 
         thread_sweep((1, 32, 128), run)
+
+
+@pytest.mark.parametrize("floating", [False, True], ids=["fixed", "floating"])
+def test_polynomial_coupling_regressor_and_centroidal_match_projection(tmp_path, floating):
+    """The joint-torque regressor (Y_y = G^T Y_f), the generalized gravity, the
+    bias, the CoM and its Jacobian, the centroidal momentum matrix and the
+    energies on the polynomial chain, against the projected reference."""
+    from pathlib import Path
+    from test.cuda_equivalents.cuda_harness import _detect_cuda_arch, _parse_runner_output, _run_runner
+    from test.cuda_equivalents.executable_cache import cached_nvcc_executable
+
+    urdf = write_polynomial_chain(tmp_path)
+    with contextlib.redirect_stdout(io.StringIO()):
+        robot = URDFParser().parse(str(urdf), floating_base=floating)
+    glass_inc = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
+    arch = _detect_cuda_arch()
+    here = Path(__file__).resolve().parent
+    # regressor header + runner
+    reg_dir = tmp_path / "regressor"; reg_dir.mkdir()
+    gen = GRiDCodeGenerator(robot, False, True, "grid")
+    with contextlib.redirect_stdout(io.StringIO()):
+        gen.gen_all_code(output_path=str(reg_dir / "grid.cuh"), codegen_profile="regressor",
+                         include_homogenous_transforms=True, enable_mujoco_kernels=False)
+    reg_exe, reg_cmd = cached_nvcc_executable(
+        [here / "cuda_regressor_smoke_runner.cu", reg_dir / "grid.cuh"],
+        ["-std=c++17", "-O0", f"-DGRID_CUDA_FLOATING_BASE={1 if floating else 0}",
+         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS", "-DGRID_CUDA_REGRESSOR_TEST_THREADS=64",
+         "-gencode", f"arch=compute_{arch},code=sm_{arch}"],
+        exe_name="cuda_regressor_smoke_runner.exe", fallback_dir=reg_dir, include_dirs=[glass_inc, reg_dir],
+        what=f"regressor runner, polynomial chain floating={floating}")
+    # centroidal header + the mimic runner (no plant costs)
+    cen_dir = tmp_path / "centroidal"; cen_dir.mkdir()
+    gen = GRiDCodeGenerator(robot, False, True, "grid")
+    with contextlib.redirect_stdout(io.StringIO()):
+        gen.gen_all_code(output_path=str(cen_dir / "grid.cuh"),
+                         algorithm_list=["generalized_gravity", "nonlinear_effects", "com", "ccrba", "energy"],
+                         enable_mujoco_kernels=False)
+    cen_exe, cen_cmd = cached_nvcc_executable(
+        [here / "cuda_centroidal_mimic_smoke_runner.cu", cen_dir / "grid.cuh"],
+        ["-std=c++17", "-O0", "-gencode", f"arch=compute_{arch},code=sm_{arch}", f"-I{glass_inc}"],
+        exe_name="cuda_centroidal_mimic_smoke_runner.exe", fallback_dir=cen_dir, include_dirs=[cen_dir],
+        what=f"centroidal runner, polynomial chain floating={floating}")
+    ref = RBDReference(robot)
+    nq, nv, nb = robot.get_num_pos(), robot.get_num_vel(), robot.get_num_bodies()
+    rng = np.random.default_rng(17)
+    for sample in range(2):
+        q = rng.standard_normal(nq)
+        if floating:
+            q[3:7] /= np.linalg.norm(q[3:7])
+        qd = rng.standard_normal(nv)
+        qdd = rng.standard_normal(nv)
+        line = lambda x: " ".join(f"{v:.9g}" for v in np.asarray(x, np.float32))
+        reg_stdin = "\n".join(line(x) for x in (q, qd, qdd)) + "\n"
+        cen_stdin = "\n".join(line(x) for x in (q, qd)) + "\n"
+        Y = np.asarray(ref.inverse_dynamics_regressor(q, qd, qdd), np.float64)
+        A, h = ref.ccrba(q, qd)
+        expected = {
+            "regressor": Y,
+            "gen_gravity": np.asarray(ref.generalized_gravity(q), np.float64).reshape(-1),
+            "nonlinear": np.asarray(ref.nonlinear_effects(q, qd), np.float64).reshape(-1),
+            "com": np.asarray(ref.com(q), np.float64).reshape(-1),
+            "jcom": np.asarray(ref.jacobian_com(q), np.float64),
+            "ccrba_A": np.asarray(A, np.float64),
+            "ccrba_h": np.asarray(h, np.float64).reshape(-1),
+            "energy": np.array([ref.kinetic_energy(q, qd), ref.potential_energy(q), ref.mechanical_energy(q, qd)]),
+        }
+        out = _parse_runner_output(_run_runner(reg_exe, reg_stdin, reg_cmd))
+        out.update(_parse_runner_output(_run_runner(cen_exe, cen_stdin, cen_cmd)))
+        for name, exp in expected.items():
+            assert name in out, (name, sorted(out))
+            got = np.asarray(out[name], np.float64)
+            if name == "regressor":
+                got = got.reshape(nv, 10 * nb)
+            elif exp.ndim == 2:
+                got = got.reshape(exp.shape, order="F")
+            else:
+                got = got.reshape(-1)
+            scale = max(1.0, float(np.max(np.abs(exp))))
+            np.testing.assert_allclose(got, exp, rtol=0, atol=3e-4 * scale,
+                                       err_msg=f"{name} sample {sample} floating={floating}")

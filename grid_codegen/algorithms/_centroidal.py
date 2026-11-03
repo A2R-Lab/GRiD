@@ -477,7 +477,7 @@ def gen_centroidal_inner(self):
         self.gen_bake_const_array("cj_ang", [v for j in jobs for v in j[3]], "T")
         self.gen_bake_const_array("cj_lin", [v for j in jobs for v in j[4]], "T")
         if HAS_MIMIC:
-            self.gen_bake_const_array("cj_alpha", [j[5] for j in jobs], "T")
+            self.gen_alpha_table("cj_alpha", [j[1] for j in jobs])
         # Serial accumulation (columns within one body can repeat vi across bodies;
         # different bodies write disjoint J slabs, but to keep it simple & correct
         # we accumulate serially). Correctness-first.

@@ -552,7 +552,10 @@ class GRiDCodeGenerator:
                          "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
                          "frame_velocity", "frame_acceleration",
                          "frame_velocity_gradient", "frame_acceleration_gradient",
-                         "integrator", "integrator_gradient", "integrator_with_gradient"}
+                         "integrator", "integrator_gradient", "integrator_with_gradient",
+                         "inverse_dynamics_regressor", "kinetic_energy_regressor", "potential_energy_regressor",
+                         "forward_dynamics_parameter_gradient", "com", "ccrba",
+                         "generalized_gravity", "nonlinear_effects", "energy"}
             unsupported = sorted(set(algorithms) - supported)
             if unsupported:
                 raise NotImplementedError(
