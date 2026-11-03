@@ -41,6 +41,12 @@ __all__ = [
     "gen_frame_jacobian_dot_kernel",
     "gen_frame_jacobian_dot_host",
     "gen_frame_jacobian_dot",
+    "frame_kin_gradient_inner_temp_mem_size",
+    "gen_frame_kinematics_gradient_inner",
+    "gen_frame_velocity_gradient_device",
+    "gen_frame_velocity_gradient",
+    "gen_frame_acceleration_gradient_device",
+    "gen_frame_acceleration_gradient",
     "gen_osc_inertia_device",
     "gen_osc_inertia_kernel",
     "gen_osc_inertia_host",
@@ -860,7 +866,7 @@ def gen_frame_acceleration_device(self):
     self.gen_add_end_function()
 
 
-def _gen_frame_kin_kernel(self, name, single_call_timing, with_qdd):
+def _gen_frame_kin_kernel(self, name, single_call_timing, with_qdd, out_count=6, grad_blocks=0):
     """Shared kernel emitter for frame_velocity / frame_acceleration: batched over
     the packed [q; qd; u] buffer (stride 3*NUM_POS), runtime target_jid and
     reference_frame, static shared inputs and output (the device wrapper owns the
@@ -886,7 +892,7 @@ def _gen_frame_kin_kernel(self, name, single_call_timing, with_qdd):
     self.gen_add_code_line(func_def, True)
     load_count = 3 * n_pos if with_qdd else n_pos + n_vel
     self.gen_add_code_line("__shared__ T s_q_qd[" + str(load_count) + "];")
-    self.gen_add_code_line("__shared__ T s_" + name + "[6];")
+    self.gen_add_code_line("__shared__ T s_" + name + "[" + str(out_count) + "];")
     self.gen_add_code_line("T *s_q = s_q_qd; T *s_qd = &s_q_qd[" + str(n_pos) + "];"
                            + (" T *s_qdd = &s_q_qd[" + str(2 * n_pos) + "];" if with_qdd else ""))
     call = (devfn + "<T>(s_" + name + ", target_jid, reference_frame, s_q, s_qd, "
@@ -905,7 +911,15 @@ def _gen_frame_kin_kernel(self, name, single_call_timing, with_qdd):
         self.gen_add_code_line("// compute")
         self.gen_add_code_line(call)
         self.gen_add_sync()
-        self.gen_kernel_save_result(name, "6", stride="6")
+        if self.robot.floating_base and grad_blocks:
+            # derivative columns against the mjx tangent: base-linear columns of
+            # every 6 x NV block are reframed by R^T (the same column reframe as
+            # the frame Jacobian twin; the rows are frame quantities).
+            self.gen_add_code_line("if constexpr (MUJOCO_OUTPUT) {", True)
+            for b in range(grad_blocks):
+                self.gen_mjx_column_reframe("(s_" + name + " + " + str(6 * n_vel * b) + ")", 6, n_vel)
+            self.gen_add_end_control_flow()
+        self.gen_kernel_save_result(name, str(out_count), stride=str(out_count))
         self.gen_add_end_control_flow()
     else:
         self.gen_kernel_load_inputs("q_qd", str(load_count))
@@ -915,11 +929,11 @@ def _gen_frame_kin_kernel(self, name, single_call_timing, with_qdd):
         self.gen_add_code_line(call)
         self.gen_anti_licm_output_write(name)
         self.gen_add_end_control_flow()
-        self.gen_kernel_save_result(name, "6")
+        self.gen_kernel_save_result(name, str(out_count))
     self.gen_add_end_function()
 
 
-def _gen_frame_kin_host(self, name, mode, bytes_macro):
+def _gen_frame_kin_host(self, name, mode, bytes_macro, out_expr="6*"):
     """Shared host emitter (3 modes) for frame_velocity / frame_acceleration; always
     the full q|qd|u memory, target_jid / reference_frame trailing defaulted."""
     single_call_timing, compute_only = host_mode_flags(mode)
@@ -964,7 +978,7 @@ def _gen_frame_kin_host(self, name, mode, bytes_macro):
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"" + name + "\", " + bytes_macro + "<T>()));")
     self.gen_add_code_lines(func_call_code)
     if not compute_only:
-        gen_emit_host_result_transfer(self, "h_" + name, "d_" + name, "6*", single_call_timing)
+        gen_emit_host_result_transfer(self, "h_" + name, "d_" + name, out_expr, single_call_timing)
     if single_call_timing:
         from ..algo_registry import single_call_printf_line
         self.gen_add_code_line(single_call_printf_line(name))
@@ -985,6 +999,305 @@ def gen_frame_acceleration(self):
     _gen_frame_kin_kernel(self, "frame_acceleration", True, True)
     for mode in (0, 1, 2):
         _gen_frame_kin_host(self, "frame_acceleration", mode, "FRAME_ACCELERATION_DYNAMIC_SHARED_MEM_BYTES")
+
+
+def _frame_kin_gradient_tables(self):
+    """Baked tables of the frame kinematics gradient sweep: the bodies in BFS
+    order (parent first) with their DoF-column range, and one row per DoF
+    column (joint, velocity slot, S angular/linear parts, mimic alpha).
+    Constant bodies (alpha 0) own no column and inherit their parent's motion."""
+    HAS_MIMIC = self.robot_has_mimic_joints()
+    b_jid, b_par, b_c0, b_cn = [], [], [], []
+    c_jid, c_vi, c_ang, c_lin, c_alpha = [], [], [], [], []
+    for level in range(self.robot.get_max_bfs_level() + 1):
+        for jid in self.robot.get_ids_by_bfs_level(level):
+            par = self.robot.get_parent_id(jid)
+            alpha = self._alpha_for_jid(jid) if HAS_MIMIC else 1.0
+            b_jid.append(int(jid)); b_par.append(int(par)); b_c0.append(len(c_jid))
+            if alpha != 0.0:
+                S = np.asarray(self.robot.get_S_by_id(jid), dtype=np.float64)
+                if S.ndim == 1:
+                    S = S.reshape(-1, 1)
+                vinds = self.robot.get_joint_index_v(jid)
+                vinds = list(vinds) if isinstance(vinds, (list, tuple, np.ndarray)) else [vinds]
+                for c in range(S.shape[1]):
+                    c_jid.append(int(jid))
+                    c_vi.append(int(vinds[c] if c < len(vinds) else vinds[-1]))
+                    c_ang += [float(S[0, c]), float(S[1, c]), float(S[2, c])]
+                    c_lin += [float(S[3, c]), float(S[4, c]), float(S[5, c])]
+                    c_alpha.append(float(alpha))
+            b_cn.append(len(c_jid) - b_c0[-1])
+    parent = [int(self.robot.get_parent_id(j)) for j in range(self.robot.get_num_joints())]
+    return {"b_jid": b_jid, "b_par": b_par, "b_c0": b_c0, "b_cn": b_cn,
+            "c_jid": c_jid, "c_vi": c_vi, "c_ang": c_ang, "c_lin": c_lin, "c_alpha": c_alpha,
+            "parent": parent, "has_mimic": HAS_MIMIC}
+
+
+def frame_kin_gradient_inner_temp_mem_size(self):
+    """s_Xworld (16 NJ) + the world-origin columns (6 per DoF column) + the
+    per-body twists and spatial accelerations (6 + 6 per joint)."""
+    NJ = self.robot.get_num_joints()
+    ncol = len(_frame_kin_gradient_tables(self)["c_jid"])
+    return 16 * NJ + 6 * ncol + 12 * NJ
+
+
+def gen_frame_kinematics_gradient_inner(self):
+    """frame_kinematics_gradient_inner: dv/dq, J (= dv/dqd = da/dqdd), da/dq and
+    da/dqd of a frame's twist v and acceleration a (as frame_velocity_device and
+    frame_acceleration_device define them) in the runtime reference frame, each
+    6 x NUM_VEL column-major, in the local tangent chart (the floating root and
+    spherical joints). Transcribes RBDReference._frame_kinematics_derivatives:
+    a serial sweep over the bodies builds the world-origin Plucker columns A of
+    every DoF, the body twists ov and spatial accelerations oa; then one thread
+    per velocity slot forms, for the slot's columns at or above the target
+    body i (parent p of the column's joint j),
+
+        dv_i/dq_j  = A x (ov_i - ov_p)
+        da_i/dq_j  = A x (oa_i - oa_p) + (ov_p x A) x (ov_i - ov_p)
+        da_i/dqd_j = ov_j x A + A x (ov_i - ov_p)
+
+    and applies the reference-frame map (LOCAL adds the placement derivative
+    -fXo(A x w); LOCAL_WORLD_ALIGNED shifts to the moving frame origin and adds
+    the classical term). WITH_ACC=false skips the acceleration sweep and rows."""
+    NJ = self.robot.get_num_joints()
+    nv = self.robot.get_num_vel()
+    tabs = _frame_kin_gradient_tables(self)
+    HAS_MIMIC = tabs["has_mimic"]
+    ncol = len(tabs["c_jid"])
+    # helpers: 3-vector cross and the [linear; angular] motion cross product
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__device__ __forceinline__")
+    self.gen_add_code_line("void frame_kin_cross3(const T *a, const T *b, T *o) {", True)
+    self.gen_add_code_line("o[0] = a[1]*b[2] - a[2]*b[1]; o[1] = a[2]*b[0] - a[0]*b[2]; o[2] = a[0]*b[1] - a[1]*b[0];")
+    self.gen_add_end_function()
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__device__ __forceinline__")
+    self.gen_add_code_line("void frame_kin_mcross(const T *a, const T *b, T *o) {", True)
+    self.gen_add_code_line("// o = a x b for [linear; angular] spatial motion vectors")
+    self.gen_add_code_line("T t1[3], t2[3];")
+    self.gen_add_code_line("frame_kin_cross3<T>(&a[3], &b[0], t1); frame_kin_cross3<T>(&a[0], &b[3], t2);")
+    self.gen_add_code_line("o[0] = t1[0] + t2[0]; o[1] = t1[1] + t2[1]; o[2] = t1[2] + t2[2];")
+    self.gen_add_code_line("frame_kin_cross3<T>(&a[3], &b[3], &o[3]);")
+    self.gen_add_end_function()
+
+    func_def = ("void frame_kinematics_gradient_inner(T *s_dvdq, T *s_J, T *s_dadq, T *s_dadqd, "
+                "const int target_jid, const int reference_frame, const T *s_q, const T *s_qd, const T *s_qdd, "
+                "const T *s_XmatsHom, const robotModel<T> *d_robotModel, T *s_temp) {")
+    func_params = ["s_dvdq holds dv/dq (6 x NUM_VEL, column-major, [linear; angular] rows)",
+                   "s_J holds the frame Jacobian in the reference frame (= dv/dqd = da/dqdd)",
+                   "s_dadq holds da/dq (written only when WITH_ACC)",
+                   "s_dadqd holds da/dqd (written only when WITH_ACC)",
+                   "target_jid is the joint id of the frame",
+                   "reference_frame is 0=LOCAL, 1=WORLD, 2=LOCAL_WORLD_ALIGNED",
+                   "s_q is the joint position vector",
+                   "s_qd is the joint velocity vector v",
+                   "s_qdd is the joint acceleration vector (read only when WITH_ACC)",
+                   "s_XmatsHom are the local homogeneous transforms (updated for s_q)",
+                   "d_robotModel is the GPU model helpers",
+                   "s_temp is the scratch arena (frame_kin_gradient_inner_temp_mem_size)"]
+    self.gen_add_func_doc("Derivatives of a frame's twist and acceleration against q, qd (and qdd)",
+                          ["Columns follow the local tangent chart; matches pinocchio getFrameVelocityDerivatives / "
+                           "getFrameAccelerationDerivatives in LOCAL and WORLD, and differentiates the classical "
+                           "acceleration with its moving origin in LOCAL_WORLD_ALIGNED."], func_params, None)
+    self.gen_add_code_line("template <typename T, bool WITH_ACC>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line(func_def, True)
+    self.gen_add_code_line("T *s_Xworld = &s_temp[0];")
+    self.gen_add_code_line("T *s_A = &s_temp[" + str(16 * NJ) + "];")
+    self.gen_add_code_line("T *s_ov = &s_temp[" + str(16 * NJ + 6 * ncol) + "];")
+    self.gen_add_code_line("T *s_oa = &s_temp[" + str(16 * NJ + 6 * ncol + 6 * NJ) + "];")
+    self.gen_add_code_line("const T *s_Xhom = s_XmatsHom;")
+    _emit_world_transform_chainup(self, declare_xworld=False)
+    self.gen_bake_const_array("fkg_bjid", tabs["b_jid"], "int")
+    self.gen_bake_const_array("fkg_bpar", tabs["b_par"], "int")
+    self.gen_bake_const_array("fkg_bc0", tabs["b_c0"], "int")
+    self.gen_bake_const_array("fkg_bcn", tabs["b_cn"], "int")
+    self.gen_bake_const_array("fkg_cjid", tabs["c_jid"], "int")
+    self.gen_bake_const_array("fkg_cvi", tabs["c_vi"], "int")
+    self.gen_bake_const_array("fkg_cang", tabs["c_ang"], "T")
+    self.gen_bake_const_array("fkg_clin", tabs["c_lin"], "T")
+    if HAS_MIMIC:
+        self.gen_bake_const_array("fkg_calpha", tabs["c_alpha"], "T")
+    self.gen_bake_const_array("fkg_parent", tabs["parent"], "int")
+    alpha_expr = "fkg_calpha[t]" if HAS_MIMIC else "static_cast<T>(1)"
+    # ---- Step 2: serial world-origin Plucker sweep (bodies parent-first) ----
+    self.gen_add_code_line("// Step 2: world-origin columns A per DoF, body twists ov and accelerations oa")
+    self.gen_add_serial_ops()
+    self.gen_add_code_line("for (int b = 0; b < " + str(NJ) + "; ++b) {", True)
+    self.gen_add_code_line("int jid = fkg_bjid[b]; int par = fkg_bpar[b];")
+    self.gen_add_code_line("T *ov = &s_ov[6*jid]; T *oa = &s_oa[6*jid];")
+    self.gen_add_code_line("for (int k = 0; k < 6; ++k) { ov[k] = (par >= 0) ? s_ov[6*par + k] : static_cast<T>(0); oa[k] = (par >= 0) ? s_oa[6*par + k] : static_cast<T>(0); }")
+    self.gen_add_code_line("const T *Xj = &s_Xworld[16*jid];")
+    self.gen_add_code_line("T pj[3] = {Xj[12], Xj[13], Xj[14]};")
+    self.gen_add_code_line("for (int t = fkg_bc0[b]; t < fkg_bc0[b] + fkg_bcn[b]; ++t) {", True)
+    self.gen_add_code_line("T a0=fkg_cang[3*t],a1=fkg_cang[3*t+1],a2=fkg_cang[3*t+2];")
+    self.gen_add_code_line("T l0=fkg_clin[3*t],l1=fkg_clin[3*t+1],l2=fkg_clin[3*t+2];")
+    self.gen_add_code_line("T *A = &s_A[6*t];")
+    self.gen_add_code_line("A[3] = Xj[0]*a0+Xj[4]*a1+Xj[8]*a2; A[4] = Xj[1]*a0+Xj[5]*a1+Xj[9]*a2; A[5] = Xj[2]*a0+Xj[6]*a1+Xj[10]*a2;")
+    self.gen_add_code_line("T lw[3]; lw[0] = Xj[0]*l0+Xj[4]*l1+Xj[8]*l2; lw[1] = Xj[1]*l0+Xj[5]*l1+Xj[9]*l2; lw[2] = Xj[2]*l0+Xj[6]*l1+Xj[10]*l2;")
+    self.gen_add_code_line("T pa[3]; frame_kin_cross3<T>(pj, &A[3], pa);")
+    self.gen_add_code_line("A[0] = pa[0] + lw[0]; A[1] = pa[1] + lw[1]; A[2] = pa[2] + lw[2];")
+    self.gen_add_code_line("T sc = " + alpha_expr + " * s_qd[fkg_cvi[t]];")
+    self.gen_add_code_line("for (int k = 0; k < 6; ++k) ov[k] += A[k] * sc;")
+    self.gen_add_end_control_flow()  # columns (velocity)
+    self.gen_add_code_line("if constexpr (WITH_ACC) {", True)
+    self.gen_add_code_line("for (int t = fkg_bc0[b]; t < fkg_bc0[b] + fkg_bcn[b]; ++t) {", True)
+    self.gen_add_code_line("const T *A = &s_A[6*t]; T mc[6]; frame_kin_mcross<T>(ov, A, mc);")
+    self.gen_add_code_line("T sc = " + alpha_expr + " * s_qd[fkg_cvi[t]]; T sa = " + alpha_expr + " * s_qdd[fkg_cvi[t]];")
+    self.gen_add_code_line("for (int k = 0; k < 6; ++k) oa[k] += A[k] * sa + mc[k] * sc;")
+    self.gen_add_end_control_flow()  # columns (acceleration)
+    self.gen_add_end_control_flow()  # if constexpr
+    self.gen_add_end_control_flow()  # bodies
+    self.gen_add_end_control_flow()  # serial
+    self.gen_add_sync()
+    # ---- Step 3: one thread per velocity slot ----
+    self.gen_add_code_line("// Step 3: per velocity slot, the columns at or above the target body, then the frame map")
+    self.gen_add_code_line("const T *ovi = &s_ov[6*target_jid]; const T *oai = &s_oa[6*target_jid];")
+    self.gen_add_code_line("const T *Xf = &s_Xworld[16*target_jid];")
+    self.gen_add_parallel_loop("vi", str(nv))
+    self.gen_add_code_line("T dvq[6], Jc[6], daq[6], dad[6], ovc[6], oac[6];")
+    self.gen_add_code_line("for (int k = 0; k < 6; ++k) { dvq[k] = Jc[k] = daq[k] = dad[k] = ovc[k] = oac[k] = static_cast<T>(0); }")
+    self.gen_add_code_line("const T zero6[6] = {static_cast<T>(0), static_cast<T>(0), static_cast<T>(0), static_cast<T>(0), static_cast<T>(0), static_cast<T>(0)};")
+    self.gen_add_code_line("for (int t = 0; t < " + str(ncol) + "; ++t) {", True)
+    self.gen_add_code_line("if (fkg_cvi[t] != vi) continue;")
+    self.gen_add_code_line("int j = fkg_cjid[t];")
+    self.gen_add_code_line("int anc = target_jid; while (anc != -1 && anc != j) anc = fkg_parent[anc];")
+    self.gen_add_code_line("if (anc != j) continue;")
+    self.gen_add_code_line("const T *A = &s_A[6*t]; int par = fkg_parent[j];")
+    self.gen_add_code_line("const T *ovp = (par >= 0) ? &s_ov[6*par] : zero6; const T *oap = (par >= 0) ? &s_oa[6*par] : zero6;")
+    self.gen_add_code_line("T al = " + alpha_expr + ";")
+    self.gen_add_code_line("T d1[6], d2[6], tmp[6], tmp2[6];")
+    self.gen_add_code_line("for (int k = 0; k < 6; ++k) { d1[k] = ovi[k] - ovp[k]; d2[k] = oai[k] - oap[k]; }")
+    self.gen_add_code_line("frame_kin_mcross<T>(A, d1, tmp);")
+    self.gen_add_code_line("for (int k = 0; k < 6; ++k) { dvq[k] += al * tmp[k]; Jc[k] += al * A[k]; }")
+    self.gen_add_code_line("frame_kin_mcross<T>(A, ovi, tmp2);")
+    self.gen_add_code_line("for (int k = 0; k < 6; ++k) ovc[k] += al * tmp2[k];")
+    self.gen_add_code_line("if constexpr (WITH_ACC) {", True)
+    self.gen_add_code_line("for (int k = 0; k < 6; ++k) dad[k] += al * tmp[k];")
+    self.gen_add_code_line("frame_kin_mcross<T>(A, d2, tmp);")
+    self.gen_add_code_line("for (int k = 0; k < 6; ++k) daq[k] += al * tmp[k];")
+    self.gen_add_code_line("frame_kin_mcross<T>(ovp, A, tmp2); frame_kin_mcross<T>(tmp2, d1, tmp);")
+    self.gen_add_code_line("for (int k = 0; k < 6; ++k) daq[k] += al * tmp[k];")
+    self.gen_add_code_line("frame_kin_mcross<T>(&s_ov[6*j], A, tmp);")
+    self.gen_add_code_line("for (int k = 0; k < 6; ++k) dad[k] += al * tmp[k];")
+    self.gen_add_code_line("frame_kin_mcross<T>(A, oai, tmp);")
+    self.gen_add_code_line("for (int k = 0; k < 6; ++k) oac[k] += al * tmp[k];")
+    self.gen_add_end_control_flow()  # if constexpr
+    self.gen_add_end_control_flow()  # for t
+    # frame map
+    self.gen_add_code_line("T *o_dvq = &s_dvdq[6*vi]; T *o_J = &s_J[6*vi];")
+    self.gen_add_code_line("T pf[3] = {Xf[12], Xf[13], Xf[14]};")
+    self.gen_add_code_line("if (reference_frame == " + str(_REF_WORLD) + ") {", True)
+    self.gen_add_code_line("for (int k = 0; k < 6; ++k) { o_dvq[k] = dvq[k]; o_J[k] = Jc[k]; }")
+    self.gen_add_code_line("if constexpr (WITH_ACC) { T *o_daq = &s_dadq[6*vi]; T *o_dad = &s_dadqd[6*vi]; for (int k = 0; k < 6; ++k) { o_daq[k] = daq[k]; o_dad[k] = dad[k]; } }")
+    self.gen_add_code_line("} else if (reference_frame == " + str(_REF_LOCAL) + ") {", True)
+    # fXo m: lin = R^T (m_lin + m_ang x p_f); ang = R^T m_ang ; dq blocks take m - (A x w) first
+    self.gen_add_code_line("auto fXo = [&](const T *m, T *o) { T c[3]; frame_kin_cross3<T>(&m[3], pf, c);")
+    self.gen_add_code_line("  T u0 = m[0] + c[0], u1 = m[1] + c[1], u2 = m[2] + c[2];")
+    self.gen_add_code_line("  o[0] = Xf[0]*u0 + Xf[1]*u1 + Xf[2]*u2; o[1] = Xf[4]*u0 + Xf[5]*u1 + Xf[6]*u2; o[2] = Xf[8]*u0 + Xf[9]*u1 + Xf[10]*u2;")
+    self.gen_add_code_line("  o[3] = Xf[0]*m[3] + Xf[1]*m[4] + Xf[2]*m[5]; o[4] = Xf[4]*m[3] + Xf[5]*m[4] + Xf[6]*m[5]; o[5] = Xf[8]*m[3] + Xf[9]*m[4] + Xf[10]*m[5]; };")
+    self.gen_add_code_line("T m[6]; for (int k = 0; k < 6; ++k) m[k] = dvq[k] - ovc[k];")
+    self.gen_add_code_line("fXo(m, o_dvq); fXo(Jc, o_J);")
+    self.gen_add_code_line("if constexpr (WITH_ACC) { for (int k = 0; k < 6; ++k) m[k] = daq[k] - oac[k]; fXo(m, &s_dadq[6*vi]); fXo(dad, &s_dadqd[6*vi]); }")
+    self.gen_add_code_line("} else {", True)
+    # LWA: X m: lin = m_lin + m_ang x p_f ; ang = m_ang ; then the moving-origin and classical terms
+    self.gen_add_code_line("auto Xl = [&](const T *m, T *o) { T c[3]; frame_kin_cross3<T>(&m[3], pf, c);")
+    self.gen_add_code_line("  o[0] = m[0] + c[0]; o[1] = m[1] + c[1]; o[2] = m[2] + c[2]; o[3] = m[3]; o[4] = m[4]; o[5] = m[5]; };")
+    self.gen_add_code_line("T Jl[6], dv[6], c[3]; Xl(Jc, Jl); Xl(dvq, dv);")
+    self.gen_add_code_line("const T *w = &ovi[3];")
+    self.gen_add_code_line("frame_kin_cross3<T>(w, Jl, c); dv[0] += c[0]; dv[1] += c[1]; dv[2] += c[2];")
+    self.gen_add_code_line("for (int k = 0; k < 6; ++k) { o_dvq[k] = dv[k]; o_J[k] = Jl[k]; }")
+    self.gen_add_code_line("if constexpr (WITH_ACC) {", True)
+    self.gen_add_code_line("T da[6], dav[6]; Xl(daq, da); Xl(dad, dav);")
+    self.gen_add_code_line("const T *wd = &oai[3];")
+    self.gen_add_code_line("frame_kin_cross3<T>(wd, Jl, c); da[0] += c[0]; da[1] += c[1]; da[2] += c[2];")
+    self.gen_add_code_line("T vl[3]; frame_kin_cross3<T>(w, pf, vl); vl[0] += ovi[0]; vl[1] += ovi[1]; vl[2] += ovi[2];")
+    # classical: a_lin += w x v_lin -> d adds (d ang) x v_lin + w x (d lin)
+    self.gen_add_code_line("frame_kin_cross3<T>(&dv[3], vl, c); da[0] += c[0]; da[1] += c[1]; da[2] += c[2];")
+    self.gen_add_code_line("frame_kin_cross3<T>(w, dv, c); da[0] += c[0]; da[1] += c[1]; da[2] += c[2];")
+    self.gen_add_code_line("frame_kin_cross3<T>(&Jl[3], vl, c); dav[0] += c[0]; dav[1] += c[1]; dav[2] += c[2];")
+    self.gen_add_code_line("frame_kin_cross3<T>(w, Jl, c); dav[0] += c[0]; dav[1] += c[1]; dav[2] += c[2];")
+    self.gen_add_code_line("T *o_daq = &s_dadq[6*vi]; T *o_dad = &s_dadqd[6*vi]; for (int k = 0; k < 6; ++k) { o_daq[k] = da[k]; o_dad[k] = dav[k]; }")
+    self.gen_add_end_control_flow()  # if constexpr
+    self.gen_add_end_control_flow()  # else (LWA)
+    self.gen_add_end_control_flow()  # for vi
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+
+def gen_frame_velocity_gradient_device(self):
+    """frame_velocity_gradient_device: [dv/dq | dv/dqd] (6 x 2 NUM_VEL, column-major)
+    of the frame twist in the chosen reference frame; owns the dynamic arena."""
+    nv = self.robot.get_num_vel()
+    func_def = ("void frame_velocity_gradient_device(T *s_dv, const int target_jid, const int reference_frame, "
+                "const T *s_q, const T *s_qd, const robotModel<T> *d_robotModel) {")
+    func_params = ["s_dv holds [dv/dq | dv/dqd] (6 x 2*NUM_VEL, column-major, [linear; angular] rows)",
+                   "target_jid is the joint id of the frame",
+                   "reference_frame is 0=LOCAL, 1=WORLD, 2=LOCAL_WORLD_ALIGNED",
+                   "s_q is the joint position vector",
+                   "s_qd is the joint velocity vector v",
+                   "d_robotModel is the GPU model helpers"]
+    self.gen_add_func_doc("Compute the derivatives of a frame's twist against q and qd",
+                          ["Equals pinocchio getFrameVelocityDerivatives in LOCAL and WORLD; in LOCAL_WORLD_ALIGNED "
+                           "the q-derivative also moves the frame origin (finite differences through the chart)."],
+                          func_params, None)
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line(func_def, True)
+    self.gen_XmatsHom_helpers_temp_shared_memory_code(frame_kin_gradient_inner_temp_mem_size(self))
+    self.gen_load_update_XmatsHom_helpers_function_call()
+    self.gen_add_code_line("frame_kinematics_gradient_inner<T, false>(&s_dv[0], &s_dv[" + str(6 * nv) + "], nullptr, nullptr, "
+                           "target_jid, reference_frame, s_q, s_qd, nullptr, s_XmatsHom, d_robotModel, s_temp);")
+    self.gen_add_end_function()
+
+
+def gen_frame_acceleration_gradient_device(self):
+    """frame_acceleration_gradient_device: [da/dq | da/dqd | da/dqdd] (6 x 3 NUM_VEL,
+    column-major) of the frame acceleration in the chosen reference frame
+    (classical in LOCAL_WORLD_ALIGNED); owns the dynamic arena."""
+    nv = self.robot.get_num_vel()
+    func_def = ("void frame_acceleration_gradient_device(T *s_da, const int target_jid, const int reference_frame, "
+                "const T *s_q, const T *s_qd, const T *s_qdd, const robotModel<T> *d_robotModel) {")
+    func_params = ["s_da holds [da/dq | da/dqd | da/dqdd] (6 x 3*NUM_VEL, column-major, [linear; angular] rows)",
+                   "target_jid is the joint id of the frame",
+                   "reference_frame is 0=LOCAL, 1=WORLD, 2=LOCAL_WORLD_ALIGNED",
+                   "s_q is the joint position vector",
+                   "s_qd is the joint velocity vector v",
+                   "s_qdd is the joint acceleration vector",
+                   "d_robotModel is the GPU model helpers"]
+    self.gen_add_func_doc("Compute the derivatives of a frame's acceleration against q, qd and qdd",
+                          ["Equals pinocchio getFrameAccelerationDerivatives in LOCAL and WORLD; in LOCAL_WORLD_ALIGNED "
+                           "it differentiates the classical acceleration with its moving origin."],
+                          func_params, None)
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line(func_def, True)
+    self.gen_XmatsHom_helpers_temp_shared_memory_code(frame_kin_gradient_inner_temp_mem_size(self),
+                                                      extra_t_buffers=[("s_dvdq_fag", 6 * nv)])
+    self.gen_load_update_XmatsHom_helpers_function_call()
+    self.gen_add_code_line("frame_kinematics_gradient_inner<T, true>(s_dvdq_fag, &s_da[" + str(12 * nv) + "], &s_da[0], &s_da[" + str(6 * nv) + "], "
+                           "target_jid, reference_frame, s_q, s_qd, s_qdd, s_XmatsHom, d_robotModel, s_temp);")
+    self.gen_add_end_function()
+
+
+def gen_frame_velocity_gradient(self):
+    nv = self.robot.get_num_vel()
+    self.gen_frame_velocity_gradient_device()
+    _gen_frame_kin_kernel(self, "frame_velocity_gradient", False, False, out_count=12 * nv, grad_blocks=2)
+    _gen_frame_kin_kernel(self, "frame_velocity_gradient", True, False, out_count=12 * nv, grad_blocks=2)
+    for mode in (0, 1, 2):
+        _gen_frame_kin_host(self, "frame_velocity_gradient", mode, "FRAME_VELOCITY_GRADIENT_DYNAMIC_SHARED_MEM_BYTES",
+                            out_expr="12*NUM_VEL*")
+
+
+def gen_frame_acceleration_gradient(self):
+    nv = self.robot.get_num_vel()
+    self.gen_frame_acceleration_gradient_device()
+    _gen_frame_kin_kernel(self, "frame_acceleration_gradient", False, True, out_count=18 * nv, grad_blocks=3)
+    _gen_frame_kin_kernel(self, "frame_acceleration_gradient", True, True, out_count=18 * nv, grad_blocks=3)
+    for mode in (0, 1, 2):
+        _gen_frame_kin_host(self, "frame_acceleration_gradient", mode, "FRAME_ACCELERATION_GRADIENT_DYNAMIC_SHARED_MEM_BYTES",
+                            out_expr="18*NUM_VEL*")
 
 
 def gen_osc_inertia_device(self):

@@ -26,6 +26,7 @@ Surface (parity with the plain ``RobotHandle``):
   ``kinetic_energy_regressor``, ``potential_energy_regressor``,
   ``frame_jacobian``, ``frame_jacobian_dot``, ``osc_inertia``,
   ``frame_velocity``, ``frame_acceleration``,
+  ``frame_velocity_gradient``, ``frame_acceleration_gradient``,
   ``end_effector_pose``, ``end_effector_pose_gradient``,
   ``end_effector_pose_hessian``, ``end_effector_pose_runtime``,
   ``end_effector_pose_gradient_runtime``,
@@ -1108,6 +1109,36 @@ class JaxRobotHandle(BaseDelegateMixin):
         raw = self._ffi(target, self._out(q, 6), vmap_method="broadcast_all")(
             q, qd, qdd, target_jid=np.int64(tj), reference_frame=np.int64(rf))
         return self._shape_out("frame_acceleration", raw)
+
+    def frame_velocity_gradient(self, q, qd, *, target_jid=None, reference_frame=None, _convention=None):
+        """``[dv/dq | dv/dqd]`` of :py:meth:`frame_velocity` as ``(B, 6, 2*NV)``
+        (the second block is the frame Jacobian), in the local tangent chart;
+        forward only. See the NumPy handle for the frame conventions.
+
+        ``target_jid`` / ``reference_frame`` are runtime int64 FFI attrs (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``)."""
+        target = self._mt(_convention, "frame_velocity_gradient", "grid_rbd_jax_frame_velocity_gradient")
+        tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
+        (q, qd) = self._prep_2d("frame_velocity_gradient", q, qd)
+        nv = self.num_vel
+        raw = self._ffi(target, self._out(q, 12 * nv), vmap_method="broadcast_all")(
+            q, qd, target_jid=np.int64(tj), reference_frame=np.int64(rf))
+        return self._shape_out("frame_velocity_gradient", raw)
+
+    def frame_acceleration_gradient(self, q, qd, qdd, *, target_jid=None, reference_frame=None, _convention=None):
+        """``[da/dq | da/dqd | da/dqdd]`` of :py:meth:`frame_acceleration` as
+        ``(B, 6, 3*NV)`` (the last block is the frame Jacobian), in the local
+        tangent chart; forward only. ``qdd`` is required.
+
+        ``target_jid`` / ``reference_frame`` are runtime int64 FFI attrs (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``)."""
+        target = self._mt(_convention, "frame_acceleration_gradient", "grid_rbd_jax_frame_acceleration_gradient")
+        tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
+        (q, qd, qdd) = self._prep_2d("frame_acceleration_gradient", q, qd, qdd)
+        nv = self.num_vel
+        raw = self._ffi(target, self._out(q, 18 * nv), vmap_method="broadcast_all")(
+            q, qd, qdd, target_jid=np.int64(tj), reference_frame=np.int64(rf))
+        return self._shape_out("frame_acceleration_gradient", raw)
 
     def osc_inertia(self, q, *, _convention=None):
         """Operational-space (task) inertia Lambda = (J·M⁻¹·Jᵀ)⁻¹ (6 x 6) for

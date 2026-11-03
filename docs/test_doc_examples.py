@@ -28,7 +28,7 @@ def test_backend_inventory_matches_class_definitions():
     page = ROOT / "docs/source/user_guide/tutorials/backend_coverage.rst"
     table = page.read_text().split("   :widths: 55, 15, 15, 15\n\n", 1)[1].split("\n\n", 1)[0]
     rows = list(csv.reader(table.splitlines(), skipinitialspace=True))
-    assert len(rows) == 37  # Guard against accidentally testing an empty/truncated table.
+    assert len(rows) == 39  # Guard against accidentally testing an empty/truncated table.
     assert len({row[0] for row in rows}) == len(rows)
     for method, *flags in rows:
         assert flags == ["Yes" if method in m else "No" for m in methods], method

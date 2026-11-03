@@ -3841,3 +3841,26 @@ value in its own chart before touching the maps; a twin that passes a packing
 test and a tier-invariance test has not been validated numerically. Both
 surfaces now refuse the floating-base mjx integrator backward until the twin's
 velocity block is fixed.
+
+### 7.z85 Pinocchio's LOCAL_WORLD_ALIGNED frame derivatives hold the frame origin fixed (2026-11-03, frame velocity and acceleration derivatives)
+
+The reference's `frame_velocity_derivatives` / `frame_acceleration_derivatives`
+(world-origin Plücker form, `dA_k/dq_j = A_j x A_k` for every column at or
+below j) matched chart finite differences of the reference's own
+`frame_velocity` / `frame_acceleration` to 1e-9 on every robot of the
+manifest, mimic and floating included, and matched Pinocchio's
+`getFrameVelocityDerivatives` / `getFrameAccelerationDerivatives` to 1e-15 in
+LOCAL and WORLD, yet disagreed with Pinocchio in LOCAL_WORLD_ALIGNED by O(1)
+whenever qd was nonzero. The hypothesis "Pinocchio differentiates with the
+frame origin held fixed" was testable in one line: `pin + [w x dp_f/dq; 0]`
+(and `[wdot x dp_f/dq; 0]` for the acceleration) reproduced the reference to
+1e-13. Pinocchio's LWA q-derivatives are the WORLD derivatives shifted to the
+current origin; the derivative of the function `q -> v_lwa(q, qd)` also moves
+the origin. GRiD keeps the derivative of the function (it is what a task-space
+constraint Jacobian needs and what finite differences through the chart give)
+and the Pinocchio backend converts before the comparison. Rules: when an
+oracle matches its own chart finite differences but not the external library
+in one frame only, suspect a definitional difference in that frame before a
+bug, and write the suspected correction as a numerical test; and never make
+the external library's convention the oracle's by default when the project's
+own finite differences disagree with it.

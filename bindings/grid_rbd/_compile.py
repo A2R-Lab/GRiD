@@ -267,6 +267,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     _DEFAULT_ALGORITHM_LIST = ["all", "frame_jacobian",
                                "frame_jacobian_dot", "osc_inertia",
                                "frame_velocity", "frame_acceleration",
+                               "frame_velocity_gradient", "frame_acceleration_gradient",
                                "end_effector_pose_runtime",
                                "end_effector_pose_gradient_runtime",
                                "integrator_hessian"]

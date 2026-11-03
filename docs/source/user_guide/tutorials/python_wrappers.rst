@@ -151,6 +151,12 @@ pass the same value to both for cross-validation.
        ``target_jid`` + ``reference_frame``): pinocchio's ``getFrameVelocity``
        and ``getFrameAcceleration`` in LOCAL and WORLD, the classical
        acceleration in LOCAL_WORLD_ALIGNED.
+   * - ``frame_velocity_gradient(q, qd)`` / ``frame_acceleration_gradient(q, qd, qdd)``
+     - ``(B, 6, 2*NV)`` / ``(B, 6, 3*NV)``
+     - ``[dv/dq | dv/dq̇]`` and ``[da/dq | da/dq̇ | da/dq̈]`` of the two above
+       in the local tangent chart (pinocchio's ``getFrameVelocityDerivatives``
+       / ``getFrameAccelerationDerivatives`` in LOCAL and WORLD; in
+       LOCAL_WORLD_ALIGNED the q block also moves the frame origin).
    * - ``end_effector_pose_runtime(q, ee_joint_names=None, ee_offsets=None)``
      - ``(B, 6*NUM_EES)``
      - Runtime arbitrary multi-EE pose (runtime target joints + per-target
@@ -649,8 +655,8 @@ the plain wrapper's tuple-of-four convention), with autograd-aware
 centroidal / kinematics value ops (``generalized_gravity``,
 ``nonlinear_effects``, ``energy``, ``com``, ``ccrba``, ``dccrba``,
 ``cmm_time_variation``, ``coriolis_matrix``, ``frame_jacobian`` /
-``frame_jacobian_dot``, ``frame_velocity`` / ``frame_acceleration``,
-``osc_inertia``, and the KE/PE regressors) are
+``frame_jacobian_dot``, ``frame_velocity`` / ``frame_acceleration`` and
+their gradients, ``osc_inertia``, and the KE/PE regressors) are
 exposed on the jax and torch surfaces too (forward-only, no autograd).
 
 PyTorch backend (``backend="torch"``)

@@ -56,6 +56,8 @@ FN_MEMBER = {
     "osc_inertia": "fn_osc_inertia_",
     "frame_velocity": "fn_frame_velocity_",
     "frame_acceleration": "fn_frame_acceleration_",
+    "frame_velocity_gradient": "fn_frame_velocity_gradient_",
+    "frame_acceleration_gradient": "fn_frame_acceleration_gradient_",
     "generalized_gravity": "fn_generalized_gravity_",
     "nonlinear_effects": "fn_nonlinear_effects_",
     "coriolis_matrix": "fn_coriolis_matrix_", "com": "fn_com_",

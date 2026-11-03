@@ -664,6 +664,16 @@ int grid_rbd_family_kinematics_kernel_ceiling(const char* algo) {
         return GRID_KERNEL_CEIL(frame_acceleration_kernel, GRID_ALGO_FRAME_ACCELERATION,
                                 void(*)(T*, const T*, const int, const int, const int, RM, const int));
 #endif
+#if GRID_HAS_FRAME_VELOCITY_GRADIENT
+    if (std::strcmp(algo, "frame_velocity_gradient") == 0)
+        return GRID_KERNEL_CEIL(frame_velocity_gradient_kernel, GRID_ALGO_FRAME_VELOCITY_GRADIENT,
+                                void(*)(T*, const T*, const int, const int, const int, RM, const int));
+#endif
+#if GRID_HAS_FRAME_ACCELERATION_GRADIENT
+    if (std::strcmp(algo, "frame_acceleration_gradient") == 0)
+        return GRID_KERNEL_CEIL(frame_acceleration_gradient_kernel, GRID_ALGO_FRAME_ACCELERATION_GRADIENT,
+                                void(*)(T*, const T*, const int, const int, const int, RM, const int));
+#endif
     (void)algo; (void)sizeof(RM);
     return -2;  // not this family's key
 }
@@ -943,6 +953,12 @@ cudaError_t grid_rbd_family_kinematics_init_attrs(const char **failed_op) {
 #endif
 #ifdef GRID_HAS_FRAME_ACCELERATION
     { cudaError_t _e = grid::init_grid_kernel_attr_frame_acceleration_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#ifdef GRID_HAS_FRAME_VELOCITY_GRADIENT
+    { cudaError_t _e = grid::init_grid_kernel_attr_frame_velocity_gradient_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#ifdef GRID_HAS_FRAME_ACCELERATION_GRADIENT
+    { cudaError_t _e = grid::init_grid_kernel_attr_frame_acceleration_gradient_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
 #endif
 #ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
     { cudaError_t _e = grid::init_grid_kernel_attr_end_effector_pose_runtime_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
@@ -1792,6 +1808,48 @@ extern "C" int grid_rbd_frame_acceleration(long long ctx_id, const T* q, const T
 #else
     (void)q; (void)qd; (void)qdd; (void)out; (void)batch; (void)target_jid; (void)reference_frame;
     return 3;  // frame_acceleration not built
+#endif
+}
+// [[unit: end]]
+
+// [[unit: kinematics]]
+extern "C" int grid_rbd_frame_velocity_gradient(long long ctx_id, const T* q, const T* qd, T* out, int batch, int target_jid, int reference_frame) {
+#ifdef GRID_HAS_FRAME_VELOCITY_GRADIENT
+    GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
+    if (batch > kMaxBatch) return 2;
+    if (target_jid < -1 || target_jid >= grid::NUM_JOINTS) return 1;
+    pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // -1 per arg => "use default" (leaf-EE / LWA); the host resolves each
+    // INDEPENDENTLY, so a default target with an explicit frame is honored.
+    grid::frame_velocity_gradient<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_VELOCITY_GRADIENT>(g_ctx, batch), g_streams, target_jid, reference_frame);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_frame_velocity_gradient, (size_t)batch * 12*grid::NUM_VEL * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)qd; (void)out; (void)batch; (void)target_jid; (void)reference_frame;
+    return 3;  // frame_velocity_gradient not built
+#endif
+}
+// [[unit: end]]
+
+// [[unit: kinematics]]
+extern "C" int grid_rbd_frame_acceleration_gradient(long long ctx_id, const T* q, const T* qd, const T* qdd, T* out, int batch, int target_jid, int reference_frame) {
+#ifdef GRID_HAS_FRAME_ACCELERATION_GRADIENT
+    GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
+    if (batch > kMaxBatch) return 2;
+    if (target_jid < -1 || target_jid >= grid::NUM_JOINTS) return 1;
+    pack_q_qd_u(g_ctx, q, qd, qdd, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    // -1 per arg => "use default" (leaf-EE / LWA); the host resolves each
+    // INDEPENDENTLY, so a default target with an explicit frame is honored.
+    grid::frame_acceleration_gradient<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_ACCELERATION_GRADIENT>(g_ctx, batch), g_streams, target_jid, reference_frame);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_frame_acceleration_gradient, (size_t)batch * 18*grid::NUM_VEL * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)qd; (void)qdd; (void)out; (void)batch; (void)target_jid; (void)reference_frame;
+    return 3;  // frame_acceleration_gradient not built
 #endif
 }
 // [[unit: end]]
@@ -2656,6 +2714,40 @@ extern "C" int grid_rbd_frame_acceleration_mujoco(long long ctx_id, const T* q, 
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FRAME_ACCELERATION
+// [[unit: end]]
+
+// [[unit: kinematics]]
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_FRAME_VELOCITY_GRADIENT
+extern "C" int grid_rbd_frame_velocity_gradient_mujoco(long long ctx_id, const T* q, const T* qd, T* out, int batch, int target_jid, int reference_frame) {
+    GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
+    if (batch > kMaxBatch) return 2;
+    if (target_jid < -1 || target_jid >= grid::NUM_JOINTS) return 1;
+    pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    grid::frame_velocity_gradient<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_VELOCITY_GRADIENT>(g_ctx, batch), g_streams, target_jid, reference_frame);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_frame_velocity_gradient, (size_t)batch * 12*grid::NUM_VEL * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FRAME_VELOCITY_GRADIENT
+// [[unit: end]]
+
+// [[unit: kinematics]]
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_FRAME_ACCELERATION_GRADIENT
+extern "C" int grid_rbd_frame_acceleration_gradient_mujoco(long long ctx_id, const T* q, const T* qd, const T* qdd, T* out, int batch, int target_jid, int reference_frame) {
+    GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
+    if (batch > kMaxBatch) return 2;
+    if (target_jid < -1 || target_jid >= grid::NUM_JOINTS) return 1;
+    pack_q_qd_u(g_ctx, q, qd, qdd, batch, grid::NUM_JOINTS, grid::NUM_VEL);
+    grid::frame_acceleration_gradient<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_ACCELERATION_GRADIENT>(g_ctx, batch), g_streams, target_jid, reference_frame);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_frame_acceleration_gradient, (size_t)batch * 18*grid::NUM_VEL * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FRAME_ACCELERATION_GRADIENT
 // [[unit: end]]
 
 // [[unit: dyn_values]]
@@ -5764,6 +5856,135 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 #endif  // GRID_HAS_FRAME_JACOBIAN && GRID_HAS_FRAME_JACOBIAN_DOT && GRID_HAS_FRAME_ACCELERATION
 // [[unit: end]]
 
+// [[unit: kinematics; surface: jax]]
+#if defined(GRID_HAS_FRAME_JACOBIAN) && defined(GRID_HAS_FRAME_VELOCITY_GRADIENT)
+template <bool MUJOCO>
+static ffi::Error grid_rbd_jax_frame_velocity_gradient_impl(
+    cudaStream_t stream,
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::Buffer<GRID_FFI_T> qd,
+    ffi::ResultBuffer<GRID_FFI_T> out,
+    int64_t target_jid,
+    int64_t reference_frame,
+    int64_t ctx_id)
+{
+    GRID_RBD_CTX_OR_FFI(ctx_id);
+    GRID_RBD_FFI_VALIDATE_2D(q, "frame_velocity_gradient: q", grid::NUM_JOINTS);
+    int batch = (int)q.dimensions()[0];
+    int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    if (batch < 1) return ffi::Error::InvalidArgument("frame_velocity_gradient: batch must be >= 1");
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("frame_velocity_gradient: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "frame_velocity_gradient: qd", grid::NUM_VEL, batch);
+    const size_t q_bytes = nj * sizeof(T), v_bytes = grid::NUM_VEL * sizeof(T);
+    const size_t dst_pitch = 3 * nj * sizeof(T);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), q_bytes, q_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj], dst_pitch, qd.typed_data(), v_bytes, v_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::frame_velocity_gradient_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FRAME_VELOCITY_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
+        grid_rbd_grid_for(g_ctx, batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_VELOCITY_GRADIENT>(g_ctx, batch), grid::FRAME_VELOCITY_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+            g_data->d_frame_velocity_gradient, g_data->d_q_qd_u, stride, (int)target_jid, (int)reference_frame, g_robot, batch);
+    GRID_RBD_FFI_CHECK_LAUNCH("frame_velocity_gradient_kernel");
+    cudaMemcpyAsync(out->typed_data(), g_data->d_frame_velocity_gradient, batch * 12 * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_frame_velocity_gradient,
+    grid_rbd_jax_frame_velocity_gradient_impl<false>,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<int64_t>("target_jid")
+        .Attr<int64_t>("reference_frame")
+        .Attr<int64_t>("ctx_id")
+);
+
+#ifdef GRID_RBD_WITH_MUJOCO
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_frame_velocity_gradient_mujoco,
+    grid_rbd_jax_frame_velocity_gradient_impl<true>,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<int64_t>("target_jid")
+        .Attr<int64_t>("reference_frame")
+        .Attr<int64_t>("ctx_id")
+);
+#endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_FRAME_JACOBIAN && GRID_HAS_FRAME_VELOCITY_GRADIENT
+// [[unit: end]]
+
+// [[unit: kinematics; surface: jax]]
+#if defined(GRID_HAS_FRAME_JACOBIAN) && defined(GRID_HAS_FRAME_ACCELERATION_GRADIENT)
+template <bool MUJOCO>
+static ffi::Error grid_rbd_jax_frame_acceleration_gradient_impl(
+    cudaStream_t stream,
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::Buffer<GRID_FFI_T> qd,
+    ffi::Buffer<GRID_FFI_T> qdd,
+    ffi::ResultBuffer<GRID_FFI_T> out,
+    int64_t target_jid,
+    int64_t reference_frame,
+    int64_t ctx_id)
+{
+    GRID_RBD_CTX_OR_FFI(ctx_id);
+    GRID_RBD_FFI_VALIDATE_2D(q, "frame_acceleration_gradient: q", grid::NUM_JOINTS);
+    int batch = (int)q.dimensions()[0];
+    int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    if (batch < 1) return ffi::Error::InvalidArgument("frame_acceleration_gradient: batch must be >= 1");
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("frame_acceleration_gradient: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "frame_acceleration_gradient: qd", grid::NUM_VEL, batch);
+    GRID_RBD_FFI_VALIDATE_ROWS(qdd, "frame_acceleration_gradient: qdd", grid::NUM_VEL, batch);
+    const size_t q_bytes = nj * sizeof(T), v_bytes = grid::NUM_VEL * sizeof(T);
+    const size_t dst_pitch = 3 * nj * sizeof(T);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), q_bytes, q_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj], dst_pitch, qd.typed_data(), v_bytes, v_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[2*nj], dst_pitch, qdd.typed_data(), v_bytes, v_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::frame_acceleration_gradient_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FRAME_ACCELERATION_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
+        grid_rbd_grid_for(g_ctx, batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_ACCELERATION_GRADIENT>(g_ctx, batch), grid::FRAME_ACCELERATION_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+            g_data->d_frame_acceleration_gradient, g_data->d_q_qd_u, stride, (int)target_jid, (int)reference_frame, g_robot, batch);
+    GRID_RBD_FFI_CHECK_LAUNCH("frame_acceleration_gradient_kernel");
+    cudaMemcpyAsync(out->typed_data(), g_data->d_frame_acceleration_gradient, batch * 18 * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_frame_acceleration_gradient,
+    grid_rbd_jax_frame_acceleration_gradient_impl<false>,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<int64_t>("target_jid")
+        .Attr<int64_t>("reference_frame")
+        .Attr<int64_t>("ctx_id")
+);
+
+#ifdef GRID_RBD_WITH_MUJOCO
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_frame_acceleration_gradient_mujoco,
+    grid_rbd_jax_frame_acceleration_gradient_impl<true>,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<int64_t>("target_jid")
+        .Attr<int64_t>("reference_frame")
+        .Attr<int64_t>("ctx_id")
+);
+#endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_FRAME_JACOBIAN && GRID_HAS_FRAME_ACCELERATION_GRADIENT
+// [[unit: end]]
+
 // ── END GENERATED JAX FFI HANDLERS ──
 
 
@@ -7512,6 +7733,50 @@ static torch::Tensor torch_frame_acceleration(torch::Tensor q, torch::Tensor qd,
 #endif  // GRID_HAS_FRAME_JACOBIAN && GRID_HAS_FRAME_JACOBIAN_DOT && GRID_HAS_FRAME_ACCELERATION
 // [[unit: end]]
 
+// [[unit: kinematics; surface: torch]]
+#if defined(GRID_HAS_FRAME_JACOBIAN) && defined(GRID_HAS_FRAME_VELOCITY_GRADIENT)
+template <bool MUJOCO>
+static torch::Tensor torch_frame_velocity_gradient(torch::Tensor q, torch::Tensor qd, int64_t target_jid, int64_t reference_frame, int64_t ctx_id) {
+    GRID_RBD_CTX_OR_THROW(ctx_id);
+    const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    grid_torch_check(q, "frame_velocity_gradient: q", nj); grid_torch_check(qd, "frame_velocity_gradient: qd", nv);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    grid_torch_pack(g_ctx, stream, batch, nj, nv, &q, &qd, nullptr);
+    auto out = grid_torch_empty(batch, 12 * nv, q);
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::frame_velocity_gradient_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FRAME_VELOCITY_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(g_ctx, batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_VELOCITY_GRADIENT>(g_ctx, batch), grid::FRAME_VELOCITY_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        g_data->d_frame_velocity_gradient, g_data->d_q_qd_u, stride, (int)target_jid, (int)reference_frame, g_robot, batch);
+    grid_torch_check_launch("frame_velocity_gradient_kernel");
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_frame_velocity_gradient, batch * 12 * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+#endif  // GRID_HAS_FRAME_JACOBIAN && GRID_HAS_FRAME_VELOCITY_GRADIENT
+// [[unit: end]]
+
+// [[unit: kinematics; surface: torch]]
+#if defined(GRID_HAS_FRAME_JACOBIAN) && defined(GRID_HAS_FRAME_ACCELERATION_GRADIENT)
+template <bool MUJOCO>
+static torch::Tensor torch_frame_acceleration_gradient(torch::Tensor q, torch::Tensor qd, torch::Tensor qdd, int64_t target_jid, int64_t reference_frame, int64_t ctx_id) {
+    GRID_RBD_CTX_OR_THROW(ctx_id);
+    const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    grid_torch_check(q, "frame_acceleration_gradient: q", nj);
+    grid_torch_check(qd, "frame_acceleration_gradient: qd", nv);
+    grid_torch_check(qdd, "frame_acceleration_gradient: qdd", nv);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    grid_torch_pack(g_ctx, stream, batch, nj, nv, &q, &qd, &qdd);
+    auto out = grid_torch_empty(batch, 18 * nv, q);
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::frame_acceleration_gradient_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FRAME_ACCELERATION_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(g_ctx, batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_ACCELERATION_GRADIENT>(g_ctx, batch), grid::FRAME_ACCELERATION_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        g_data->d_frame_acceleration_gradient, g_data->d_q_qd_u, stride, (int)target_jid, (int)reference_frame, g_robot, batch);
+    grid_torch_check_launch("frame_acceleration_gradient_kernel");
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_frame_acceleration_gradient, batch * 18 * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+#endif  // GRID_HAS_FRAME_JACOBIAN && GRID_HAS_FRAME_ACCELERATION_GRADIENT
+// [[unit: end]]
+
 // ── END GENERATED TORCH OP BODIES ──
 
 // ─── runtime-target multi-EE pose / pose-gradient (single-target torch ops) ──
@@ -8252,6 +8517,16 @@ static std::vector<torch::Tensor> torch_momentum_cost(torch::Tensor q, torch::Te
 #else
 #define GRID_TORCH_ROW_FRAME_ACCELERATION(X)
 #endif
+#if defined(GRID_HAS_FRAME_JACOBIAN) && defined(GRID_HAS_FRAME_VELOCITY_GRADIENT)
+#define GRID_TORCH_ROW_FRAME_VELOCITY_GRADIENT(X) X(frame_velocity_gradient, "(Tensor q, Tensor qd, int target_jid, int reference_frame, int ctx_id=0) -> Tensor")
+#else
+#define GRID_TORCH_ROW_FRAME_VELOCITY_GRADIENT(X)
+#endif
+#if defined(GRID_HAS_FRAME_JACOBIAN) && defined(GRID_HAS_FRAME_ACCELERATION_GRADIENT)
+#define GRID_TORCH_ROW_FRAME_ACCELERATION_GRADIENT(X) X(frame_acceleration_gradient, "(Tensor q, Tensor qd, Tensor qdd, int target_jid, int reference_frame, int ctx_id=0) -> Tensor")
+#else
+#define GRID_TORCH_ROW_FRAME_ACCELERATION_GRADIENT(X)
+#endif
 #ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
 #define GRID_TORCH_ROW_END_EFFECTOR_POSE_RUNTIME(X) X(end_effector_pose_runtime, "(Tensor q, int target_jid, Tensor offset, int ctx_id=0) -> Tensor")
 #else
@@ -8320,6 +8595,8 @@ static std::vector<torch::Tensor> torch_momentum_cost(torch::Tensor q, torch::Te
     GRID_TORCH_ROW_OSC_INERTIA(X) \
     GRID_TORCH_ROW_FRAME_VELOCITY(X) \
     GRID_TORCH_ROW_FRAME_ACCELERATION(X) \
+    GRID_TORCH_ROW_FRAME_VELOCITY_GRADIENT(X) \
+    GRID_TORCH_ROW_FRAME_ACCELERATION_GRADIENT(X) \
     GRID_TORCH_ROW_END_EFFECTOR_POSE_RUNTIME(X) \
     GRID_TORCH_ROW_END_EFFECTOR_POSE_GRADIENT_RUNTIME(X) \
     GRID_TORCH_ROW_QUADRATIC_STATE_COST(X) \
@@ -8575,6 +8852,8 @@ void grid_rbd_torch_impl_regressors(torch::Library &m) {
     GRID_TORCH_ROW_OSC_INERTIA(X) \
     GRID_TORCH_ROW_FRAME_VELOCITY(X) \
     GRID_TORCH_ROW_FRAME_ACCELERATION(X) \
+    GRID_TORCH_ROW_FRAME_VELOCITY_GRADIENT(X) \
+    GRID_TORCH_ROW_FRAME_ACCELERATION_GRADIENT(X) \
     GRID_TORCH_ROW_END_EFFECTOR_POSE_RUNTIME(X) \
     GRID_TORCH_ROW_END_EFFECTOR_POSE_GRADIENT_RUNTIME(X)
 void grid_rbd_torch_def_kinematics(torch::Library &m) {

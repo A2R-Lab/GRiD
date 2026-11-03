@@ -5,7 +5,7 @@ agreement with the RBDReference numpy oracle at float32 precision:
 
   com / ccrba / energy / generalized_gravity / nonlinear_effects
   frame_jacobian / frame_jacobian_dot / frame_velocity / frame_acceleration /
-  osc_inertia
+  frame_velocity_gradient / frame_acceleration_gradient / osc_inertia
 
 Robots: iiwa14 (7-DoF serial arm) + go2 (12-DoF branched quadruped, fixed
 base) — kept small so the register/compile stays fast. Both are non-mimic.
@@ -288,6 +288,43 @@ def test_frame_acceleration(robot):
                 assert _max_err(a[i], ref_a) < _TOL, f"{rf_name} target={target_name}"
     with pytest.raises(ValueError):
         handle.frame_acceleration(s["q"], s["qd"], None)
+
+
+def test_frame_velocity_gradient(robot):
+    """[dv/dq | dv/dqd] against the derivative oracle in the three frames."""
+    handle, ref, s = robot
+    fn = _leaf_frame_name(ref)
+    mid_id, mid_name = _mid_chain_target(ref)
+    NV = handle.num_vel
+    g = handle.frame_velocity_gradient(s["q"], s["qd"])
+    assert g.shape == (_B, 6, 2 * NV)
+    for rf_name, rf_code in _REF_FRAMES:
+        for target_id, target_name in ((None, fn), (mid_id, mid_name)):
+            g = handle.frame_velocity_gradient(s["q"], s["qd"], target_jid=target_id, reference_frame=rf_code)
+            for i, (q, qd) in enumerate(zip(s["q"], s["qd"])):
+                dv_dq, dv_dqd = ref.frame_velocity_derivatives(q.astype(np.float64), qd.astype(np.float64), target_name, rf_name)
+                ref_g = np.hstack([dv_dq, dv_dqd])
+                assert _max_err(g[i], ref_g) < _TOL * max(1.0, np.abs(ref_g).max()), f"{rf_name} target={target_name}"
+
+
+def test_frame_acceleration_gradient(robot):
+    """[da/dq | da/dqd | da/dqdd] against the derivative oracle in the three frames."""
+    handle, ref, s = robot
+    fn = _leaf_frame_name(ref)
+    mid_id, mid_name = _mid_chain_target(ref)
+    NV = handle.num_vel
+    g = handle.frame_acceleration_gradient(s["q"], s["qd"], s["qdd"])
+    assert g.shape == (_B, 6, 3 * NV)
+    for rf_name, rf_code in _REF_FRAMES:
+        for target_id, target_name in ((None, fn), (mid_id, mid_name)):
+            g = handle.frame_acceleration_gradient(s["q"], s["qd"], s["qdd"], target_jid=target_id, reference_frame=rf_code)
+            for i, (q, qd, qdd) in enumerate(zip(s["q"], s["qd"], s["qdd"])):
+                _, da_dq, da_dqd, da_dqdd = ref.frame_acceleration_derivatives(
+                    q.astype(np.float64), qd.astype(np.float64), qdd.astype(np.float64), target_name, rf_name)
+                ref_g = np.hstack([da_dq, da_dqd, da_dqdd])
+                assert _max_err(g[i], ref_g) < _TOL * max(1.0, np.abs(ref_g).max()), f"{rf_name} target={target_name}"
+    with pytest.raises(ValueError):
+        handle.frame_acceleration_gradient(s["q"], s["qd"], None)
 
 
 # osc_inertia is Lambda = (J Minv J^T)^-1 at the baked leaf frame, which exists

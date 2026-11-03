@@ -157,6 +157,9 @@ class GRiDCodeGenerator:
                             gen_frame_jacobian_dot_host, gen_frame_jacobian_dot, \
                             gen_frame_velocity_device, gen_frame_velocity, \
                             gen_frame_acceleration_device, gen_frame_acceleration, \
+                            frame_kin_gradient_inner_temp_mem_size, gen_frame_kinematics_gradient_inner, \
+                            gen_frame_velocity_gradient_device, gen_frame_velocity_gradient, \
+                            gen_frame_acceleration_gradient_device, gen_frame_acceleration_gradient, \
                             gen_osc_inertia_device, gen_osc_inertia_kernel, \
                             gen_osc_inertia_host, gen_osc_inertia, \
                             gen_end_effector_pose_runtime_inner, gen_end_effector_pose_runtime_device, \
@@ -1140,6 +1143,26 @@ class GRiDCodeGenerator:
                     "{ return FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES<T>(); }")
                 self.gen_add_code_line("#define GRID_HAS_FRAME_ACCELERATION 1")
                 self.gen_frame_acceleration()
+            # Item C derivatives: one shared inner (world-origin Plucker sweep, one
+            # thread per velocity slot), two devices. The arena = XmatsHom + the
+            # inner's s_Xworld / columns / twists; the acceleration device adds a
+            # 6*NV dv/dq scratch the LWA classical rows read.
+            if "frame_velocity_gradient" in algorithms or "frame_acceleration_gradient" in algorithms:
+                self.gen_frame_kinematics_gradient_inner()
+            if "frame_velocity_gradient" in algorithms:
+                fvg_t_count = Xhom_size_fj + self.frame_kin_gradient_inner_temp_mem_size()
+                self.gen_add_code_line(
+                    "template <typename T> __host__ __device__ constexpr size_t FRAME_VELOCITY_GRADIENT_DYNAMIC_SHARED_MEM_BYTES() "
+                    "{ return grid_shared_arena_bytes<T>(" + str(fvg_t_count) + ", TOPOLOGY_HELPERS_COUNT); }")
+                self.gen_add_code_line("#define GRID_HAS_FRAME_VELOCITY_GRADIENT 1")
+                self.gen_frame_velocity_gradient()
+            if "frame_acceleration_gradient" in algorithms:
+                fag_t_count = Xhom_size_fj + self.frame_kin_gradient_inner_temp_mem_size() + (6 * nv_fj)
+                self.gen_add_code_line(
+                    "template <typename T> __host__ __device__ constexpr size_t FRAME_ACCELERATION_GRADIENT_DYNAMIC_SHARED_MEM_BYTES() "
+                    "{ return grid_shared_arena_bytes<T>(" + str(fag_t_count) + ", TOPOLOGY_HELPERS_COUNT); }")
+                self.gen_add_code_line("#define GRID_HAS_FRAME_ACCELERATION_GRADIENT 1")
+                self.gen_frame_acceleration_gradient()
             # Lambda (osc_inertia) is emitted for mimic robots too. It composes
             # Minv on device via minv_inner, whose mimic path routes
             # through crba_inner -> invert_matrix (== RBDReference.minv's mimic

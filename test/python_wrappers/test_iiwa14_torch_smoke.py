@@ -330,6 +330,8 @@ _PTIER1_ARRAY = [
     ("frame_jacobian_dot",         ("qn", "qdn")),
     ("frame_velocity",             ("qn", "qdn")),
     ("frame_acceleration",         ("qn", "qdn", "qddn")),
+    ("frame_velocity_gradient",    ("qn", "qdn")),
+    ("frame_acceleration_gradient", ("qn", "qdn", "qddn")),
     ("osc_inertia",                ("qn",)),
 ]
 

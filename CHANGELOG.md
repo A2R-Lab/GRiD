@@ -24,7 +24,20 @@ repository. Everything below describes the packaged A2R-Lab releases.
   `frame_velocity(q, qd, target_jid=, reference_frame=)` and
   `frame_acceleration(q, qd, qdd, ...)`, returning `(B, 6)`; a floating
   base gets the MuJoCo-convention twins (input conversion only, since the
-  outputs are frame quantities).
+  outputs are frame quantities). Their derivatives follow:
+  `frame_velocity_gradient` (`[dv/dq | dv/dqd]`, 6 x 2 nv) and
+  `frame_acceleration_gradient` (`[da/dq | da/dqd | da/dqdd]`, 6 x 3 nv) in
+  the local tangent chart, on one generated inner (a world-origin Plücker
+  sweep, then one thread per velocity slot), bound on the three surfaces
+  with MuJoCo-convention twins (column reframe); the reference gains
+  `frame_velocity_derivatives` / `frame_acceleration_derivatives`, checked
+  against Pinocchio's `getFrameVelocityDerivatives` /
+  `getFrameAccelerationDerivatives` and against chart finite differences on
+  every robot of the manifest. Pinocchio's LOCAL_WORLD_ALIGNED
+  q-derivatives hold the frame origin fixed; GRiD's differentiate the
+  function, so they also carry the moving origin (and, for the
+  acceleration, the classical term), which is what a task-space constraint
+  needs.
 - Rotor armature: `register_robot(..., runtime_armature=True)` adds a
   runtime per-velocity-slot reflected motor inertia to the diagonal of the
   joint-space inertia, following Pinocchio's `model.armature`: inverse

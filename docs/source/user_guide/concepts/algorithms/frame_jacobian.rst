@@ -53,6 +53,10 @@ Signature
    # frame velocity (6) and frame acceleration (6)
    v      = rbd.frame_velocity(q, qd, frame_name, reference_frame="LOCAL_WORLD_ALIGNED")
    a      = rbd.frame_acceleration(q, qd, qdd, frame_name, reference_frame="LOCAL_WORLD_ALIGNED")
+   # their derivatives (each 6 x nv): dv/dq, dv/dqd and dv/dq, da/dq, da/dqd, da/dqdd
+   dv_dq, dv_dqd = rbd.frame_velocity_derivatives(q, qd, frame_name, reference_frame="LOCAL_WORLD_ALIGNED")
+   dv_dq, da_dq, da_dqd, da_dqdd = rbd.frame_acceleration_derivatives(q, qd, qdd, frame_name,
+                                                                      reference_frame="LOCAL_WORLD_ALIGNED")
 
 Validation (Pinocchio oracle)
 -----------------------------
@@ -70,14 +74,47 @@ reference frames on both a fixed-base (iiwa14) and a floating-base
   in ``LOCAL`` and ``WORLD`` and ``getFrameClassicalAcceleration`` in
   ``LOCAL_WORLD_ALIGNED`` (iiwa14, go2 and gen3 on both bases, a leaf and
   a mid-chain target).
+* The derivatives vs ``getFrameVelocityDerivatives`` /
+  ``getFrameAccelerationDerivatives`` (``computeForwardKinematicsDerivatives``)
+  in ``LOCAL`` and ``WORLD``. In ``LOCAL_WORLD_ALIGNED`` Pinocchio's
+  q-derivatives hold the frame origin fixed; the reference differentiates
+  the function itself, so its q-derivatives carry the moving origin
+  (``w x dp_f/dq``) and, for the acceleration, the classical term, and the
+  Pinocchio values are converted before the comparison. The same
+  derivatives are checked against central differences of ``frame_velocity``
+  and ``frame_acceleration`` through the ``integrate`` chart on every robot
+  of the manifest, mimic robots included.
 
-See ``external/RBDReference/tests/test_frame_jacobian_equivalence.py`` and
-``test_frame_velocity_acceleration_equivalence.py``. The generated CUDA
+See ``external/RBDReference/tests/test_frame_jacobian_equivalence.py``,
+``test_frame_velocity_acceleration_equivalence.py`` and
+``test_frame_kinematics_derivatives_equivalence.py``. The generated CUDA
 ``frame_velocity_device`` and ``frame_acceleration_device`` (opt-in keys
 ``frame_velocity`` and ``frame_acceleration``, with batched kernels and
 three-mode hosts) are checked against the numpy reference across the three
 frames and a thread-count sweep in
-``test/cuda_equivalents/test_cuda_frame_kinematics.py``.
+``test/cuda_equivalents/test_cuda_frame_kinematics.py``, as are the
+derivative devices ``frame_velocity_gradient_device`` (``[dv/dq | dv/dqd]``,
+6 x 2nv, key ``frame_velocity_gradient``) and
+``frame_acceleration_gradient_device`` (``[da/dq | da/dqd | da/dqdd]``,
+6 x 3nv, key ``frame_acceleration_gradient``).
+
+The derivatives follow from the world-origin Plücker form. With
+:math:`A_j` the column of joint :math:`j` (parent :math:`p`), the target
+body :math:`i`, :math:`v` the body twists and :math:`a` the spatial
+accelerations, and :math:`\times` the motion cross product,
+
+.. math::
+
+   \frac{\partial v_i}{\partial q_j} = A_j \times (v_i - v_p), \qquad
+   \frac{\partial a_i}{\partial q_j} = A_j \times (a_i - a_p)
+     + (v_p \times A_j) \times (v_i - v_p), \qquad
+   \frac{\partial a_i}{\partial \dot q_j} = v_j \times A_j + A_j \times (v_i - v_p),
+
+since every column at or below :math:`j` has :math:`\partial A_k /
+\partial q_j = A_j \times A_k` (the root's own columns included, which
+gives the local tangent chart). The CUDA inner runs one serial sweep over
+the bodies for the columns, twists and accelerations, then one thread per
+velocity slot forms its columns and applies the reference-frame map.
 
 Implementation
 --------------
@@ -140,8 +177,10 @@ Python handle calls
 -------------------
 
 Select ``frame_jacobian``, ``frame_jacobian_dot``, ``frame_velocity``,
-``frame_acceleration`` and/or ``osc_inertia`` in ``algorithm_list`` when
-building the handle (the default list has all five). The NumPy calls are::
+``frame_acceleration``, ``frame_velocity_gradient``,
+``frame_acceleration_gradient`` and/or ``osc_inertia`` in ``algorithm_list``
+when building the handle (the default list has all seven). The NumPy calls
+are::
 
    J = h.frame_jacobian(q, target_jid=jid, reference_frame="LOCAL")  # (B, 6, NV)
    Jdot = h.frame_jacobian_dot(q, qd, target_jid=jid,
@@ -149,9 +188,11 @@ building the handle (the default list has all five). The NumPy calls are::
    v = h.frame_velocity(q, qd, target_jid=jid, reference_frame="WORLD")  # (B, 6)
    a = h.frame_acceleration(q, qd, qdd, target_jid=jid,
                             reference_frame="WORLD")  # (B, 6)
+   dv = h.frame_velocity_gradient(q, qd, target_jid=jid)  # (B, 6, 2 NV): [dv/dq | dv/dqd]
+   da = h.frame_acceleration_gradient(q, qd, qdd, target_jid=jid)  # (B, 6, 3 NV): [da/dq | da/dqd | da/dqdd]
    Lambda = h.osc_inertia(q)  # (B, 6, 6), baked leaf-EE / LWA target
 
-The JAX and PyTorch handles expose the same five methods with the same
+The JAX and PyTorch handles expose the same seven methods with the same
 arguments (forward only). Unlike the other methods, the ``osc_inertia``
 handle does not expose runtime target/frame arguments. Its CUDA device
 function does. Do not use an undamped OSC inverse at a singular task

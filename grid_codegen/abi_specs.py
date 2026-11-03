@@ -683,6 +683,41 @@ ABI_SPECS: dict[str, AbiSpec] = {
         py_rc3_msg="frame_acceleration not built into this robot .so — add 'frame_acceleration' to algorithm_list in register_robot() and rebuild",
         py_twin_guard='frame_acceleration_mujoco unavailable: floating-base .so with frame_jacobian only',
     ),
+    # Item C derivatives: [dv/dq | dv/dqd] (6 x 2 NV) and [da/dq | da/dqd | da/dqdd]
+    # (6 x 3 NV), column-major, in the runtime reference frame.
+    "frame_velocity_gradient": AbiSpec(
+        "frame_velocity_gradient",
+        gate_form="ifdef",                                     # #ifdef GRID_HAS_FRAME_VELOCITY_GRADIENT
+        not_built_msg="bare",
+        inputs=(("q", "const T*"), ("qd", "const T*"), ("out", "T*"),
+                ("batch", "int"), ("target_jid", "int"), ("reference_frame", "int")),
+        pack_mode="q_qd_null",
+        trailing_runtime_args=("target_jid", "reference_frame"),
+        out_buffer="h_frame_velocity_gradient", out_copy="memcpy_h",
+        out_size_expr="12*grid::NUM_VEL",
+        has_mjx_twin=True, mjx_omits_tier=True,
+        py_out_dims=('12 * num_vel_',),
+        out_layout=("colmajor", ("6", "2*num_vel_")),
+        py_rc3_msg="frame_velocity_gradient not built into this robot .so — add 'frame_velocity_gradient' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='frame_velocity_gradient_mujoco unavailable: floating-base .so with frame_jacobian only',
+    ),
+    "frame_acceleration_gradient": AbiSpec(
+        "frame_acceleration_gradient",
+        gate_form="ifdef",                                     # #ifdef GRID_HAS_FRAME_ACCELERATION_GRADIENT
+        not_built_msg="bare",
+        inputs=(("q", "const T*"), ("qd", "const T*"), ("qdd", "const T*"), ("out", "T*"),
+                ("batch", "int"), ("target_jid", "int"), ("reference_frame", "int")),
+        pack_mode="qdd_u_slot",
+        qdd_route="u_slot",
+        trailing_runtime_args=("target_jid", "reference_frame"),
+        out_buffer="h_frame_acceleration_gradient", out_copy="memcpy_h",
+        out_size_expr="18*grid::NUM_VEL",
+        has_mjx_twin=True, mjx_omits_tier=True,
+        py_out_dims=('18 * num_vel_',),
+        out_layout=("colmajor", ("6", "3*num_vel_")),
+        py_rc3_msg="frame_acceleration_gradient not built into this robot .so — add 'frame_acceleration_gradient' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='frame_acceleration_gradient_mujoco unavailable: floating-base .so with frame_jacobian only',
+    ),
 
     # ── RNEA-derived centroidal/bias quantities ───────────────────────────────
     "generalized_gravity": AbiSpec(
@@ -1204,6 +1239,8 @@ _KERNEL_ARGS = {
     "osc_inertia":  ("OUT", "WS", "QQDU", "STRIDE", "ROBOT", "BATCH"),
     "frame_velocity": ("OUT", "QQDU", "STRIDE", "JID", "FRAME", "ROBOT", "BATCH"),
     "frame_acceleration": ("OUT", "QQDU", "STRIDE", "JID", "FRAME", "ROBOT", "BATCH"),
+    "frame_velocity_gradient": ("OUT", "QQDU", "STRIDE", "JID", "FRAME", "ROBOT", "BATCH"),
+    "frame_acceleration_gradient": ("OUT", "QQDU", "STRIDE", "JID", "FRAME", "ROBOT", "BATCH"),
 }
 
 # id has qdd as 3rd kernel arg and no workspace (the torch fork's qdd branch);
@@ -1239,6 +1276,8 @@ _GATE_REQUIRES = {
     "osc_inertia": ("GRID_HAS_FRAME_JACOBIAN",),
     "frame_velocity": ("GRID_HAS_FRAME_JACOBIAN",),
     "frame_acceleration": ("GRID_HAS_FRAME_JACOBIAN", "GRID_HAS_FRAME_JACOBIAN_DOT"),
+    "frame_velocity_gradient": ("GRID_HAS_FRAME_JACOBIAN",),
+    "frame_acceleration_gradient": ("GRID_HAS_FRAME_JACOBIAN",),
 }
 
 _HOIST_OUT_SIZE = ("inverse_dynamics_regressor",
@@ -1357,6 +1396,7 @@ FAMILY_ATTR_SHORTS: dict[str, tuple[str, ...]] = {
     "kinematics": ("end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian",
                    "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
                    "frame_velocity", "frame_acceleration",
+                   "frame_velocity_gradient", "frame_acceleration_gradient",
                    "end_effector_pose_runtime", "end_effector_pose_gradient_runtime"),
     "centroidal": ("com", "ccrba", "dccrba", "cmm_time_variation"),
     "plant_costs": (),
@@ -1370,6 +1410,7 @@ NOT_LAUNCHED_BY_BINDINGS: frozenset[str] = frozenset(
 OPT_IN_GATE_SHORTS: frozenset[str] = frozenset(
     {"frame_jacobian", "frame_jacobian_dot", "osc_inertia",
      "frame_velocity", "frame_acceleration",
+     "frame_velocity_gradient", "frame_acceleration_gradient",
      "end_effector_pose_runtime", "end_effector_pose_gradient_runtime"})
 # Build family of every ABI key (multi-TU arc). `python_only` rows have no
 # wrapper body and no family. Hand-written owners (tool/contact fext kernels,
@@ -1386,6 +1427,7 @@ FAMILY_OF: dict[str, str] = {
     **{k: "kinematics" for k in ("end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian",
                                  "fk_batched", "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
                                  "frame_velocity", "frame_acceleration",
+                                 "frame_velocity_gradient", "frame_acceleration_gradient",
                                  "end_effector_pose_runtime", "end_effector_pose_gradient_runtime")},
     **{k: "centroidal" for k in ("com", "ccrba", "dccrba", "cmm_time_variation")},
     "integrator": "integrator",

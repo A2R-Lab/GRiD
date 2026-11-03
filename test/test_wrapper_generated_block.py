@@ -29,7 +29,7 @@ def test_mjx_twin_scope():
     and only the runtime-EE pair keeps the inner-gate + stub form."""
     from grid_codegen.abi_specs import ABI_SPECS
     from grid_codegen.wrapper_mjx_docs import MJX_DOC
-    assert len(g.MJX_KEYS) == 32
+    assert len(g.MJX_KEYS) == 34
     for key in g.MJX_KEYS:
         s = ABI_SPECS[key]
         assert s.has_mjx_twin and not s.body_override, key

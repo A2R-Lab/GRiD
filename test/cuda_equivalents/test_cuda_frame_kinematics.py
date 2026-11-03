@@ -6,6 +6,11 @@ getFrameVelocity / getFrameAcceleration / getFrameClassicalAcceleration verify
   * grid::frame_velocity_device      = J qd            (LOCAL / WORLD / LWA)
   * grid::frame_acceleration_device  = J qdd + Jdot qd (spatial in LOCAL / WORLD,
                                         classical in LOCAL_WORLD_ALIGNED)
+  * grid::frame_velocity_gradient_device     = [dv/dq | dv/dqd]
+  * grid::frame_acceleration_gradient_device = [da/dq | da/dqd | da/dqdd]
+    (the derivative oracle is checked against pinocchio's
+    getFrameVelocityDerivatives / getFrameAccelerationDerivatives and the
+    chart finite differences in test_frame_kinematics_derivatives_equivalence.py)
 
 The target is each robot's leaf joint; the thread count is swept and the
 outputs must be bit-identical across counts. Robots default to iiwa14, go2,
@@ -38,7 +43,7 @@ from RBDReference.equivalents.reference_backend import build_project_adapter
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_frame_kinematics_smoke_runner.cu")
 _REF_FRAMES = (("local", "LOCAL"), ("world", "WORLD"), ("lwa", "LOCAL_WORLD_ALIGNED"))
-_ALGO_KEYS = ["frame_velocity", "frame_acceleration"]
+_ALGO_KEYS = ["frame_velocity", "frame_acceleration", "frame_velocity_gradient", "frame_acceleration_gradient"]
 _DEFAULT_ROBOTS = "iiwa14:fixed,iiwa14:floating,go2:fixed,go2:floating,gen3:fixed,gen3:floating,fr3:fixed,fr3:floating"
 
 
@@ -107,19 +112,27 @@ def test_cuda_frame_kinematics_matches_reference(tmp_path, robot_id, base_mode):
         q, qd, qdd = (np.asarray(x, np.float64) for x in (sample.q, sample.qd, sample.qdd))
         stdin = _stdin(leaf_id, q, qd, qdd)
         expected = {}
+        nv = len(qd)
         for blk, ref_frame in _REF_FRAMES:
             expected["V_" + blk] = np.asarray(project_model.frame_velocity(q, qd, leaf_name, ref_frame), np.float64)
             expected["A_" + blk] = np.asarray(project_model.frame_acceleration(q, qd, qdd, leaf_name, ref_frame), np.float64)
+            dv_dq, dv_dqd = project_model.frame_velocity_derivatives(q, qd, leaf_name, ref_frame)
+            _, da_dq, da_dqd, da_dqdd = project_model.frame_acceleration_derivatives(q, qd, qdd, leaf_name, ref_frame)
+            expected["GV_" + blk] = np.hstack([dv_dq, dv_dqd]).astype(np.float64)
+            expected["GA_" + blk] = np.hstack([da_dq, da_dqd, da_dqdd]).astype(np.float64)
 
         def run(threads):
             out = _parse_runner_output(_run_runner(exe, stdin, cmd, num_threads=threads))
-            return np.concatenate([out[k].reshape(-1) for k in sorted(expected)])
+            return np.concatenate([np.asarray(out[k]).reshape(-1) for k in sorted(expected)])
 
         def check(values, threads):
             offset = 0
             for k in sorted(expected):
-                got = values[offset:offset + 6]; offset += 6
-                tol = 2e-3 if k.startswith("V_") else 5e-3   # float32 kernels; the acceleration sums two products
+                n = expected[k].size
+                got = values[offset:offset + n].reshape(expected[k].shape, order="C") if expected[k].ndim == 1 \
+                    else values[offset:offset + n].reshape(expected[k].shape)
+                offset += n
+                tol = 2e-3 if k.startswith("V_") else 5e-3   # float32 kernels; the others sum several products
                 close(got, expected[k], f"{k} {robot_id}-{base_mode} @ {sample.name} threads={threads}", tol, tol)
 
         thread_sweep((1, 32, 128, 256), run, check)

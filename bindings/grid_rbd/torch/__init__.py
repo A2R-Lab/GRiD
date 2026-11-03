@@ -13,7 +13,8 @@ handle: ``generalized_gravity``, ``nonlinear_effects``, ``energy``, ``com``,
 ``ccrba``, ``dccrba``, ``cmm_time_variation``, ``coriolis_matrix``,
 ``kinetic_energy_regressor``, ``potential_energy_regressor``, ``frame_jacobian``,
 ``frame_jacobian_dot``, ``osc_inertia``, ``frame_velocity``,
-``frame_acceleration``, ``end_effector_pose_runtime``,
+``frame_acceleration``, ``frame_velocity_gradient``,
+``frame_acceleration_gradient``, ``end_effector_pose_runtime``,
 ``end_effector_pose_gradient_runtime`` (the gated ones raise an actionable
 "not generated for this robot" error when their kernel is absent from the .so).
 
@@ -954,6 +955,30 @@ class TorchRobotHandle(BaseDelegateMixin):
         tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
         raw = self._op(_convention, "frame_acceleration")(q, qd, qdd, int(tj), int(rf))
         return self._shape_out("frame_acceleration", raw)
+
+    def frame_velocity_gradient(self, q, qd, *, target_jid=None, reference_frame=None, _convention=None):
+        """``[dv/dq | dv/dqd]`` of :py:meth:`frame_velocity` as ``(B, 6, 2*NV)``
+        (the second block is the frame Jacobian), in the local tangent chart;
+        forward only. See the NumPy handle for the frame conventions.
+
+        ``target_jid`` / ``reference_frame`` are runtime int op args (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``)."""
+        from .._handle import _resolve_frame_args
+        tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
+        raw = self._op(_convention, "frame_velocity_gradient")(q, qd, int(tj), int(rf))
+        return self._shape_out("frame_velocity_gradient", raw)
+
+    def frame_acceleration_gradient(self, q, qd, qdd, *, target_jid=None, reference_frame=None, _convention=None):
+        """``[da/dq | da/dqd | da/dqdd]`` of :py:meth:`frame_acceleration` as
+        ``(B, 6, 3*NV)`` (the last block is the frame Jacobian), in the local
+        tangent chart; forward only. ``qdd`` is required.
+
+        ``target_jid`` / ``reference_frame`` are runtime int op args (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``)."""
+        from .._handle import _resolve_frame_args
+        tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
+        raw = self._op(_convention, "frame_acceleration_gradient")(q, qd, qdd, int(tj), int(rf))
+        return self._shape_out("frame_acceleration_gradient", raw)
 
     def osc_inertia(self, q, *, _convention=None):
         """Operational-space (task) inertia Lambda = (J·M⁻¹·Jᵀ)⁻¹ (6 x 6) for

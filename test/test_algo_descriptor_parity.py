@@ -77,6 +77,8 @@ _GOLDEN_ALGO_TO_SYMBOL = {
     "inverse_dynamics_regressor_gradient": "inverse_dynamics_regressor_gradient",
     "frame_velocity":        "frame_velocity",
     "frame_acceleration":    "frame_acceleration",
+    "frame_velocity_gradient":     "frame_velocity_gradient",
+    "frame_acceleration_gradient": "frame_acceleration_gradient",
 }
 
 # The emitted `enum GridAlgo` order (byte-identity anchor). Equals the launch-cfg
@@ -103,6 +105,7 @@ _GOLDEN_LAUNCH_ORDER = (
     "inverse_dynamics_regressor_gradient",
     # batch 4 — frame kinematics (2026-11-03), appended:
     "frame_velocity", "frame_acceleration",
+    "frame_velocity_gradient", "frame_acceleration_gradient",
 )
 
 

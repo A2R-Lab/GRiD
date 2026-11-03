@@ -443,7 +443,7 @@ def test_substitution_partitions():
     """The substitution sets derive from kernel_args[_jax] presence and must
     partition the surface inventory: every torch_<x>/jax impl body that is
     NOT substitution-emitted is on the known-bespoke list (or plant/infra)."""
-    assert len(_TORCH_SUB) == 26 and len(_JAX_SUB) == 28
+    assert len(_TORCH_SUB) == 28 and len(_JAX_SUB) == 30
     assert set(_JAX_SUB) - set(_TORCH_SUB) == {
         "inverse_dynamics", "inverse_dynamics_gradient"}
     torch_fns = set(re.findall(r"torch::Tensor torch_([a-z0-9_]+)\(", _SRC))
