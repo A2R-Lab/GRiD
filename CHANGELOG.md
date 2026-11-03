@@ -52,10 +52,12 @@ repository. Everything below describes the packaged A2R-Lab releases.
   dynamics, CRBA, Minv, forward dynamics, ABA and both first-order gradients
   carry the new terms (the follower accelerates by alpha' qd_l^2, the
   gradients gain the alpha' and alpha'' terms and (dG/dq)^T f) and are
-  checked on the GPU against the projection on both bases. Every other
-  algorithm is refused for a polynomial robot until its fold reads alpha
-  at runtime. Headers of robots without polynomial followers are
-  byte-identical.
+  checked on the GPU against the projection on both bases; so do the
+  end-effector pose and its gradient and the frame Jacobian family (J,
+  Jdot with its alpha' qd_l term, the task inertia, the frame velocity and
+  acceleration and their derivatives). Every other algorithm is refused for
+  a polynomial robot until its fold reads alpha at runtime. Headers of
+  robots without polynomial followers are byte-identical.
 - Rotor armature: `register_robot(..., runtime_armature=True)` adds a
   runtime per-velocity-slot reflected motor inertia to the diagonal of the
   joint-space inertia, following Pinocchio's `model.armature`: inverse

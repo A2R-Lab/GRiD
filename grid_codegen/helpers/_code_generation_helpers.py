@@ -122,6 +122,24 @@ def _coupling_value_cpp(self, jid, q_name="s_q"):
     return "grid_coupling_value_" + str(jid) + "<T>(" + q_name + ")"
 
 
+def gen_alpha_table(self, name, jids, order=0):
+    """Per-entry fold multipliers of the joints ``jids`` (order 0: alpha, 1:
+    alpha', 2: alpha''): a baked ``static const`` table when every entry is a
+    constant (byte-identical to the legacy bake), else a shared table filled
+    at runtime from the leader coordinates in ``s_q`` (one thread, then a
+    sync) because a polynomial follower's multiplier varies with q."""
+    if not any(self._alpha_is_variable(int(j)) for j in jids):
+        vals = [float(self._alpha_for_jid(int(j))) if order == 0 else 0.0 for j in jids]
+        self.gen_bake_const_array(name, vals, "T")
+        return
+    self.gen_add_code_line("__shared__ T " + name + "[" + str(max(1, len(jids))) + "];")
+    self.gen_add_serial_ops()
+    for t, j in enumerate(jids):
+        self.gen_add_code_line(name + "[" + str(t) + "] = " + self._coupling_alpha_cpp(int(j), order=order) + ";")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+
+
 def gen_coupling_evaluators(self):
     """Emit, once per polynomial follower, the device evaluators of its
     coordinate q = sum_i c_i (q_l - q0)^i and of alpha = dq/dq_l, alpha' and

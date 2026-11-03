@@ -186,7 +186,7 @@ def gen_frame_jacobian_inner(self):
         self.gen_bake_const_array("fj_ang", [v for j in jobs for v in j[3]], "T")
         self.gen_bake_const_array("fj_lin", [v for j in jobs for v in j[4]], "T")
         if HAS_MIMIC:
-            self.gen_bake_const_array("fj_alpha", [j[5] for j in jobs], "T")
+            self.gen_alpha_table("fj_alpha", [j[1] for j in jobs])
         # Serial accumulation (correctness-first; columns may repeat vi).
         self.gen_add_serial_ops()
         # frame origin p_f in world.
@@ -513,7 +513,7 @@ def gen_frame_jacobian_dot_device(self):
         self.gen_bake_const_array("fjd_ang", s_ang, "T")
         self.gen_bake_const_array("fjd_lin", s_lin, "T")
         if HAS_MIMIC:
-            self.gen_bake_const_array("fjd_alpha", s_alpha, "T")
+            self.gen_alpha_table("fjd_alpha", s_jid)
         self.gen_add_serial_ops()
         self.gen_add_code_line("for (int t = 0; t < " + str(nsweep) + "; ++t) {", True)
         self.gen_add_code_line("int jid = fjd_jid[t]; int par = fjd_par[t]; int vi = fjd_vi[t];")
@@ -572,7 +572,9 @@ def gen_frame_jacobian_dot_device(self):
         self.gen_bake_const_array("fjc_ang", [v for j in jobs for v in j[3]], "T")
         self.gen_bake_const_array("fjc_lin", [v for j in jobs for v in j[4]], "T")
         if HAS_MIMIC:
-            self.gen_bake_const_array("fjc_alpha", [j[5] for j in jobs], "T")
+            self.gen_alpha_table("fjc_alpha", [j[1] for j in jobs])
+            if self.robot_has_variable_couplings():
+                self.gen_alpha_table("fjc_alphad", [j[1] for j in jobs], order=1)
         self.gen_add_serial_ops()
         self.gen_add_code_line("const T *Xf = &s_Xworld[16*target_jid];")
         self.gen_add_code_line("T pfx=Xf[12], pfy=Xf[13], pfz=Xf[14];")
@@ -600,6 +602,10 @@ def gen_frame_jacobian_dot_device(self):
             self.gen_add_code_line("T al = fjc_alpha[t];")
             self.gen_add_code_line("Vc[0]+=al*jv0; Vc[1]+=al*jv1; Vc[2]+=al*jv2; Vc[3]+=al*aw0; Vc[4]+=al*aw1; Vc[5]+=al*aw2;")
             self.gen_add_code_line("Dc[0]+=al*jvd0; Dc[1]+=al*jvd1; Dc[2]+=al*jvd2; Dc[3]+=al*awd0; Dc[4]+=al*awd1; Dc[5]+=al*awd2;")
+            if self.robot_has_variable_couplings():
+                # d/dt of the fold weight alpha(q_l): Jdot_l += alpha' qd_l J_column
+                self.gen_add_code_line("{ T ald = fjc_alphad[t] * s_qd[vi];")
+                self.gen_add_code_line("  Dc[0]+=ald*jv0; Dc[1]+=ald*jv1; Dc[2]+=ald*jv2; Dc[3]+=ald*aw0; Dc[4]+=ald*aw1; Dc[5]+=ald*aw2; }")
         else:
             self.gen_add_code_line("Vc[0]+=jv0; Vc[1]+=jv1; Vc[2]+=jv2; Vc[3]+=aw0; Vc[4]+=aw1; Vc[5]+=aw2;")
             self.gen_add_code_line("Dc[0]+=jvd0; Dc[1]+=jvd1; Dc[2]+=jvd2; Dc[3]+=awd0; Dc[4]+=awd1; Dc[5]+=awd2;")
@@ -1116,8 +1122,12 @@ def gen_frame_kinematics_gradient_inner(self):
     self.gen_bake_const_array("fkg_cvi", tabs["c_vi"], "int")
     self.gen_bake_const_array("fkg_cang", tabs["c_ang"], "T")
     self.gen_bake_const_array("fkg_clin", tabs["c_lin"], "T")
+    VARIABLE = self.robot_has_variable_couplings()
     if HAS_MIMIC:
-        self.gen_bake_const_array("fkg_calpha", tabs["c_alpha"], "T")
+        self.gen_alpha_table("fkg_calpha", tabs["c_jid"])
+        if VARIABLE:
+            self.gen_alpha_table("fkg_calphad", tabs["c_jid"], order=1)
+            self.gen_alpha_table("fkg_calphadd", tabs["c_jid"], order=2)
     self.gen_bake_const_array("fkg_parent", tabs["parent"], "int")
     alpha_expr = "fkg_calpha[t]" if HAS_MIMIC else "static_cast<T>(1)"
     # ---- Step 2: serial world-origin Plucker sweep (bodies parent-first) ----
@@ -1143,7 +1153,8 @@ def gen_frame_kinematics_gradient_inner(self):
     self.gen_add_code_line("if constexpr (WITH_ACC) {", True)
     self.gen_add_code_line("for (int t = fkg_bc0[b]; t < fkg_bc0[b] + fkg_bcn[b]; ++t) {", True)
     self.gen_add_code_line("const T *A = &s_A[6*t]; T mc[6]; frame_kin_mcross<T>(ov, A, mc);")
-    self.gen_add_code_line("T sc = " + alpha_expr + " * s_qd[fkg_cvi[t]]; T sa = " + alpha_expr + " * s_qdd[fkg_cvi[t]];")
+    self.gen_add_code_line("T sc = " + alpha_expr + " * s_qd[fkg_cvi[t]]; T sa = " + alpha_expr + " * s_qdd[fkg_cvi[t]]"
+                           + (" + fkg_calphad[t] * s_qd[fkg_cvi[t]] * s_qd[fkg_cvi[t]]" if VARIABLE else "") + ";")
     self.gen_add_code_line("for (int k = 0; k < 6; ++k) oa[k] += A[k] * sa + mc[k] * sc;")
     self.gen_add_end_control_flow()  # columns (acceleration)
     self.gen_add_end_control_flow()  # if constexpr
@@ -1182,7 +1193,18 @@ def gen_frame_kinematics_gradient_inner(self):
     self.gen_add_code_line("for (int k = 0; k < 6; ++k) dad[k] += al * tmp[k];")
     self.gen_add_code_line("frame_kin_mcross<T>(A, oai, tmp);")
     self.gen_add_code_line("for (int k = 0; k < 6; ++k) oac[k] += al * tmp[k];")
+    if VARIABLE:
+        # the follower's qd_f = alpha(q_l) qd_l and qdd_f = alpha qdd_l + alpha' qd_l^2
+        # depend on the leader: chain terms J_b alpha' qd_l (dv/dq), the
+        # da/dqd_b column times alpha' qd_l plus J_b (alpha' qdd_l + alpha'' qd_l^2)
+        # (da/dq) and J_b 2 alpha' qd_l (da/dqd), with J_b = A.
+        self.gen_add_code_line("{ T ald = fkg_calphad[t], aldd = fkg_calphadd[t], qdl = s_qd[vi], qddl = s_qdd[vi];")
+        self.gen_add_code_line("  T dq_b = ald * qddl + aldd * qdl * qdl; T dqd_b = static_cast<T>(2) * ald * qdl;")
+        self.gen_add_code_line("  T tb[6], tc[6]; frame_kin_mcross<T>(&s_ov[6*j], A, tb); frame_kin_mcross<T>(A, d1, tc);")
+        self.gen_add_code_line("  for (int k = 0; k < 6; ++k) { daq[k] += ald * qdl * (tb[k] + tc[k]) + dq_b * A[k]; dad[k] += dqd_b * A[k]; } }")
     self.gen_add_end_control_flow()  # if constexpr
+    if VARIABLE:
+        self.gen_add_code_line("{ T ald = fkg_calphad[t] * s_qd[vi]; for (int k = 0; k < 6; ++k) dvq[k] += ald * A[k]; }")
     self.gen_add_end_control_flow()  # for t
     # frame map
     self.gen_add_code_line("T *o_dvq = &s_dvdq[6*vi]; T *o_J = &s_J[6*vi];")

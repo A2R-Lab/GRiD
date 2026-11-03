@@ -5,6 +5,7 @@ from ._code_generation_helpers import (
     _alpha_for_jid,
     _coupling_leader_qslot,
     _alpha_is_variable,
+    gen_alpha_table,
     VariableAlpha,
     _coupling_alpha_cpp,
     _coupling_value_cpp,

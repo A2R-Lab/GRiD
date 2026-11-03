@@ -66,7 +66,7 @@ class GRiDCodeGenerator:
                          gen_grid_linalg_backend_helpers, _gen_vendored_glass, _gen_linalg_wrappers, gen_invert_matrix, gen_matmul, gen_matmul_trans, gen_crm_mul, gen_crm, gen_mxS_general, custom_is_constant, \
                          gen_mjx_input_convert, gen_mjx_quat_reorder, gen_mjx_base_rotate, gen_mjx_symmetrize_full, gen_mjx_accel_out, gen_mjx_congruence, gen_mjx_column_reframe, gen_mjx_retract, \
                          robot_has_mimic_joints, _v_slot_cpp, _alpha_for_jid, _id_S_desc, gen_add_fragment_mark, \
-                            robot_has_variable_couplings, _alpha_is_variable, _coupling_leader_qslot, _coupling_alpha_cpp, _coupling_value_cpp, gen_coupling_evaluators
+                            robot_has_variable_couplings, _alpha_is_variable, gen_alpha_table, _coupling_leader_qslot, _coupling_alpha_cpp, _coupling_value_cpp, gen_coupling_evaluators
 
     # then import all of the algorithms
     from .algorithms import gen_inverse_dynamics_inner_temp_mem_size, gen_inverse_dynamics_inner_function_call, \
@@ -548,7 +548,10 @@ class GRiDCodeGenerator:
         if self.robot_has_variable_couplings():
             supported = {"inverse_dynamics", "crba", "minv", "forward_dynamics", "aba",
                          "inverse_dynamics_gradient", "forward_dynamics_gradient",
-                         "end_effector_pose", "end_effector_pose_gradient"}
+                         "end_effector_pose", "end_effector_pose_gradient",
+                         "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
+                         "frame_velocity", "frame_acceleration",
+                         "frame_velocity_gradient", "frame_acceleration_gradient"}
             unsupported = sorted(set(algorithms) - supported)
             if unsupported:
                 raise NotImplementedError(
