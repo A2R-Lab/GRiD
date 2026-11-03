@@ -548,7 +548,7 @@ class GRiDCodeGenerator:
         if self.robot_has_variable_couplings():
             supported = {"inverse_dynamics", "crba", "minv", "forward_dynamics", "aba",
                          "inverse_dynamics_gradient", "forward_dynamics_gradient",
-                         "end_effector_pose"}
+                         "end_effector_pose", "end_effector_pose_gradient"}
             unsupported = sorted(set(algorithms) - supported)
             if unsupported:
                 raise NotImplementedError(

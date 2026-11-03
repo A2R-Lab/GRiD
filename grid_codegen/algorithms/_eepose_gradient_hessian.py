@@ -676,6 +676,10 @@ def emit_geometric_jacobian_jvjw(self, nv, num_ees, single_jobs, multi_groups, h
                 self.gen_add_code_line("  T axw_1 = s_Xworld[16*" + str(j) + " + 1]*ax0 + s_Xworld[16*" + str(j) + " + 5]*ax1 + s_Xworld[16*" + str(j) + " + 9]*ax2;")
                 self.gen_add_code_line("  T axw_2 = s_Xworld[16*" + str(j) + " + 2]*ax0 + s_Xworld[16*" + str(j) + " + 6]*ax1 + s_Xworld[16*" + str(j) + " + 10]*ax2;")
                 a = repr(float(alpha))
+                if self._alpha_is_variable(j):
+                    # polynomial follower: the fold multiplier alpha(q_l) at runtime
+                    self.gen_add_code_line("  const T al_v = " + self._coupling_alpha_cpp(j) + ";")
+                    a = "al_v"
                 if job["revolute"]:
                     self.gen_add_code_line("  s_Jw[" + str(col_base) + " + 0] += static_cast<T>(" + a + ") * axw_0; s_Jw[" + str(col_base) + " + 1] += static_cast<T>(" + a + ") * axw_1; s_Jw[" + str(col_base) + " + 2] += static_cast<T>(" + a + ") * axw_2;")
                     self.gen_add_code_line("  T dx = s_Xworld[16*" + str(ee_anchor) + " + 12] - s_Xworld[16*" + str(j) + " + 12];")

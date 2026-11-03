@@ -22,7 +22,8 @@ from test.cuda_equivalents.thread_invariance import thread_sweep
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
 ALGOS = ["inverse_dynamics", "crba", "minv", "forward_dynamics", "aba",
-         "inverse_dynamics_gradient", "forward_dynamics_gradient"]
+         "inverse_dynamics_gradient", "forward_dynamics_gradient",
+         "end_effector_pose", "end_effector_pose_gradient"]
 
 
 @pytest.mark.parametrize("floating", [False, True], ids=["fixed", "floating"])
@@ -39,10 +40,11 @@ def test_polynomial_coupling_dynamics_match_projection(tmp_path, monkeypatch, fl
     monkeypatch.setenv("GRID_CUDA_CACHE_DIR", str(tmp_path / "executables"))
     exe, command = _compile_runner(tmp_path, floating_base=floating,
                                    run_tokens={"RUN_" + a.upper() for a in ALGOS},
-                                   skip_gradients=False, skip_eepose_gradients=True)
+                                   skip_gradients=False, skip_eepose_gradients=False)
     ref = RBDReference(robot)
     assert ref._embedding is not None
     nq, nv = robot.get_num_pos(), robot.get_num_vel()
+    leaf = robot.get_joint_by_id(int(robot.get_leaf_nodes()[0])).get_name()
     rng = np.random.default_rng(7)
     for sample in range(3):
         q = rng.standard_normal(nq)
@@ -61,6 +63,9 @@ def test_polynomial_coupling_dynamics_match_projection(tmp_path, monkeypatch, fl
             "inverse_dynamics_gradient_qd": ref.inverse_dynamics_gradient(q, qd, None)[:, nv:],
             "forward_dynamics_gradient_q": ref.forward_dynamics_gradient(q, qd, u)[0],
             "forward_dynamics_gradient_qd": ref.forward_dynamics_gradient(q, qd, u)[1],
+            # the leaf end effector: pose (6) and its gradient (6 x nv, column-major flatten)
+            "end_effector_pose": np.asarray(ref.end_effector_pose(q, leaf), np.float64).reshape(-1),
+            "end_effector_pose_gradient": np.asarray(ref.end_effector_pose_gradient(q, leaf), np.float64).reshape(-1, order="F"),
         }
         stdin = "\n".join(" ".join(f"{v:.9g}" for v in np.asarray(x, np.float32)) for x in (q, qd, u)) + "\n"
 
