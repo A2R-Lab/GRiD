@@ -61,6 +61,18 @@ from grid_rbd._handle import RobotHandle, SecondOrderID, SecondOrderFD, _integra
 from .._out_transform import apply_out_layout
 from .._surface_common import BaseDelegateMixin, MujocoDerivativeViewMixin, MujocoViewBase
 
+# 2026-11-03: the MuJoCo-convention integrator_gradient twin's velocity rows
+# (d qd_{k+1} / dq, d qd_{k+1} / dqd) disagree with finite differences of the
+# twin's own value on go2 (angular columns by 7e-2, joint columns by 1e-4, the
+# qd block by 1e-2) while its configuration rows are exact; the pin kernel passes
+# the same check. Until the twin is fixed its backward is refused rather than
+# returning a wrong gradient (docs/open-tasks plan, item D; guide 7.z84).
+_MJX_INTEGRATOR_BACKWARD_MSG = (
+    "integrator backward under output_convention='mujoco' on a floating base is "
+    "not available: the MuJoCo-convention integrator_gradient twin's velocity rows "
+    "do not match the twin's value yet. Use the pinocchio convention for the "
+    "integrator's autograd, or differentiate integrator_gradient's outputs directly.")
+
 
 # ─── op-library registry (process-global, idempotent) ───────────────────────
 
@@ -204,7 +216,8 @@ def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None, ctx_i
     # ABI_SPECS[key].vjp and runs through the shared _vjp_common.vjp_backward
     # driver, identical to the jax surface.
     from grid_codegen.abi_specs import ABI_SPECS
-    from .._vjp_common import vjp_backward
+    from .._vjp_common import integrator_state_cotangent, vjp_backward
+
 
     # B2 (K4): every forward allocates an int32 model-version stamp that the op
     # fills at execution time (`stamp_out`); the backward hands it back to each
@@ -331,26 +344,24 @@ def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None, ctx_i
         @staticmethod
         def forward(ctx, q, qd, u, dt, it, gravity):
             stamp = _stamp(q)
-            ctx.save_for_backward(q, qd, u, stamp)
+            out = _op("integrator")(q, qd, u, dt, it, gravity, stamp_out=stamp)
+            # x_{k+1} is a residual: on a quaternion model the state cotangent
+            # is pulled onto the gradient kernel's tangent rows at q_{k+1}.
+            ctx.save_for_backward(q, qd, u, stamp, out)
             ctx.dt, ctx.it, ctx.gravity = dt, it, gravity
-            return _op("integrator")(q, qd, u, dt, it, gravity, stamp_out=stamp)
+            return out
 
         @staticmethod
         def backward(ctx, grad_x):
-            q, qd, u, stamp = ctx.saved_tensors
-            # A3-audit fix (2026-09-09): this used to shadow the closure's nv
-            # with q.shape[1] (= nq). Fixed base: nq == nv, worked by luck.
-            # Floating base: nq = nv+1, so the reshape below mis-sized AND the
-            # tangent (2nv-wide) Jacobian cannot be chained to the (nq+nv)-wide
-            # x cotangent without the quaternion-chart VJP — unimplemented, so
-            # say so instead of crashing on a confusing reshape.
-            if q.shape[1] != nv:
-                raise NotImplementedError(
-                    "integrator backward on a floating base is not implemented: it "
-                    "needs the SE(3) chart VJP (tangent 2*nv Jacobian against the "
-                    "nq+nv state cotangent). Differentiate the integrator_gradient "
-                    "outputs directly, or use a fixed-base robot.")
-            g = vjp_backward(ABI_SPECS["integrator"].vjp, grad_x, {
+            q, qd, u, stamp, out = ctx.saved_tensors
+            if mujoco and q.shape[1] != nv:
+                raise NotImplementedError(_MJX_INTEGRATOR_BACKWARD_MSG)
+            # nq != nv (floating root or spherical joints): the (nq+nv)-wide x
+            # cotangent is chained to the tangent (2nv-wide) Jacobian through
+            # the chart's output map (2026-11-03; refused before that).
+            ct = integrator_state_cotangent(grad_x, out, nq=q.shape[1], nv=nv, mjx=mujoco,
+                                            layout=configuration_layout)
+            g = vjp_backward(ABI_SPECS["integrator"].vjp, ct, {
                 # h_dAB is (2*NV x 3*NV) column-major per ts → shared out-layout
                 # (colmajor_whole → row-major (B, 2NV, 3NV)); thirds = gq/gqd/gu.
                 "grad": lambda: apply_out_layout(
@@ -1276,6 +1287,7 @@ def register_robot(
     algorithm_list: list[str] | str | None = None,
     use_joint_dynamics: bool = False,
     runtime_joint_dynamics: bool = False,
+    runtime_armature: bool = False,
     runtime_inertia: bool = False,
     runtime_transform: bool = False,
     enable_tool: bool = False,
@@ -1307,6 +1319,7 @@ def register_robot(
         friction_model=friction_model, friction_width=friction_width,  # smooth friction (tanh)
         cost_frames=cost_frames,  # plant menu frame residuals
         runtime_joint_dynamics=runtime_joint_dynamics,  # C5 mutable damping/friction table
+        runtime_armature=runtime_armature,
         runtime_inertia=runtime_inertia,  # D.4: mutable inertia table (torch op reads same device global)
         runtime_transform=runtime_transform,  # mutable joint-origin table (shared device global)
         enable_tool=enable_tool,  # tool welding: attach_tool/detach_tool/tool_fext surface

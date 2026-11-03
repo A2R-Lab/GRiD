@@ -540,7 +540,10 @@ def test_floating_second_order_diagnostic_matches_python_reference(tmp_path, rob
     reference_model = _build_so_oracle(spec, resolved, "floating")
     samples = _floating_second_order_samples(project_model)
     target_shared_bytes = _second_order_target_shared_bytes()
-    enable_fdsva = os.environ.get("GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA", "0") == "1"
+    # fdsva_so is in the diagnostic by default since 2026-11-03 (it used to be
+    # opt-in, so no receipt checked the standalone floating fdsva_so against
+    # the oracle); GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA=0 opts out.
+    enable_fdsva = os.environ.get("GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA", "1") == "1"
     algorithm_list = "idsva_so_body_frame,fdsva_so" if enable_fdsva else "idsva_so_body_frame"
 
     executable, compile_cmd = _build_second_order_case(

@@ -176,7 +176,7 @@ humanoids) launched with `cudaErrorInvalidValue` ("invalid argument") while thei
   manifest-parity test over relying on a GPU run to surface it.
 
 ### 1g. In-kernel mjx OUTPUT-BAND scratch must be spill-aware (aliases spilled buffers → state-dependent garbage)
-**Found in fdsva_so mjx (2026-06-09, still open).** An mjx epilogue that writes a large output band into
+**Found in fdsva_so mjx (2026-06-09; closed 2026-06-10 by 6b96d3e2, the epilogue recomputes into a disjoint `d_mjx_scratch` band, unguarded in 8c0fbb46 and validated against the oracle on go2; this entry stayed marked open until 2026-11-03).** An mjx epilogue that writes a large output band into
 "dead" scratch (`s_temp`) is WRONG on robots where the algorithm SPILLS: `s_temp`==`d_workspace`, and the
 spilled live buffers (`s_df_du`, `s_Minv`) ALSO live in `d_workspace` → the band overlaps them →
 state-dependent garbage (the result depends on the PREVIOUS kernel call's `d_workspace` contents; jax≠torch
@@ -185,8 +185,9 @@ in an interleaved test but deterministic in isolation — the tell-tale signatur
   after a different op (changes? → reads cross-call global state = a spilled-buffer alias).
 - **Rule:** an in-kernel scratch band must be provably DEAD *and* DISJOINT in BOTH the smem and the spilled
   layouts. A buffer that's disjoint in smem can alias in `d_workspace`. (Reusing `s_idsva_so` made fdsva_so
-  deterministic but still wrong — `s_df_du`/`s_Minv` are likely clobbered before the epilogue reads them, a
-  second liveness bug. Open.) This is the general **mjx-vs-tier-spill** hazard: the spill classifier never saw
+  deterministic but still wrong — `s_df_du`/`s_Minv` were clobbered before the epilogue read them, the
+  second liveness bug; the fix recomputes Minv, qdd and the first-order gradients fresh into their own
+  spill-disjoint band.) This is the general **mjx-vs-tier-spill** hazard: the spill classifier never saw
   the mjx epilogue's scratch usage.
 
 ### 1h. Templating a wrapper on a flag that only ONE kernel overload carries
@@ -3825,3 +3826,18 @@ merge an all-unsigned shard set with `--unsigned`, verify it with
 is refused before the merge; `run_gpu_proof.sh` never publishes an unsigned
 receipt and prints the desktop re-sign command; CI verifies every committed
 secondary receipt with `receipt_integrity.py --verify-all`.
+
+### 7.z84 A convention twin's gradient must be checked against its own value, block by block (2026-11-03, mjx integrator_gradient)
+
+The MuJoCo-convention twin of `integrator_gradient` had only ever been checked for
+packing against the numpy surface. The first ambient finite-difference test of a
+loss through it (the floating integrator VJP work) failed on the quaternion slots,
+and the guess "the chart map is wrong" was wrong: probing the twin block by block
+showed its configuration rows exact in the world-linear, local-angular chart
+(8e-11) and its velocity rows off (angular columns of d qd_{k+1}/dq by 7e-2, the
+qd block by 1e-2). Rules: when a new VJP disagrees with finite differences, split
+the chain and test each piece against finite differences of the kernel's own
+value in its own chart before touching the maps; a twin that passes a packing
+test and a tier-invariance test has not been validated numerically. Both
+surfaces now refuse the floating-base mjx integrator backward until the twin's
+velocity block is fixed.

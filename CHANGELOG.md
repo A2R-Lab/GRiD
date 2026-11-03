@@ -12,6 +12,48 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Rotor armature: `register_robot(..., runtime_armature=True)` adds a
+  runtime per-velocity-slot reflected motor inertia to the diagonal of the
+  joint-space inertia, following Pinocchio's `model.armature`: inverse
+  dynamics gains `a*qdd`, CRBA and Minv see `M + diag(a)`, ABA solves with it,
+  and forward dynamics, its gradient, the integrators, the plant step and the
+  second-order forward dynamics follow. The handle gains `armature` and
+  `set_armature`; the table starts at zero and the build equals the plain one
+  bit for bit until poked. `RBDReference.set_armature` is the oracle, checked
+  against Pinocchio on iiwa14, go2, gen3 and the mimic fr3. The docs state the
+  gear-ratio approximation and its failure on belt transmissions.
+- Correctness: the floating-base integrator retract built the position update
+  from the raw input quaternion, so a non-unit quaternion moved the base by
+  its squared norm; the retract now normalises the input like every other
+  kernel (`f = f o normalize`). Unit inputs are unchanged.
+- Differentiation: the integrator backward runs on floating-base and
+  spherical-joint models on the jax and torch surfaces. The state cotangent
+  of `x_{k+1}` is pulled onto the gradient kernel's tangent rows at `q_{k+1}`
+  through the chart's output map (`integrator_state_cotangent`: `R(q)` on the
+  pin linear block, `0.5 q (x) (delta, 0)` on each quaternion block, identity
+  on the MuJoCo linear block), then the `q` cotangent is pulled back to the
+  input quaternion as for every other op. Both surfaces refused these models
+  before; jax fell back to a non-differentiable call.
+- Correctness: the second-order forward dynamics kernel (`fdsva_so`) now
+  forwards the model pointer to the forward dynamics inner it reuses. With
+  `runtime_joint_dynamics=True` on a damped robot the inner's bias read the
+  runtime table through a null pointer; builds without runtime joint dynamics
+  are byte-identical.
+- Codegen: `enable_floating_second_order=False` no longer warns that
+  floating-base second order is "under development"; it is a plain opt-out.
+- Receipts: the floating-base second-order diagnostic includes `fdsva_so` by
+  default (`GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA=0` opts out), so the
+  standalone floating `fdsva_so` is checked against the oracle on every robot
+  of the diagnostic instead of only through the go2 plant Hessian.
+- Tests: one shared thread-sweep helper (`test/cuda_equivalents/
+  thread_invariance.py`) replaces the per-module loops in fifteen CUDA
+  equivalence modules; the split driver fingerprints `from
+  test.cuda_equivalents import helper` imports too (two helper modules had
+  escaped it). gen3 joins the frame, tool-offset, quaternion-derivative,
+  dCCRBA and integrator oracle tests, with its continuous-joint round-off
+  classes recorded per key; the operational-space inertia oracle test checks
+  every sample through the backward-error tiers instead of skipping
+  ill-conditioned ones.
 - Assets: the bundled rizon4 URDF's eight inertial elements now carry the
   vendor's current table (flexiv_description `jazzy` at 7d5dd28c, 2026-10-19)
   in place of hand-rounded values; kinematics and limits are unchanged.

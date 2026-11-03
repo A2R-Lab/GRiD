@@ -174,10 +174,12 @@ pass the same value to both for cross-validation.
        joint-local ``f_ext``; needs a ``register_robot(contact_frames=[...])``
        build.
    * - ``set_inertia_params(t)`` / ``set_transform_params(t)`` /
-       ``set_joint_dynamics(damping=, friction=, friction_width=)``
+       ``set_joint_dynamics(damping=, friction=, friction_width=)`` /
+       ``set_armature(a)``
      - none
      - Runtime-mutable model tables (flag-gated builds; no recompile).
-       ``friction_width`` is accepted on a ``friction_model="tanh"`` build.
+       ``friction_width`` is accepted on a ``friction_model="tanh"`` build;
+       ``set_armature`` on a ``runtime_armature`` build.
    * - ``fk_batched(q)``
      - ``(B, 7)``
      - Large-batch forward kinematics for the leaf EE frame
@@ -409,10 +411,14 @@ else is forward-only on every backend.
        forward-only.
    * - ``integrator``
      - ``q``, ``qd``, ``u``
-     - fixed-base only (the SE(3)-chart VJP is not implemented); through
-       the baked ``integrator_with_gradient`` kernel (the same fused step +
-       Jacobian that ``integrator_gradient`` / ``plant_step_gradient`` return);
-       ``dt``/steps are static.
+     - through the baked ``integrator_with_gradient`` kernel (the same fused
+       step + Jacobian that ``integrator_gradient`` / ``plant_step_gradient``
+       return); ``dt``/steps are static. On a floating base or a spherical
+       joint the state cotangent of ``x_{k+1}`` is pulled onto the kernel's
+       tangent rows at ``q_{k+1}`` by the chart's output map (``R(q_{k+1})``
+       on the pin linear block, ``0.5 q (x) (delta, 0)`` on each quaternion
+       block), then the ``q`` cotangent is pulled back to the input
+       quaternion as for every other op.
    * - ``inverse_dynamics_wrt_params``
      - ``params``, ``q``, ``qd``
      - local parameter sensitivity (``∂τ/∂π`` via the regressor at
@@ -461,8 +467,28 @@ third row of the mutable table, so ``set_joint_dynamics(friction_width=)``
 changes it without a recompile; the handle reports ``friction_model`` and
 ``joint_friction_width``.
 
+Rotor armature is a runtime table of its own. ``register_robot(...,
+runtime_armature=True)`` adds a per-velocity-slot reflected motor inertia
+``a`` to the diagonal of the joint-space inertia, following Pinocchio's
+``model.armature``: ``inverse_dynamics`` gains ``a*qdd``, ``crba`` and
+``minv`` see ``M + diag(a)``, ``aba`` solves with it, and
+``forward_dynamics``, ``forward_dynamics_gradient``, the integrators, the
+plant step and ``fdsva_so`` follow; ``inverse_dynamics_gradient`` and
+``idsva_so`` are unchanged, since a constant diagonal has no configuration or
+velocity derivative. A URDF carries no armature, so the table starts at zero
+and the build equals the plain one bit for bit until ``set_armature(a)`` is
+called; the handle reports ``armature`` and ``runtime_armature``. The vector
+is in the reduced coordinates (one entry per velocity slot; a mimic joint
+folds onto its target's slot), and must be zero on the floating root's six
+slots and on a spherical block, which the kernels never read. The reference
+is ``RBDReference.set_armature(a)``, checked against Pinocchio's
+``model.armature``. A diagonal armature is the gear-ratio approximation of a
+rotor: it is exact for a motor on its own joint axis and wrong for a belt or
+linkage transmission whose rotor couples two joints, which needs the rotor
+as a body of its own (a cluster joint, planned for the closed-loop work).
+
 Runtime tables reach dynamics, not baked kinematics. ``runtime_inertia``,
-``runtime_transform`` and ``runtime_joint_dynamics`` rebuild the dynamics
+``runtime_transform``, ``runtime_joint_dynamics`` and ``runtime_armature`` rebuild the dynamics
 tables from a mutable device table once per launch, so ``inverse_dynamics``,
 ``forward_dynamics``, their gradients and the second-order kernels follow
 ``set_*_params`` with no recompile. The homogeneous-transform path used by

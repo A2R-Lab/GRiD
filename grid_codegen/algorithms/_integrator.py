@@ -176,7 +176,13 @@ def gen_lie_group_helpers(self):
         "    T rho[3]      = {v_dt[0], v_dt[1], v_dt[2]};",
         "    T omega_dt[3] = {v_dt[3], v_dt[4], v_dt[5]};",
         "    T dq[4]; glass::thread::quat_exp<T>(omega_dt, dq);",
-        "    T q_old_quat[4] = {q[3], q[4], q[5], q[6]};",
+        # The kernels evaluate R(p/|p|): the public function is f o normalize on the
+        # ambient quaternion (the contract every q cotangent assumes, zero radial
+        # part). The position retract used the RAW quaternion's rotation before
+        # 2026-11-03, so a scaled input moved the base by |p|^2 (found by the
+        # floating integrator VJP's ambient finite differences).
+        "    T q_raw_quat[4] = {q[3], q[4], q[5], q[6]};",
+        "    T q_old_quat[4]; glass::thread::quat_normalize<T>(q_raw_quat, q_old_quat);",
         "    T q_new_quat[4]; glass::thread::quat_mul<T>(q_old_quat, dq, q_new_quat);",
         "    T q_norm[4]; glass::thread::quat_normalize<T>(q_new_quat, q_norm);   // renormalize",
         "    #pragma unroll",

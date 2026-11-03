@@ -66,6 +66,83 @@ def _quaternion_cotangent(g_ang, p, scalar_first=False):
     return _concat_last([gw, gx, gy, gz] if scalar_first else [gx, gy, gz, gw]) * (2 / pn)
 
 
+def _tangent_from_quaternion_cotangent(c, p, scalar_first=False):
+    """Transpose of the output-side chart map of a quaternion block.
+
+    A local angular tangent ``delta`` moves a unit quaternion by
+    ``dq = 0.5 * q (x) (delta, 0)`` (the retract's derivative at zero), a
+    4 x 3 map whose transpose sends an ambient quaternion cotangent ``c`` to
+    ``0.5 * vec(qhat^-1 (x) c)``. This is the direction
+    :func:`_quaternion_cotangent` does not cover: that one pulls a tangent
+    cotangent back to an ambient INPUT, this one pulls an ambient OUTPUT
+    cotangent forward onto the tangent rows of a gradient kernel.
+    """
+    pn = (p * p).sum(-1, keepdims=True) ** 0.5
+    qn = p / pn
+    if scalar_first:
+        w, x, y, z = qn[..., 0:1], qn[..., 1:2], qn[..., 2:3], qn[..., 3:4]
+        cw, cx, cy, cz = c[..., 0:1], c[..., 1:2], c[..., 2:3], c[..., 3:4]
+    else:
+        x, y, z, w = qn[..., 0:1], qn[..., 1:2], qn[..., 2:3], qn[..., 3:4]
+        cx, cy, cz, cw = c[..., 0:1], c[..., 1:2], c[..., 2:3], c[..., 3:4]
+    dx = w * cx - x * cw - y * cz + z * cy
+    dy = w * cy - y * cw - z * cx + x * cz
+    dz = w * cz - z * cw - x * cy + y * cx
+    return _concat_last([dx, dy, dz]) * 0.5
+
+
+def integrator_state_cotangent(ct, x_next, *, nq, nv, mjx=False, layout=None):
+    """Pull the ``nq + nv`` cotangent of the integrator state ``x_{k+1}`` onto
+    the ``2 * nv`` tangent rows of ``integrator_gradient``.
+
+    The gradient kernel's configuration rows are a local tangent at
+    ``q_{k+1}``: a perturbation ``delta`` there moves the ambient state by
+    the chart's derivative, block by block: identity on scalar joints, the
+    quaternion map of :func:`_tangent_from_quaternion_cotangent` on a
+    spherical block, and on the floating root ``R(q_{k+1}) delta_lin`` for
+    the position (pin: the linear tangent is local; mjx: identity, its
+    linear part is a world-frame add) plus the quaternion map (xyzw for pin,
+    wxyz for mjx). The velocity rows are the ambient velocity itself. Scalar
+    models (``nq == nv``) pass through unchanged.
+    """
+    if nq == nv:
+        return ct
+    if layout is None:
+        raise ValueError("integrator_state_cotangent: quaternion joints need configuration_layout metadata")
+    cq, cqd = ct[..., :nq], ct[..., nq:]
+    qn = x_next[..., :nq]
+    parts = []
+    for kind, qi, vi, bnq, bnv in layout:
+        c = cq[..., qi:qi + bnq]
+        if kind == "euclidean":
+            parts.append(c)
+        elif kind == "spherical":
+            parts.append(_tangent_from_quaternion_cotangent(c, qn[..., qi:qi + bnq]))
+        elif kind == "floating":
+            p = qn[..., qi + 3:qi + 7]
+            c_lin = c[..., :3]
+            if not mjx:
+                pn = (p * p).sum(-1, keepdims=True) ** 0.5
+                u = p / pn
+                x, y, z, w = (u[..., i:i + 1] for i in range(4))
+                l0, l1, l2 = (c_lin[..., i:i + 1] for i in range(3))
+                # R(qhat)^T: a world position cotangent onto the local linear tangent.
+                c_lin = _concat_last([
+                    (1 - 2 * (y*y + z*z))*l0 + 2*(x*y + z*w)*l1 + 2*(x*z - y*w)*l2,
+                    2*(x*y - z*w)*l0 + (1 - 2 * (x*x + z*z))*l1 + 2*(y*z + x*w)*l2,
+                    2*(x*z + y*w)*l0 + 2*(y*z - x*w)*l1 + (1 - 2 * (x*x + y*y))*l2,
+                ])
+            parts.extend([c_lin, _tangent_from_quaternion_cotangent(c[..., 3:7], p, mjx)])
+        else:
+            raise ValueError(
+                f"Unknown joint block kind {kind!r} in the cached joint layout; "
+                f"re-register the robot with register_robot(..., force_rebuild=True).")
+    tq = _concat_last(parts)
+    if tq.shape[-1] != nv:
+        raise ValueError("Integrator state cotangent layout does not match the tangent width")
+    return _concat_last([tq, cqd])
+
+
 def _configuration_cotangent(g, q, mjx=False, *, layout):
     """Map every independent joint's tangent block to its public q block.
 

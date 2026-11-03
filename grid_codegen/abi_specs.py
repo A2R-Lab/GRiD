@@ -52,8 +52,9 @@ class VjpSpec:
     - u_via_minv:     extra ∂out/∂u = M⁻¹ contraction for the "u" input.
     - param_grad_op:  extra ∂out/∂π op (regressor / -M⁻¹Y) for "params".
     - nondiff:   inputs whose cotangent is None.
-    - fixed_base_only: the recipe is undefined on a floating base (integrator:
-                 the SE(3)-chart VJP is unimplemented — shells must raise)."""
+    - fixed_base_only: the recipe is undefined on a floating base (no recipe
+                 sets it since 2026-11-03; the integrator's state cotangent is
+                 pulled onto its tangent rows by the surfaces)."""
     residuals: tuple[str, ...]
     grad_op: str
     wrt: tuple[str, ...]
@@ -1093,8 +1094,8 @@ _VJPS = {
     "integrator": VjpSpec(
         residuals=("q", "qd", "u"),
         grad_op="integrator_gradient",     # (2NV, 3NV) dAB → thirds (gq, gqd, gu)
-        wrt=("q", "qd", "u"),
-        fixed_base_only=True,              # SE(3)-chart VJP unimplemented
+        wrt=("q", "qd", "u"),              # the state cotangent is pulled onto the
+                                           # tangent rows first (integrator_state_cotangent)
     ),
 }
 for _k, _v in _VJPS.items():
