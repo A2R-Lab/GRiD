@@ -51,10 +51,9 @@ Fixed-base CUDA coverage includes the core dynamics and kinematics paths:
 
 Second-order fixed-base diagnostics are still developer-only. The current
 green zero-sample set includes ``iiwa14``, ``go2``, ``gen3``, ``fr3``,
-``fetch``, and ``rizon4`` (the upstream flexiv xacro emits each link's
-origin/mass/inertia triple bare, so the local
-``grid_assets/robots/rizon4.urdf`` wraps them in proper ``<inertial>``
-elements).
+``fetch``, and ``rizon4`` (the bundled ``grid_assets/robots/rizon4.urdf``
+carries the vendor's published inertial table from ``flexiv_description``,
+as ``grid_assets/robots/URDF_SOURCES.md`` records).
 
 Floating-Base Robots
 --------------------

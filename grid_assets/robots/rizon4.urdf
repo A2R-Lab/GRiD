@@ -70,9 +70,9 @@
       </link>
   <link name="base_link">
     <inertial>
-      <origin rpy="0.0 0.0 0.0" xyz="0.0 -0.0 0.09"/>
-      <mass value="3.8"/>
-      <inertia ixx="0.02" ixy="0.0" ixz="0.0" iyy="0.02" iyz="0.0" izz="0.01"/>
+      <origin rpy="0.0 0.0 0.0" xyz="0.0 -0.0008 0.0883"/>
+      <mass value="3.863"/>
+      <inertia ixx="0.0188" ixy="0.0" ixz="0.0" iyy="0.019" iyz="0.0002" izz="0.0103"/>
     </inertial>
     <visual name="shell">
       <origin rpy="0 0 0" xyz="0 0 0"/>
@@ -95,9 +95,9 @@
   </link>
   <link name="link1">
     <inertial>
-      <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.15"/>
-      <mass value="3.6"/>
-      <inertia ixx="0.03" ixy="0.0" ixz="0.0" iyy="0.03" iyz="0.0" izz="0.01"/>
+      <origin rpy="0.0 0.0 0.0" xyz="0.0002 0.004 0.1451"/>
+      <mass value="3.85"/>
+      <inertia ixx="0.0308" ixy="0.0" ixz="-0.0001" iyy="0.0307" iyz="0.0012" izz="0.0077"/>
     </inertial>
     <visual name="shell">
       <origin rpy="0 0 0" xyz="0 0 0"/>
@@ -120,9 +120,9 @@
   </link>
   <link name="link2">
     <inertial>
-      <origin rpy="0.0 0.0 0.0" xyz="-0.0 0.04 0.1"/>
-      <mass value="2.7"/>
-      <inertia ixx="0.02" ixy="0.0" ixz="0.0" iyy="0.02" iyz="-0.0003" izz="0.004"/>
+      <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0356 0.0946"/>
+      <mass value="2.904"/>
+      <inertia ixx="0.0255" ixy="0.0" ixz="0.0001" iyy="0.0263" iyz="-0.0001" izz="0.0039"/>
     </inertial>
     <visual name="shell">
       <origin rpy="0 0 0" xyz="0 0 0"/>
@@ -145,9 +145,9 @@
   </link>
   <link name="link3">
     <inertial>
-      <origin rpy="0.0 0.0 0.0" xyz="-0.01 -0.0 0.14"/>
-      <mass value="2.4"/>
-      <inertia ixx="0.01" ixy="0.0" ixz="-0.001" iyy="0.01" iyz="-0.0007" izz="0.004"/>
+      <origin rpy="0.0 0.0 0.0" xyz="-0.0123 -0.0021 0.1368"/>
+      <mass value="2.381"/>
+      <inertia ixx="0.0144" ixy="0.0001" ixz="-0.0015" iyy="0.0139" iyz="-0.0006" izz="0.0039"/>
     </inertial>
     <visual name="shell">
       <origin rpy="0 0 0" xyz="0 0 0"/>
@@ -170,9 +170,9 @@
   </link>
   <link name="link4">
     <inertial>
-      <origin rpy="0.0 0.0 0.0" xyz="-0.01 0.03 0.1"/>
-      <mass value="2.4"/>
-      <inertia ixx="0.02" ixy="0.0" ixz="-0.002" iyy="0.02" iyz="-0.001" izz="0.003"/>
+      <origin rpy="0.0 0.0 0.0" xyz="-0.0129 0.0309 0.1047"/>
+      <mass value="2.381"/>
+      <inertia ixx="0.0184" ixy="0.0001" ixz="-0.0016" iyy="0.0188" iyz="-0.0012" izz="0.0029"/>
     </inertial>
     <visual name="shell">
       <origin rpy="0 0 0" xyz="0 0 0"/>
@@ -195,9 +195,9 @@
   </link>
   <link name="link5">
     <inertial>
-      <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.14"/>
-      <mass value="2.3"/>
-      <inertia ixx="0.01" ixy="0.0" ixz="0.0" iyy="0.01" iyz="0.001" izz="0.004"/>
+      <origin rpy="0.0 0.0 0.0" xyz="0.0003 0.0024 0.1365"/>
+      <mass value="2.336"/>
+      <inertia ixx="0.0144" ixy="0.0" ixz="0.0" iyy="0.0136" iyz="0.0006" izz="0.0036"/>
     </inertial>
     <visual name="shell">
       <origin rpy="0 0 0" xyz="0 0 0"/>
@@ -220,9 +220,9 @@
   </link>
   <link name="link6">
     <inertial>
-      <origin rpy="0.0 0.0 0.0" xyz="0.02 0.06 0.07"/>
-      <mass value="2.2"/>
-      <inertia ixx="0.01" ixy="0.0" ixz="-0.001" iyy="0.01" iyz="0.002" izz="0.004"/>
+      <origin rpy="0.0 0.0 0.0" xyz="0.0193 0.0595 0.0726"/>
+      <mass value="2.251"/>
+      <inertia ixx="0.0085" ixy="0.0004" ixz="0.0012" iyy="0.0089" iyz="0.0018" izz="0.0041"/>
     </inertial>
     <visual name="shell">
       <origin rpy="0 0 0" xyz="0 0 0"/>
@@ -245,9 +245,9 @@
   </link>
   <link name="link7">
     <inertial>
-      <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.03"/>
-      <mass value="0.8"/>
-      <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.001"/>
+      <origin rpy="0.0 0.0 0.0" xyz="0.0003 0.0008 0.025"/>
+      <mass value="0.774"/>
+      <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.0009"/>
     </inertial>
     <visual name="shell">
       <origin rpy="0 0 0" xyz="0 0 0"/>

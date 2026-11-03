@@ -12,6 +12,10 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Assets: the bundled rizon4 URDF's eight inertial elements now carry the
+  vendor's current table (flexiv_description `jazzy` at 7d5dd28c, 2026-10-19)
+  in place of hand-rounded values; kinematics and limits are unchanged.
+  `grid_assets/robots/URDF_SOURCES.md` records the provenance.
 - Receipts: the first Jetson AGX Orin (sm_87) receipt,
   `receipts/gpu-proof-sm87.json` with its header-key ledger, recorded at the
   0.7.0 receipt commit 607efc2: 2056 tests, 2055 passed and the one expected
