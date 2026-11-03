@@ -78,6 +78,7 @@ def samples(jax_handle):
         "q":  rng.standard_normal((B, NJ)).astype(np.float32),
         "qd": rng.standard_normal((B, NJ)).astype(np.float32),
         "u":  rng.standard_normal((B, NJ)).astype(np.float32),
+        "qdd": rng.standard_normal((B, NJ)).astype(np.float32),
     }
 
 
@@ -444,6 +445,8 @@ _PTIER1_ARRAY = [
     ("dccrba",                     ("q",)),
     ("frame_jacobian",             ("q",)),
     ("frame_jacobian_dot",         ("q", "qd")),
+    ("frame_velocity",             ("q", "qd")),
+    ("frame_acceleration",         ("q", "qd", "qdd")),
     ("osc_inertia",                ("q",)),
 ]
 

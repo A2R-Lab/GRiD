@@ -31,6 +31,8 @@ not a GPU validation matrix or a promise of arbitrary-order framework autodiff.
    fk_batched, Yes, No, No
    frame_jacobian, Yes, Yes, Yes
    frame_jacobian_dot, Yes, Yes, Yes
+   frame_velocity, Yes, Yes, Yes
+   frame_acceleration, Yes, Yes, Yes
    osc_inertia, Yes, Yes, Yes
    com, Yes, Yes, Yes
    ccrba, Yes, Yes, Yes

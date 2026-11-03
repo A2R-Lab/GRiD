@@ -2304,6 +2304,59 @@ class RobotHandle:
         raw = self._runner.frame_jacobian_dot(q, qd, tj, rf)  # (B, 6*NV) col-major
         return self._shape_out("frame_jacobian_dot", raw)
 
+    def frame_velocity(self, q, qd, *, target_jid=None, reference_frame=None, _convention=None):
+        """Frame twist ``v = J(q) qd`` (``[linear; angular]``) in the chosen
+        reference frame. Returns ``(B, 6)``. Matches
+        ``RBDReference.frame_velocity(q, qd, frame_name, reference_frame)`` and
+        pinocchio's ``getFrameVelocity`` in LOCAL, WORLD and LOCAL_WORLD_ALIGNED.
+
+        ``target_jid`` / ``reference_frame`` are RUNTIME parameters (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``); see :py:meth:`frame_jacobian`.
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention inputs; the twist is a frame quantity, so it is not
+        reframed."""
+        tj, rf = _frame_args(target_jid, reference_frame)
+        q = np.ascontiguousarray(q, dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
+        if self._mjx_active(_convention):
+            self._require_mjx_twin("frame_velocity")
+            raw = self._runner.frame_velocity_mujoco(q, qd, tj, rf)
+            return self._shape_out("frame_velocity", raw)
+        self._check_nv_width(qd, "qd")
+        raw = self._runner.frame_velocity(q, qd, tj, rf)
+        return self._shape_out("frame_velocity", raw)
+
+    def frame_acceleration(self, q, qd, qdd, *, target_jid=None, reference_frame=None, _convention=None):
+        """Frame acceleration ``a = J(q) qdd + Jdot(q, qd) qd`` (``[linear;
+        angular]``), the time derivative of the twist measured in the chosen
+        reference frame. Returns ``(B, 6)``. Matches
+        ``RBDReference.frame_acceleration(q, qd, qdd, frame_name, reference_frame)``:
+        pinocchio's ``getFrameAcceleration`` in LOCAL and WORLD and
+        ``getFrameClassicalAcceleration`` in LOCAL_WORLD_ALIGNED.
+
+        ``qdd`` is required (``(B, NV)``). ``target_jid`` / ``reference_frame``
+        are RUNTIME parameters (default: leaf-EE joint / ``LOCAL_WORLD_ALIGNED``);
+        see :py:meth:`frame_jacobian`.
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd``/``qdd``
+        are MuJoCo-convention inputs; the acceleration is a frame quantity, so
+        it is not reframed."""
+        if qdd is None:
+            raise ValueError("frame_acceleration: qdd is required ((B, NV))")
+        tj, rf = _frame_args(target_jid, reference_frame)
+        q = np.ascontiguousarray(q, dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
+        qdd = np.ascontiguousarray(qdd, dtype=self._dt)
+        if self._mjx_active(_convention):
+            self._require_mjx_twin("frame_acceleration")
+            raw = self._runner.frame_acceleration_mujoco(q, qd, qdd, tj, rf)
+            return self._shape_out("frame_acceleration", raw)
+        self._check_nv_width(qd, "qd")
+        self._check_nv_width(qdd, "qdd")
+        raw = self._runner.frame_acceleration(q, qd, qdd, tj, rf)
+        return self._shape_out("frame_acceleration", raw)
+
     def osc_inertia(self, q, *, _convention=None):
         """Operational-space (task) inertia Lambda = (J·M⁻¹·Jᵀ)⁻¹ (6 x 6) for
         the leaf-EE frame (LWA). Returns ``(B, 6, 6)``. Matches

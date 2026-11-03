@@ -145,6 +145,12 @@ pass the same value to both for cross-validation.
      - ``(B, 6, NV)`` / ``(B, 6, NV)`` / ``(B, 6, 6)``
      - General-frame J / J̇ (runtime ``target_jid`` + ``reference_frame``) and
        operational-space inertia Λ.
+   * - ``frame_velocity(q, qd)`` / ``frame_acceleration(q, qd, qdd)``
+     - ``(B, 6)`` / ``(B, 6)``
+     - Frame twist ``J q̇`` and frame acceleration ``J q̈ + J̇ q̇`` (runtime
+       ``target_jid`` + ``reference_frame``): pinocchio's ``getFrameVelocity``
+       and ``getFrameAcceleration`` in LOCAL and WORLD, the classical
+       acceleration in LOCAL_WORLD_ALIGNED.
    * - ``end_effector_pose_runtime(q, ee_joint_names=None, ee_offsets=None)``
      - ``(B, 6*NUM_EES)``
      - Runtime arbitrary multi-EE pose (runtime target joints + per-target
@@ -643,7 +649,8 @@ the plain wrapper's tuple-of-four convention), with autograd-aware
 centroidal / kinematics value ops (``generalized_gravity``,
 ``nonlinear_effects``, ``energy``, ``com``, ``ccrba``, ``dccrba``,
 ``cmm_time_variation``, ``coriolis_matrix``, ``frame_jacobian`` /
-``frame_jacobian_dot``, ``osc_inertia``, and the KE/PE regressors) are
+``frame_jacobian_dot``, ``frame_velocity`` / ``frame_acceleration``,
+``osc_inertia``, and the KE/PE regressors) are
 exposed on the jax and torch surfaces too (forward-only, no autograd).
 
 PyTorch backend (``backend="torch"``)

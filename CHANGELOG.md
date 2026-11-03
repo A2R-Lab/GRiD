@@ -19,8 +19,12 @@ repository. Everything below describes the packaged A2R-Lab releases.
   kernels with batched launchers and three-mode hosts; the numpy reference
   gains the same functions, checked against Pinocchio's
   `getFrameVelocity`, `getFrameAcceleration` and
-  `getFrameClassicalAcceleration`. The Python surfaces follow in a later
-  change.
+  `getFrameClassicalAcceleration`. Both are in the default `register_robot`
+  algorithm list and bound on the three Python surfaces as
+  `frame_velocity(q, qd, target_jid=, reference_frame=)` and
+  `frame_acceleration(q, qd, qdd, ...)`, returning `(B, 6)`; a floating
+  base gets the MuJoCo-convention twins (input conversion only, since the
+  outputs are frame quantities).
 - Rotor armature: `register_robot(..., runtime_armature=True)` adds a
   runtime per-velocity-slot reflected motor inertia to the diagonal of the
   joint-space inertia, following Pinocchio's `model.armature`: inverse

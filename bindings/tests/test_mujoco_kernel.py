@@ -186,6 +186,33 @@ def test_native_mjx_frame_jacobian_matches_host_oracle(go2_floating):
 
 @pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
 @pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+def test_native_mjx_frame_velocity_acceleration_match_host_oracle(go2_floating):
+    """input-convert class: the frame twist and acceleration are frame quantities,
+    so the mjx twin equals the pin kernel on the converted inputs (q reordered,
+    base-linear velocity rotated, base-linear acceleration minus omega x v)."""
+    h = go2_floating
+    assert h._runner.has_frame_velocity_mujoco and h._runner.has_frame_acceleration_mujoco
+    rng = np.random.default_rng(5)
+    for B in (1, 4):
+        qpos, qvel, _ = _rand_state(h, rng, B, with_qd=True)
+        qacc = rng.standard_normal((B, h.num_vel))
+        q_pin, qd_pin, qdd_pin, _, _ = h._mjx_inputs(qpos, qvel, qacc)
+        for rf in (0, 1, 2):
+            nat_v = np.asarray(h.frame_velocity(qpos, qvel, reference_frame=rf, _convention="mujoco"), np.float64)
+            exp_v = np.asarray(h.frame_velocity(q_pin, qd_pin, reference_frame=rf), np.float64)
+            assert np.allclose(nat_v, exp_v, rtol=2e-3, atol=2e-3), \
+                f"frame_velocity mjx != oracle (B={B}, rf={rf}): max|d|={np.abs(nat_v-exp_v).max():.3e}"
+            nat_a = np.asarray(h.frame_acceleration(qpos, qvel, qacc, reference_frame=rf, _convention="mujoco"), np.float64)
+            exp_a = np.asarray(h.frame_acceleration(q_pin, qd_pin, qdd_pin, reference_frame=rf), np.float64)
+            assert np.allclose(nat_a, exp_a, rtol=2e-3, atol=5e-3), \
+                f"frame_acceleration mjx != oracle (B={B}, rf={rf}): max|d|={np.abs(nat_a-exp_a).max():.3e}"
+    # non-triviality: the raw pin kernel on mjx inputs differs (base-linear convert matters)
+    raw_v = np.asarray(h.frame_velocity(qpos, qvel, reference_frame=1), np.float64)
+    assert np.abs(raw_v - nat_v).max() > 1e-2
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
 def test_native_mjx_osc_inertia_invariant_but_quat_reordered(go2_floating):
     """osc_inertia value is frame-INVARIANT, but the mjx q (wxyz) must be reordered
     before the kinematics build — the mjx kernel does that. So native(q_mjx) equals

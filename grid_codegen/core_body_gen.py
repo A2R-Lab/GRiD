@@ -54,6 +54,8 @@ FN_MEMBER = {
     "fk_batched": "fn_fk_batched_", "frame_jacobian": "fn_frame_jacobian_",
     "frame_jacobian_dot": "fn_frame_jacobian_dot_",
     "osc_inertia": "fn_osc_inertia_",
+    "frame_velocity": "fn_frame_velocity_",
+    "frame_acceleration": "fn_frame_acceleration_",
     "generalized_gravity": "fn_generalized_gravity_",
     "nonlinear_effects": "fn_nonlinear_effects_",
     "coriolis_matrix": "fn_coriolis_matrix_", "com": "fn_com_",

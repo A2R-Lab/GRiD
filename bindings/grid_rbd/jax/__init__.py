@@ -25,6 +25,7 @@ Surface (parity with the plain ``RobotHandle``):
   ``dccrba``, ``cmm_time_variation``, ``coriolis_matrix``,
   ``kinetic_energy_regressor``, ``potential_energy_regressor``,
   ``frame_jacobian``, ``frame_jacobian_dot``, ``osc_inertia``,
+  ``frame_velocity``, ``frame_acceleration``,
   ``end_effector_pose``, ``end_effector_pose_gradient``,
   ``end_effector_pose_hessian``, ``end_effector_pose_runtime``,
   ``end_effector_pose_gradient_runtime``,
@@ -1072,6 +1073,41 @@ class JaxRobotHandle(BaseDelegateMixin):
         raw = self._ffi(target, self._out(q, 6 * nv), vmap_method="broadcast_all")(
             q, qd, target_jid=np.int64(tj), reference_frame=np.int64(rf))
         return self._shape_out("frame_jacobian_dot", raw)
+
+    def frame_velocity(self, q, qd, *, target_jid=None, reference_frame=None, _convention=None):
+        """Frame twist ``v = J(q) qd`` (``[linear; angular]``) in the chosen
+        reference frame. Returns ``(B, 6)``.
+
+        ``target_jid`` / ``reference_frame`` are runtime int64 FFI attrs (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``); see :py:meth:`frame_jacobian`.
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention inputs; the twist is a frame quantity, so it is not
+        reframed."""
+        target = self._mt(_convention, "frame_velocity", "grid_rbd_jax_frame_velocity")
+        tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
+        (q, qd) = self._prep_2d("frame_velocity", q, qd)
+        raw = self._ffi(target, self._out(q, 6), vmap_method="broadcast_all")(
+            q, qd, target_jid=np.int64(tj), reference_frame=np.int64(rf))
+        return self._shape_out("frame_velocity", raw)
+
+    def frame_acceleration(self, q, qd, qdd, *, target_jid=None, reference_frame=None, _convention=None):
+        """Frame acceleration ``a = J(q) qdd + Jdot(q, qd) qd`` (``[linear;
+        angular]``), the time derivative of the twist measured in the chosen
+        reference frame (classical acceleration in ``LOCAL_WORLD_ALIGNED``).
+        Returns ``(B, 6)``. ``qdd`` is required.
+
+        ``target_jid`` / ``reference_frame`` are runtime int64 FFI attrs (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``); see :py:meth:`frame_jacobian`.
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd``/``qdd``
+        are MuJoCo-convention inputs; the acceleration is not reframed."""
+        target = self._mt(_convention, "frame_acceleration", "grid_rbd_jax_frame_acceleration")
+        tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
+        (q, qd, qdd) = self._prep_2d("frame_acceleration", q, qd, qdd)
+        raw = self._ffi(target, self._out(q, 6), vmap_method="broadcast_all")(
+            q, qd, qdd, target_jid=np.int64(tj), reference_frame=np.int64(rf))
+        return self._shape_out("frame_acceleration", raw)
 
     def osc_inertia(self, q, *, _convention=None):
         """Operational-space (task) inertia Lambda = (J·M⁻¹·Jᵀ)⁻¹ (6 x 6) for

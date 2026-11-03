@@ -4,7 +4,8 @@ Exercises the grid_rbd handle methods newly bound in F2 and asserts numerical
 agreement with the RBDReference numpy oracle at float32 precision:
 
   com / ccrba / energy / generalized_gravity / nonlinear_effects
-  frame_jacobian / frame_jacobian_dot / osc_inertia
+  frame_jacobian / frame_jacobian_dot / frame_velocity / frame_acceleration /
+  osc_inertia
 
 Robots: iiwa14 (7-DoF serial arm) + go2 (12-DoF branched quadruped, fixed
 base) — kept small so the register/compile stays fast. Both are non-mimic.
@@ -98,6 +99,7 @@ def _samples(handle):
     return {
         "q":  rng.standard_normal((_B, NJ)).astype(np.float32),
         "qd": rng.standard_normal((_B, NJ)).astype(np.float32),
+        "qdd": rng.standard_normal((_B, NJ)).astype(np.float32),
     }
 
 
@@ -237,6 +239,55 @@ def test_frame_jacobian_dot(robot):
     for i, (q, qd) in enumerate(zip(s["q"], s["qd"])):
         ref_Jd = ref.frame_jacobian_dot(q.astype(np.float64), qd.astype(np.float64), fn)
         assert _max_err(Jd[i], ref_Jd) < 5e-2
+
+
+_REF_FRAMES = (("LOCAL", 0), ("WORLD", 1), ("LOCAL_WORLD_ALIGNED", 2))
+
+
+def _mid_chain_target(ref):
+    """A non-leaf movable joint (the parent of the leaf), so the runtime target
+    is exercised off the default."""
+    robot = ref.robot
+    leaf_id = robot.get_leaf_nodes()[0]
+    parent = robot.get_parent_id(leaf_id)
+    return parent, robot.get_joint_by_id(parent).get_name()
+
+
+def test_frame_velocity(robot):
+    """v = J qd in the three reference frames, leaf and mid-chain targets."""
+    handle, ref, s = robot
+    fn = _leaf_frame_name(ref)
+    mid_id, mid_name = _mid_chain_target(ref)
+    v = handle.frame_velocity(s["q"], s["qd"])
+    assert v.shape == (_B, 6)
+    for rf_name, rf_code in _REF_FRAMES:
+        for target_id, target_name in ((None, fn), (mid_id, mid_name)):
+            v = handle.frame_velocity(s["q"], s["qd"], target_jid=target_id, reference_frame=rf_code)
+            for i, (q, qd) in enumerate(zip(s["q"], s["qd"])):
+                ref_v = ref.frame_velocity(q.astype(np.float64), qd.astype(np.float64), target_name, rf_name)
+                assert _max_err(v[i], ref_v) < _TOL, f"{rf_name} target={target_name}"
+    # J qd on the GPU surface composes with the handle's own Jacobian.
+    J = handle.frame_jacobian(s["q"], reference_frame="WORLD")
+    v = handle.frame_velocity(s["q"], s["qd"], reference_frame="WORLD")
+    assert _max_err(v, np.einsum("bij,bj->bi", np.asarray(J, np.float64), s["qd"][:, :handle.num_vel].astype(np.float64))) < _TOL
+
+
+def test_frame_acceleration(robot):
+    """a = J qdd + Jdot qd: spatial in LOCAL / WORLD, classical in LWA."""
+    handle, ref, s = robot
+    fn = _leaf_frame_name(ref)
+    mid_id, mid_name = _mid_chain_target(ref)
+    a = handle.frame_acceleration(s["q"], s["qd"], s["qdd"])
+    assert a.shape == (_B, 6)
+    for rf_name, rf_code in _REF_FRAMES:
+        for target_id, target_name in ((None, fn), (mid_id, mid_name)):
+            a = handle.frame_acceleration(s["q"], s["qd"], s["qdd"], target_jid=target_id, reference_frame=rf_code)
+            for i, (q, qd, qdd) in enumerate(zip(s["q"], s["qd"], s["qdd"])):
+                ref_a = ref.frame_acceleration(q.astype(np.float64), qd.astype(np.float64),
+                                               qdd.astype(np.float64), target_name, rf_name)
+                assert _max_err(a[i], ref_a) < _TOL, f"{rf_name} target={target_name}"
+    with pytest.raises(ValueError):
+        handle.frame_acceleration(s["q"], s["qd"], None)
 
 
 # osc_inertia is Lambda = (J Minv J^T)^-1 at the baked leaf frame, which exists

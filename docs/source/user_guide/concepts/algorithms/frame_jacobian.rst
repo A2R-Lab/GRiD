@@ -139,17 +139,23 @@ host-surface test coverage (Λ checked at non-singular configs).
 Python handle calls
 -------------------
 
-Select ``frame_jacobian``, ``frame_jacobian_dot`` and/or ``osc_inertia``
-in ``algorithm_list`` when building the handle. The NumPy calls are::
+Select ``frame_jacobian``, ``frame_jacobian_dot``, ``frame_velocity``,
+``frame_acceleration`` and/or ``osc_inertia`` in ``algorithm_list`` when
+building the handle (the default list has all five). The NumPy calls are::
 
    J = h.frame_jacobian(q, target_jid=jid, reference_frame="LOCAL")  # (B, 6, NV)
    Jdot = h.frame_jacobian_dot(q, qd, target_jid=jid,
                               reference_frame="LOCAL_WORLD_ALIGNED")  # (B, 6, NV)
+   v = h.frame_velocity(q, qd, target_jid=jid, reference_frame="WORLD")  # (B, 6)
+   a = h.frame_acceleration(q, qd, qdd, target_jid=jid,
+                            reference_frame="WORLD")  # (B, 6)
    Lambda = h.osc_inertia(q)  # (B, 6, 6), baked leaf-EE / LWA target
 
-Unlike the first two methods, the ``osc_inertia`` handle does not expose
-runtime target/frame arguments. Its CUDA device function does. Do not use
-an undamped OSC inverse at a singular task configuration.
+The JAX and PyTorch handles expose the same five methods with the same
+arguments (forward only). Unlike the other methods, the ``osc_inertia``
+handle does not expose runtime target/frame arguments. Its CUDA device
+function does. Do not use an undamped OSC inverse at a singular task
+configuration.
 
 See Also
 --------

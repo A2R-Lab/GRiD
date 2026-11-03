@@ -895,8 +895,12 @@ def _gen_frame_kin_kernel(self, name, single_call_timing, with_qdd):
         self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
         self.gen_kernel_load_inputs("q_qd", str(load_count), stride="stride_q_qd")
         if self.robot.floating_base:
+            # mjx input convert: quaternion order, base-linear velocity and (for
+            # the acceleration) the base-linear acceleration, which is not a plain
+            # rotation (a_pin = R^T a_mjx - omega x v_local). The outputs are frame
+            # quantities (LOCAL / WORLD / LWA twists), so no output reframe.
             self.gen_add_code_line("if constexpr (MUJOCO_OUTPUT) {", True)
-            self.gen_mjx_input_convert("s_q", "s_qd")
+            self.gen_mjx_input_convert("s_q", "s_qd", qdd_name=("s_qdd" if with_qdd else None))
             self.gen_add_end_control_flow()
         self.gen_add_code_line("// compute")
         self.gen_add_code_line(call)
