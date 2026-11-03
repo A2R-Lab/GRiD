@@ -152,6 +152,27 @@ def test_zeroing_table_equals_bare(iiwa_builds):
     h_rt.set_joint_dynamics(damping=h_rt.joint_damping, friction=h_rt.joint_friction)
 
 
+def test_second_order_reads_runtime_table(iiwa_builds):
+    """fdsva_so reuses forward_dynamics_inner, whose ID bias reads the runtime
+    table through d_robotModel; the second-order inner's positional call used
+    to stop at gravity, so the runtime build dereferenced the inner's nullptr
+    default there (found 2026-11-03). Untouched runtime equals baked bit for
+    bit on both second-order outputs, and a zeroed table matches the bare
+    build to float32 accuracy."""
+    h_rt, h_baked, h_bare = iiwa_builds
+    nv = h_rt.num_vel
+    q, qd, u = _samples(h_rt.num_joints, seed=3)
+    for name in ("idsva_so", "fdsva_so"):
+        for k, (a, b) in enumerate(zip(getattr(h_rt, name)(q, qd, u), getattr(h_baked, name)(q, qd, u))):
+            assert np.array_equal(_na(a), _na(b)), f"{name}[{k}]: untouched runtime != baked bit-for-bit"
+    h_rt.set_joint_dynamics(damping=np.zeros(nv, np.float32), friction=np.zeros(nv, np.float32))
+    try:
+        for k, (a, b) in enumerate(zip(h_rt.fdsva_so(q, qd, u), h_bare.fdsva_so(q, qd, u))):
+            np.testing.assert_allclose(_na(a), _na(b), rtol=1e-4, atol=1e-4, err_msg=f"fdsva_so[{k}] zeroed != bare")
+    finally:
+        h_rt.set_joint_dynamics(damping=h_rt.joint_damping, friction=h_rt.joint_friction)
+
+
 def test_roundtrip_baked_values(iiwa_builds):
     """Poking the baked values back reproduces the untouched (baked) result."""
     h_rt, h_baked, _ = iiwa_builds
