@@ -54,8 +54,106 @@ def _alpha_for_jid(self, jid):
     """
     j = self.robot.get_joint_by_id(jid)
     if getattr(j, "is_mimic", False):
+        if not j.is_linear_coupling():
+            # A polynomial follower's multiplier varies with its leader: no
+            # literal exists. The sizing walks (arena layout, temp sizes, job
+            # tables) only need "owns a column" (nonzero), so they get a unit
+            # VariableAlpha; sites that EMIT arithmetic test _alpha_is_variable
+            # and read alpha(q) through _coupling_alpha_cpp. Algorithms whose
+            # emitters still bake the literal are refused in gen_all_code.
+            return VariableAlpha(1.0)
         return float(j.get_mimic_multiplier())
     return 1.0
+
+
+class VariableAlpha(float):
+    """Placeholder multiplier of a polynomial follower (value 1.0 for sizing);
+    never a valid literal to bake. Test with _alpha_is_variable."""
+    variable = True
+
+
+def _alpha_is_variable(self, jid):
+    return isinstance(self._alpha_for_jid(jid), VariableAlpha)
+
+
+def robot_has_variable_couplings(self):
+    """True if any follower joint's fold multiplier varies with its leader
+    (the polynomial coupling kind, 2026-11-03). Every emit site below this
+    gate keeps the linear (literal alpha) path byte-identical and evaluates
+    alpha(q), alpha'(q), alpha''(q) at runtime from the leader's q only when
+    this is True."""
+    return any(getattr(j, "is_mimic", False) and not j.is_linear_coupling()
+               for j in self.robot.joints)
+
+
+def _coupling_leader_qslot(self, jid):
+    j = self.robot.get_joint_by_id(jid)
+    slot = self.robot.get_joint_index_q(int(j.get_mimic_target_id()))
+    if isinstance(slot, (list, tuple)):
+        slot = slot[0]
+    return int(slot)
+
+
+def _coupling_alpha_cpp(self, jid, q_name="s_q", order=0):
+    """C expression for body jid's fold multiplier dq_jid/dq_leader (order 0)
+    or its first/second derivative against the leader coordinate (orders 1,
+    2): a literal for non-mimic and linear followers, a call of the baked
+    polynomial evaluator (gen_coupling_evaluators) for a polynomial follower."""
+    j = self.robot.get_joint_by_id(jid)
+    if not getattr(j, "is_mimic", False):
+        return "static_cast<T>(1)" if order == 0 else "static_cast<T>(0)"
+    if j.is_linear_coupling():
+        return ("static_cast<T>(" + repr(float(j.get_mimic_multiplier())) + ")") if order == 0 else "static_cast<T>(0)"
+    suffix = ("", "_d", "_dd")[order]
+    return "grid_coupling_alpha" + suffix + "_" + str(jid) + "<T>(" + q_name + ")"
+
+
+def _coupling_value_cpp(self, jid, q_name="s_q"):
+    """C expression for a follower's coordinate from the reduced q."""
+    j = self.robot.get_joint_by_id(jid)
+    if j.is_linear_coupling():
+        mult = float(j.get_mimic_multiplier()); off = float(j.get_mimic_offset())
+        if j.get_mimic_target_id() == -1 or mult == 0.0:
+            return "static_cast<T>(" + repr(off) + ")"
+        expr = "static_cast<T>(" + repr(mult) + ") * " + q_name + "[" + str(self._coupling_leader_qslot(jid)) + "]"
+        if off != 0.0:
+            expr += " + static_cast<T>(" + repr(off) + ")"
+        return "(" + expr + ")"
+    return "grid_coupling_value_" + str(jid) + "<T>(" + q_name + ")"
+
+
+def gen_coupling_evaluators(self):
+    """Emit, once per polynomial follower, the device evaluators of its
+    coordinate q = sum_i c_i (q_l - q0)^i and of alpha = dq/dq_l, alpha' and
+    alpha'' (Horner on the baked coefficients, reading the leader's reduced q
+    slot). Emits nothing on robots without variable couplings."""
+    if not self.robot_has_variable_couplings():
+        return
+    self.gen_add_code_line("// polynomial coupling evaluators (closed loops by constraint embedding): q_f(q_l) and dq_f/dq_l with derivatives")
+    for j in self.robot.get_joints_ordered_by_id():
+        if not (getattr(j, "is_mimic", False) and not j.is_linear_coupling()):
+            continue
+        jid = int(j.get_id())
+        c = [float(v) for v in j.get_coupling_coefficients()]
+        slot = self._coupling_leader_qslot(jid)
+        q0 = float(j.get_coupling_q0())
+        d = "(s_q[" + str(slot) + "] - static_cast<T>(" + repr(q0) + "))"
+        def lit(v):
+            return "static_cast<T>(" + repr(float(v)) + ")"
+        forms = {
+            "value": lit(c[0]) + " + d * (" + lit(c[1]) + " + d * (" + lit(c[2]) + " + d * (" + lit(c[3]) + " + d * " + lit(c[4]) + ")))",
+            "alpha": lit(c[1]) + " + d * (" + lit(2 * c[2]) + " + d * (" + lit(3 * c[3]) + " + d * " + lit(4 * c[4]) + "))",
+            "alpha_d": lit(2 * c[2]) + " + d * (" + lit(6 * c[3]) + " + d * " + lit(12 * c[4]) + ")",
+            "alpha_dd": lit(6 * c[3]) + " + d * " + lit(24 * c[4]),
+        }
+        for name, expr in forms.items():
+            self.gen_add_code_line("template <typename T>")
+            self.gen_add_code_line("__device__ __forceinline__")
+            self.gen_add_code_line("T grid_coupling_" + name + "_" + str(jid) + "(const T *s_q) {", True)
+            self.gen_add_code_line("const T d = " + d + ";")
+            self.gen_add_code_line("return " + expr + ";")
+            self.gen_add_end_function()
+
 
 def _id_S_desc(self, jid):
     """Classify body ``jid``'s 1-DoF motion subspace for codegen dispatch.

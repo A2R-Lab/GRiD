@@ -92,7 +92,10 @@ def _coriolis_metadata(self):
     for i in range(NB):
         joint = robot.get_joint_by_id(i)
         is_mimic = getattr(joint, "is_mimic", False)
-        alpha = float(joint.get_mimic_multiplier()) if is_mimic else 1.0
+        # a polynomial follower has no constant multiplier; the metadata is only
+        # sized here (the coriolis inner is refused for variable couplings until
+        # its fold reads alpha(q) at runtime), so a unit placeholder suffices.
+        alpha = (float(joint.get_mimic_multiplier()) if joint.is_linear_coupling() else 1.0) if is_mimic else 1.0
         if alpha == 0.0:
             # The body still transports motion and inertia, but owns no local
             # velocity columns or reduced Coriolis rows/columns.

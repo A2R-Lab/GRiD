@@ -800,7 +800,9 @@ def _emit_mimic_q_fold(self):
                 continue
             qslot = qslot[0]
         j = self.robot.get_joint_by_id(ind)
-        if getattr(j, "is_mimic", False):
+        if getattr(j, "is_mimic", False) and not j.is_linear_coupling():
+            self.gen_add_code_line("s_temp[" + str(ind) + "] = " + self._coupling_value_cpp(ind) + ";")
+        elif getattr(j, "is_mimic", False):
             mult = j.get_mimic_multiplier()
             off = j.get_mimic_offset()
             if j.get_mimic_target_id() == -1 or mult == 0.0:

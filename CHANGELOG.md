@@ -38,6 +38,24 @@ repository. Everything below describes the packaged A2R-Lab releases.
   function, so they also carry the moving origin (and, for the
   acceleration, the classical term), which is what a task-space constraint
   needs.
+- Closed loops by constraint embedding, first step (item E of 0.8):
+  polynomial couplings. URDFParser reads `<mimic joint="l" polycoef="c0 c1
+  c2 c3 c4" q0="..."/>` (the MuJoCo joint equality, q = sum c_i (q_l -
+  q0)^i; a degree-one polynomial is the plain mimic) and offers
+  `parse(..., reduce_couplings=False)`, the full spanning tree with the
+  couplings recorded. The reference projects the full tree onto the
+  independent coordinates (`RBDReference/_embedding.py`: q = F(y),
+  qd = G yd, qdd = G ydd + Gdot yd, tau_y = G^T tau) for any robot with a
+  polynomial follower; on a mimic robot the projection equals the reduced
+  recursions to round-off. The generator evaluates alpha = dq_f/dq_l and
+  its two derivatives on the device from the leader's coordinate; inverse
+  dynamics, CRBA, Minv, forward dynamics, ABA and both first-order gradients
+  carry the new terms (the follower accelerates by alpha' qd_l^2, the
+  gradients gain the alpha' and alpha'' terms and (dG/dq)^T f) and are
+  checked on the GPU against the projection on both bases. Every other
+  algorithm is refused for a polynomial robot until its fold reads alpha
+  at runtime. Headers of robots without polynomial followers are
+  byte-identical.
 - Rotor armature: `register_robot(..., runtime_armature=True)` adds a
   runtime per-velocity-slot reflected motor inertia to the diagonal of the
   joint-space inertia, following Pinocchio's `model.armature`: inverse

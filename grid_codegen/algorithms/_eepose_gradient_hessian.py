@@ -2715,6 +2715,8 @@ def _ee_pose_inner_angle_expr(self, jid):
     lets the standalone (d_robotModel-free) FK inner support mimic robots without
     the general load_update path's s_q_eff scratch."""
     joint = self.robot.get_joint_by_id(jid)
+    if joint is not None and joint.is_mimic_joint() and not joint.is_linear_coupling():
+        return self._coupling_value_cpp(jid)
     if joint is not None and joint.is_mimic_joint():
         src = int(joint.get_mimic_target_id())
         mult = float(joint.get_mimic_multiplier())
