@@ -211,7 +211,12 @@ Sanitizer diagnostics with JAX
   for a standalone JAX reduction, a selective device-code recompilation notice.
   Both come from JAX 0.11 and the CUDA 13 toolchain and reproduce in a process
   that imports no GRiD; the numerical results are correct and the NumPy and
-  PyTorch surfaces pass the same sanitizer with zero errors. We record this as
+  PyTorch surfaces pass the same sanitizer with zero errors. The first is the
+  driver's own behaviour: ``cuDeviceGetAttribute`` reports fabric-handle
+  support on a machine that has no IMEX channel node (the driver creates one
+  only with ``NVreg_CreateImexChannel0``), so XLA's allocator probe takes the
+  fabric path and the API call it makes is refused; the allocator then falls
+  back and runs correctly. Nothing in GRiD selects a handle type. We record this as
   an accepted limitation of the combined sanitizer invocation rather than a
   defect of the wrapper: the sanitizer exit code of a JAX-initialized process is
   nonzero, and the release checks state it so instead of suppressing the
