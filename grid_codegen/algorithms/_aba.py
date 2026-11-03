@@ -551,6 +551,8 @@ def gen_aba_inner(self):
     self.gen_add_code_line("if constexpr (!TEMP_IN_SMEM) { s_temp = d_workspace; } else { (void)d_workspace; }")
     self.gen_add_code_line("T *s_cold = s_temp;")
     self.gen_add_code_line("if constexpr (TEMP_IN_SMEM && !COLD_IN_SMEM) { s_cold = d_workspace - " + str(98 * n) + "; }")
+    if self.robot_has_armature():
+        self.gen_bake_armature_array()
 
     if self.robot_has_mimic_joints():
         # Mimic ABA via algebraic decomposition (mirrors RBDReference.aba mimic
@@ -984,7 +986,8 @@ def gen_aba_inner(self):
                 jid = str(inds[0])
                 self.gen_add_code_line("int jid = " + jid + ";")
             self.gen_add_code_line("int jid6 = 6 * " + jid + ";")
-            self.gen_add_code_line("s_temp[96 * "+ str(n) +" + jid] = (" + S_sign_cpp + ") * s_temp[84 * " + str(n) + " + jid6 + " + S_ind_cpp + "];")
+            armature = " + s_armature[jid]" if self.robot_has_armature() else ""
+            self.gen_add_code_line("s_temp[96 * "+ str(n) +" + jid] = (" + S_sign_cpp + ") * s_temp[84 * " + str(n) + " + jid6 + " + S_ind_cpp + "]" + armature + ";")
 
             self.gen_add_code_line("T tempval = (" + S_sign_cpp + ") * s_temp[78 * " + str(n) + " + jid6 + " + S_ind_cpp +"];")
             self.gen_add_code_line("s_temp[97 * " + str(n) + " + jid] = s_tau[jid] - tempval;")

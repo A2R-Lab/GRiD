@@ -415,13 +415,16 @@ def gen_crba_inner(self):
     self.gen_add_code_line("//")
     self.gen_add_code_line("// Calculation of M[ind, ind] ")
     self.gen_add_code_line("//")
+    if self.robot_has_armature():
+        self.gen_bake_armature_array()
     _, S_ind_cpp = self.gen_topology_helpers_pointers_for_cpp(NO_GRAD_FLAG = True)
     S_sign_cpp = self.gen_topology_S_sign_for_cpp()
     
     self.gen_add_parallel_loop("jid",str(n))
 
     ImatOffset = 36*n   # Offset in XImats to Imats
-    self.gen_add_code_line(f"s_M[jid+jid*{n}] = s_XImats[{ImatOffset} + 36*jid + 6*{S_ind_cpp} + {S_ind_cpp}];") # take the S_ind row and S_ind column of appropriate Imat
+    armature = " + s_armature[jid]" if self.robot_has_armature() else ""
+    self.gen_add_code_line(f"s_M[jid+jid*{n}] = s_XImats[{ImatOffset} + 36*jid + 6*{S_ind_cpp} + {S_ind_cpp}]{armature};") # project link inertia and add reflected inertia
     self.gen_add_end_control_flow()
     # NO sync (barrier audit 2026-10-03): the s_fh fill below reads only s_XImats; the
     # diagonal writes ride the s_fh barrier (the chain walk after it never touches M[ii]).

@@ -142,6 +142,9 @@ def gen_minv_inner(self):
     # body indexes into s_temp (IA/U/Dinv/Ia/IaTemp). The F-region is sliced
     # separately below.
 
+    if self.robot_has_armature():
+        self.gen_bake_armature_array()
+
     # Inner-controlled F placement: F lives at the tail of s_temp (after the
     # no_F region) when F_IN_SMEM, else in d_workspace. Keeping no_F at offset 0
     # leaves every s_temp[...] body reference below unchanged.
@@ -274,7 +277,8 @@ def gen_minv_inner(self):
                 self.gen_add_parallel_loop("row",str(6))
             self.gen_add_code_line("s_temp[" + str(UOffset) + " + " + jid6 + " + row] = (" + S_sign_cpp + ") * s_temp[" + str(IAOffset) + " + 6*" + jid6 + " + 6*" + S_ind_cpp + " + row];")
             self.gen_add_code_line("if(row == " + S_ind_cpp + "){", True)
-            self.gen_add_code_line("s_temp[" + str(DinvOffset) + " + " + jid + "] = static_cast<T>(1)/((" + S_sign_cpp + ") * s_temp[" + str(UOffset) + " + " + jid6 + " + " + S_ind_cpp + "]);")
+            armature = " + s_armature[" + jid + "]" if self.robot_has_armature() else ""
+            self.gen_add_code_line("s_temp[" + str(DinvOffset) + " + " + jid + "] = static_cast<T>(1)/((" + S_sign_cpp + ") * s_temp[" + str(UOffset) + " + " + jid6 + " + " + S_ind_cpp + "]" + armature + ");")
             # need offset due to floating base matrix in upper left
             if self.robot.floating_base: self.gen_add_code_line(f's_Minv[{str(n + 1)} * ({jid} + 5)]' + " = s_temp[" + str(DinvOffset) + " + " + jid + "];")
             else: self.gen_add_code_line("s_Minv[" + str(n + 1) + " * " + jid + "] = s_temp[" + str(DinvOffset) + " + " + jid + "];")

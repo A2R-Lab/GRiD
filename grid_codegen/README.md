@@ -11,6 +11,16 @@ codegen = GRiDCodeGenerator(robot, DEBUG_MODE=False)
 codegen.gen_all_code(output_path="grid.cuh")
 ```
 
+For a fixed-base robot with scalar revolute/continuous cardinal-axis joints and
+no mimics, `JOINT_ARMATURE=[...]` on `GRiDCodeGenerator` bakes one nonnegative
+reflected inertia per joint (kg m²): the joint-space inertia becomes
+`M(q) + diag(armature)`. It composes with `USE_JOINT_DYNAMICS=True`,
+`FRICTION_MODEL="tanh"` and `FRICTION_WIDTH`. `None` and an all-zero vector
+preserve the existing generated code. This is a code-generator option, not a
+`load_robot` or RBDReference runtime parameter. Consumers must include the
+armature vector in their model/cache identity; changing it requires generation
+and compilation. Other joint topologies are rejected when armature is supplied.
+
 For command-line generation, use `grid-generate robot.urdf`. Subset builds
 (`--algorithm-list`) and `--no-mujoco-kernels` reduce compilation cost.
 

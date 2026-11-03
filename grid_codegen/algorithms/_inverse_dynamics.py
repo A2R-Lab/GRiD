@@ -830,6 +830,12 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
         self.gen_add_end_control_flow()
         self.gen_add_sync()
         self.gen_inverse_dynamics_joint_dynamics_bias()
+        if use_qdd_input and self.robot_has_armature():
+            self.gen_bake_armature_array()
+            self.gen_add_parallel_loop("dof_id", str(self.robot.get_num_vel()))
+            self.gen_add_code_line("s_c[dof_id] += s_armature[dof_id] * s_qdd[dof_id];")
+            self.gen_add_end_control_flow()
+            self.gen_add_sync()
     self.gen_add_end_function()
 
 
