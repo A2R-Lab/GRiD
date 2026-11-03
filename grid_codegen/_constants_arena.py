@@ -1000,6 +1000,9 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              "// runtime_joint_dynamics: length of the mutable [damping || friction (|| friction_width)] table, v-slot indexed",
                              "const int JOINT_DYNAMICS_PARAMS_COUNT = " + str(self.gen_get_joint_dynamics_params_size()) + ";",
                              ] if getattr(self, "runtime_joint_dynamics", False) else []) + ([
+                             "// runtime_armature: length of the mutable per-v-slot rotor-armature table",
+                             "const int ARMATURE_PARAMS_COUNT = " + str(self.gen_get_armature_params_size()) + ";",
+                             ] if getattr(self, "runtime_armature", False) else []) + ([
                              "// USE_JOINT_DYNAMICS with FRICTION_MODEL=\"tanh\": the Coulomb term is f*tanh(qd/w) with derivatives in the gradient and second-order kernels",
                              "const int JOINT_FRICTION_MODEL_TANH = 1;",
                              ] if self._jd_tanh_active() else []) + [ \
@@ -1472,6 +1475,10 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
         # Emitted ONLY under runtime_joint_dynamics so the baked struct stays
         # byte-identical.
         struct_lines.append("    T *d_joint_dynamics_params;")
+    if getattr(self, "runtime_armature", False):
+        # runtime_armature: flag-gated mutable per-v-slot rotor-armature table
+        # (nv floats, zero-initialised). Emitted ONLY under runtime_armature.
+        struct_lines.append("    T *d_armature_params;")
     struct_lines.append("};")
     self.gen_add_code_lines(struct_lines)
     self.gen_add_code_lines(["struct grid_device_pool_t;  // defined with the allocator below", \

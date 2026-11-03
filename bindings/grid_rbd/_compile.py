@@ -207,6 +207,9 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # host mutator; the id/fd/aba/*_gradient bias reads the folded per-v-slot coeff from
     # it). Default-off keeps the header byte-identical; in the cache key ONLY when True.
     runtime_joint_dynamics = bool(options.get("runtime_joint_dynamics", False))
+    # runtime_armature: the mutable per-v-slot rotor-armature table + mutator;
+    # default-off keeps the header byte-identical; in the cache key only when True.
+    runtime_armature = bool(options.get("runtime_armature", False))
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -341,6 +344,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
             runtime_inertia=runtime_inertia,
             runtime_transform=runtime_transform,
             runtime_joint_dynamics=runtime_joint_dynamics,
+            runtime_armature=runtime_armature,
             enable_contact_runtime=bool(options.get("enable_contact_runtime", False)),
             contact_frames=contact_frame_specs,
             # The wrapper units compile against the plant block whatever the algorithm
@@ -455,6 +459,12 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
             # the table's third row: the per-v-slot tanh width the device table is
             # initialized with (set_joint_dynamics(friction_width=) fetch-then-mutate).
             meta["joint_friction_width"] = [float(w) for w in cg.get_friction_width_baked()]
+    # runtime_armature: the table starts at zero (the URDF carries no armature);
+    # the slots that carry an entry are recorded so set_armature can refuse a
+    # value on the floating root or a spherical block.
+    if runtime_armature:
+        meta["runtime_armature"] = True
+        meta["armature_slots"] = [int(v) for v in cg._armature_vslots()]
     return meta
 
 
@@ -592,6 +602,7 @@ def compile_so(
     runtime_inertia: bool = False,
     runtime_transform: bool = False,
     runtime_joint_dynamics: bool = False,
+    runtime_armature: bool = False,
     object_cache_dir: Path | None = None,
     reuse_objects: bool = True,
     cuda_archs: list[int] | None = None,
@@ -672,6 +683,9 @@ def compile_so(
     # -D gates the wrapper's grid_rbd_set_joint_dynamics_params C-ABI symbol on it.
     if runtime_joint_dynamics:
         cmd.append("-DGRID_RBD_RUNTIME_JOINT_DYNAMICS")
+    # runtime_armature: gates the wrapper's grid_rbd_set_armature_params symbol.
+    if runtime_armature:
+        cmd.append("-DGRID_RBD_RUNTIME_ARMATURE")
 
     # JAX FFI handlers: when jax is available, point nvcc at its FFI include
     # dir and define GRID_RBD_WITH_JAX so the wrapper template emits its
@@ -989,6 +1003,7 @@ def compile_sources(
                runtime_inertia=bool(options.get("runtime_inertia", False)),
                runtime_transform=bool(options.get("runtime_transform", False)),
                runtime_joint_dynamics=bool(options.get("runtime_joint_dynamics", False)),
+               runtime_armature=bool(options.get("runtime_armature", False)),
                object_cache_dir=object_cache_dir, reuse_objects=reuse_objects,
                # Host-template signature flags, derived from the header just
                # generated (floating builds carry a MUJOCO_OUTPUT template param

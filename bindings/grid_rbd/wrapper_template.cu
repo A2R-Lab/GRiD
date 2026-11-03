@@ -1062,6 +1062,19 @@ GRID_RBD_RUNTIME_PARAM_SETTER(transform, 6 * grid::NUM_JOINTS)
 GRID_RBD_RUNTIME_PARAM_SETTER(joint_dynamics, grid::JOINT_DYNAMICS_PARAMS_COUNT)
 #endif
 
+// ─── runtime-mutable rotor armature (runtime_armature) ───────────────────────
+//
+// Gated on GRID_RBD_RUNTIME_ARMATURE (set by grid_rbd._compile alongside the
+// codegen runtime_armature flag). grid.cuh then exports grid::set_armature_params
+// (a thin cudaMemcpy into the device-resident d_armature_params table).
+// h_params: grid::ARMATURE_PARAMS_COUNT = NUM_VEL scalars, v-slot indexed in the
+// reduced coordinates; the floating root's six slots and every spherical block
+// must stay zero (the kernels never read them). Zero-initialised, so the build
+// equals the plain kernels bit for bit until poked. Returns 0 on success.
+#ifdef GRID_RBD_RUNTIME_ARMATURE
+GRID_RBD_RUNTIME_PARAM_SETTER(armature, grid::ARMATURE_PARAMS_COUNT)
+#endif
+
 
 // ─── algorithms ──────────────────────────────────────────────────────────────
 

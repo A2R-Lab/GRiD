@@ -55,7 +55,7 @@ def gen_kinetic_energy_regressor_inner_function_call(self, updated_var_names=Non
     code_middle = self.gen_insert_helpers_function_call()
     # runtime_joint_dynamics: forward d_robotModel into the inner (trailing defaulted
     # param) so its reused ID bias can read the mutable table; omitted when off.
-    _rt_jd = (", " + var_names["d_robotModel_name"]) if getattr(self, "runtime_joint_dynamics", False) else ""
+    _rt_jd = (", " + var_names["d_robotModel_name"]) if self._emits_model_ptr() else ""
     code_end = var_names["s_temp_name"] + ", " + var_names["gravity_name"] + _rt_jd + ");"
     self.gen_add_code_line(code_start + code_middle + code_end)
 
@@ -82,7 +82,7 @@ def gen_kinetic_energy_regressor_inner(self):
     # defaulted param ONLY under that flag (byte-identical signature when off). The KE
     # regressor consumes only s_vaf v|a, so the added bias on the scratch torque is
     # discarded, but d_robotModel must be in scope for the read to compile.
-    if getattr(self, "runtime_joint_dynamics", False):
+    if self._emits_model_ptr():
         func_def_end = "T *s_temp, const T gravity, const robotModel<T> *d_robotModel = nullptr) {"
     else:
         func_def_end = "T *s_temp, const T gravity) {"
@@ -100,7 +100,7 @@ def gen_kinetic_energy_regressor_inner(self):
     #    v, so reuse the bias variant (compute_c=True, use_qdd_input=False).
     self.gen_add_code_line("// forward RNEA sweep: populate s_vaf v (reuse RNEA vaf inner; qdd irrelevant to v)")
     _ke_vn = dict(s_c_name="s_temp", d_f_ext_name="nullptr")
-    if getattr(self, "runtime_joint_dynamics", False):
+    if self._emits_model_ptr():
         _ke_vn["d_robotModel_name"] = "d_robotModel"
     self.gen_inverse_dynamics_inner_function_call(
         compute_c=True, use_qdd_input=False,

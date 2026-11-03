@@ -72,7 +72,8 @@ development alternative), then choose the task below.
        ``handle.device_profile`` says what it was fitted to. One pipeline per
        context. :doc:`user_guide/concepts/runtime_contexts`.
    * - Swap inertias / attach a tool at run time and keep autograd consistent
-     - ``set_inertia_params`` / ``attach_tool`` / ``set_joint_dynamics``
+     - ``set_inertia_params`` / ``attach_tool`` / ``set_joint_dynamics`` /
+       ``set_armature``
        mutate the context under an exclusive admission lock and bump
        ``handle.model_version``; a torch/JAX backward whose forward ran under
        an older version raises, so recompute the forward. Same page as above.

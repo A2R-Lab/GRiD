@@ -31,6 +31,7 @@ _NON_ALGO_GATES = {
     "GRID_RBD_RUNTIME_INERTIA",   # -D from _compile.py (runtime_inertia builds)
     "GRID_RBD_RUNTIME_TRANSFORM",
     "GRID_RBD_RUNTIME_JOINT_DYNAMICS",
+    "GRID_RBD_RUNTIME_ARMATURE",     # -D from _compile.py (runtime_armature builds)
 }
 
 

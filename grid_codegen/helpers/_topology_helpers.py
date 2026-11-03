@@ -452,6 +452,42 @@ def gen_init_joint_dynamics_params(self):
     self.gen_checked_table_tail("h_joint_dynamics_params", "d_joint_dynamics_params", str(size), "T")
     self.gen_legacy_init_wrapper("init_joint_dynamics_params", "T")
 
+def gen_get_armature_params_size(self):
+    # runtime_armature: one scalar per v-slot (the floating root's and spherical
+    # blocks' entries exist for indexing and stay zero).
+    return self.robot.get_num_vel()
+
+def gen_init_armature_params(self):
+    # runtime_armature: host-side init of the mutable per-v-slot rotor armature
+    # table. The URDF carries no armature, so the table is calloc'd zero and
+    # the build is bit-identical to the no-armature kernels until
+    # set_armature_params is called.
+    self.gen_add_func_doc("Initializes the mutable rotor-armature table in GPU memory (all zero)",
+            ["Memory order is armature[0..nv-1], v-slot indexed (reduced coordinates); floating-root and spherical slots stay zero"],
+            [], "A pointer to the armature-params memory in the GPU")
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__host__")
+    self.gen_add_code_line("cudaError_t init_armature_params_checked(T **out, const char **failed_op = nullptr) {", True)
+    size = self.gen_get_armature_params_size()
+    self.gen_checked_host_alloc("h_armature_params", str(size), "T")
+    self.gen_checked_table_tail("h_armature_params", "d_armature_params", str(size), "T")
+    self.gen_legacy_init_wrapper("init_armature_params", "T")
+
+def gen_set_armature_params(self):
+    # runtime_armature (mirror of gen_set_joint_dynamics_params): public mutator,
+    # a thin cudaMemcpy of nv scalars into d_armature_params.
+    size = self.gen_get_armature_params_size()
+    self.gen_add_func_doc("Updates the mutable rotor-armature table on the GPU at runtime (no recompile)",
+            ["h_params is the host array of " + str(size) + " floats: armature per v-slot (reduced coordinates); the floating root's six and every spherical block's three must be zero"],
+            [], None)
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__host__")
+    self.gen_add_code_line("void set_armature_params(robotModel<T> *d_robotModel, const T *h_params) {", True)
+    self.gen_add_code_line("robotModel<T> h_robotModel;")
+    self.gen_add_code_line("gpuErrchk(cudaMemcpy(&h_robotModel,d_robotModel,sizeof(robotModel<T>),cudaMemcpyDeviceToHost));")
+    self.gen_add_code_line("gpuErrchk(cudaMemcpy(h_robotModel.d_armature_params,h_params," + str(size) + "*sizeof(T),cudaMemcpyHostToDevice));")
+    self.gen_add_end_function()
+
 def gen_set_joint_dynamics_params(self):
     # runtime_joint_dynamics (mirror of gen_set_inertia_params): public mutator.
     # Thin cudaMemcpy of the 2*nv [damping||friction] table into
@@ -1708,6 +1744,8 @@ def _robotModel_members(self):
         members.append(("d_transform_params", "init_transform_params_checked<T>", "T"))
     if getattr(self, "runtime_joint_dynamics", False):
         members.append(("d_joint_dynamics_params", "init_joint_dynamics_params_checked<T>", "T"))
+    if getattr(self, "runtime_armature", False):
+        members.append(("d_armature_params", "init_armature_params_checked<T>", "T"))
     return members
 
 def gen_init_robotModel(self):

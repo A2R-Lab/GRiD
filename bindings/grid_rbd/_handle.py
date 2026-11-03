@@ -23,6 +23,11 @@ import functools
 from typing import Any, NamedTuple
 
 import numpy as np
+
+# runtime_armature: the vector last installed on each registration's device
+# table, keyed by robot name (the jax/torch surfaces wrap their own numpy
+# handle over the same table, so a poke through one surface is echoed by all).
+_ARMATURE_INSTALLED: dict = {}
 from ._surface_common import MujocoDerivativeViewMixin, MujocoViewBase
 
 
@@ -888,6 +893,59 @@ class RobotHandle:
         """True if registered with runtime_joint_dynamics=True (the mutable
         damping/friction table backing :py:meth:`set_joint_dynamics`)."""
         return bool(self._meta.get("runtime_joint_dynamics", False))
+
+    @property
+    def runtime_armature(self) -> bool:
+        """True if registered with runtime_armature=True (the mutable rotor-armature
+        table backing :py:meth:`set_armature`)."""
+        return bool(self._meta.get("runtime_armature", False))
+
+    @property
+    def armature(self):
+        """The rotor armature currently installed on the device (length nv, one entry
+        per v-slot in the reduced coordinates), as last passed to
+        :py:meth:`set_armature`; all zero after registration, since a URDF carries
+        no armature. Only on a runtime_armature build (raises otherwise)."""
+        if not self.runtime_armature:
+            raise RuntimeError(
+                "armature is only available on a robot registered with "
+                "runtime_armature=True. Re-register with "
+                "register_robot(..., runtime_armature=True, force_rebuild=True).")
+        current = _ARMATURE_INSTALLED.get(self.name)
+        if current is None:
+            current = np.zeros(self.num_vel, dtype=self._dt)
+        return np.array(current, dtype=self._dt)
+
+    def set_armature(self, values) -> None:
+        """Install a rotor armature at runtime (no recompile): ``values`` is length nv
+        (v-slot indexed, reduced coordinates). It is added to the diagonal of the
+        joint-space inertia the way Pinocchio's ``model.armature`` is: inverse
+        dynamics gains ``a*qdd``, CRBA and Minv see ``M + diag(a)``, ABA solves with
+        it, and forward dynamics, its derivatives and the second-order forward
+        dynamics follow. Entries on the floating root's six slots or on a spherical
+        block must be zero (the kernels never read them); a nonzero one raises. A
+        zero vector reproduces the plain kernels bit for bit. Only on a
+        runtime_armature build (raises otherwise)."""
+        if not self.runtime_armature:
+            raise RuntimeError(
+                "set_armature requires a robot registered with runtime_armature=True. "
+                "Re-register with register_robot(..., runtime_armature=True, force_rebuild=True).")
+        nv = self.num_vel
+        a = np.asarray(values, dtype=self._dt)
+        if a.shape != (nv,):
+            raise ValueError(f"armature must be length nv={nv} (v-slot indexed); got {a.shape}.")
+        slots = set(int(v) for v in self._meta.get("armature_slots", range(nv)))
+        bad = [int(i) for i in range(nv) if i not in slots and a[i] != 0]
+        if bad:
+            raise ValueError(
+                f"armature must be zero on v-slots {bad}: they belong to the floating "
+                f"root or to a spherical block, which carry no rotor armature.")
+        if not np.all(np.isfinite(a)):
+            raise ValueError("armature must be finite in every slot.")
+        self._runner.set_armature_params(np.ascontiguousarray(a))
+        # The device table is shared by every surface of this registration, so
+        # the installed vector is kept per robot name, not per handle object.
+        _ARMATURE_INSTALLED[self.name] = np.array(a, dtype=self._dt)
 
     @property
     def joint_damping(self):
