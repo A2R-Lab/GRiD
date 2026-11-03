@@ -17,4 +17,5 @@ input/output ABI, and the parallelism patterns.
    algorithms/index
    codegen_architecture
    mjx_convention
+   closed_loops
    resource_tier_system

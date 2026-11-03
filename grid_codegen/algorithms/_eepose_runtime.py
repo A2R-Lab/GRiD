@@ -382,7 +382,7 @@ def gen_end_effector_pose_gradient_runtime_inner(self):
         self.gen_bake_const_array("epg_ang", [v for j in jobs for v in j[3]], "T")
         self.gen_bake_const_array("epg_lin", [v for j in jobs for v in j[4]], "T")
         if HAS_MIMIC:
-            self.gen_bake_const_array("epg_alpha", [j[5] for j in jobs], "T")
+            self.gen_alpha_table("epg_alpha", [j[1] for j in jobs])
         self.gen_add_serial_ops()
         # tip lever point p_ee = p_target + R_target * p_tool (p_tool = X_tool translation).
         # Only the tool TRANSLATION enters the lever arm (R_tool affects only the E^-1 block).

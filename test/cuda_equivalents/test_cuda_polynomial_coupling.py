@@ -308,3 +308,62 @@ def test_polynomial_coupling_regressor_and_centroidal_match_projection(tmp_path,
             scale = max(1.0, float(np.max(np.abs(exp))))
             np.testing.assert_allclose(got, exp, rtol=0, atol=3e-4 * scale,
                                        err_msg=f"{name} sample {sample} floating={floating}")
+
+
+@pytest.mark.parametrize("floating", [False, True], ids=["fixed", "floating"])
+def test_polynomial_coupling_runtime_pose_match_projection(tmp_path, floating):
+    """The runtime-target pose and pose gradient (with and without a tool
+    transform) on the polynomial chain, against the projected reference."""
+    from pathlib import Path
+    from scipy.spatial.transform import Rotation
+    from test.cuda_equivalents.cuda_harness import _detect_cuda_arch, _parse_runner_output, _run_runner
+    from test.cuda_equivalents.executable_cache import cached_nvcc_executable
+
+    urdf = write_polynomial_chain(tmp_path)
+    with contextlib.redirect_stdout(io.StringIO()):
+        robot = URDFParser().parse(str(urdf), floating_base=floating)
+    gen = GRiDCodeGenerator(robot, False, True, "grid")
+    with contextlib.redirect_stdout(io.StringIO()):
+        gen.gen_all_code(output_path=str(tmp_path / "grid.cuh"),
+                         algorithm_list=["end_effector_pose_runtime", "end_effector_pose_gradient_runtime"],
+                         enable_mujoco_kernels=False)
+    glass_inc = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
+    arch = _detect_cuda_arch()
+    exe, cmd = cached_nvcc_executable(
+        [Path(__file__).with_name("cuda_eepose_runtime_smoke_runner.cu"), tmp_path / "grid.cuh"],
+        ["-std=c++17", "-O0", "-DGRID_CUDA_EEPOSE_RT_SCALAR=float", "-gencode", f"arch=compute_{arch},code=sm_{arch}",
+         f"-I{glass_inc}"],
+        exe_name="cuda_eepose_runtime_smoke_runner.exe", fallback_dir=tmp_path, include_dirs=[tmp_path],
+        what=f"runtime pose runner, polynomial chain floating={floating}")
+    ref = RBDReference(robot)
+    nq, nv = robot.get_num_pos(), robot.get_num_vel()
+    leaf_id = int(robot.get_leaf_nodes()[0])
+    leaf = robot.get_joint_by_id(leaf_id).get_name()
+    Xtool = np.eye(4)
+    Xtool[:3, :3] = Rotation.from_euler("xyz", [0.3, -0.2, 0.5]).as_matrix()
+    Xtool[:3, 3] = [0.05, -0.02, 0.08]
+    rng = np.random.default_rng(23)
+    checked = 0
+    for sample in range(4):
+        q = rng.standard_normal(nq)
+        if floating:
+            q[3:7] /= np.linalg.norm(q[3:7])
+        ref0 = np.asarray(ref.end_effector_pose(q, [leaf], None), np.float64).reshape(-1)
+        refN = np.asarray(ref.end_effector_pose(q, [leaf], [Xtool]), np.float64).reshape(-1)
+        if min(abs(abs(ref0[4]) - np.pi / 2), abs(abs(refN[4]) - np.pi / 2)) < 0.15:
+            continue   # the rpy rows are singular near +-pi/2 pitch (the oracle and the device alike)
+        grad0 = np.asarray(ref.end_effector_pose_gradient(q, [leaf], None), np.float64).reshape(6, nv)
+        gradN = np.asarray(ref.end_effector_pose_gradient(q, [leaf], [Xtool]), np.float64).reshape(6, nv)
+        rows = [str(leaf_id), " ".join(f"{v:.9g}" for v in np.asarray(Xtool, np.float32).reshape(-1, order="F")),
+                " ".join(f"{v:.9g}" for v in np.asarray(q, np.float32))]
+        out = _parse_runner_output(_run_runner(exe, "\n".join(rows) + "\n", cmd))
+        for name, exp in (("pose0", ref0), ("poseN", refN)):
+            got = np.asarray(out[name], np.float64).reshape(-1)
+            np.testing.assert_allclose(got[:3], exp[:3], rtol=0, atol=3e-4 * max(1.0, float(np.max(np.abs(exp[:3])))), err_msg=f"{name} xyz sample {sample}")
+            np.testing.assert_allclose((got[3:] - exp[3:] + np.pi) % (2 * np.pi) - np.pi, np.zeros(3), rtol=0, atol=3e-4, err_msg=f"{name} rpy sample {sample}")
+        for name, exp in (("grad0", grad0), ("gradN", gradN)):
+            got = np.asarray(out[name], np.float64).reshape(6, nv, order="F")
+            scale = max(1.0, float(np.max(np.abs(exp))))
+            np.testing.assert_allclose(got, exp, rtol=0, atol=5e-4 * scale, err_msg=f"{name} sample {sample}")
+        checked += 1
+    assert checked >= 2
