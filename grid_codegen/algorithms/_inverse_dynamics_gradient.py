@@ -276,7 +276,7 @@ def gen_inverse_dynamics_gradient_inner_function_call(self, updated_var_names = 
     inverse_dynamics_gradient_code_middle = var_names["s_vaf_name"] + ", " + self.gen_insert_helpers_function_call()
     # runtime_joint_dynamics: forward d_robotModel into the inner (trailing defaulted
     # param) so the damping-diag term can read the mutable table; omitted when off.
-    _idg_rt_jd = (", " + var_names["d_robotModel_name"]) if getattr(self, "runtime_joint_dynamics", False) else ""
+    _idg_rt_jd = (", " + var_names["d_robotModel_name"]) if self._emits_model_ptr() else ""
     inverse_dynamics_gradient_code_end = var_names["s_temp_name"] + ", " + var_names["d_temp_spill_name"] + ", " + var_names["gravity_name"] + _idg_rt_jd + ");"
     inverse_dynamics_gradient_code = inverse_dynamics_gradient_code_start + inverse_dynamics_gradient_code_middle + inverse_dynamics_gradient_code_end
     self.gen_add_code_line(inverse_dynamics_gradient_code)
@@ -300,7 +300,7 @@ def gen_inverse_dynamics_gradient_inner(self):
     # runtime_joint_dynamics: the damping-diag term reads
     # d_robotModel->d_joint_dynamics_params, so thread d_robotModel in as a trailing
     # defaulted param ONLY under that flag (byte-identical signature when off).
-    if getattr(self, "runtime_joint_dynamics", False):
+    if self._emits_model_ptr():
         func_def_end = "T *s_temp, T *d_temp_spill, const T gravity, const robotModel<T> *d_robotModel = nullptr) {"
     else:
         func_def_end = "T *s_temp, T *d_temp_spill, const T gravity) {"

@@ -52,7 +52,7 @@ def gen_inverse_dynamics_inner_function_call(self, compute_c = False, use_qdd_in
     # build) relies on the trailing `= nullptr` default, so no other call site needs
     # editing and the byte-identity invariant holds.
     _id_rt_jd = ""
-    if compute_c and getattr(self, "runtime_joint_dynamics", False):
+    if compute_c and self._emits_model_ptr():
         _id_rt_jd = ", " + var_names.get("d_robotModel_name", "d_robotModel")
     id_code_end = var_names["s_temp_name"] + ", " + var_names["d_f_ext_name"] + ", " + var_names["gravity_name"] + _id_rt_jd + ");"
     if compute_c:
@@ -160,6 +160,27 @@ def gen_inverse_dynamics_joint_dynamics_bias(self):
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 
+def gen_inverse_dynamics_armature_bias(self, use_qdd_input):
+    """runtime_armature: tau += a[vs] * qdd[vs] on every single-DoF v-slot
+    (Pinocchio's rnea adds the armature term). Only the qdd-input value path
+    carries it: the c(q, qd) path used by forward dynamics has qdd = 0 and
+    the armature enters that solve through M + diag(a) instead."""
+    if not getattr(self, "runtime_armature", False) or not use_qdd_input:
+        return
+    slots = self._armature_vslots()
+    if not slots:
+        return
+    self.gen_add_code_line("//")
+    self.gen_add_code_line("// rotor armature: s_c += a * qdd per v-slot (runtime table)")
+    self.gen_add_code_line("//")
+    self.gen_add_sync()
+    self.gen_add_parallel_loop("k", str(len(slots)))
+    self.gen_add_code_line("static const int armature_slots[" + str(len(slots)) + "] = {" + ", ".join(str(v) for v in slots) + "};")
+    self.gen_add_code_line("int vs = armature_slots[k];")
+    self.gen_add_code_line("s_c[vs] += d_robotModel->d_armature_params[vs] * s_qdd[vs];")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+
 def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
     n = self.robot.get_num_joints()
     n_bfs_levels = self.robot.get_max_bfs_level() + 1 # starts at 0
@@ -183,9 +204,9 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
     # default keeps every existing call site (id/fd/aba/gradient/so/regressor/...)
     # source-compatible without edits; only the compute_c id-call passes a real
     # pointer (below). The default keeps the signature byte-identical when off.
-    if getattr(self, "runtime_joint_dynamics", False):
+    if self._emits_model_ptr():
         func_def_end = "T *s_temp, T *d_f_ext, const T gravity, const robotModel<T> *d_robotModel = nullptr) {"
-        func_params.append("d_robotModel is the GPU model pointer (read for the mutable joint-dynamics table; nullptr when unused)")
+        func_params.append("d_robotModel is the GPU model pointer (read for the mutable joint-dynamics / armature tables; nullptr when unused)")
     else:
         func_def_end = "T *s_temp, T *d_f_ext, const T gravity) {"
     func_params.append("d_f_ext is the (optional) GLOBAL external forces, body-major 6*NUM_BODIES local-frame, or nullptr")
@@ -757,6 +778,7 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
         self.gen_add_end_control_flow()
         self.gen_add_sync()
         self.gen_inverse_dynamics_joint_dynamics_bias()
+        self.gen_inverse_dynamics_armature_bias(use_qdd_input)
         self.gen_add_end_function()
         return
     if compute_c and self.robot.robot_has_spherical():
@@ -787,6 +809,7 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
         self.gen_add_end_control_flow()
         self.gen_add_sync()
         self.gen_inverse_dynamics_joint_dynamics_bias()
+        self.gen_inverse_dynamics_armature_bias(use_qdd_input)
         self.gen_add_end_function()
         return
     if compute_c and self.robot.robot_has_skew_axis():
@@ -809,6 +832,7 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
         self.gen_add_end_control_flow()
         self.gen_add_sync()
         self.gen_inverse_dynamics_joint_dynamics_bias()
+        self.gen_inverse_dynamics_armature_bias(use_qdd_input)
         self.gen_add_end_function()
         return
     if compute_c:
@@ -830,6 +854,7 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
         self.gen_add_end_control_flow()
         self.gen_add_sync()
         self.gen_inverse_dynamics_joint_dynamics_bias()
+        self.gen_inverse_dynamics_armature_bias(use_qdd_input)
     self.gen_add_end_function()
 
 

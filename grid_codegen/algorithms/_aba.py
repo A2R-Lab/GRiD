@@ -64,6 +64,15 @@ def _aba_vslot(self, jid):
     return v
 
 
+def _aba_armature_term_cpp(self, dof):
+    """runtime_armature: the ``+ a[dof]`` added to the articulated D of a
+    single-DoF joint (Pinocchio's aba solves with M + diag(armature)); ``dof``
+    is a v-slot literal or a C variable name. Empty when the flag is off."""
+    if not getattr(self, "runtime_armature", False):
+        return ""
+    return " + d_robotModel->d_armature_params[" + str(dof) + "]"
+
+
 def _aba_jd_bias_term_cpp(self, jid):
     """C++ subexpression for body ``jid``'s joint-local damping + Coulomb friction
     bias, or "" when there is none to apply. The friction shape is sign(qd), or
@@ -169,7 +178,7 @@ def gen_aba_inner_floating(self):
     # runtime_joint_dynamics: the u-site bias reads d_robotModel->d_joint_dynamics_params,
     # so thread d_robotModel in as a trailing defaulted param ONLY under that flag
     # (byte-identical signature when off).
-    if getattr(self, "runtime_joint_dynamics", False):
+    if self._emits_model_ptr():
         func_def_end = "T *s_temp, T *d_workspace, T *d_f_ext, const T gravity, const robotModel<T> *d_robotModel = nullptr) {"
     else:
         func_def_end = "T *s_temp, T *d_workspace, T *d_f_ext, const T gravity) {"
@@ -356,7 +365,7 @@ def gen_aba_inner_floating(self):
         self.gen_add_end_control_flow()
         self.gen_add_sync()
         self.gen_add_serial_ops()
-        self.gen_add_code_line("s_temp[" + str(dOffset + jid) + "] = static_cast<T>(" + str(S_sign) + ") * s_temp[" + str(UOffset + jid6 + S_ind) + "];")
+        self.gen_add_code_line("s_temp[" + str(dOffset + jid) + "] = static_cast<T>(" + str(S_sign) + ") * s_temp[" + str(UOffset + jid6 + S_ind) + "]" + _aba_armature_term_cpp(self, dof) + ";")
         _jd_bias = _aba_jd_bias_term_cpp(self, jid)
         _jd_sub = (" - (" + _jd_bias + ")") if _jd_bias else ""
         self.gen_add_code_line("s_temp[" + str(uOffset + jid) + "] = s_tau[" + str(dof) + "]" + _jd_sub + " - static_cast<T>(" + str(S_sign) + ") * s_temp[" + str(pAOffset + jid6 + S_ind) + "] - dot_prod<T,6,1,1>(&s_temp[" + str(UOffset + jid6) + "], &s_temp[" + str(cOffset + jid6) + "]);")
@@ -525,7 +534,7 @@ def gen_aba_inner(self):
     # runtime_joint_dynamics: the u-site bias reads d_robotModel->d_joint_dynamics_params,
     # so thread d_robotModel in as a trailing defaulted param ONLY under that flag
     # (byte-identical signature when off).
-    if getattr(self, "runtime_joint_dynamics", False):
+    if self._emits_model_ptr():
         func_def_end = "T *s_temp, T *d_workspace, T *d_f_ext, const T gravity, const robotModel<T> *d_robotModel = nullptr) {"
     else:
         func_def_end = "T *s_temp, T *d_workspace, T *d_f_ext, const T gravity) {"
@@ -925,7 +934,7 @@ def gen_aba_inner(self):
                     self.gen_add_end_control_flow()
                     self.gen_add_sync()
                     self.gen_add_serial_ops()
-                    self.gen_add_code_line("s_temp[" + str(96*n + jid) + "] = (" + str(s_sign) + ") * s_temp[" + str(84*n + jid6 + s_ind) + "];")
+                    self.gen_add_code_line("s_temp[" + str(96*n + jid) + "] = (" + str(s_sign) + ") * s_temp[" + str(84*n + jid6 + s_ind) + "]" + _aba_armature_term_cpp(self, _aba_vslot(self, jid)) + ";")
                     self.gen_add_code_line("s_temp[" + str(97*n + jid) + "] = s_tau[" + str(_tau_idx(jid)) + "]" + _jd_sub + " - (" + str(s_sign) + ") * s_temp[" + str(78*n + jid6 + s_ind) + "];")
                     self.gen_add_end_control_flow()
                     self.gen_add_sync()
@@ -951,7 +960,7 @@ def gen_aba_inner(self):
                 # U = IA[jid] (col-major 6x6) * S
                 self.gen_add_code_line("  for (int r = 0; r < 6; r++) { T acc = static_cast<T>(0); for (int p = 0; p < 6; p++) { acc += s_temp[36*" + str(jid) + " + r + 6*p] * S_skew[p]; } s_temp[" + str(84*n + jid6) + " + r] = acc; }")
                 # d = S^T U ; u = tau - S^T pA
-                self.gen_add_code_line("  s_temp[" + str(96*n + jid) + "] = dot_prod<T,6,1,1>(S_skew, &s_temp[" + str(84*n + jid6) + "]);")
+                self.gen_add_code_line("  s_temp[" + str(96*n + jid) + "] = dot_prod<T,6,1,1>(S_skew, &s_temp[" + str(84*n + jid6) + "])" + _aba_armature_term_cpp(self, jid) + ";")
                 _jd_bias = _aba_jd_bias_term_cpp(self, jid)
                 _jd_sub = (" - (" + _jd_bias + ")") if _jd_bias else ""
                 self.gen_add_code_line("  s_temp[" + str(97*n + jid) + "] = s_tau[" + str(jid) + "]" + _jd_sub + " - dot_prod<T,6,1,1>(S_skew, &s_temp[" + str(78*n + jid6) + "]); }")
@@ -984,7 +993,7 @@ def gen_aba_inner(self):
                 jid = str(inds[0])
                 self.gen_add_code_line("int jid = " + jid + ";")
             self.gen_add_code_line("int jid6 = 6 * " + jid + ";")
-            self.gen_add_code_line("s_temp[96 * "+ str(n) +" + jid] = (" + S_sign_cpp + ") * s_temp[84 * " + str(n) + " + jid6 + " + S_ind_cpp + "];")
+            self.gen_add_code_line("s_temp[96 * "+ str(n) +" + jid] = (" + S_sign_cpp + ") * s_temp[84 * " + str(n) + " + jid6 + " + S_ind_cpp + "]" + _aba_armature_term_cpp(self, "jid") + ";")
 
             self.gen_add_code_line("T tempval = (" + S_sign_cpp + ") * s_temp[78 * " + str(n) + " + jid6 + " + S_ind_cpp +"];")
             self.gen_add_code_line("s_temp[97 * " + str(n) + " + jid] = s_tau[jid] - tempval;")
@@ -1313,7 +1322,7 @@ def gen_aba_inner_function_call(self, updated_var_names = None,
     aba_code_start = "aba_inner<T, " + temp_in_smem_expr + ", " + cold_in_smem_expr + ">(" + var_names["s_qdd_name"] + ", " + var_names["s_va_name"] + ", " + var_names["s_q_name"] + ", " + var_names["s_qd_name"] + ", " + var_names["s_tau_name"] + ", "
     # runtime_joint_dynamics: forward d_robotModel into aba_inner (trailing defaulted
     # param) so the u-site bias can read the mutable table; omitted when off.
-    _aba_rt_jd = (", " + var_names["d_robotModel_name"]) if getattr(self, "runtime_joint_dynamics", False) else ""
+    _aba_rt_jd = (", " + var_names["d_robotModel_name"]) if self._emits_model_ptr() else ""
     aba_code_end = var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ", " + var_names["d_f_ext_name"] + ", " + var_names["gravity_name"] + _aba_rt_jd + ");"
     aba_code_middle = self.gen_insert_helpers_function_call()
     aba_code = aba_code_start + aba_code_middle + aba_code_end

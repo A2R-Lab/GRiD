@@ -376,6 +376,11 @@ public:
         // next to the setter; it sizes the params check below.
         fn_jd_params_size_ = reinterpret_cast<fn_int_v_t>(opt_sym("grid_rbd_joint_dynamics_params_size"));
 
+        // runtime_armature — OPTIONAL: present only in a .so built with
+        // runtime_armature=True (-DGRID_RBD_RUNTIME_ARMATURE). set_armature_params()
+        // raises a clear error if this symbol is null.
+        fn_set_armature_params_ = reinterpret_cast<fn_set_params_t>(opt_sym("grid_rbd_set_armature_params"));
+
         // Cache constants (avoid the indirect-function-call cost on every read).
         num_joints_ = fn_num_joints_();
         num_vel_    = fn_num_vel_();
@@ -2034,6 +2039,26 @@ public:
         if (rc != 0) throw std::runtime_error(rc_message(rc, "set_transform_params", nullptr));
     }
 
+    // set_armature_params(params) — runtime-mutable rotor armature. params is a flat
+    // (num_vel,) array in the reduced coordinates (v-slot indexed); the floating
+    // root's six slots and spherical blocks must be zero. Copies it into the device
+    // d_armature_params table; id (with qdd), crba, minv, aba, fd and everything built
+    // on them read it (no recompile). Only available on a .so built with runtime_armature=True.
+    void set_armature_params(arr_t params) {
+        if (!fn_set_armature_params_) throw std::runtime_error(
+            "set_armature_params not available in this .so: register the robot with "
+            "runtime_armature=True (and force_rebuild=True) to enable the mutable armature table.");
+        if (params.ndim() != 1 || (int)params.shape(0) != num_vel_) {
+            throw std::runtime_error(
+                "set_armature_params: params must be a flat (" + std::to_string(num_vel_) +
+                ",) array (one entry per v-slot); got ndim=" + std::to_string(params.ndim()) +
+                ", size=" + std::to_string(params.size()));
+        }
+        const CT *pdata = params.data();
+        int rc; { GridNoGil nogil; rc = fn_set_armature_params_(ctx_id_, pdata); }
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "set_armature_params", nullptr));
+    }
+
     // set_joint_dynamics_params(params) — runtime-mutable damping/friction (C5).
     // params is a flat (2*num_vel,) array = [damping(nv) || friction(nv)], v-slot
     // indexed and alpha-folded (matching init_joint_dynamics_params); a tanh friction
@@ -2273,6 +2298,7 @@ private:
     fn_set_params_t fn_set_transform_params_        = nullptr;
     fn_set_params_t        fn_set_jd_params_               = nullptr;
     fn_int_v_t             fn_jd_params_size_              = nullptr;  // table length (2*nv or 3*nv)
+    fn_set_params_t        fn_set_armature_params_         = nullptr;  // runtime_armature (optional)
 
     int num_joints_ = 0;
     int num_vel_    = 0;
@@ -2631,7 +2657,13 @@ static void register_runner(py::module_& m, const char* cls_name) {
              "runtime_joint_dynamics). params is a flat (2*num_vel,) array = "
              "[damping(nv) || friction(nv)], v-slot indexed (alpha-folded), or "
              "(3*num_vel,) with a trailing friction_width(nv) row on a tanh friction build. "
-             "Only available on a .so built with runtime_joint_dynamics=True; raises otherwise.");
+             "Only available on a .so built with runtime_joint_dynamics=True; raises otherwise.")
+        .def("set_armature_params", &R::set_armature_params,
+             py::arg("params"),
+             "Update the device-resident mutable rotor-armature table (runtime_armature). "
+             "params is a flat (num_vel,) array in the reduced coordinates; the floating "
+             "root's six slots and spherical blocks must be zero. Only available on a .so "
+             "built with runtime_armature=True; raises otherwise.");
 }
 
 

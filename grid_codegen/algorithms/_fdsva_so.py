@@ -436,7 +436,7 @@ def gen_fdsva_so_device(self):
     # runtime_joint_dynamics: the reused ID inner's bias reads the mutable table
     # through d_robotModel (in scope here); the positional call used to stop at
     # gravity, so the ON build dereferenced the inner's nullptr default (2026-11-03).
-    fd_tail = "s_temp, nullptr, nullptr, gravity" + (", d_robotModel" if getattr(self, "runtime_joint_dynamics", False) else "") + ");"
+    fd_tail = "s_temp, nullptr, nullptr, gravity" + (", d_robotModel" if self._emits_model_ptr() else "") + ");"
     self.gen_add_code_line("forward_dynamics_inner<T, true>(s_qdd, s_q, s_qd, s_u, " + self.gen_insert_helpers_function_call() + fd_tail)
     self.gen_add_sync()
     # fd-gradient inline; the band-spill variant is a compile-time choice.

@@ -42,6 +42,30 @@ def gen_crba_inner_temp_mem_size(self):
         return 36*NJ + 36
     return 42*NJ
 
+def _crba_inner_func_def_end(self):
+    """The inner's trailing parameters; under runtime_armature a defaulted
+    ``d_robotModel`` is appended so the diagonal epilogue can read the table."""
+    if getattr(self, "runtime_armature", False):
+        return "T *s_temp, T *d_workspace, const T gravity, const robotModel<T> *d_robotModel = nullptr) {"
+    return "T *s_temp, T *d_workspace, const T gravity) {"
+
+
+def _gen_crba_armature_epilogue(self):
+    """runtime_armature: M[vs, vs] += a[vs] on every single-DoF v-slot, after
+    the inner assembled M (every CRBA variant ends through here)."""
+    slots = self._armature_vslots()
+    if not slots:
+        return
+    nv = self.robot.get_num_vel()
+    self.gen_add_code_line("// rotor armature: M += diag(a) on the single-DoF slots (runtime table)")
+    self.gen_add_parallel_loop("k", str(len(slots)))
+    self.gen_add_code_line("static const int armature_slots[" + str(len(slots)) + "] = {" + ", ".join(str(v) for v in slots) + "};")
+    self.gen_add_code_line("int vs = armature_slots[k];")
+    self.gen_add_code_line("s_M[vs + " + str(nv) + "*vs] += d_robotModel->d_armature_params[vs];")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+
+
 def gen_crba_inner_function_call(self, updated_var_names = None,
                                  temp_in_smem_expr = "true"):
     var_names = dict( \
@@ -56,7 +80,10 @@ def gen_crba_inner_function_call(self, updated_var_names = None,
         for key,value in updated_var_names.items():
             var_names[key] = value
     crba_code_start = "crba_inner<T, " + temp_in_smem_expr + ">(" + var_names["s_M_name"] + ", " +  var_names["s_q_name"] + ", " + var_names["s_qd_name"] + ", "
-    crba_code_end = var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ", " + var_names["gravity_name"] + ");"
+    # runtime_armature: forward d_robotModel (trailing defaulted param) so the
+    # epilogue can add diag(a); omitted when off.
+    _crba_rt = (", " + var_names.get("d_robotModel_name", "d_robotModel")) if getattr(self, "runtime_armature", False) else ""
+    crba_code_end = var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ", " + var_names["gravity_name"] + _crba_rt + ");"
     crba_code_middle = self.gen_insert_helpers_function_call()
     crba_code = crba_code_start + crba_code_middle + crba_code_end
     self.gen_add_code_line(crba_code)
@@ -305,7 +332,7 @@ def gen_crba_inner(self):
     func_notes = ["Inner-controlled placement: TEMP_IN_SMEM selects where the scratch band lives (s_temp vs d_workspace). Decided at the top; caller sizes both arenas from CRBA_INNER_*_BYTES."]
     func_def_start = "void crba_inner("
     func_def_middle = "T *s_M, const T *s_q, const T *s_qd, "
-    func_def_end = "T *s_temp, T *d_workspace, const T gravity) {"
+    func_def_end = _crba_inner_func_def_end(self)
 
     func_def_middle, func_params = self.gen_insert_helpers_func_def_params(func_def_middle, func_params, -2)
     func_def = func_def_start + func_def_middle + func_def_end
@@ -320,11 +347,13 @@ def gen_crba_inner(self):
 
     if self.robot_has_mimic_joints():
         _gen_crba_inner_mimic_fixed(self, n)
+        _gen_crba_armature_epilogue(self)
         self.gen_add_end_function()
         return
 
     if self.robot.robot_has_spherical():
         _gen_crba_inner_spherical_fixed(self, n, n_bfs_levels)
+        _gen_crba_armature_epilogue(self)
         self.gen_add_end_function()
         return
 
@@ -408,6 +437,7 @@ def gen_crba_inner(self):
             self.gen_add_code_line("}")
         self.gen_add_end_control_flow()
         self.gen_add_sync()
+        _gen_crba_armature_epilogue(self)
         self.gen_add_end_function()
         return
 
@@ -479,6 +509,7 @@ def gen_crba_inner(self):
     self.gen_add_end_control_flow()
     self.gen_add_end_control_flow()
 
+    _gen_crba_armature_epilogue(self)
     self.gen_add_end_function()
 
 
@@ -502,7 +533,7 @@ def gen_crba_inner_floating(self):
                   "Inner-controlled placement: TEMP_IN_SMEM selects where the scratch band lives (s_temp vs d_workspace). Decided at the top; caller sizes both arenas from CRBA_INNER_*_BYTES."]
     func_def_start = "void crba_inner("
     func_def_middle = "T *s_M, const T *s_q, const T *s_qd, "
-    func_def_end = "T *s_temp, T *d_workspace, const T gravity) {"
+    func_def_end = _crba_inner_func_def_end(self)
     func_def_middle, func_params = self.gen_insert_helpers_func_def_params(func_def_middle, func_params, -2)
     func_def = func_def_start + func_def_middle + func_def_end
     self.gen_add_func_doc("Compute the Floating-Base Composite Rigid Body Algorithm", func_notes, func_params, None)
@@ -642,6 +673,7 @@ def gen_crba_inner_floating(self):
     # root<->joint cross block. The IC band above is already correct.
     if self.robot_has_mimic_joints():
         _gen_crba_mimic_floating_phase2(self, NJ)
+        _gen_crba_armature_epilogue(self)
         self.gen_add_end_function()
         return
 
@@ -720,6 +752,7 @@ def gen_crba_inner_floating(self):
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 
+    _gen_crba_armature_epilogue(self)
     self.gen_add_end_function()
 
 

@@ -56,7 +56,7 @@ def gen_forward_dynamics_parameter_gradient_inner_function_call(self, updated_va
     code_middle = self.gen_insert_helpers_function_call()
     # runtime_joint_dynamics: forward d_robotModel into the inner (trailing defaulted
     # param) so its reused ID bias can read the mutable table; omitted when off.
-    _rt_jd = (", " + var_names["d_robotModel_name"]) if getattr(self, "runtime_joint_dynamics", False) else ""
+    _rt_jd = (", " + var_names["d_robotModel_name"]) if self._emits_model_ptr() else ""
     code_end = var_names["s_temp_name"] + ", " + var_names["gravity_name"] + _rt_jd + ");"
     self.gen_add_code_line(code_start + code_middle + code_end)
 
@@ -87,7 +87,7 @@ def gen_forward_dynamics_parameter_gradient_inner(self):
     # runtime_joint_dynamics: the reused inverse_dynamics_inner bias reads
     # d_robotModel->d_joint_dynamics_params, so thread d_robotModel in as a trailing
     # defaulted param ONLY under that flag (byte-identical signature when off).
-    if getattr(self, "runtime_joint_dynamics", False):
+    if self._emits_model_ptr():
         func_def_end = "T *s_temp, const T gravity, const robotModel<T> *d_robotModel = nullptr) {"
     else:
         func_def_end = "T *s_temp, const T gravity) {"
@@ -110,7 +110,7 @@ def gen_forward_dynamics_parameter_gradient_inner(self):
     # runtime_joint_dynamics: opt the reused ID inner into the table-reading bias by
     # forwarding the d_robotModel threaded into this inner (default name d_robotModel).
     _idcall_vn = dict(d_f_ext_name="nullptr")
-    if getattr(self, "runtime_joint_dynamics", False):
+    if self._emits_model_ptr():
         _idcall_vn["d_robotModel_name"] = "d_robotModel"
     self.gen_inverse_dynamics_inner_function_call(
         compute_c=True, use_qdd_input=False,
