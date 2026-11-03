@@ -551,7 +551,8 @@ class GRiDCodeGenerator:
                          "end_effector_pose", "end_effector_pose_gradient",
                          "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
                          "frame_velocity", "frame_acceleration",
-                         "frame_velocity_gradient", "frame_acceleration_gradient"}
+                         "frame_velocity_gradient", "frame_acceleration_gradient",
+                         "integrator", "integrator_gradient", "integrator_with_gradient"}
             unsupported = sorted(set(algorithms) - supported)
             if unsupported:
                 raise NotImplementedError(

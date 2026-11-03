@@ -167,3 +167,64 @@ def test_polynomial_coupling_frame_kinematics_match_projection(tmp_path, floatin
             return np.concatenate(flat)
 
         thread_sweep((1, 32, 64, 128), run)
+
+
+_INTEGRATORS = (("integrator_euler", "euler"), ("integrator_si_euler", "semi_implicit_euler"),
+                ("integrator_midpoint", "midpoint"), ("integrator_trapezoidal", "trapezoidal"),
+                ("integrator_rk4", "rk4"), ("integrator_constant_acceleration", "constant_acceleration"))
+
+
+@pytest.mark.parametrize("floating", [False, True], ids=["fixed", "floating"])
+def test_polynomial_coupling_integrators_match_projection(tmp_path, floating):
+    """The six integrators and their [A | B] gradients on the polynomial chain:
+    they compose the converted forward dynamics and its gradient with the
+    reduced-coordinate retract, so they carry no fold of their own; checked
+    against the reference (which integrates the projected dynamics)."""
+    from pathlib import Path
+    from test.cuda_equivalents.cuda_harness import _detect_cuda_arch, _parse_runner_output, _run_runner
+    from test.cuda_equivalents.executable_cache import cached_nvcc_executable
+
+    urdf = write_polynomial_chain(tmp_path)
+    with contextlib.redirect_stdout(io.StringIO()):
+        robot = URDFParser().parse(str(urdf), floating_base=floating)
+    gen = GRiDCodeGenerator(robot, False, True, "grid")
+    with contextlib.redirect_stdout(io.StringIO()):
+        gen.gen_all_code(output_path=str(tmp_path / "grid.cuh"), codegen_profile="integrators",
+                         enable_mujoco_kernels=False)
+    glass_inc = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
+    arch = _detect_cuda_arch()
+    exe, cmd = cached_nvcc_executable(
+        [Path(__file__).with_name("cuda_integrator_smoke_runner.cu"), tmp_path / "grid.cuh"],
+        ["-std=c++17", "-O0", "-gencode", f"arch=compute_{arch},code=sm_{arch}"],
+        exe_name="cuda_integrator_smoke_runner.exe", fallback_dir=tmp_path, include_dirs=[glass_inc],
+        what=f"integrator runner, polynomial chain floating={floating}")
+    ref = RBDReference(robot)
+    nq, nv = robot.get_num_pos(), robot.get_num_vel()
+    rng = np.random.default_rng(13)
+    for sample in range(2):
+        q = rng.standard_normal(nq)
+        if floating:
+            q[3:7] /= np.linalg.norm(q[3:7])
+        qd = 0.5 * rng.standard_normal(nv)
+        u = rng.standard_normal(nv)
+        dt = 0.01
+        stdin = "\n".join(" ".join(f"{v:.9g}" for v in np.asarray(x, np.float32)) for x in (q, qd, u)) + f"\n{dt:.9g}\n"
+        expected = {}
+        for prefix, kind in _INTEGRATORS:
+            expected[prefix + "_x_kp1"] = np.asarray(ref.integrator(q, qd, u, dt, integrator_type=kind), np.float64).reshape(-1)
+            expected[prefix + "_dAB"] = np.asarray(ref.integrator_gradient(q, qd, u, dt, integrator_type=kind), np.float64)
+
+        def run(threads):
+            out = _parse_runner_output(_run_runner(exe, stdin, cmd, num_threads=threads))
+            flat = []
+            for name, exp in expected.items():
+                assert name in out, (name, sorted(out))
+                got = np.asarray(out[name], np.float64)
+                got = got.reshape(-1) if exp.ndim == 1 else got.reshape(exp.shape)
+                scale = max(1.0, float(np.max(np.abs(exp))))
+                np.testing.assert_allclose(got, exp, rtol=0, atol=2e-3 * scale,
+                                           err_msg=f"{name} sample {sample} floating={floating} threads={threads}")
+                flat.append(got.reshape(-1))
+            return np.concatenate(flat)
+
+        thread_sweep((1, 32, 128), run)
