@@ -433,7 +433,11 @@ def gen_fdsva_so_device(self):
     self.gen_add_code_line("if constexpr (!IDSVA_COLD_IN_SMEM) { d_temp_spill = d_idsva_cold_spill; } else { (void)d_idsva_cold_spill; }")
     self.gen_load_update_XImats_helpers_function_call()
     self.gen_minv_inner_function_call(f_in_smem_expr = "true")
-    self.gen_add_code_line("forward_dynamics_inner<T, true>(s_qdd, s_q, s_qd, s_u, " + self.gen_insert_helpers_function_call() + "s_temp, nullptr, nullptr, gravity);")
+    # runtime_joint_dynamics: the reused ID inner's bias reads the mutable table
+    # through d_robotModel (in scope here); the positional call used to stop at
+    # gravity, so the ON build dereferenced the inner's nullptr default (2026-11-03).
+    fd_tail = "s_temp, nullptr, nullptr, gravity" + (", d_robotModel" if getattr(self, "runtime_joint_dynamics", False) else "") + ");"
+    self.gen_add_code_line("forward_dynamics_inner<T, true>(s_qdd, s_q, s_qd, s_u, " + self.gen_insert_helpers_function_call() + fd_tail)
     self.gen_add_sync()
     # fd-gradient inline; the band-spill variant is a compile-time choice.
     self.gen_add_code_line("if constexpr (FD_GRAD_USE_SPILL) {", True)
