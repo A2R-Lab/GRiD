@@ -8,6 +8,7 @@ from grid_codegen import GRiDCodeGenerator
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 from test.cuda_equivalents.constant_model import constant_model
+from test.cuda_equivalents.thread_invariance import thread_sweep
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
@@ -65,14 +66,15 @@ int main(int argc,char **argv){
     # Independent yaw derivative of the tip branch is exactly the mimic scale;
     # the other branch's angular velocity is around y and has zero yaw rate.
     np.testing.assert_array_equal(np.sort(expected.reshape(2, 6)[:, 5]), [-.5, 0.])
-    baseline = None
-    for threads in (1, 17, 32, 64, 256):
+    tol = 3e-5 if precision == 'float' else 1e-10
+
+    def run(threads):
         ran = subprocess.run([str(exe), str(threads)], capture_output=True, text=True)
         assert ran.returncode == 0, ran.stderr
-        actual = np.fromstring(ran.stdout, sep=' ')
+        return np.fromstring(ran.stdout, sep=' ')
+
+    def check(actual, _):
         assert actual.size == 12
-        tol = 3e-5 if precision == 'float' else 1e-10
         np.testing.assert_allclose(actual, expected, atol=tol, rtol=tol)
-        if baseline is not None:
-            np.testing.assert_array_equal(actual, baseline)
-        baseline = actual
+
+    thread_sweep((1, 17, 32, 64, 256), run, check)

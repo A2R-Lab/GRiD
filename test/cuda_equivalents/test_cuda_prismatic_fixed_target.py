@@ -11,6 +11,7 @@ from grid_codegen import GRiDCodeGenerator
 from URDFParser import URDFParser
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from test.cuda_equivalents.executable_cache import cached_nvcc_executable
+from test.cuda_equivalents.thread_invariance import thread_sweep
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
@@ -35,19 +36,19 @@ def test_prismatic_fixed_tool_values_and_thread_invariance(tmp_path, mimic):
                          (0.5 if mimic else 1.) * r.apply(axis), np.zeros(3)]
         quat = r.as_quat()  # scipy's xyzw order, including older supported versions
         frame = np.r_[p + r.apply(axis * displacement), quat[3], quat[:3]]
-        baseline = None
-        for threads in (1, 32, 64, 128):
-            run = subprocess.run([str(exe), str(threads), str(q)], capture_output=True, text=True)
-            assert run.returncode == 0, run.stdout + run.stderr
-            values = np.fromstring(run.stdout.strip().splitlines()[-1], sep=" ")
+        def run(threads):
+            ran = subprocess.run([str(exe), str(threads), str(q)], capture_output=True, text=True)
+            assert ran.returncode == 0, ran.stdout + ran.stderr
+            return np.fromstring(ran.stdout.strip().splitlines()[-1], sep=" ")
+
+        def check(values, threads):
             assert values.size == (26 if threads >= 32 else 19)
             np.testing.assert_allclose(values[:12], expected, atol=2e-5, rtol=2e-5)
             np.testing.assert_allclose(values[12:19], frame, atol=2e-5, rtol=2e-5)
             if threads >= 32:
                 np.testing.assert_allclose(values[19:26], frame, atol=2e-5, rtol=2e-5)
-            if baseline is not None:
-                np.testing.assert_array_equal(values[:19], baseline)
-            baseline = values[:19]
+
+        thread_sweep((1, 32, 64, 128), run, check, select=lambda values, _: values[:19])
 
 
 @pytest.mark.parametrize("mimic", [False, True, "constant"])
@@ -96,8 +97,7 @@ def test_prismatic_dynamics_against_independent_mechanics(tmp_path, mimic, axis,
             expected.update({name + suffix: 0. for name in
                              ("inverse_dynamics_gradient", "forward_dynamics_gradient")
                              for suffix in ("_q", "_qd")})
-        baseline = None
-        for threads in (1, 32, 64, 128):
+        def run(threads):
             stdout = _run_runner(exe, f"{q}\n{qd}\n{torque}\n", command, num_threads=threads)
             outputs = _parse_runner_output(stdout)
             actual = []
@@ -107,6 +107,6 @@ def test_prismatic_dynamics_against_independent_mechanics(tmp_path, mimic, axis,
                 assert result.size == 1, (name, result)
                 np.testing.assert_allclose(result, [value], atol=2e-4, rtol=2e-4, err_msg=name)
                 actual.extend(result)
-            if baseline is not None:
-                np.testing.assert_array_equal(actual, baseline)
-            baseline = actual
+            return np.asarray(actual)
+
+        thread_sweep((1, 32, 64, 128), run)

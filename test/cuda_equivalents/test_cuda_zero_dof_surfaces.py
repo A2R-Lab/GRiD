@@ -8,6 +8,7 @@ from RBDReference import RBDReference
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 from test.cuda_equivalents.constant_model import constant_model
+from test.cuda_equivalents.thread_invariance import thread_sweep
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
@@ -94,15 +95,16 @@ int main(int argc,char **argv){
             locked = RBDReference(constant_model(tmp_path, locked=True))
             np.testing.assert_allclose(gradient, locked.plant_step_gradient(*args), atol=1e-11, rtol=1e-10)
             expected = np.r_[123, gradient.ravel(order='F'), 456]
-    baseline = None
-    for count in threads:
+    tol = 3e-5 if precision == 'float' else 1e-10
+
+    def run(count):
         ran = subprocess.run([str(exe), str(count)], capture_output=True, text=True)
         assert ran.returncode == 0, ran.stderr
-        actual = np.fromstring(ran.stdout, sep=' ')
+        return np.fromstring(ran.stdout, sep=' ')
+
+    def check(actual, _):
         assert actual.size == expected.size
         np.testing.assert_array_equal(actual[[0, -1]], [123, 456])
-        tol = 3e-5 if precision == 'float' else 1e-10
         np.testing.assert_allclose(actual, expected, atol=tol, rtol=tol)
-        if baseline is not None:
-            np.testing.assert_array_equal(actual, baseline)
-        baseline = actual
+
+    thread_sweep(threads, run, check)

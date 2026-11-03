@@ -326,7 +326,13 @@ def collect_cuda_node_ids(cuda_k: str | None) -> list[str]:
 
 
 _LOCAL_CUDA_SOURCE = re.compile(r"""["']([A-Za-z0-9_]+\.(?:cu|cuh))["']""")
-_LOCAL_HELPER_IMPORT = re.compile(r"^from test\.cuda_equivalents\.([A-Za-z0-9_]+) import", re.MULTILINE)
+# Both spellings a module uses for a sibling helper: `from test.cuda_equivalents.x
+# import f` and `from test.cuda_equivalents import x [as y]` (2026-11-03: the
+# second form carried revolute_mimic_mechanics.py and test_cuda_frame_jacobian.py
+# outside their importers' fingerprints).
+_LOCAL_HELPER_IMPORT = re.compile(
+    r"^from test\.cuda_equivalents(?:\.([A-Za-z0-9_]+) import|"
+    r" import ([A-Za-z0-9_]+)(?:\s+as\s+[A-Za-z0-9_]+)?\s*$)", re.MULTILINE)
 
 
 def _module_local_dependencies(mod: str, exclude: set[str]) -> list[str]:
@@ -343,7 +349,8 @@ def _module_local_dependencies(mod: str, exclude: set[str]) -> list[str]:
     for name in _LOCAL_CUDA_SOURCE.findall(source):
         if (CUDA_DIR / name).is_file():
             found.append(f"test/cuda_equivalents/{name}")
-    for helper in _LOCAL_HELPER_IMPORT.findall(source):
+    for dotted, bare in _LOCAL_HELPER_IMPORT.findall(source):
+        helper = dotted or bare
         if helper != "cuda_harness" and (CUDA_DIR / f"{helper}.py").is_file():
             found.append(f"test/cuda_equivalents/{helper}.py")
     return [path for path in dict.fromkeys(found) if path not in exclude]

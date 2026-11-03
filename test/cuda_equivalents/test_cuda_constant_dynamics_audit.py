@@ -11,6 +11,7 @@ from grid_codegen.algorithms._idsva_so import gen_floating_gravity_d2tau_dq_spil
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 from test.cuda_equivalents.constant_model import constant_model
+from test.cuda_equivalents.thread_invariance import thread_sweep
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
@@ -79,15 +80,15 @@ def test_constant_dynamics_audit(dynamics_probe, mode):
     np.testing.assert_allclose(reference, independent, atol=2e-10, rtol=2e-10)
     expected = reference.ravel(order='F' if mode < 2 else 'C')
     tol = 5e-5 if precision == 'float' else 2e-10
-    baseline = None
-    for threads in (1, 17, 32, 64, 256):
+    def run(threads):
         ran = subprocess.run([str(exe), str(threads), str(mode), str(path / 'inputs.txt')],
                              capture_output=True, text=True)
         assert ran.returncode == 0, ran.stderr
-        actual = np.fromstring(ran.stdout, sep=' ')
+        return np.fromstring(ran.stdout, sep=' ')
+
+    def check(actual, _):
         assert actual.size == expected.size + 2
         np.testing.assert_array_equal(actual[[0, -1]], [123, 456])
         np.testing.assert_allclose(actual[1:-1], expected, atol=tol, rtol=tol)
-        if baseline is not None:
-            np.testing.assert_array_equal(actual, baseline)
-        baseline = actual
+
+    thread_sweep((1, 17, 32, 64, 256), run, check)

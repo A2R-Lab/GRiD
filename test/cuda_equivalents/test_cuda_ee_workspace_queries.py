@@ -8,6 +8,7 @@ from grid_assets import robot_urdf
 from grid_codegen import GRiDCodeGenerator
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from test.cuda_equivalents.executable_cache import cached_nvcc_executable
+from test.cuda_equivalents.thread_invariance import thread_sweep
 
 pytestmark=[pytest.mark.cuda_equivalence,pytest.mark.robot_smoke]
 
@@ -79,14 +80,12 @@ def test_exact_target_scratch(tmp_path,name,target,scalar):
     ref=RBDReference(robot);names=[target] if target else None
     expected=np.r_[np.asarray(ref.end_effector_pose(q.astype(float),ee_joint_names=names)).ravel(),
         np.concatenate([j.ravel(order='F') for j in ref.end_effector_pose_gradient(q.astype(float),ee_joint_names=names)])]
-    baseline=None
-    for threads in (1,17,32,64,256):
+    def run(threads):
         output=tmp_path/f'out-{threads}.bin'
         result=subprocess.run([str(exe),str(tmp_path/'input.bin'),str(output),str(threads)],capture_output=True,text=True)
         (tmp_path/f'run-{threads}.log').write_text(result.stdout+result.stderr)
         assert result.returncode==0,result.stderr
-        actual=np.fromfile(output,dtype)
-        np.testing.assert_allclose(actual,expected,rtol=2e-5 if scalar=='float' else 1e-9,
-                                   atol=2e-5 if scalar=='float' else 1e-9)
-        if baseline is not None:np.testing.assert_array_equal(actual,baseline)
-        baseline=actual
+        return np.fromfile(output,dtype)
+    tol=2e-5 if scalar=='float' else 1e-9
+    thread_sweep((1,17,32,64,256),run,
+                 lambda actual,_:np.testing.assert_allclose(actual,expected,rtol=tol,atol=tol))

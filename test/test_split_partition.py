@@ -1076,3 +1076,23 @@ def test_merge_command_unsigned_shards_merge_unsigned(tmp_path):
     assert rss.shard_receipts_unsigned(shards) is None
     (tmp_path / "bad.json").write_text("not json")
     assert rss.shard_receipts_unsigned([str(a), str(tmp_path / "bad.json")]) is None
+
+
+def test_fingerprint_follows_package_form_helper_imports(tmp_path, monkeypatch):
+    """2026-11-03: `from test.cuda_equivalents import helper as h` is a local
+    helper import too; it used to escape the fingerprint (revolute_mimic_
+    mechanics.py, test_cuda_frame_jacobian.py), so an edit to the helper left
+    the importing shard carried against stale bytes."""
+    cuda = tmp_path / "cuda"; cuda.mkdir()
+    (cuda / "helper_a.py").write_text("A = 1\n")
+    (cuda / "helper_b.py").write_text("B = 1\n")
+    (cuda / "cuda_harness.py").write_text("H = 1\n")
+    (cuda / "test_cuda_x.py").write_text(
+        "from test.cuda_equivalents import helper_a as a\n"
+        "from test.cuda_equivalents.helper_b import B\n"
+        "from test.cuda_equivalents import cuda_harness\n"
+        "import numpy as np\n"
+        "def f():\n    from test.cuda_equivalents import helper_missing\n")
+    monkeypatch.setattr(rss, "CUDA_DIR", cuda)
+    deps = rss._module_local_dependencies("test_cuda_x", set())
+    assert deps == ["test/cuda_equivalents/helper_a.py", "test/cuda_equivalents/helper_b.py"]

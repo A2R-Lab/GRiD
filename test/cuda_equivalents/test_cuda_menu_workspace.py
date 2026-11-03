@@ -8,6 +8,7 @@ from grid_assets import robot_urdf
 from grid_codegen import GRiDCodeGenerator
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from test.cuda_equivalents.executable_cache import cached_nvcc_executable
+from test.cuda_equivalents.thread_invariance import thread_sweep
 
 pytestmark=[pytest.mark.cuda_equivalence,pytest.mark.robot_smoke]
 
@@ -51,14 +52,13 @@ def test_menu_workspace(menu_case,kind):
         gx[offset:]=ax.T@(wx*rx);hx[offset:,offset:]=ax.T@(wx[:,None]*ax)
         gu=au.T@(wu*ru);hu=au.T@(wu[:,None]*au)
         expected.append(2*np.r_[.5*(np.dot(wx,rx*rx)+np.dot(wu,ru*ru)),gx,gu,hx.ravel(order='F'),hu.ravel(order='F')])
-    expected=np.asarray(expected);baseline=None
-    for threads in (1,17,32,64,256):
+    expected=np.asarray(expected)
+    def run(threads):
         output=path/f'out-{kind}-{threads}.bin'
         result=subprocess.run([str(exe),str(inp),str(output),str(threads),str(kind)],capture_output=True,text=True)
         (path/f'run-{kind}-{threads}.log').write_text(result.stdout+result.stderr)
         assert result.returncode==0,result.stdout+result.stderr+f' exit={result.returncode}'
-        actual=np.fromfile(output,dtype).reshape(expected.shape)
-        np.testing.assert_allclose(actual,expected,rtol=1e-4 if dtype==np.float32 else 2e-12,
-                                   atol=1e-6 if dtype==np.float32 else 2e-12)
-        if baseline is not None:np.testing.assert_array_equal(actual,baseline)
-        baseline=actual
+        return np.fromfile(output,dtype).reshape(expected.shape)
+    thread_sweep((1,17,32,64,256),run,
+                 lambda actual,_:np.testing.assert_allclose(actual,expected,rtol=1e-4 if dtype==np.float32 else 2e-12,
+                                                            atol=1e-6 if dtype==np.float32 else 2e-12))
