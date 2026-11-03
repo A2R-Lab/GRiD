@@ -44,8 +44,7 @@ __all__ = [
     "gen_osc_inertia_device",
     "gen_osc_inertia_kernel",
     "gen_osc_inertia_host",
-    "gen_osc_inertia",
-]
+    "gen_osc_inertia", "gen_frame_velocity_device", "gen_frame_velocity", "gen_frame_acceleration_device", "gen_frame_acceleration"]
 
 
 # Reference-frame enum (matches pin.ReferenceFrame ordering used by the host).
@@ -779,6 +778,209 @@ def gen_frame_jacobian_dot(self):
     self.gen_frame_jacobian_dot_host(mode=0)
     self.gen_frame_jacobian_dot_host(mode=1)
     self.gen_frame_jacobian_dot_host(mode=2)
+
+
+# ─── frame velocity / acceleration (item C of 0.8, 2026-11-03) ─────────────────
+# frame_velocity   = J(q) qd                      (6, [linear; angular], chosen frame)
+# frame_acceleration = J(q) qdd + Jdot(q, qd) qd  (the time derivative of that twist:
+#   the spatial acceleration in LOCAL / WORLD, the classical acceleration of the
+#   frame origin in LOCAL_WORLD_ALIGNED; RBDReference.frame_acceleration, checked
+#   against pinocchio's getFrameAcceleration / getFrameClassicalAcceleration).
+# Both reuse the frame_jacobian family's inners; the contraction is one parallel
+# loop over the six rows.
+
+def _gen_frame_contract_rows(self, out_name, mats_and_vecs, nv):
+    """s_out[r] = sum_c A[r + 6c] x[c] (+ B[r + 6c] y[c]) for r < 6, block-parallel."""
+    self.gen_add_parallel_loop("r", "6")
+    self.gen_add_code_line("T acc = static_cast<T>(0);")
+    self.gen_add_code_line("for (int c = 0; c < " + str(nv) + "; ++c) {", True)
+    for mat, vec in mats_and_vecs:
+        self.gen_add_code_line("acc += " + mat + "[r + 6*c] * " + vec + "[c];")
+    self.gen_add_end_control_flow()
+    self.gen_add_code_line(out_name + "[r] = acc;")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+
+
+def gen_frame_velocity_device(self):
+    """frame_velocity_device: the twist J(q) qd of a frame in the chosen reference
+    frame (6 entries, [linear; angular]). Owns the dynamic arena like
+    frame_jacobian_device plus a 6 x NUM_VEL J buffer."""
+    nv = self.robot.get_num_vel()
+    func_def = ("void frame_velocity_device(T *s_v, const int target_jid, const int reference_frame, "
+                "const T *s_q, const T *s_qd, const robotModel<T> *d_robotModel) {")
+    func_params = ["s_v holds the 6-entry frame twist ([linear; angular]) in the chosen reference frame",
+                   "target_jid is the joint id of the frame",
+                   "reference_frame is 0=LOCAL, 1=WORLD, 2=LOCAL_WORLD_ALIGNED",
+                   "s_q is the joint position vector",
+                   "s_qd is the joint velocity vector v (Pinocchio order [v_lin; omega; joints] for floating base)",
+                   "d_robotModel is the GPU model helpers"]
+    self.gen_add_func_doc("Compute a frame's velocity (twist) in a reference frame",
+                          ["Equals pinocchio getFrameVelocity for the three reference frames."], func_params, None)
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line(func_def, True)
+    self.gen_XmatsHom_helpers_temp_shared_memory_code(
+        _frame_jacobian_inner_temp_mem_size(self), extra_t_buffers=[("s_Jv", 6 * nv)])
+    self.gen_load_update_XmatsHom_helpers_function_call()
+    self.gen_add_code_line("frame_jacobian_inner<T>(s_Jv, target_jid, reference_frame, s_q, s_XmatsHom, d_robotModel, s_temp);")
+    self.gen_add_sync()
+    _gen_frame_contract_rows(self, "s_v", [("s_Jv", "s_qd")], nv)
+    self.gen_add_end_function()
+
+
+def gen_frame_acceleration_device(self):
+    """frame_acceleration_device: J(q) qdd + Jdot(q, qd) qd, the time derivative of
+    the frame twist in the chosen reference frame (6 entries). Jdot comes from
+    frame_jacobian_dot_device (which owns the dynamic arena), J from
+    frame_jacobian_device afterwards; both land in static shared buffers."""
+    nv = self.robot.get_num_vel()
+    func_def = ("void frame_acceleration_device(T *s_a, const int target_jid, const int reference_frame, "
+                "const T *s_q, const T *s_qd, const T *s_qdd, const robotModel<T> *d_robotModel) {")
+    func_params = ["s_a holds the 6-entry frame acceleration ([linear; angular]) in the chosen reference frame",
+                   "target_jid is the joint id of the frame",
+                   "reference_frame is 0=LOCAL, 1=WORLD, 2=LOCAL_WORLD_ALIGNED",
+                   "s_q is the joint position vector",
+                   "s_qd is the joint velocity vector v",
+                   "s_qdd is the joint acceleration vector",
+                   "d_robotModel is the GPU model helpers"]
+    self.gen_add_func_doc("Compute a frame's acceleration (the time derivative of its twist) in a reference frame",
+                          ["Equals pinocchio getFrameAcceleration (LOCAL, WORLD) and getFrameClassicalAcceleration (LOCAL_WORLD_ALIGNED)."],
+                          func_params, None)
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line(func_def, True)
+    self.gen_add_code_line("__shared__ T s_Jd_fa[" + str(6 * nv) + "];")
+    self.gen_add_code_line("__shared__ T s_Jv_fa[" + str(6 * nv) + "];")
+    self.gen_add_code_line("frame_jacobian_dot_device<T>(s_Jd_fa, target_jid, reference_frame, s_q, s_qd, d_robotModel);")
+    self.gen_add_sync()
+    self.gen_add_code_line("frame_jacobian_device<T>(s_Jv_fa, target_jid, reference_frame, s_q, d_robotModel);")
+    self.gen_add_sync()
+    _gen_frame_contract_rows(self, "s_a", [("s_Jv_fa", "s_qdd"), ("s_Jd_fa", "s_qd")], nv)
+    self.gen_add_end_function()
+
+
+def _gen_frame_kin_kernel(self, name, single_call_timing, with_qdd):
+    """Shared kernel emitter for frame_velocity / frame_acceleration: batched over
+    the packed [q; qd; u] buffer (stride 3*NUM_POS), runtime target_jid and
+    reference_frame, static shared inputs and output (the device wrapper owns the
+    dynamic arena, mirroring frame_jacobian_dot_kernel)."""
+    n_pos = self.robot.get_num_pos()
+    n_vel = self.robot.get_num_vel()
+    devfn = name + "_device"
+    func_params = ["d_" + name + " is the vector of 6-entry outputs ([linear; angular])",
+                   "d_q_qd is the packed [q (NUM_POS); qd; (qdd)] input, three NUM_POS-wide slots per timestep",
+                   "stride_q_qd is the stride between timesteps",
+                   "target_jid is the joint id of the frame (runtime)",
+                   "reference_frame is 0=LOCAL, 1=WORLD, 2=LOCAL_WORLD_ALIGNED (runtime)",
+                   "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)",
+                   "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)"]
+    func_def = ("void " + name + "_kernel(T *d_" + name + ", const T *d_q_qd, const int stride_q_qd, "
+                "const int target_jid, const int reference_frame, const robotModel<T> *d_robotModel, const int NUM_TIMESTEPS) {")
+    if single_call_timing:
+        func_def = func_def.replace("(", "_single_timing(")
+    self.gen_add_func_doc("Batched " + name.replace("_", " "), [], func_params, None)
+    self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER, bool MUJOCO_OUTPUT = false>")
+    self.gen_add_code_line("__global__")
+    self.gen_add_code_line("__launch_bounds__(tier_max_threads<RESOURCE_TIER>())")
+    self.gen_add_code_line(func_def, True)
+    load_count = 3 * n_pos if with_qdd else n_pos + n_vel
+    self.gen_add_code_line("__shared__ T s_q_qd[" + str(load_count) + "];")
+    self.gen_add_code_line("__shared__ T s_" + name + "[6];")
+    self.gen_add_code_line("T *s_q = s_q_qd; T *s_qd = &s_q_qd[" + str(n_pos) + "];"
+                           + (" T *s_qdd = &s_q_qd[" + str(2 * n_pos) + "];" if with_qdd else ""))
+    call = (devfn + "<T>(s_" + name + ", target_jid, reference_frame, s_q, s_qd, "
+            + ("s_qdd, " if with_qdd else "") + "d_robotModel);")
+    if not single_call_timing:
+        self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
+        self.gen_kernel_load_inputs("q_qd", str(load_count), stride="stride_q_qd")
+        if self.robot.floating_base:
+            self.gen_add_code_line("if constexpr (MUJOCO_OUTPUT) {", True)
+            self.gen_mjx_input_convert("s_q", "s_qd")
+            self.gen_add_end_control_flow()
+        self.gen_add_code_line("// compute")
+        self.gen_add_code_line(call)
+        self.gen_add_sync()
+        self.gen_kernel_save_result(name, "6", stride="6")
+        self.gen_add_end_control_flow()
+    else:
+        self.gen_kernel_load_inputs("q_qd", str(load_count))
+        self.gen_add_code_line("// compute with NUM_TIMESTEPS as NUM_REPS for timing")
+        self.gen_add_code_line("for (int rep = 0; rep < NUM_TIMESTEPS; rep++){", True)
+        self.gen_anti_licm_input_reload("q_qd", str(load_count), feedback_from=name)
+        self.gen_add_code_line(call)
+        self.gen_anti_licm_output_write(name)
+        self.gen_add_end_control_flow()
+        self.gen_kernel_save_result(name, "6")
+    self.gen_add_end_function()
+
+
+def _gen_frame_kin_host(self, name, mode, bytes_macro):
+    """Shared host emitter (3 modes) for frame_velocity / frame_acceleration; always
+    the full q|qd|u memory, target_jid / reference_frame trailing defaulted."""
+    single_call_timing, compute_only = host_mode_flags(mode)
+    default_tjid = self.robot.get_leaf_nodes()[0]
+    func_params = ["hd_data is the packaged input and output pointers",
+                   "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)",
+                   "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)",
+                   "streams are pointers to CUDA streams for async memory transfers (if needed)",
+                   "target_jid is the joint id of the requested frame (default leaf-EE)",
+                   "reference_frame is 0=LOCAL, 1=WORLD, 2=LOCAL_WORLD_ALIGNED (default LWA)"]
+    frame_args = (", int target_jid = " + str(default_tjid) + ", int reference_frame = " + str(_REF_LWA))
+    func_def_start = "void " + name + "(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const int num_timesteps,"
+    func_def_end = "                            const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams" + frame_args + ") {"
+    if single_call_timing:
+        func_def_start = func_def_start.replace("(", "_single_timing(")
+        func_def_end = "              " + func_def_end
+    if compute_only:
+        func_def_end = "                            const dim3 block_dimms, const dim3 thread_dimms" + frame_args + ") {"
+        func_def_start = func_def_start.replace("(", "_compute_only(")
+        func_def_end = "             " + func_def_end
+    self.gen_add_func_doc("Batched " + name.replace("_", " "), [], func_params, None)
+    mjx_host = gen_host_wrapper_head(self, name, func_def_start, func_def_end, kind_rule="kinematics")
+    self.gen_add_code_line("if (target_jid < 0) { target_jid = " + str(default_tjid) + "; }       // -1 => leaf-EE default (frame still honored)")
+    self.gen_add_code_line("if (reference_frame < 0) { reference_frame = " + str(_REF_LWA) + "; }  // -1 => LOCAL_WORLD_ALIGNED default")
+    tmpl = name + "_kernel<T, RESOURCE_TIER, MUJOCO_OUTPUT>" if mjx_host else name + "_kernel<T, RESOURCE_TIER>"
+    func_call = (tmpl + "<<<block_dimms,thread_dimms," + bytes_macro + "<T>()>>>"
+                 "(hd_data->d_" + name + ",hd_data->d_q_qd_u,stride_q_qd,target_jid,reference_frame,d_robotModel,num_timesteps);")
+    if single_call_timing:
+        func_call = func_call.replace(name + "_kernel<", name + "_kernel_single_timing<")
+    if not compute_only:
+        self.gen_add_code_lines(["// start code with memory transfer",
+                                 "int stride_q_qd = 3*NUM_JOINTS;",
+                                 "gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd_u,hd_data->h_q_qd_u,stride_q_qd*" +
+                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));",
+                                 "gpuErrchkKernel();"])
+    else:
+        self.gen_add_code_line("int stride_q_qd = 3*NUM_JOINTS;")
+    self.gen_add_code_line("// then call the kernel")
+    func_call_code = [func_call, "gpuErrchkKernel();"]
+    if single_call_timing:
+        wrap_host_single_call_timing(func_call_code)
+    self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"" + name + "\", " + bytes_macro + "<T>()));")
+    self.gen_add_code_lines(func_call_code)
+    if not compute_only:
+        gen_emit_host_result_transfer(self, "h_" + name, "d_" + name, "6*", single_call_timing)
+    if single_call_timing:
+        from ..algo_registry import single_call_printf_line
+        self.gen_add_code_line(single_call_printf_line(name))
+    self.gen_add_end_function()
+
+
+def gen_frame_velocity(self):
+    self.gen_frame_velocity_device()
+    _gen_frame_kin_kernel(self, "frame_velocity", False, False)
+    _gen_frame_kin_kernel(self, "frame_velocity", True, False)
+    for mode in (0, 1, 2):
+        _gen_frame_kin_host(self, "frame_velocity", mode, "FRAME_VELOCITY_DYNAMIC_SHARED_MEM_BYTES")
+
+
+def gen_frame_acceleration(self):
+    self.gen_frame_acceleration_device()
+    _gen_frame_kin_kernel(self, "frame_acceleration", False, True)
+    _gen_frame_kin_kernel(self, "frame_acceleration", True, True)
+    for mode in (0, 1, 2):
+        _gen_frame_kin_host(self, "frame_acceleration", mode, "FRAME_ACCELERATION_DYNAMIC_SHARED_MEM_BYTES")
 
 
 def gen_osc_inertia_device(self):

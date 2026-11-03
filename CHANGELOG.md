@@ -12,6 +12,15 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Frame kinematics: `frame_velocity` (the twist `J qd` of a frame) and
+  `frame_acceleration` (`J qdd + Jdot qd`, the spatial acceleration in
+  `LOCAL` and `WORLD` and the classical acceleration in
+  `LOCAL_WORLD_ALIGNED`) join the frame Jacobian family as opt-in generated
+  kernels with batched launchers and three-mode hosts; the numpy reference
+  gains the same functions, checked against Pinocchio's
+  `getFrameVelocity`, `getFrameAcceleration` and
+  `getFrameClassicalAcceleration`. The Python surfaces follow in a later
+  change.
 - Rotor armature: `register_robot(..., runtime_armature=True)` adds a
   runtime per-velocity-slot reflected motor inertia to the diagonal of the
   joint-space inertia, following Pinocchio's `model.armature`: inverse

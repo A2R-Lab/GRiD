@@ -354,6 +354,18 @@ KERNEL_OVERLOADS = {
         ("frame_jacobian_dot_kernel_single_timing<T>",
          "void (*)(T *, const T *, const int, const int, const int, const robotModel<T> *, const int)"),
     ],
+    "frame_velocity": [
+        ("frame_velocity_kernel<T>",
+         "void (*)(T *, const T *, const int, const int, const int, const robotModel<T> *, const int)"),
+        ("frame_velocity_kernel_single_timing<T>",
+         "void (*)(T *, const T *, const int, const int, const int, const robotModel<T> *, const int)"),
+    ],
+    "frame_acceleration": [
+        ("frame_acceleration_kernel<T>",
+         "void (*)(T *, const T *, const int, const int, const int, const robotModel<T> *, const int)"),
+        ("frame_acceleration_kernel_single_timing<T>",
+         "void (*)(T *, const T *, const int, const int, const int, const robotModel<T> *, const int)"),
+    ],
     "osc_inertia": [
         ("osc_inertia_kernel<T>",
          "void (*)(T *, unsigned char *, const T *, const int, const robotModel<T> *, const int)"),

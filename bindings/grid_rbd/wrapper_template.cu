@@ -928,6 +928,12 @@ cudaError_t grid_rbd_family_kinematics_init_attrs(const char **failed_op) {
     { cudaError_t _e = grid::init_grid_kernel_attr_osc_inertia_mjx_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
 #endif
 #endif
+#ifdef GRID_HAS_FRAME_VELOCITY
+    { cudaError_t _e = grid::init_grid_kernel_attr_frame_velocity_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
+#ifdef GRID_HAS_FRAME_ACCELERATION
+    { cudaError_t _e = grid::init_grid_kernel_attr_frame_acceleration_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
+#endif
 #ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
     { cudaError_t _e = grid::init_grid_kernel_attr_end_effector_pose_runtime_checked<T>(failed_op); if (_e != cudaSuccess) return _e; }
 #endif

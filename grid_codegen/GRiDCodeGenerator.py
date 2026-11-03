@@ -155,6 +155,8 @@ class GRiDCodeGenerator:
                             gen_frame_jacobian_kernel, gen_frame_jacobian_host, gen_frame_jacobian, \
                             gen_frame_jacobian_dot_device, gen_frame_jacobian_dot_kernel, \
                             gen_frame_jacobian_dot_host, gen_frame_jacobian_dot, \
+                            gen_frame_velocity_device, gen_frame_velocity, \
+                            gen_frame_acceleration_device, gen_frame_acceleration, \
                             gen_osc_inertia_device, gen_osc_inertia_kernel, \
                             gen_osc_inertia_host, gen_osc_inertia, \
                             gen_end_effector_pose_runtime_inner, gen_end_effector_pose_runtime_device, \
@@ -1120,6 +1122,24 @@ class GRiDCodeGenerator:
                 if self.robot.floating_base:
                     self.gen_lie_group_helpers()
                 self.gen_frame_jacobian_dot()
+            # Item C (2026-11-03): frame velocity J qd and frame acceleration
+            # J qdd + Jdot qd on the same inners. The velocity device owns the
+            # frame_jacobian arena plus a 6*NV J buffer; the acceleration device
+            # runs the Jdot wrapper (its arena is the larger) then the J wrapper,
+            # both into static shared buffers.
+            if "frame_velocity" in algorithms:
+                fv_t_count = Xhom_size_fj + (16 * NJ_fj) + (6 * nv_fj)
+                self.gen_add_code_line(
+                    "template <typename T> __host__ __device__ constexpr size_t FRAME_VELOCITY_DYNAMIC_SHARED_MEM_BYTES() "
+                    "{ return grid_shared_arena_bytes<T>(" + str(fv_t_count) + ", TOPOLOGY_HELPERS_COUNT); }")
+                self.gen_add_code_line("#define GRID_HAS_FRAME_VELOCITY 1")
+                self.gen_frame_velocity()
+            if "frame_acceleration" in algorithms:
+                self.gen_add_code_line(
+                    "template <typename T> __host__ __device__ constexpr size_t FRAME_ACCELERATION_DYNAMIC_SHARED_MEM_BYTES() "
+                    "{ return FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES<T>(); }")
+                self.gen_add_code_line("#define GRID_HAS_FRAME_ACCELERATION 1")
+                self.gen_frame_acceleration()
             # Lambda (osc_inertia) is emitted for mimic robots too. It composes
             # Minv on device via minv_inner, whose mimic path routes
             # through crba_inner -> invert_matrix (== RBDReference.minv's mimic

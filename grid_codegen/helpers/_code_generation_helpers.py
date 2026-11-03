@@ -171,6 +171,8 @@ ALGO_TO_FRAGMENT = {
     "dccrba": "centroidal",
     "frame_jacobian": "frame_jacobian_family",
     "frame_jacobian_dot": "frame_jacobian_family",
+    "frame_velocity": "frame_jacobian_family",
+    "frame_acceleration": "frame_jacobian_family",
     "osc_inertia": "frame_jacobian_family",
     "end_effector_pose": "ee_kinematics",
     "end_effector_pose_gradient": "ee_kinematics",

@@ -1316,6 +1316,7 @@ FAMILY_ATTR_SHORTS: dict[str, tuple[str, ...]] = {
                    "kinetic_energy_regressor", "potential_energy_regressor"),
     "kinematics": ("end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian",
                    "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
+                   "frame_velocity", "frame_acceleration",
                    "end_effector_pose_runtime", "end_effector_pose_gradient_runtime"),
     "centroidal": ("com", "ccrba", "dccrba", "cmm_time_variation"),
     "plant_costs": (),
@@ -1328,6 +1329,7 @@ NOT_LAUNCHED_BY_BINDINGS: frozenset[str] = frozenset(
 # inside the opt-in algorithm's own block) rather than always defined to 1/0.
 OPT_IN_GATE_SHORTS: frozenset[str] = frozenset(
     {"frame_jacobian", "frame_jacobian_dot", "osc_inertia",
+     "frame_velocity", "frame_acceleration",
      "end_effector_pose_runtime", "end_effector_pose_gradient_runtime"})
 # Build family of every ABI key (multi-TU arc). `python_only` rows have no
 # wrapper body and no family. Hand-written owners (tool/contact fext kernels,

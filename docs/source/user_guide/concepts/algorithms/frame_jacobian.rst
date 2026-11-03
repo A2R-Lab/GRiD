@@ -22,6 +22,12 @@ generated CUDA interfaces:
   is only defined when the frame is reachable by at least six
   independent DOFs (the task matrix :math:`J\,M^{-1}\,J^{\top}` must be
   well-conditioned).
+* the frame velocity :math:`v = J\,\dot q` (the twist in the chosen
+  reference frame) and the frame acceleration
+  :math:`a = J\,\ddot q + \dot J\,\dot q`, the time derivative of that
+  twist: the spatial acceleration in ``LOCAL`` and ``WORLD`` and, in
+  ``LOCAL_WORLD_ALIGNED``, the classical acceleration of the frame origin
+  in world axes.
 
 Reference frames
 ----------------
@@ -44,6 +50,9 @@ Signature
    Jdot   = rbd.frame_jacobian_dot(q, qd, frame_name, reference_frame="LOCAL_WORLD_ALIGNED")
    # operational-space (OSC) inertia (6 x 6)
    Lambda = rbd.osc_inertia(q, frame_name, reference_frame="LOCAL_WORLD_ALIGNED")
+   # frame velocity (6) and frame acceleration (6)
+   v      = rbd.frame_velocity(q, qd, frame_name, reference_frame="LOCAL_WORLD_ALIGNED")
+   a      = rbd.frame_acceleration(q, qd, qdd, frame_name, reference_frame="LOCAL_WORLD_ALIGNED")
 
 Validation (Pinocchio oracle)
 -----------------------------
@@ -57,8 +66,18 @@ reference frames on both a fixed-base (iiwa14) and a floating-base
   ``computeJointJacobiansTimeVariation``).
 * :math:`\Lambda` vs ``(J\,M^{-1}\,J^{\top})^{-1}`` built from
   Pinocchio's ``computeMinverse``.
+* :math:`v` vs ``getFrameVelocity``; :math:`a` vs ``getFrameAcceleration``
+  in ``LOCAL`` and ``WORLD`` and ``getFrameClassicalAcceleration`` in
+  ``LOCAL_WORLD_ALIGNED`` (iiwa14, go2 and gen3 on both bases, a leaf and
+  a mid-chain target).
 
-See ``external/RBDReference/tests/test_frame_jacobian_equivalence.py``.
+See ``external/RBDReference/tests/test_frame_jacobian_equivalence.py`` and
+``test_frame_velocity_acceleration_equivalence.py``. The generated CUDA
+``frame_velocity_device`` and ``frame_acceleration_device`` (opt-in keys
+``frame_velocity`` and ``frame_acceleration``, with batched kernels and
+three-mode hosts) are checked against the numpy reference across the three
+frames and a thread-count sweep in
+``test/cuda_equivalents/test_cuda_frame_kinematics.py``.
 
 Implementation
 --------------
