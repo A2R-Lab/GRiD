@@ -51,6 +51,34 @@ Explicit coupling kinds
   :math:`\alpha'`, :math:`\alpha''` and :math:`(\partial G/\partial q)^{\top} f`
   terms. See :doc:`/api_reference/urdf` for the element.
 
+Joint damping and friction on a follower
+----------------------------------------
+
+A follower's ``<dynamics damping="b" friction="f"/>`` acts in the
+follower's own coordinate, :math:`b \dot q_f + f\,\mathrm{sign}(\dot q_f)`
+with :math:`\dot q_f = \alpha \dot q_l`, and projects onto its leader
+through :math:`\alpha` like every other follower torque:
+
+.. math::
+
+   \tau_l \mathrel{+}= \alpha^{2} b\,\dot q_l + |\alpha|\, f\,\mathrm{sign}(\dot q_l),
+
+the congruence :math:`G^{\top} B G` of the embedding. The sign of
+:math:`\alpha` cancels in the Coulomb term, and the dissipated power
+:math:`\dot q_l \tau_l` is non-negative for every ratio (a single power of
+:math:`\alpha` would inject energy on a negative one). Under the smooth
+``friction_model="tanh"`` the width belongs to the reduced coordinate:
+the shape is :math:`\tanh(\dot q_l / w_l)`, scaled by :math:`|\alpha|`.
+For a polynomial follower :math:`\alpha(q_l)` is evaluated on the device,
+and the gradient of the bias then carries, on the leader's diagonal of
+:math:`\partial \tau / \partial q`, the term
+:math:`2 \alpha \alpha' b\,\dot q_l + \mathrm{sign}(\alpha)\,\alpha' f\,s(\dot q_l)`;
+the runtime-mutable joint-dynamics table (``runtime_joint_dynamics``), a
+constant per reduced slot, is refused for a damped polynomial follower.
+The reference checks this fold against the projection of a full spanning
+tree that carries the damping itself, on a chain with ratios 2 and -1.5
+(``RBDReference/tests/test_joint_dynamics_coupling_fold.py``).
+
 Planar four-bar closures and loops without a closed form (the ``<loop>``
 element of URDF+, the ``connect`` and ``weld`` equalities of MJCF) are the
 next cluster kinds; they close the loop numerically inside the kernel and
@@ -75,7 +103,6 @@ Every other algorithm still bakes a constant multiplier into its fold and
 the Coriolis matrix (whose reduced form carries :math:`G^{\top} M \dot G`),
 the momentum-matrix derivatives, the external-force gradients, the pose
 Hessian and the multi-target kernels, the regressor gradient, the
-second-order derivatives, the plant layer and the joint damping and
-friction folds. ``register_robot`` therefore takes an explicit
+second-order derivatives and the plant layer. ``register_robot`` therefore takes an explicit
 ``algorithm_list`` for a polynomial robot
 (``test/python_wrappers/test_polynomial_coupling_handle.py``).

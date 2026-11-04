@@ -367,3 +367,79 @@ def test_polynomial_coupling_runtime_pose_match_projection(tmp_path, floating):
             np.testing.assert_allclose(got, exp, rtol=0, atol=5e-4 * scale, err_msg=f"{name} sample {sample}")
         checked += 1
     assert checked >= 2
+
+
+_JD_ALGOS = ["inverse_dynamics", "forward_dynamics", "aba", "inverse_dynamics_gradient", "forward_dynamics_gradient"]
+
+
+@pytest.mark.parametrize("floating", [False, True], ids=["fixed", "floating"])
+@pytest.mark.parametrize("model", ["sign", "tanh"])
+@pytest.mark.parametrize("kind", ["linear", "polynomial"])
+def test_coupled_joint_dynamics_match_reference(tmp_path, monkeypatch, kind, model, floating):
+    """Damping and Coulomb friction on coupled joints: alpha^2 b and |alpha| f
+    in the leader's slot (user ruling 2026-11-03), on a chain with ratios 2
+    and -1.5 (linear) and on the polynomial chain, whose fold multiplier and
+    therefore its damping coefficient vary with the leader's q (a dc_dq term
+    the gradient carries). The reference is checked against the projection
+    of a full tree that carries the damping itself and against finite
+    differences in RBDReference/tests/test_joint_dynamics_coupling_fold.py."""
+    from test.cuda_equivalents.cuda_harness import _compile_runner, _parse_runner_output, _run_runner
+
+    urdf = write_polynomial_chain(tmp_path, kind=kind, joint_dynamics=True)
+    with contextlib.redirect_stdout(io.StringIO()):
+        robot = URDFParser().parse(str(urdf), floating_base=floating)
+    assert robot.robot_has_joint_damping() and robot.robot_has_joint_friction()
+    width = 0.05
+    gen = GRiDCodeGenerator(robot, False, True, "grid", USE_JOINT_DYNAMICS=True,
+                            FRICTION_MODEL=model, FRICTION_WIDTH=width)
+    with contextlib.redirect_stdout(io.StringIO()):
+        gen.gen_all_code(output_path=str(tmp_path / "grid.cuh"), algorithm_list=_JD_ALGOS,
+                         enable_mujoco_kernels=False)
+    header = (tmp_path / "grid.cuh").read_text()
+    if kind == "polynomial":
+        assert "grid_coupling_alpha_" in header and "fabs(" in header, "runtime alpha fold missing"
+    monkeypatch.setenv("GRID_CUDA_CACHE_DIR", str(tmp_path / "executables"))
+    exe, command = _compile_runner(tmp_path, floating_base=floating,
+                                   run_tokens={"RUN_" + a.upper() for a in _JD_ALGOS},
+                                   skip_gradients=False, skip_eepose_gradients=True)
+    ref = RBDReference(robot, use_joint_dynamics=True, friction_model=model, friction_width=width)
+    bare = RBDReference(robot)
+    assert (ref._embedding is None) == (kind == "linear")
+    nq, nv = robot.get_num_pos(), robot.get_num_vel()
+    rng = np.random.default_rng(13)
+    for sample in range(3):
+        q = rng.standard_normal(nq)
+        if floating:
+            q[3:7] /= np.linalg.norm(q[3:7])
+        qd = rng.uniform(0.3, 1.5, nv) * rng.choice([-1.0, 1.0], nv)   # away from the Coulomb switch
+        u = rng.standard_normal(nv)
+        c = ref.inverse_dynamics(q, qd, None)[0]
+        # the fold is active: the damped bias differs from the undamped one by the joint torques
+        assert float(np.max(np.abs(c - bare.inverse_dynamics(q, qd, None)[0]))) > 1e-2
+        expected = {
+            "inverse_dynamics": c,
+            "forward_dynamics": ref.forward_dynamics(q, qd, u),
+            "aba": ref.aba(q, qd, u),
+            "inverse_dynamics_gradient_q": ref.inverse_dynamics_gradient(q, qd, None)[:, :nv],
+            "inverse_dynamics_gradient_qd": ref.inverse_dynamics_gradient(q, qd, None)[:, nv:],
+            "forward_dynamics_gradient_q": ref.forward_dynamics_gradient(q, qd, u)[0],
+            "forward_dynamics_gradient_qd": ref.forward_dynamics_gradient(q, qd, u)[1],
+        }
+        stdin = "\n".join(" ".join(f"{v:.9g}" for v in np.asarray(x, np.float32)) for x in (q, qd, u)) + "\n"
+
+        def run(threads):
+            out = _parse_runner_output(_run_runner(exe, stdin, command, num_threads=threads))
+            flat = []
+            for name, exp in expected.items():
+                assert name in out, (name, sorted(out))
+                got = np.asarray(out[name], np.float64)
+                exp = np.asarray(exp, np.float64)
+                if got.shape != exp.shape:
+                    got = got.reshape(exp.shape) if exp.ndim == 2 else got.reshape(-1)
+                scale = max(1.0, float(np.max(np.abs(exp))))
+                np.testing.assert_allclose(got, exp, rtol=0, atol=3e-4 * scale,
+                                           err_msg=f"{name} {kind} {model} sample {sample} floating={floating} threads={threads}")
+                flat.append(got.reshape(-1))
+            return np.concatenate(flat)
+
+        thread_sweep((1, 32, 64, 128), run)

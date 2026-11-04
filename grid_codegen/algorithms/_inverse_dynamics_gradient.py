@@ -1,6 +1,9 @@
 from grid_codegen.helpers._code_generation_helpers import gen_launch_pair, gen_emit_host_result_transfer, gen_workspace_cast_expr, gen_workspace_repoint_line, host_mode_flags, host_q_qd_input_transfer_lines, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
 
 
+from grid_codegen.helpers._topology_helpers import _jd_alpha_fold
+
+
 def _idg_Svec_cpp(S_vec):
     """C++ brace-init for a dense 6-vector motion subspace column (Tier-B skew
     emit in the dense serial ID-gradient inner)."""
@@ -24,13 +27,14 @@ def _idg_damping_diag_cpp(self, n):
     ``s_dc_du[nv*nv + nv*vs + vs]``. We ``+=`` so multiple joints sharing a
     v-slot (mimic) sum, matching the value path's per-v-slot accumulate.
 
-    Mimic alpha-fold: ONE power of alpha (k^1) -- the value bias scales by
-    alpha*damping, so its qd-derivative w.r.t. the SHARED reduced coordinate is
-    likewise alpha*damping (d(alpha*b*(alpha*qd_v))/dqd_v would be alpha^2, but
-    the bias reads s_qd[vs] (the reduced coord) scaled once by alpha and writes
-    once, exactly as gen_inverse_dynamics_joint_dynamics_bias does -> the
-    derivative carries a single alpha, matching the value emit's literal
-    alpha*b coefficient). The floating root carries no damping (skipped).
+    Mimic alpha-fold: the value bias folds alpha^2*damping and |alpha|*friction
+    into the leader's slot (_jd_alpha_fold, user ruling 2026-11-03), so the
+    dqd diagonal carries the same folded coefficients. A polynomial follower's
+    alpha varies with the leader coordinate: its dqd diagonal reads alpha(q)
+    at runtime and its dq diagonal gains 2 alpha alpha' b qd_l +
+    sign(alpha) alpha' f s(qd_l) (the derivative of the fold itself; under the
+    sign model the Coulomb term therefore contributes to dc_dq, nowhere else).
+    The floating root carries no damping (skipped).
 
     EMITTED ONLY when USE_JOINT_DYNAMICS is enabled AND the robot declares
     nonzero damping. With the flag off (the DEFAULT) this is a pure no-op, so
@@ -41,11 +45,14 @@ def _idg_damping_diag_cpp(self, n):
     if not getattr(self, "USE_JOINT_DYNAMICS", False):
         return
     TANH = self._jd_tanh_active()
-    if not (self.robot.robot_has_joint_damping() or TANH):
+    HAS_VARIABLE = self.robot_has_variable_couplings()
+    if not (self.robot.robot_has_joint_damping() or TANH
+            or (HAS_VARIABLE and self.robot.robot_has_joint_friction())):
         return
     HAS_MIMIC = self.robot_has_mimic_joints()
     HAS_DAMP = self.robot.robot_has_joint_damping()
     fb = self.robot.floating_base
+    variable = []   # (jid, vs, b, fr) of polynomial followers: runtime alpha(q) terms
     # collect (v_slot -> summed alpha*damping) so mimic joints sharing a slot
     # fold to a single += into the diagonal cell. Under the tanh model the folded
     # alpha*friction per slot is collected too: its slope (f/w) sech^2(qd/w) is
@@ -56,7 +63,7 @@ def _idg_damping_diag_cpp(self, n):
         if fb and jid == 0:
             continue  # floating root carries no damping
         b = float(self.robot.get_damping_by_id(jid)) if HAS_DAMP else 0.0
-        fr = float(self.robot.get_friction_by_id(jid)) if TANH else 0.0
+        fr = float(self.robot.get_friction_by_id(jid)) if (TANH or HAS_VARIABLE) else 0.0
         if b == 0.0 and fr == 0.0:
             continue
         if HAS_MIMIC:
@@ -64,13 +71,23 @@ def _idg_damping_diag_cpp(self, n):
             alpha = float(self._alpha_for_jid(jid))
             if alpha == 0.0:
                 continue  # No reduced derivative row belongs to a constant joint.
+            if self._alpha_is_variable(jid):
+                variable.append((jid, vs, b, fr))
+                continue
         else:
             vs = self.robot.get_joint_index_v(jid)
             alpha = 1.0
+        if not TANH:
+            fr = 0.0   # sign-model Coulomb friction with a constant fold: zero slope
+        b_fold, f_fold = _jd_alpha_fold(alpha, b, fr)
         if b != 0.0:
-            diag[vs] = diag.get(vs, 0.0) + alpha * b
+            diag[vs] = diag.get(vs, 0.0) + b_fold
         if fr != 0.0:
-            fdiag[vs] = fdiag.get(vs, 0.0) + alpha * fr
+            fdiag[vs] = fdiag.get(vs, 0.0) + f_fold
+    if not (diag or fdiag or variable):
+        return
+    if variable:
+        _idg_variable_fold_terms_cpp(self, n, variable, TANH)
     if not (diag or fdiag):
         return
     self.gen_add_code_line("//")
@@ -115,6 +132,38 @@ def _idg_damping_diag_cpp(self, n):
                                    + ") * (static_cast<T>(1) - th * th); }")
         else:
             self.gen_add_code_line(guard + "s_dc_du[" + str(cell) + "] += " + rhs + ";")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+
+
+def _idg_variable_fold_terms_cpp(self, n, variable, TANH):
+    """The joint-dynamics gradient of polynomial followers (alpha varies with
+    the leader's q): per follower, with al = alpha(q_l), ald = alpha'(q_l),
+    s = sign(qd_l) or tanh(qd_l / w) and sech2 = 1 - tanh^2,
+        dc_dqd[vs, vs] += al^2 b (+ |al| (f / w) sech2 under tanh)
+        dc_dq [vs, vs] += 2 al ald b qd_l + sign(al) ald f s.
+    Serial (one thread), like the value bias it differentiates."""
+    w_vslot = self.get_friction_width_baked() if TANH else None
+    self.gen_add_code_line("//")
+    self.gen_add_code_line("// polynomial followers: joint-dynamics gradient with alpha(q): dc_dqd += al^2 b; dc_dq += 2 al al' b qd + sign(al) al' f s(qd)")
+    self.gen_add_code_line("//")
+    self.gen_add_sync()
+    self.gen_add_serial_ops()
+    for jid, vs, b, fr in variable:
+        qd = "s_qd[" + str(vs) + "]"
+        cell_qd = n * n + n * vs + vs
+        cell_q = n * vs + vs
+        self.gen_add_code_line("{ const T al = " + self._coupling_alpha_cpp(jid) + "; const T ald = " + self._coupling_alpha_cpp(jid, order=1) + ";")
+        if TANH and fr != 0.0:
+            w = "static_cast<T>(" + repr(float(w_vslot[vs])) + ")"
+            self.gen_add_code_line("  const T th = tanh(" + qd + " / " + w + "); const T s = th; const T sl = (static_cast<T>(" + repr(float(fr)) + ") / " + w + ") * (static_cast<T>(1) - th * th);")
+        elif fr != 0.0:
+            self.gen_add_code_line("  const T s = static_cast<T>((" + qd + " > static_cast<T>(0)) - (" + qd + " < static_cast<T>(0))); const T sl = static_cast<T>(0);")
+        else:
+            self.gen_add_code_line("  const T s = static_cast<T>(0); const T sl = static_cast<T>(0);")
+        self.gen_add_code_line("  const T sg = static_cast<T>((al > static_cast<T>(0)) - (al < static_cast<T>(0)));")
+        self.gen_add_code_line("  s_dc_du[" + str(cell_qd) + "] += al * al * static_cast<T>(" + repr(float(b)) + ") + fabs(al) * sl;")
+        self.gen_add_code_line("  s_dc_du[" + str(cell_q) + "] += static_cast<T>(2) * al * ald * static_cast<T>(" + repr(float(b)) + ") * " + qd + " + sg * ald * static_cast<T>(" + repr(float(fr)) + ") * s; }")
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 

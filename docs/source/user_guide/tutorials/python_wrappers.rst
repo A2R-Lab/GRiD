@@ -462,7 +462,9 @@ offer a functional parameterized forward.
 
 Joint damping and friction are opt-in. ``register_robot(use_joint_dynamics=True)``
 applies the URDF ``<dynamics damping= friction=>`` values as the joint-local
-bias ``damping*qd + friction*s(qd)`` in ``inverse_dynamics``,
+bias ``damping*qd + friction*s(qd)`` (a mimic follower's folds into its
+leader's slot as ``alpha^2*damping`` and ``|alpha|*friction``, see
+:doc:`/user_guide/concepts/closed_loops`) in ``inverse_dynamics``,
 ``forward_dynamics`` and ``aba``, and carries its derivative through the
 gradients. The shape ``s`` is ``friction_model``: ``"sign"`` (the default)
 applies ``sign(qd)``, whose derivative is zero almost everywhere, so a

@@ -12,6 +12,17 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Joint damping and friction on a coupled (mimic) joint now fold into the
+  leader's coordinate with `alpha^2 * damping` and `|alpha| * friction`
+  (the congruence `G^T B G` of the follower's own torque), in the generated
+  bias and gradients, the runtime joint-dynamics table and the numpy
+  reference. The previous fold used a single power of `alpha`, which
+  coincides on a ratio of one (fr3) and injected energy on a negative
+  ratio. Polynomial followers evaluate `alpha(q)` in the fold and gain the
+  `2 alpha alpha' b qd + sign(alpha) alpha' f s(qd)` term in `dtau/dq`;
+  the constant per-slot `runtime_joint_dynamics` table is refused for a
+  damped polynomial follower.
+
 - Frame kinematics: `frame_velocity` (the twist `J qd` of a frame) and
   `frame_acceleration` (`J qdd + Jdot qd`, the spatial acceleration in
   `LOCAL` and `WORLD` and the classical acceleration in

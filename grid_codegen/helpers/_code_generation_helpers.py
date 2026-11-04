@@ -108,6 +108,22 @@ def _coupling_alpha_cpp(self, jid, q_name="s_q", order=0):
     return "grid_coupling_alpha" + suffix + "_" + str(jid) + "<T>(" + q_name + ")"
 
 
+def _jd_fold_cpp(self, jid, alpha, b, fr, q_name="s_q"):
+    """C expressions (damping, friction) of body jid's joint-dynamics
+    coefficients in its reduced slot: alpha^2 b and |alpha| fr
+    (_jd_alpha_fold). A linear follower or an independent joint gets the
+    folded literal; a polynomial follower evaluates alpha(q_l) through the
+    baked evaluator, so the expressions read q_name."""
+    if not self._alpha_is_variable(jid):
+        from ._topology_helpers import _jd_alpha_fold
+        b_fold, f_fold = _jd_alpha_fold(alpha, b, fr)
+        return ("static_cast<T>(" + repr(float(b_fold)) + ")",
+                "static_cast<T>(" + repr(float(f_fold)) + ")")
+    al = self._coupling_alpha_cpp(jid, q_name)
+    return ("(" + al + " * " + al + " * static_cast<T>(" + repr(float(b)) + "))",
+            "(fabs(" + al + ") * static_cast<T>(" + repr(float(fr)) + "))")
+
+
 def _coupling_value_cpp(self, jid, q_name="s_q"):
     """C expression for a follower's coordinate from the reduced q."""
     j = self.robot.get_joint_by_id(jid)

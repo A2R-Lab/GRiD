@@ -371,9 +371,13 @@ def _joint_dynamics_folded_by_vslot(self):
     Reuses the EXACT jid->v-slot fold the baked bias emitters use
     (gen_inverse_dynamics_joint_dynamics_bias / _idg_damping_diag_cpp): iterate
     joints, skip the floating root, map jid->v-slot via _v_slot_cpp /
-    get_joint_index_v, and ACCUMULATE alpha*b / alpha*fr into the shared slot so
-    several mimic joints feeding one reduced coordinate fold to a single fused
-    coefficient. Returning the folded vectors here (rather than re-deriving the
+    get_joint_index_v, and ACCUMULATE alpha^2*b / |alpha|*fr into the shared
+    slot (the congruence G^T B G of the follower's own damping, and the
+    follower's Coulomb torque alpha*f*sign(alpha*qd_l); user ruling 2026-11-03)
+    so several mimic joints feeding one reduced coordinate fold to a single
+    fused coefficient. A polynomial follower has no constant fold, so a robot
+    with a damped or frictional polynomial follower refuses the runtime table
+    (its baked bias evaluates alpha(q) in the kernel instead). Returning the folded vectors here (rather than re-deriving the
     fold in init_joint_dynamics_params, _compile meta, and the bias read) keeps
     the device-table init, the persisted meta, and the bias reads agreeing BY
     CONSTRUCTION — the bit-identity invariant in C5 plan §3.4.
@@ -397,14 +401,33 @@ def _joint_dynamics_folded_by_vslot(self):
         if b == 0.0 and fr == 0.0:
             continue
         if HAS_MIMIC:
+            if self._alpha_is_variable(jid):
+                raise NotImplementedError(
+                    "runtime_joint_dynamics: joint " + str(self.robot.get_joint_by_id(jid).get_name())
+                    + " is a polynomial follower with damping or friction; its fold multiplier varies "
+                    "with the leader, so no per-slot table entry exists (bake the joint dynamics instead)")
             vs = self._v_slot_cpp(jid)
             alpha = float(self._alpha_for_jid(jid))
         else:
             vs = self.robot.get_joint_index_v(jid)
             alpha = 1.0
-        b_vslot[vs] += alpha * b
-        f_vslot[vs] += alpha * fr
+        b_fold, f_fold = _jd_alpha_fold(alpha, b, fr)
+        b_vslot[vs] += b_fold
+        f_vslot[vs] += f_fold
     return b_vslot, f_vslot
+
+
+def _jd_alpha_fold(alpha, b, fr):
+    """The reduced-coordinate coefficients of a joint's damping b and Coulomb
+    friction fr when the joint's velocity is alpha times the reduced slot's:
+    (alpha^2 b, |alpha| fr). The follower's torque b*qd_f + fr*sign(qd_f) with
+    qd_f = alpha qd_l projects onto the leader through alpha, which gives
+    alpha^2 b qd_l + |alpha| fr sign(qd_l) (the sign of alpha cancels in the
+    Coulomb term). Under the tanh model the smoothing width belongs to the
+    reduced slot, so the shape stays tanh(qd_l / w). Dissipation is then
+    non-negative for every sign of alpha (user ruling 2026-11-03; the earlier
+    single-alpha fold injected energy on a negative ratio)."""
+    return alpha * alpha * b, abs(alpha) * fr
 
 def gen_get_joint_dynamics_params_size(self):
     # runtime_joint_dynamics: nv damping + nv friction = 2*nv scalars, v-slot

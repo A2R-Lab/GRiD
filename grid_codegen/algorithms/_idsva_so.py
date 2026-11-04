@@ -44,7 +44,7 @@ def _emit_idsva_so_joint_dynamics_diag(self, out_name):
         else:
             vs = self.robot.get_joint_index_v(jid)
             alpha = 1.0
-        fdiag[vs] = fdiag.get(vs, 0.0) + alpha * fr
+        fdiag[vs] = fdiag.get(vs, 0.0) + abs(alpha) * fr   # |alpha| f: _jd_alpha_fold
     if not fdiag:
         return
     RUNTIME = getattr(self, "runtime_joint_dynamics", False)

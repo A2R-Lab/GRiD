@@ -3864,3 +3864,22 @@ in one frame only, suspect a definitional difference in that frame before a
 bug, and write the suspected correction as a numerical test; and never make
 the external library's convention the oracle's by default when the project's
 own finite differences disagree with it.
+
+### 7.z86 A ratio of one hides the power of alpha (2026-11-03, joint dynamics on mimic followers)
+
+The damping and friction fold of a mimic follower carried a single power of alpha
+(`tau_l += alpha*b*qd_l`) for a year, with the reference, the generator, their tests
+and a docstring agreeing that this was intentional. Every test ran on fr3, whose
+finger follower has a multiplier of exactly one, where `alpha` and `alpha^2`
+coincide; the tests were also built from the same formula they checked. The physical
+fold is `alpha^2 b qd_l + |alpha| f sign(qd_l)` (the follower's own torque, projected
+through alpha; the congruence `G^T B G`), and the single-alpha version injects energy
+on a negative ratio. Lessons: (1) a convention test needs a parameter value at which
+the candidate conventions differ, here a ratio other than one and a negative one;
+(2) an expected value built from the implementation's own formula is a regression
+lock, not an oracle, so prefer a witness that involves no reduced-coordinate
+convention at all (the projection of a full spanning tree that carries the quantity
+itself) plus an invariant (dissipated power non-negative); (3) Pinocchio ignores
+`model.damping` in rnea and aba, so joint dynamics has no external oracle and must be
+pinned this way. Witness: `RBDReference/tests/test_joint_dynamics_coupling_fold.py`,
+`test/cuda_equivalents/test_cuda_polynomial_coupling.py::test_coupled_joint_dynamics_match_reference`.

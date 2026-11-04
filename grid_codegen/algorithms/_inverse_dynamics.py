@@ -144,17 +144,20 @@ def gen_inverse_dynamics_joint_dynamics_bias(self):
             if alpha == 0.0:
                 continue  # No local input or generalized-force ownership.
             qd = "s_qd[" + str(vs) + "]"
+            # the follower's own torque projected onto its leader: alpha^2 b qd_l
+            # and |alpha| f s(qd_l) (_jd_alpha_fold); a polynomial follower reads
+            # alpha(q_l) from the baked evaluator at runtime.
+            b_cpp, f_cpp = self._jd_fold_cpp(jid, alpha, b, fr)
             terms = []
             if b != 0.0:
-                terms.append("static_cast<T>(" + repr(alpha * b) + ") * " + qd)
+                terms.append(b_cpp + " * " + qd)
             if fr != 0.0 and TANH:
-                # smooth model: alpha*f*tanh(qd/w), the width per v-slot baked.
-                terms.append("static_cast<T>(" + repr(alpha * fr) + ") * tanh(" + qd
+                # smooth model: |alpha|*f*tanh(qd/w), the width per v-slot baked.
+                terms.append(f_cpp + " * tanh(" + qd
                              + " / static_cast<T>(" + repr(float(w_vslot[vs])) + "))")
             elif fr != 0.0:
                 # exact sign matching np.sign (0 at qd==0): (qd>0) - (qd<0).
-                terms.append("static_cast<T>(" + repr(alpha * fr)
-                             + ") * static_cast<T>((" + qd + " > static_cast<T>(0)) - ("
+                terms.append(f_cpp + " * static_cast<T>((" + qd + " > static_cast<T>(0)) - ("
                              + qd + " < static_cast<T>(0)))")
             self.gen_add_code_line("s_c[" + str(vs) + "] += " + " + ".join(terms) + ";")
     self.gen_add_end_control_flow()
