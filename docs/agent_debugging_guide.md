@@ -3901,3 +3901,24 @@ itself) plus an invariant (dissipated power non-negative); (3) Pinocchio ignores
 `model.damping` in rnea and aba, so joint dynamics has no external oracle and must be
 pinned this way. Witness: `RBDReference/tests/test_joint_dynamics_coupling_fold.py`,
 `test/cuda_equivalents/test_cuda_polynomial_coupling.py::test_coupled_joint_dynamics_match_reference`.
+
+### 7.z87 A smoke runner's hardcoded thread count can exceed a production kernel's launch bound, and only cudaGetLastError says so (2026-11-03, multitarget runners)
+
+The multitarget runners launched the production `*_kernel<T, TIER_SHARED>` with 128
+threads. The generator sizes `MAX_PERF_LEVEL_THREADS` from the topology, and
+`__launch_bounds__(tier_max_threads<TIER>())` makes it a hard cap: a four-joint branched
+chain gets 96, the launch fails with cudaErrorInvalidValue, the output buffer keeps its
+zeros, and `cudaDeviceSynchronize` reports nothing because a launch-configuration error
+is not a sticky device error. The runner's tier self-check then blamed the kernel
+("tier non-bit-identical 2.4e-1"). The production host never hits this (it clamps
+through grid_host_clamp_threads), and the shipped robots all cap above 128, so only the
+tiny synthetic chains of the coupling tests exposed it. Rules: a runner that launches a
+generated kernel clamps its thread count to `grid::tier_max_threads<TIER>()` (or the
+host clamp) and checks `cudaGetLastError()` right after the launch; a "tier mismatch"
+where one tier is all zeros is a failed launch until proven otherwise.
+
+Found on the way: a polynomial follower whose leader is not on the anchor's chain (the
+cross-finger coupling of a gripper) is a lone Jacobian job, and `group_jacobian_jobs`
+took it for an unscaled single job because the placeholder multiplier compares equal to
+one. Test the kind (`_alpha_is_variable`), never the placeholder's value. The branched
+chain of `polynomial_coupling_model.py` (`branched=True`) is the witness.

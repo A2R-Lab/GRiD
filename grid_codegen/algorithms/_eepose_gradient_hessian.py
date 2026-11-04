@@ -587,7 +587,11 @@ def group_jacobian_jobs(self, fill_jobs, anchors):
         # The disjoint-column fast path writes an unscaled axis. A lone mimic
         # contribution still needs its multiplier, even after constant jobs
         # have been removed from this column.
-        if len(grp) == 1 and (not has_mimic or self._alpha_for_jid(grp[0][2]["j"]) == 1.0):
+        # (A polynomial follower's placeholder multiplier reads as one, so it is
+        # tested by kind: alone on a chain whose anchor its leader does not reach,
+        # it still scales by alpha(q) through the serial path.)
+        if len(grp) == 1 and (not has_mimic or (self._alpha_for_jid(grp[0][2]["j"]) == 1.0
+                                                and not self._alpha_is_variable(grp[0][2]["j"]))):
             single_jobs.append(grp[0])
         else:
             multi_groups.append(grp)

@@ -48,6 +48,11 @@ repository. Everything below describes the packaged A2R-Lab releases.
   gradient transform. The floating-base mjx integrator backward is no longer
   refused on the jax and torch surfaces and is checked against finite
   differences of a loss through it in float64.
+- A polynomial follower whose leader is not on an end effector's chain (a
+  gripper's cross-finger coupling) is now scaled by `alpha(q)` in the pose
+  and multitarget gradients; its lone Jacobian column was treated as an
+  unscaled single job. The multitarget smoke runners clamp their shared-tier
+  launches to the kernel's launch bound and check the launch.
 - A spherical-joint model builds with `integrator_gradient` in its algorithm
   list. Its gradient kernels support the single-stage schemes only (euler,
   semi-implicit euler, constant acceleration; the multi-stage instantiations

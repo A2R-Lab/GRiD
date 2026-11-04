@@ -30,21 +30,31 @@ def _joint(name, parent, child, axis, xyz, rpy, mimic_xml="", joint_dynamics=Fal
             '<limit lower="-3" upper="3" effort="10" velocity="10"/>' + mimic_xml + '</joint>')
 
 
-def polynomial_chain_urdf(kind="polynomial", joint_dynamics=False):
+def polynomial_chain_urdf(kind="polynomial", joint_dynamics=False, branched=False):
     """kind: "polynomial" (the default chain) or "linear" (constant ratios);
-    joint_dynamics adds viscous damping and Coulomb friction to every joint."""
+    joint_dynamics adds viscous damping and Coulomb friction to every joint;
+    branched puts j3/j4 on a second branch off the base, with j4 still the
+    follower of j1 (a leader the second leaf's chain never reaches, the
+    cross-finger coupling of a gripper), two leaves l2 and l4."""
     mimic = _POLY if kind == "polynomial" else _LINEAR
     links = '<link name="base"/>' + "".join(f'<link name="l{k}">{_INERTIAL}</link>' for k in range(1, 5))
-    joints = (_joint("j1", "base", "l1", "0 0 1", "0 0 0.1", "0 0 0", joint_dynamics=joint_dynamics)
-              + _joint("j2", "l1", "l2", "0 1 0", "0.2 0 0.05", "0.1 0 0", mimic["j2"], joint_dynamics)
-              + _joint("j3", "l2", "l3", "1 0 0", "0.15 0.05 0", "0 0.2 0", joint_dynamics=joint_dynamics)
-              + _joint("j4", "l3", "l4", "0 1 0", "0.1 0 0.1", "0 0 0.3", mimic["j4"], joint_dynamics))
-    name = ("poly_chain" if kind == "polynomial" else "linear_chain") + ("_damped" if joint_dynamics else "")
+    if branched:
+        j4 = mimic["j4"].replace('joint="j3"', 'joint="j1"')
+        joints = (_joint("j1", "base", "l1", "0 0 1", "0 0 0.1", "0 0 0", joint_dynamics=joint_dynamics)
+                  + _joint("j2", "l1", "l2", "0 1 0", "0.2 0 0.05", "0.1 0 0", mimic["j2"], joint_dynamics)
+                  + _joint("j3", "base", "l3", "1 0 0", "-0.15 0.05 0.1", "0 0.2 0", joint_dynamics=joint_dynamics)
+                  + _joint("j4", "l3", "l4", "0 1 0", "0.1 0 0.1", "0 0 0.3", j4, joint_dynamics))
+    else:
+        joints = (_joint("j1", "base", "l1", "0 0 1", "0 0 0.1", "0 0 0", joint_dynamics=joint_dynamics)
+                  + _joint("j2", "l1", "l2", "0 1 0", "0.2 0 0.05", "0.1 0 0", mimic["j2"], joint_dynamics)
+                  + _joint("j3", "l2", "l3", "1 0 0", "0.15 0.05 0", "0 0.2 0", joint_dynamics=joint_dynamics)
+                  + _joint("j4", "l3", "l4", "0 1 0", "0.1 0 0.1", "0 0 0.3", mimic["j4"], joint_dynamics))
+    name = ("poly_chain" if kind == "polynomial" else "linear_chain") + ("_damped" if joint_dynamics else "") + ("_branched" if branched else "")
     return f'<robot name="{name}">{links}{joints}</robot>'
 
 
-def write_polynomial_chain(directory, kind="polynomial", joint_dynamics=False):
-    name = ("poly_chain" if kind == "polynomial" else "linear_chain") + ("_damped" if joint_dynamics else "")
+def write_polynomial_chain(directory, kind="polynomial", joint_dynamics=False, branched=False):
+    name = ("poly_chain" if kind == "polynomial" else "linear_chain") + ("_damped" if joint_dynamics else "") + ("_branched" if branched else "")
     path = directory / f"{name}.urdf"
-    path.write_text(polynomial_chain_urdf(kind, joint_dynamics))
+    path.write_text(polynomial_chain_urdf(kind, joint_dynamics, branched))
     return path

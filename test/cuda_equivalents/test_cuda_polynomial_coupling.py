@@ -591,3 +591,54 @@ def test_polynomial_coupling_f_ext_gradient_matches_projection(tmp_path, floatin
         exp = fe["did_du_dfext_dq"]
         scale = max(1.0, float(np.max(np.abs(exp))))
         np.testing.assert_allclose(cuda3, exp, rtol=0, atol=3e-4 * scale, err_msg=f"did_du_dfext_dq sample {sample} floating={floating}")
+
+
+def test_polynomial_coupling_branched_leader_multitarget_gradient(tmp_path):
+    """A follower whose leader sits on another branch (the cross-finger coupling
+    of a gripper): its column is alone on the second leaf's chain and must still
+    scale by alpha(q) (before 2026-11-03 the placeholder multiplier read as one
+    and the column went out unscaled). The multitarget gradient runner checks
+    every target column against finite differences of the reduced model's own
+    forward kinematics and the offset-free targets against the pose gradient."""
+    import subprocess
+    from test.cuda_equivalents.test_cuda_multi_target_position_gradient import (
+        _build_batch, _generate_header, _compile_runner, _parse, _pos)
+
+    urdf = write_polynomial_chain(tmp_path, branched=True)
+    with contextlib.redirect_stdout(io.StringIO()):
+        robot = URDFParser().parse(str(urdf), floating_base=False)
+    j4 = robot.get_joint_by_name("j4")
+    assert not j4.is_linear_coupling() and robot.get_joint_by_id(j4.get_mimic_target_id()).get_name() == "j1"
+    assert len(robot.get_leaf_nodes()) == 2
+    targets, n_leaves = _build_batch(robot)
+    build_dir = tmp_path / "branched"
+    build_dir.mkdir()
+    _generate_header(robot, targets, build_dir)
+    exe = _compile_runner(build_dir)
+    result = subprocess.run([str(exe)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    mtg, eeg = _parse(result.stdout)
+    nv, nq = robot.get_num_vel(), robot.get_num_pos()
+    assert nq == nv == 2
+    ref = RBDReference(robot)
+    q = np.array([0.2 * np.sin(0.7 * i) + 0.1 for i in range(nq)])   # the runner's configuration
+    eps = 1e-6
+    for t, tgt in enumerate(targets):
+        anc, off = tgt["anchor_jid"], tgt["offset"]
+        for vi in range(nv):
+            qp = q.copy(); qp[vi] += eps
+            qm = q.copy(); qm[vi] -= eps
+            Xp, _ = ref._frame_world_placement_and_chain(qp)
+            Xm, _ = ref._frame_world_placement_and_chain(qm)
+            fd = (_pos(Xp, anc, off) - _pos(Xm, anc, off)) / (2 * eps)
+            np.testing.assert_allclose(mtg[(t, vi)], fd, rtol=1e-4, atol=1e-5,
+                                       err_msg=f"target {t} (anchor {anc}) col {vi}")
+    # the second leaf's offset target moves with the leader's coordinate only through
+    # alpha(q_1) (the leaf joint sits at the leaf origin, so the offset-free target's
+    # column is zero): a nonzero column that the unscaled single-job path would drop
+    leaf_b = int(robot.get_leaf_nodes()[1])
+    t_b = next(t for t, tgt in enumerate(targets) if tgt["anchor_jid"] == leaf_b and any(tgt["offset"]))
+    assert float(np.linalg.norm(mtg[(t_b, 0)])) > 1e-3
+    for e in range(n_leaves):
+        for vi in range(nv):
+            np.testing.assert_allclose(mtg[(e, vi)], eeg[(e, vi)], rtol=1e-9, atol=1e-11)
