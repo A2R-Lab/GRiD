@@ -556,7 +556,8 @@ class GRiDCodeGenerator:
                          "inverse_dynamics_regressor", "kinetic_energy_regressor", "potential_energy_regressor",
                          "forward_dynamics_parameter_gradient", "com", "ccrba",
                          "generalized_gravity", "nonlinear_effects", "energy",
-                         "end_effector_pose_runtime", "end_effector_pose_gradient_runtime"}
+                         "end_effector_pose_runtime", "end_effector_pose_gradient_runtime",
+                         "coriolis_matrix"}
             unsupported = sorted(set(algorithms) - supported)
             if unsupported:
                 raise NotImplementedError(

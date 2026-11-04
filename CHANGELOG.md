@@ -22,6 +22,11 @@ repository. Everything below describes the packaged A2R-Lab releases.
   `2 alpha alpha' b qd + sign(alpha) alpha' f s(qd)` term in `dtau/dq`;
   the constant per-slot `runtime_joint_dynamics` table is refused for a
   damped polynomial follower.
+- `coriolis_matrix` generates for polynomial couplings: the embedding's
+  reduced matrix `G^T C_f G + G^T M_f Gdot`, whose inertia term the kernel
+  assembles from the composite inertias of its backward pass with `alpha(q)`
+  and `alpha'(q)` read at runtime; the numpy reference projects the same
+  expression and checks `C qd + g = bias` and `C + C^T = dM/dt`.
 
 - Frame kinematics: `frame_velocity` (the twist `J qd` of a frame) and
   `frame_acceleration` (`J qdd + Jdot qd`, the spatial acceleration in

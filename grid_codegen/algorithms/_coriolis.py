@@ -88,13 +88,16 @@ def _coriolis_metadata(self):
     col_s_sign = []   # internal slot -> S unit-axis sign (cardinal); 0 for skew
     col_S_vec = []    # internal slot -> dense 6-vector S column (Tier-B skew)
     col_is_skew = []  # internal slot -> 1 if Tier-B skew, else 0
+    col_variable = []  # internal slot -> 1 if the fold multiplier varies with q (polynomial follower)
     body_col_start = [0]  # body i's internal columns are [body_col_start[i], body_col_start[i+1])
     for i in range(NB):
         joint = robot.get_joint_by_id(i)
         is_mimic = getattr(joint, "is_mimic", False)
-        # a polynomial follower has no constant multiplier; the metadata is only
-        # sized here (the coriolis inner is refused for variable couplings until
-        # its fold reads alpha(q) at runtime), so a unit placeholder suffices.
+        # a polynomial follower has no constant multiplier: the table holds a
+        # unit placeholder and the inner fills cor_col_alpha / cor_col_alphad
+        # at runtime from the leader coordinate (gen_alpha_table); such a
+        # column also owns the inertia-term jobs (kind 2) below.
+        variable = bool(is_mimic and not joint.is_linear_coupling())
         alpha = (float(joint.get_mimic_multiplier()) if joint.is_linear_coupling() else 1.0) if is_mimic else 1.0
         if alpha == 0.0:
             # The body still transports motion and inertia, but owns no local
@@ -113,6 +116,7 @@ def _coriolis_metadata(self):
             col_body.append(i)
             col_true_vel.append(vel)
             col_alpha.append(alpha)
+            col_variable.append(1 if variable else 0)
             if s_row is None:
                 # Tier-B skew column: bake the dense S, sentinel the index/sign.
                 col_s_index.append(0)
@@ -154,6 +158,28 @@ def _coriolis_metadata(self):
             for ic in range(ci0, ci1):
                 for tc in range(cj0, cj1):
                     jobs.append((ic, tc, i, 1))
+    # Variable couplings (polynomial followers): the reduced Coriolis matrix of
+    # the embedding is C_y = G^T C_f G + G^T M_f Gdot, and the second term is
+    # not bilinear in alpha: for a follower column fc (body f, leader slot l)
+    # every column c of the full tree contributes M_f[c, fc] alpha' yd_l to
+    # C_y[true_vel[c], l], with M_f[c, fc] = Sw[c]^T oYc[f] Sw[fc] when body(c)
+    # is an ancestor-or-self of f and Sw[c]^T oYc[body(c)] Sw[fc] when body(c)
+    # lies below f (the CRBA cell through the deeper composite). Kind 2 jobs;
+    # the fan scales them by alpha[ic] * alpha'[tc] * qd[true_vel[tc]].
+    has_variable = any(col_variable)
+    if has_variable:
+        for fc in range(n_int):
+            if not col_variable[fc]:
+                continue
+            f = col_body[fc]
+            for b in list(ancestors(f)) + [f]:
+                for ic in range(body_col_start[b], body_col_start[b + 1]):
+                    jobs.append((ic, fc, f, 2))
+            for d in subtree[f]:
+                if d == f:
+                    continue
+                for ic in range(body_col_start[d], body_col_start[d + 1]):
+                    jobs.append((ic, fc, d, 2))
     # Mimic robots: several jobs can land on ONE reduced C cell (true_vel is
     # non-injective). The old emission atomicAdd-folded them (warp-order sums =
     # run-to-run nondeterministic). Deterministic form (bc6c75a accumulator-major
@@ -196,6 +222,8 @@ def _coriolis_metadata(self):
         "col_S_vec": col_S_vec,
         "col_is_skew": col_is_skew,
         "has_skew": any(col_is_skew),
+        "col_variable": col_variable,
+        "has_variable": has_variable,
         "job_icol": job_icol,
         "job_tcol": job_tcol,
         "job_body": job_body,
@@ -273,13 +301,20 @@ def gen_coriolis_matrix_inner(self):
         f"static const int cor_col_s_index[] = {{ {_coriolis_int_array(md['col_s_index'])} }};",
         f"static const int cor_col_s_sign[] = {{ {_coriolis_int_array(md['col_s_sign'])} }};",
         f"static const int cor_body_col_start[] = {{ {_coriolis_int_array(md['body_col_start'])} }};",
+    ] + ([] if md["has_variable"] else [
         "static const T cor_col_alpha[] = { " + ", ".join(
             "static_cast<T>(" + repr(a) + ")" for a in (md['col_alpha'] or [0.0])) + " };",
+    ]) + [
         f"static const int cor_job_icol[] = {{ {_coriolis_int_array(md['job_icol'])} }};",
         f"static const int cor_job_tcol[] = {{ {_coriolis_int_array(md['job_tcol'])} }};",
         f"static const int cor_job_body[] = {{ {_coriolis_int_array(md['job_body'])} }};",
         f"static const int cor_job_kind[] = {{ {_coriolis_int_array(md['job_kind'])} }};",
     ])
+    if md["has_variable"]:
+        # polynomial followers: alpha(q) and alpha'(q) per internal column, filled
+        # at runtime from the leader coordinates (one thread, then a sync)
+        self.gen_alpha_table("cor_col_alpha", md["col_body"])
+        self.gen_alpha_table("cor_col_alphad", md["col_body"], order=1)
     if HAS_MIMIC:
         # Destination-cell tables for the deterministic C-assembly fan (jobs are
         # baked cell-major; see _coriolis_metadata). Mimic-only -> cardinal robots
@@ -470,12 +505,21 @@ def gen_coriolis_matrix_inner(self):
         self.gen_add_code_line("int ic = cor_job_icol[job]; int tc = cor_job_tcol[job]; int bi = cor_job_body[job]; int kind = cor_job_kind[job];")
         if with_dest:  # non-mimic keeps the original line order (byte-identity)
             self.gen_add_code_line("int rrow = cor_col_true_vel[ic]; int ccol = cor_col_true_vel[tc];")
-        self.gen_add_code_line("T coeff = cor_col_alpha[ic] * cor_col_alpha[tc];")
+        if md["has_variable"]:
+            self.gen_add_code_line("T coeff = (kind == 2) ? cor_col_alpha[ic] * cor_col_alphad[tc] * s_qd[cor_col_true_vel[tc]] : cor_col_alpha[ic] * cor_col_alpha[tc];")
+        else:
+            self.gen_add_code_line("T coeff = cor_col_alpha[ic] * cor_col_alpha[tc];")
         self.gen_add_code_line("T val;")
         self.gen_add_code_line("if (kind == 0) {", True)
         self.gen_add_code_line("// subtree: Sw[ic]^T dFdv[tc]")
         self.gen_add_code_line("val = static_cast<T>(0); for (int r = 0; r < 6; ++r) val += s_Sw[ic*6 + r]*s_dFdv[tc*6 + r];")
         self.gen_add_end_control_flow()
+        if md["has_variable"]:
+            self.gen_add_code_line("else if (kind == 2) {", True)
+            self.gen_add_code_line("// inertia term of the embedding: Sw[ic]^T oYc[bi] Sw[tc] (M_f cell), scaled by alpha[ic] alpha'[tc] qd_l")
+            self.gen_add_code_line("T yw[6]; for (int row = 0; row < 6; ++row) { T a = static_cast<T>(0); for (int kk = 0; kk < 6; ++kk) a += s_oYc[bi*36 + row + 6*kk]*s_Sw[tc*6 + kk]; yw[row] = a; }")
+            self.gen_add_code_line("val = static_cast<T>(0); for (int r = 0; r < 6; ++r) val += s_Sw[ic*6 + r]*yw[r];")
+            self.gen_add_end_control_flow()
         self.gen_add_code_line("else {", True)
         self.gen_add_code_line("// ancestor: (oYc[bi] Sw[ic])^T dJ[tc] + (Sw[ic]^T Bc[bi]) Sw[tc]")
         self.gen_add_code_line("T ag[6]; for (int row = 0; row < 6; ++row) { T a = static_cast<T>(0); for (int kk = 0; kk < 6; ++kk) a += s_oYc[bi*36 + row + 6*kk]*s_Sw[ic*6 + kk]; ag[row] = a; }")

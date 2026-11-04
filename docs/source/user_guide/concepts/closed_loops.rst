@@ -94,13 +94,17 @@ targets; the frame Jacobian family (``J``, ``J̇``, the task inertia, the
 frame velocity and acceleration and their derivatives); the six
 integrators with their ``[A | B]`` gradients; the joint-torque regressor,
 the energy regressors and the forward-dynamics parameter gradient; the
-generalized gravity, the bias, the CoM, the centroidal momentum matrix and
-the energies. Each is checked on the GPU against the projection on a
+generalized gravity, the bias, the Coriolis matrix, the CoM, the
+centroidal momentum matrix, the energies and the joint damping and
+friction folds. The reduced Coriolis matrix is
+:math:`C_y = G^{\top} C_f G + G^{\top} M_f \dot G`, so that
+:math:`C_y \dot y + g_y` is the bias and :math:`C_y + C_y^{\top} = \dot M_y`;
+the kernel assembles the second term from the composite inertias of its
+backward pass. Each is checked on the GPU against the projection on a
 fixed and a floating-base chain (``test/cuda_equivalents/test_cuda_polynomial_coupling.py``).
 
 Every other algorithm still bakes a constant multiplier into its fold and
 ``gen_all_code`` refuses it for such a robot with a message that names it:
-the Coriolis matrix (whose reduced form carries :math:`G^{\top} M \dot G`),
 the momentum-matrix derivatives, the external-force gradients, the pose
 Hessian and the multi-target kernels, the regressor gradient, the
 second-order derivatives and the plant layer. ``register_robot`` therefore takes an explicit
