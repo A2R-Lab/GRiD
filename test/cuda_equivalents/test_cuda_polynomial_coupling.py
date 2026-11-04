@@ -544,3 +544,50 @@ def test_polynomial_coupling_dccrba_matches_projection(tmp_path, floating):
             return np.concatenate([dA.reshape(-1), adot.reshape(-1)])
 
         thread_sweep((1, 32, 64, 128), run)
+
+
+@pytest.mark.parametrize("floating", [False, True], ids=["fixed", "floating"])
+def test_polynomial_coupling_f_ext_gradient_matches_projection(tmp_path, floating):
+    """The external-force gradients of a polynomial robot: J_y^T = G^T J_f^T
+    with alpha(q) read at runtime, and -dJ_y^T/dy whose product alpha_j alpha_m
+    comes from two runtime tables plus the term -(dG/dy_l)^T J_f^T, the
+    follower's own pushdown row times alpha'(q_l). The projection is pinned by
+    the affine identity in f_ext and the chart in
+    RBDReference/tests/test_embedding_projection.py."""
+    import types
+    from test.cuda_equivalents.cuda_harness import _parse_runner_output
+    from test.cuda_equivalents.test_cuda_f_ext_gradient_equivalence import _gen_and_compile, _run
+
+    urdf = write_polynomial_chain(tmp_path)
+    with contextlib.redirect_stdout(io.StringIO()):
+        robot = URDFParser().parse(str(urdf), floating_base=floating)
+    exe = _gen_and_compile(types.SimpleNamespace(robot=robot), tmp_path, floating, codegen_profile="f-ext-gradient")
+    header = (tmp_path / "grid.cuh").read_text()
+    assert "fegdq_f_alphad" in header and "fegdq_alpha_j" in header, "the embedding terms are missing"
+    ref = RBDReference(robot)
+    assert ref._embedding is not None
+    nq, nv, nb = robot.get_num_pos(), robot.get_num_vel(), robot.get_num_bodies()
+    rng = np.random.default_rng(23)
+    for sample in range(3):
+        q = rng.standard_normal(nq)
+        if floating:
+            q[3:7] /= np.linalg.norm(q[3:7])
+        fe = ref.f_ext_gradient(q)
+        # the follower term is active on this chain
+        G = ref._embedding.G(q)
+        emb = ref._embedding
+        plain = np.einsum("jr,jcm,mi->rci", G, np.asarray(emb.full.f_ext_jacobian_transpose_dq(emb.expand_q(q))), G)
+        assert float(np.max(np.abs(-plain - fe["did_du_dfext_dq"]))) > 1e-3
+        out = _parse_runner_output(_run(exe, " ".join(f"{v:.9g}" for v in np.asarray(q, np.float32)) + "\n"))
+        for name, exp in (("f_ext_gradient_dtau_dfext", fe["dtau_dfext"]), ("f_ext_gradient_dqdd_dfext", fe["dqdd_dfext"])):
+            got = np.asarray(out[name], np.float64).reshape(nv, 6 * nb)
+            scale = max(1.0, float(np.max(np.abs(exp))))
+            np.testing.assert_allclose(got, exp, rtol=0, atol=3e-4 * scale, err_msg=f"{name} sample {sample} floating={floating}")
+        cuda_djt = np.asarray(out["f_ext_gradient_did_du_dfext_dq"], np.float64).reshape(nv * 6 * nb, nv)
+        cuda3 = np.empty((nv, 6 * nb, nv))
+        for vj in range(nv):
+            for col in range(6 * nb):
+                cuda3[vj, col, :] = cuda_djt[vj + nv * col, :]
+        exp = fe["did_du_dfext_dq"]
+        scale = max(1.0, float(np.max(np.abs(exp))))
+        np.testing.assert_allclose(cuda3, exp, rtol=0, atol=3e-4 * scale, err_msg=f"did_du_dfext_dq sample {sample} floating={floating}")
