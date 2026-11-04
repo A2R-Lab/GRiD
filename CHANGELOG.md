@@ -33,6 +33,12 @@ repository. Everything below describes the packaged A2R-Lab releases.
   contracted); the reference projects the same and checks the tensor
   against the chart, `Adot` along the flow and `hdot = A ydd + Adot yd`
   analytically.
+- `f_ext_gradient` and `f_ext_gradient_dq` generate for polynomial
+  couplings: `J_y^T = G^T J_f^T` with runtime `alpha(q)`, and the
+  configuration derivative adds `-(dG/dy)^T J_f^T` (the follower's own
+  pushdown row times `alpha'`) to the two-table `alpha_j alpha_m` product;
+  the reference projects the same and checks the affine identity in
+  `f_ext` and the chart.
 
 - Frame kinematics: `frame_velocity` (the twist `J qd` of a frame) and
   `frame_acceleration` (`J qdd + Jdot qd`, the spatial acceleration in
