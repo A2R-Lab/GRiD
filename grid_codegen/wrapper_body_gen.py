@@ -352,7 +352,10 @@ def gen_body(spec: AbiSpec) -> str:
     if spec.key in BODY_COMMENTS:
         L.append(BODY_COMMENTS[spec.key])
     if spec.it_dispatch:
-        L.append(f"    GRID_RBD_IT_DISPATCH(it, {IT_LAUNCHER[spec.key]}, batch, gravity, dt);")
+        # the gradient names only the single-stage cases on a model whose gradient
+        # kernels support no multi-stage scheme (GRID_RBD_IT_DISPATCH_GRAD)
+        macro = "GRID_RBD_IT_DISPATCH_GRAD" if spec.key == "integrator_gradient" else "GRID_RBD_IT_DISPATCH"
+        L.append(f"    {macro}(it, {IT_LAUNCHER[spec.key]}, batch, gravity, dt);")
     else:
         grav = "gravity, " if spec.takes_gravity else ""
         trail = "".join(", " + a for a in spec.trailing_runtime_args)

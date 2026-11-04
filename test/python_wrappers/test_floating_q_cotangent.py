@@ -52,7 +52,7 @@ pytestmark = pytest.mark.python_wrappers
 _ALGOS = ["inverse_dynamics", "inverse_dynamics_gradient", "forward_dynamics",
           "forward_dynamics_gradient", "minv", "end_effector_pose", "end_effector_pose_gradient",
           "integrator", "integrator_gradient"]
-_SPHERICAL_ALGOS = _ALGOS[:-2]
+_SPHERICAL_ALGOS = _ALGOS   # the integrators included: the wrapper names only the single-stage gradient cases on a spherical model
 _DT = 0.01       # the integrator step; euler, so q_{k+1} depends on (q, qd) and qd_{k+1} on (q, qd, u)
 _METHODS = ["inverse_dynamics", "forward_dynamics", "end_effector_pose", "integrator"]
 _EPS = 1e-6
@@ -332,11 +332,10 @@ def test_mujoco_convention_q_cotangent_is_the_on_manifold_pullback(numpy_go2_mjx
 def spherical_handle(request, dtype):
     name, floating = request.param
     urdf = REPO_ROOT / "external/URDFParser/tests/fixtures" / f"{name}.urdf"
-    # No integrator here: the wrapper instantiates integrator_gradient for every
-    # integrator type and the spherical-joint gradient is single-stage only (a
-    # static assertion at compile time), so the spherical build keeps the
-    # pre-2026-11-03 algorithm set; the spherical chart map is covered by
-    # test/test_configuration_cotangent.py on the CPU.
+    # The integrators are in: the spherical-joint gradient is single-stage only
+    # (a static assertion), and since 2026-11-03 the wrapper's gradient dispatch
+    # names only those cases on such a model (GRID_INTEGRATOR_GRADIENT_SINGLE_STAGE_ONLY),
+    # so the build compiles and the multi-stage codes fail at call time.
     h = grid_rbd.register_robot(f"w01_{name}_{floating}_{dtype}", str(urdf),
                                 floating_base=floating, algorithm_list=_SPHERICAL_ALGOS,
                                 enable_mujoco_kernels=False, max_batch_size=8, dtype=dtype)
@@ -345,7 +344,7 @@ def spherical_handle(request, dtype):
 
 
 @pytest.mark.parametrize("backend", ["jax", "torch"])
-@pytest.mark.parametrize("method", _METHODS[:-1])
+@pytest.mark.parametrize("method", _METHODS)
 def test_spherical_public_q_gradient(spherical_handle, dtype, backend, method):
     framework = pytest.importorskip(backend)
     if backend == "jax": framework.config.update("jax_enable_x64", True)
@@ -413,6 +412,34 @@ def _torch_weighted_reference(ref, h, method, q, qd, u):
         out = ref.forward_dynamics(qn, qd, u)
     out = np.asarray(out, np.float64).reshape(-1)
     return float(out @ np.linspace(.5, 1.5, out.size))
+
+
+def test_spherical_integrator_gradient_single_stage_only(spherical_handle, dtype):
+    """A spherical model's integrator gradient compiles with the single-stage
+    schemes only: euler, semi-implicit euler and constant acceleration run and
+    match the float64 reference at the normalized configuration, while the
+    multi-stage codes are refused at call time (rc=3) instead of failing the
+    build (2026-11-03; before that the build failed on the static assertion)."""
+    base, ref = spherical_handle
+    rng = np.random.default_rng(83)
+    q = rng.uniform(-.5, .5, base.num_joints)
+    for kind, qi, vi, nq, nv in base.configuration_layout:
+        if kind != "euclidean":
+            start = qi + (3 if kind == "floating" else 0)
+            q[start:start+4] /= np.linalg.norm(q[start:start+4])
+    qd = rng.uniform(-.2, .2, base.num_vel); u = rng.uniform(-.3, .3, base.num_vel)
+    tol = 1e-8 if dtype == "float64" else 2e-3
+    for it in ("euler", "semi_implicit_euler", "constant_acceleration"):
+        got = np.asarray(base.integrator_gradient(q[None].astype(_NP[dtype]), qd[None].astype(_NP[dtype]),
+                                                  u[None].astype(_NP[dtype]), _DT, integrator_type=it), np.float64)[0]
+        exp = np.asarray(ref.integrator_gradient(q, qd, u, _DT, integrator_type=it), np.float64)
+        scale = max(1.0, float(np.abs(exp).max()))
+        np.testing.assert_allclose(got, exp, rtol=0, atol=tol * scale, err_msg=it)
+    for it in ("midpoint", "rk4", "trapezoidal"):
+        with pytest.raises(RuntimeError):
+            base.integrator_gradient(q[None].astype(_NP[dtype]), qd[None].astype(_NP[dtype]),
+                                     u[None].astype(_NP[dtype]), _DT, integrator_type=it)
+
 
 
 @pytest.mark.fp64_alpha

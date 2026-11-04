@@ -2322,7 +2322,7 @@ extern "C" int grid_rbd_integrator_gradient(long long ctx_id, const T* q, const 
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS, grid::NUM_VEL);
-    GRID_RBD_IT_DISPATCH(it, launch_integrator_grad_host, batch, gravity, dt);
+    GRID_RBD_IT_DISPATCH_GRAD(it, launch_integrator_grad_host, batch, gravity, dt);
     { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(dAB_out, g_data->h_dAB, (size_t)batch * (2 * grid::NUM_VEL) * (3 * grid::NUM_VEL) * sizeof(T));
@@ -3734,7 +3734,7 @@ extern "C" int grid_plant_step_gradient(long long ctx_id,
     const int dab = 2 * nv * 3 * nv;
     cudaMemcpy(g_plant.d_in_a, x, batch * nx * sizeof(T), cudaMemcpyHostToDevice);
     cudaMemcpy(g_plant.d_in_b, u, batch * nv * sizeof(T), cudaMemcpyHostToDevice);
-    GRID_RBD_IT_DISPATCH(it, launch_plant_step_gradient, batch, (T)gravity, (T)dt);
+    GRID_RBD_IT_DISPATCH_GRAD(it, launch_plant_step_gradient, batch, (T)gravity, (T)dt);
     { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
     if (int rc = grid_rbd_sync_consume()) return rc;
     cudaMemcpy(dAB, g_plant.d_grad, batch * dab * sizeof(T), cudaMemcpyDeviceToHost);
@@ -6297,6 +6297,16 @@ static void launch_integrator_grad_kernel_jax(GridCtx *ctx, cudaStream_t stream,
             "mujoco integrator/plant-step gradient supports only euler / semi-implicit-euler"),     \
         __VA_ARGS__)
 
+// Pin gradient dispatch: the full switch, or the single-stage cases only on a model
+// whose gradient kernels support no multi-stage scheme (spherical joints; see
+// GRID_RBD_IT_SWITCH_MJX_GRAD in wrapper_common.cuh).
+#define GRID_RBD_IT_DISPATCH_FFI_MJX_GRAD(it_code, FN, MUJOCO_FLAG, ...)                           \
+    GRID_RBD_IT_SWITCH_MJX_GRAD(it_code, FN, MUJOCO_FLAG,                                           \
+        return ffi::Error::InvalidArgument(                                                         \
+            "integrator gradient on this model supports single-stage integrators only "            \
+            "(euler, semi-implicit-euler, constant-acceleration)"),                                 \
+        __VA_ARGS__)
+
 // q/qd/u D→D pack into the singleton's d_q_qd_u (layout [q,qd,u] per timestep).
 static ffi::Error grid_rbd_jax_pack_qqdu(GridCtx *ctx, cudaStream_t stream, int batch, int nj,
                                    ffi::Buffer<GRID_FFI_T>& q,
@@ -6414,7 +6424,7 @@ static ffi::Error grid_rbd_jax_integrator_gradient_body(
     if constexpr (MUJOCO) {
         GRID_RBD_IT_DISPATCH_FFI_MJX_SS((int)it, launch_integrator_grad_kernel_jax, true, stream, batch, dt, gravity);
     } else {
-        GRID_RBD_IT_DISPATCH_FFI_MJX((int)it, launch_integrator_grad_kernel_jax, false, stream, batch, dt, gravity);
+        GRID_RBD_IT_DISPATCH_FFI_MJX_GRAD((int)it, launch_integrator_grad_kernel_jax, false, stream, batch, dt, gravity);
     }
     GRID_RBD_FFI_CHECK_LAUNCH("integrator_grad_kernel");
 
@@ -6739,7 +6749,7 @@ static ffi::Error grid_rbd_jax_plant_step_gradient_impl(
     if constexpr (MUJOCO) {
         GRID_RBD_IT_DISPATCH_FFI_MJX_SS((int)it, launch_plant_step_gradient_jax, true, stream, batch, gravity, dt);
     } else {
-        GRID_RBD_IT_DISPATCH_FFI_MJX((int)it, launch_plant_step_gradient_jax, false, stream, batch, gravity, dt);
+        GRID_RBD_IT_DISPATCH_FFI_MJX_GRAD((int)it, launch_plant_step_gradient_jax, false, stream, batch, gravity, dt);
     }
     GRID_RBD_FFI_CHECK_LAUNCH("plant_step_gradient_kernel");
     cudaMemcpyAsync(dAB->typed_data(), g_plant.d_grad, (size_t)batch * dab * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -7951,6 +7961,13 @@ static torch::Tensor torch_idsva_so(torch::Tensor q, torch::Tensor qd, torch::Te
         TORCH_CHECK(false,                                                                      \
             "mujoco integrator/plant-step gradient supports only euler / semi-implicit-euler"), \
         __VA_ARGS__)
+// Pin gradient dispatch (see GRID_RBD_IT_SWITCH_MJX_GRAD in wrapper_common.cuh).
+#define GRID_RBD_IT_DISPATCH_TORCH_MJX_GRAD(it_code, FN, MUJOCO_FLAG, ...)                     \
+    GRID_RBD_IT_SWITCH_MJX_GRAD(it_code, FN, MUJOCO_FLAG,                                       \
+        TORCH_CHECK(false,                                                                      \
+            "integrator gradient on this model supports single-stage integrators only "        \
+            "(euler, semi-implicit-euler, constant-acceleration)"),                             \
+        __VA_ARGS__)
 // [[unit: end]]
 
 // [[unit: integrator; surface: torch]]
@@ -8019,7 +8036,7 @@ static torch::Tensor torch_integrator_gradient(torch::Tensor q, torch::Tensor qd
     if constexpr (MUJOCO) {
         GRID_RBD_IT_DISPATCH_TORCH_MJX_SS((int)it, torch_launch_integrator_grad, true, stream, batch, dt, gravity);
     } else {
-        GRID_RBD_IT_DISPATCH_TORCH_MJX((int)it, torch_launch_integrator_grad, false, stream, batch, dt, gravity);
+        GRID_RBD_IT_DISPATCH_TORCH_MJX_GRAD((int)it, torch_launch_integrator_grad, false, stream, batch, dt, gravity);
     }
     grid_torch_check_launch("integrator_grad_kernel");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_dAB, batch * (2 * nv) * (3 * nv) * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -8227,7 +8244,7 @@ static torch::Tensor torch_plant_step_gradient(torch::Tensor x, torch::Tensor u,
     if constexpr (MUJOCO) {
         GRID_RBD_IT_DISPATCH_TORCH_MJX_SS((int)it, torch_launch_plant_step_gradient, true, stream, batch, gravity, dt);
     } else {
-        GRID_RBD_IT_DISPATCH_TORCH_MJX((int)it, torch_launch_plant_step_gradient, false, stream, batch, gravity, dt);
+        GRID_RBD_IT_DISPATCH_TORCH_MJX_GRAD((int)it, torch_launch_plant_step_gradient, false, stream, batch, gravity, dt);
     }
     grid_torch_check_launch("plant_step_gradient_kernel");
     cudaMemcpyAsync(out.data_ptr<T>(), g_plant.d_grad, (size_t)batch * dab * sizeof(T), cudaMemcpyDeviceToDevice, stream);

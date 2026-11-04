@@ -48,6 +48,14 @@ repository. Everything below describes the packaged A2R-Lab releases.
   gradient transform. The floating-base mjx integrator backward is no longer
   refused on the jax and torch surfaces and is checked against finite
   differences of a loss through it in float64.
+- A spherical-joint model builds with `integrator_gradient` in its algorithm
+  list. Its gradient kernels support the single-stage schemes only (euler,
+  semi-implicit euler, constant acceleration; the multi-stage instantiations
+  are a static assertion), and the wrapper's gradient dispatch used to name
+  every scheme, so the build failed to compile. The generated header now
+  sets `GRID_INTEGRATOR_GRADIENT_SINGLE_STAGE_ONLY` and the integrator and
+  plant-step gradient dispatch on the three surfaces names only the
+  supported cases; a multi-stage request fails at call time with a message.
 - `f_ext_gradient` and `f_ext_gradient_dq` generate for polynomial
   couplings: `J_y^T = G^T J_f^T` with runtime `alpha(q)`, and the
   configuration derivative adds `-(dG/dy)^T J_f^T` (the follower's own
