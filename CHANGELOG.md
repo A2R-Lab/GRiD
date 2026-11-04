@@ -27,6 +27,12 @@ repository. Everything below describes the packaged A2R-Lab releases.
   assembles from the composite inertias of its backward pass with `alpha(q)`
   and `alpha'(q)` read at runtime; the numpy reference projects the same
   expression and checks `C qd + g = bias` and `C + C^T = dM/dt`.
+- `dccrba` and `cmm_time_variation` generate for polynomial couplings: the
+  derivative of `A_y = A_f G` adds the full tree's momentum column of each
+  follower times `alpha'(q)` at its leader's cell (times `qd` when
+  contracted); the reference projects the same and checks the tensor
+  against the chart, `Adot` along the flow and `hdot = A ydd + Adot yd`
+  analytically.
 
 - Frame kinematics: `frame_velocity` (the twist `J qd` of a frame) and
   `frame_acceleration` (`J qdd + Jdot qd`, the spatial acceleration in

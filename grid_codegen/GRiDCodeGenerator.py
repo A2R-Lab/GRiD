@@ -557,7 +557,7 @@ class GRiDCodeGenerator:
                          "forward_dynamics_parameter_gradient", "com", "ccrba",
                          "generalized_gravity", "nonlinear_effects", "energy",
                          "end_effector_pose_runtime", "end_effector_pose_gradient_runtime",
-                         "coriolis_matrix"}
+                         "coriolis_matrix", "dccrba", "cmm_time_variation"}
             unsupported = sorted(set(algorithms) - supported)
             if unsupported:
                 raise NotImplementedError(

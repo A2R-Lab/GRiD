@@ -491,3 +491,56 @@ def test_polynomial_coupling_coriolis_matches_projection(tmp_path, floating):
             return got.reshape(-1)
 
         thread_sweep((1, 32, 64, 128), run)
+
+
+@pytest.mark.parametrize("floating", [False, True], ids=["fixed", "floating"])
+def test_polynomial_coupling_dccrba_matches_projection(tmp_path, floating):
+    """The momentum-matrix derivatives of a polynomial robot, A_y = A_f G:
+    the tensor dA_y[:, k, i] and Adot_y carry, beyond the alpha-scaled units,
+    the embedding term A_f[:, fv] alpha'(q_l) (times qd_l when contracted) at
+    the leader's cell. The projection is pinned against the chart and the
+    flow in RBDReference/tests/test_embedding_projection.py."""
+    from test.cuda_equivalents.cuda_harness import _parse_runner_output, _run_runner
+    from test.cuda_equivalents.test_cuda_dccrba import _compile_runner as _compile_dccrba_runner, _dccrba_flat_to_tensor
+
+    urdf = write_polynomial_chain(tmp_path)
+    with contextlib.redirect_stdout(io.StringIO()):
+        robot = URDFParser().parse(str(urdf), floating_base=floating)
+    gen = GRiDCodeGenerator(robot, False, True, "grid")
+    with contextlib.redirect_stdout(io.StringIO()):
+        gen.gen_all_code(output_path=str(tmp_path / "grid.cuh"), algorithm_list=["dccrba", "cmm_time_variation"],
+                         enable_mujoco_kernels=False)
+    header = (tmp_path / "grid.cuh").read_text()
+    assert "dc_unit_alphad" in header, "the embedding term is missing"
+    exe, command = _compile_dccrba_runner(tmp_path, floating)
+    ref = RBDReference(robot)
+    assert ref._embedding is not None
+    nq, nv = robot.get_num_pos(), robot.get_num_vel()
+    rng = np.random.default_rng(19)
+    for sample in range(3):
+        q = rng.standard_normal(nq)
+        if floating:
+            q[3:7] /= np.linalg.norm(q[3:7])
+        qd = rng.standard_normal(nv)
+        u = rng.standard_normal(nv)
+        dA_ref = np.asarray(ref.dccrba(q), np.float64).reshape(6, nv, nv)
+        adot_ref = np.asarray(ref.cmm_time_variation(q, qd), np.float64).reshape(6, nv)
+        # the embedding term is active on this chain
+        G = ref._embedding.G(q)
+        plain = np.einsum("ajm,jk,mi->aki", np.asarray(ref._embedding.full.dccrba(ref._embedding.expand_q(q))), G, G)
+        assert float(np.max(np.abs(dA_ref - plain))) > 1e-3
+        stdin = "\n".join(" ".join(f"{v:.9g}" for v in np.asarray(x, np.float32)) for x in (q, qd, u)) + "\n"
+        dA_scale = max(1.0, float(np.max(np.abs(dA_ref))))
+        adot_scale = max(1.0, float(np.max(np.abs(adot_ref))))
+
+        def run(threads):
+            out = _parse_runner_output(_run_runner(exe, stdin, command, num_threads=threads))
+            dA = _dccrba_flat_to_tensor(np.asarray(out["dccrba"], np.float64).reshape(-1), nv)
+            adot = np.asarray(out["cmm_time_variation"], np.float64).reshape(6, nv, order="F")
+            np.testing.assert_allclose(dA, dA_ref, rtol=0, atol=3e-4 * dA_scale,
+                                       err_msg=f"dccrba sample {sample} floating={floating} threads={threads}")
+            np.testing.assert_allclose(adot, adot_ref, rtol=0, atol=3e-4 * adot_scale,
+                                       err_msg=f"cmm_time_variation sample {sample} floating={floating} threads={threads}")
+            return np.concatenate([dA.reshape(-1), adot.reshape(-1)])
+
+        thread_sweep((1, 32, 64, 128), run)

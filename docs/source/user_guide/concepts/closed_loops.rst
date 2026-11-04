@@ -95,8 +95,10 @@ frame velocity and acceleration and their derivatives); the six
 integrators with their ``[A | B]`` gradients; the joint-torque regressor,
 the energy regressors and the forward-dynamics parameter gradient; the
 generalized gravity, the bias, the Coriolis matrix, the CoM, the
-centroidal momentum matrix, the energies and the joint damping and
-friction folds. The reduced Coriolis matrix is
+centroidal momentum matrix and its derivatives (``dccrba`` and
+``cmm_time_variation``, which carry the term
+:math:`A_f[:, f]\,\alpha'` of :math:`A_y = A_f G` at the leader's cell),
+the energies and the joint damping and friction folds. The reduced Coriolis matrix is
 :math:`C_y = G^{\top} C_f G + G^{\top} M_f \dot G`, so that
 :math:`C_y \dot y + g_y` is the bias and :math:`C_y + C_y^{\top} = \dot M_y`;
 the kernel assembles the second term from the composite inertias of its
@@ -104,8 +106,7 @@ backward pass. Each is checked on the GPU against the projection on a
 fixed and a floating-base chain (``test/cuda_equivalents/test_cuda_polynomial_coupling.py``).
 
 Every other algorithm still bakes a constant multiplier into its fold and
-``gen_all_code`` refuses it for such a robot with a message that names it:
-the momentum-matrix derivatives, the external-force gradients, the pose
+``gen_all_code`` refuses it for such a robot with a message that names it: the external-force gradients, the pose
 Hessian and the multi-target kernels, the regressor gradient, the
 second-order derivatives and the plant layer. ``register_robot`` therefore takes an explicit
 ``algorithm_list`` for a polynomial robot
