@@ -61,12 +61,6 @@ from .._surface_common import BaseDelegateMixin, MujocoDerivativeViewMixin, Mujo
 # qd block by 1e-2) while its configuration rows are exact; the pin kernel passes
 # the same check. Until the twin is fixed its backward is refused rather than
 # returning a wrong gradient (docs/open-tasks plan, item D; guide 7.z84).
-_MJX_INTEGRATOR_BACKWARD_MSG = (
-    "integrator backward under output_convention='mujoco' on a floating base is "
-    "not available: the MuJoCo-convention integrator_gradient twin's velocity rows "
-    "do not match the twin's value yet. Use the pinocchio convention for the "
-    "integrator's autograd, or differentiate integrator_gradient's outputs directly.")
-
 import grid_rbd as _grid_rbd
 from grid_rbd._handle import RobotHandle, SecondOrderID, SecondOrderFD
 
@@ -662,8 +656,6 @@ class JaxRobotHandle(BaseDelegateMixin):
 
         def integ_bwd(gravity, dt, it, res, ct):
             q, qd, u, stamp, out = res
-            if mjx and nj != nv:
-                raise NotImplementedError(_MJX_INTEGRATOR_BACKWARD_MSG)
             tg = _tv("integrator_gradient", "grid_rbd_jax_integrator_gradient", "_checked")
             ct = integrator_state_cotangent(ct, out, nq=nj, nv=nv, mjx=mjx,
                                             layout=configuration_layout)

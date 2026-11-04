@@ -69,12 +69,6 @@ from .._surface_common import BaseDelegateMixin, MujocoDerivativeViewMixin, Mujo
 # qd block by 1e-2) while its configuration rows are exact; the pin kernel passes
 # the same check. Until the twin is fixed its backward is refused rather than
 # returning a wrong gradient (docs/open-tasks plan, item D; guide 7.z84).
-_MJX_INTEGRATOR_BACKWARD_MSG = (
-    "integrator backward under output_convention='mujoco' on a floating base is "
-    "not available: the MuJoCo-convention integrator_gradient twin's velocity rows "
-    "do not match the twin's value yet. Use the pinocchio convention for the "
-    "integrator's autograd, or differentiate integrator_gradient's outputs directly.")
-
 
 # ─── op-library registry (process-global, idempotent) ───────────────────────
 
@@ -356,8 +350,6 @@ def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None, ctx_i
         @staticmethod
         def backward(ctx, grad_x):
             q, qd, u, stamp, out = ctx.saved_tensors
-            if mujoco and q.shape[1] != nv:
-                raise NotImplementedError(_MJX_INTEGRATOR_BACKWARD_MSG)
             # nq != nv (floating root or spherical joints): the (nq+nv)-wide x
             # cotangent is chained to the tangent (2nv-wide) Jacobian through
             # the chart's output map (2026-11-03; refused before that).

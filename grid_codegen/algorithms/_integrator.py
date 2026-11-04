@@ -1064,17 +1064,17 @@ def _emit_integrator_kernel_body_for_flags(self, nq, nv, spill_minv_F, single_ca
             self.gen_add_code_line(gen_workspace_repoint_line("int_d_workspace", "GRID_MINV_F_WORKSPACE_OFFSET_BYTES<T>()", batch_indexed=True, declare=True))
         else:
             self.gen_add_code_line("(void)d_workspace;")
-        # mjx input convert (RETRACT family): reorder ONLY the input base
-        # quaternion wxyz->xyzw so the kernel's SE(3) quaternion integration
-        # (grid_integrate_floating_q reads/writes xyzw) and XImats X[0] are
-        # built correctly. Do NOT convert qd: the mjx retract needs the RAW mjx
-        # GLOBAL base-linear velocity qd[0:3], and the quaternion integration
-        # uses qd[3:6] (angular, frame-shared) -> qd stays raw mjx. Must precede
-        # the XImats build below.
+        # mjx input convert: the base quaternion wxyz->xyzw (the SE(3) quaternion
+        # integration and XImats X[0] read xyzw), the base-linear velocity and
+        # force R^T into the pin frame, so the forward dynamics inside the
+        # integrate sees pin quantities (until 2026-11-03 the raw world-frame
+        # velocity was fed as the local one). The world-frame velocity the mjx
+        # position step needs is rebuilt as R v in the output epilogue. Must
+        # precede the XImats build below.
         if self.robot.floating_base:
             self.gen_add_code_line("if constexpr (MUJOCO_OUTPUT) {", True)
             self.gen_add_code_line('static_assert(IT == IntegratorType::EULER || IT == IntegratorType::SEMI_IMPLICIT_EULER, "MuJoCo integration currently supports Euler and semi-implicit Euler only.");')
-            self.gen_mjx_quat_reorder("s_q")
+            self.gen_mjx_input_convert(q_name="s_q", qd_name="s_qd", u_name="s_u")
             self.gen_add_end_control_flow()
         self.gen_add_code_line("// compute")
         self.gen_load_update_XImats_helpers_function_call()
@@ -1082,28 +1082,13 @@ def _emit_integrator_kernel_body_for_flags(self, nq, nv, spill_minv_F, single_ca
             updated_var_names=(dict(d_workspace_name="int_d_workspace", d_f_ext_name="d_f_ext_k") if spill_minv_F else dict(d_f_ext_name="d_f_ext_k")),
             minv_f_in_smem_expr=minv_f_expr)
         self.gen_add_sync()
-        # mjx output (RETRACT): the kernel integrated q in the PIN convention
-        # (SE(3) V(phi) base-position coupling, which is O(dt^2) wrong for mjx).
-        # OVERWRITE the base-linear position of s_x_kp1 with the mjx GLOBAL
-        # additive step  s_q[0:3] + dt*s_qd[0:3]  (s_q still holds the ORIGINAL
-        # pre-integration base position -- the kernel integrates OUT-of-place
-        # into the separate s_x_kp1 buffer; s_qd[0:3] is the raw mjx global
-        # base-linear velocity). The quaternion + joints the kernel computed are
-        # kept. Then convert the output base quaternion xyzw->wxyz back to mjx
-        # order: gen_mjx_quat_reorder is a cyclic LEFT-rotate of slots[3..6]
-        # (wxyz->xyzw), NOT an involution, so the inverse (xyzw->wxyz) is the
-        # cyclic RIGHT-rotate emitted inline here.
+        # mjx output: the MuJoCo velocity step (world-linear qd_{k+1} = R (qd_{k+1,pin}
+        # + dt omega x v), the omega x v term of the MuJoCo-frame acceleration), the
+        # GLOBAL additive base-position step and the quaternion xyzw->wxyz. s_q and
+        # s_qd still hold step k (the kernel integrates OUT-of-place into s_x_kp1).
         if self.robot.floating_base:
             self.gen_add_code_line("if constexpr (MUJOCO_OUTPUT) {", True)
-            self.gen_mjx_retract("s_x_kp1", "s_q", "s_qd", "dt")
-            self.gen_add_code_lines([
-                "// mjx output: base quaternion xyzw->wxyz (inverse of input reorder)",
-                "if (threadIdx.x == 0 && threadIdx.y == 0) {", True,
-                "T qw_out = s_x_kp1[6];",
-                "s_x_kp1[6] = s_x_kp1[5]; s_x_kp1[5] = s_x_kp1[4]; s_x_kp1[4] = s_x_kp1[3]; s_x_kp1[3] = qw_out;",
-            ])
-            self.gen_add_end_control_flow()
-            self.gen_add_sync()
+            self.gen_mjx_integrator_output("s_x_kp1", "s_q", "s_qd", "dt", "IT == IntegratorType::SEMI_IMPLICIT_EULER", nq)
             self.gen_add_end_control_flow()
         self.gen_kernel_save_result("x_kp1",str(out_count),stride=str(out_count))
         self.gen_add_end_control_flow()

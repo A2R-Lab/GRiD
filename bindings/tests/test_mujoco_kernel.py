@@ -608,21 +608,29 @@ def test_native_mjx_integrator_retract(go2_floating):
     # confirms the global-add rule rather than coincidentally matching SE(3).
     dt = 0.1
     rng = np.random.default_rng(6)
-    for B in (1, 4):
+    for B, it_name in ((1, "euler"), (4, "euler"), (2, "semi_implicit_euler")):
         qpos, qvel, u = _rand_state(h, rng, B, with_qd=True, with_u=True)
-        x_next = np.asarray(h.integrator(qpos, qvel, u, dt, _convention="mujoco"), np.float64)
+        x_next = np.asarray(h.integrator(qpos, qvel, u, dt, integrator_type=it_name, _convention="mujoco"), np.float64)
         q_next = x_next[:, :nq]
-        # (1) defining mjx retract: base position is a GLOBAL additive step.
-        exp_pos = qpos[:, :3] + dt * qvel[:, :3]
+        # (0) the MuJoCo velocity step: qvel_{k+1} = qvel + dt qacc with the
+        # MuJoCo-frame acceleration (its base-linear block carries omega x v).
+        qacc = np.asarray(h.forward_dynamics(qpos, qvel, u, _convention="mujoco"), np.float64)
+        exp_qd = qvel[:, :nv] + dt * qacc[:, :nv]
+        assert np.allclose(x_next[:, nq:], exp_qd, rtol=2e-3, atol=2e-3), \
+            f"integrator velocity != qvel + dt qacc ({it_name}, B={B}): max|d|={np.abs(x_next[:, nq:]-exp_qd).max():.3e}"
+        # (1) defining mjx retract: base position is a GLOBAL additive step with the
+        # world-frame linear velocity of step k (euler) or k+1 (semi-implicit).
+        w = qvel[:, :3] if it_name == "euler" else exp_qd[:, :3]
+        exp_pos = qpos[:, :3] + dt * w
         assert np.allclose(q_next[:, :3], exp_pos, rtol=2e-3, atol=2e-3), \
-            f"integrator base pos != global add (B={B}): max|d|={np.abs(q_next[:, :3]-exp_pos).max():.3e}"
+            f"integrator base pos != global add ({it_name}, B={B}): max|d|={np.abs(q_next[:, :3]-exp_pos).max():.3e}"
         # (2) the base quaternion stays a unit quaternion (wxyz).
         assert np.allclose(np.linalg.norm(q_next[:, 3:7], axis=1), 1.0, atol=1e-4)
         # (3) joints integrate identically to the pin integrator on pin-converted inputs.
         q_pin, qd_pin, _, u_pin, _ = h._mjx_inputs(qpos, qvel, u=u)
-        pin_x = np.asarray(h.integrator(q_pin, qd_pin, u_pin, dt), np.float64)
+        pin_x = np.asarray(h.integrator(q_pin, qd_pin, u_pin, dt, integrator_type=it_name), np.float64)
         assert np.allclose(q_next[:, 7:], pin_x[:, 7:nq], rtol=2e-3, atol=2e-3), \
-            f"integrator joints != pin (B={B}): max|d|={np.abs(q_next[:, 7:]-pin_x[:, 7:nq]).max():.3e}"
+            f"integrator joints != pin ({it_name}, B={B}): max|d|={np.abs(q_next[:, 7:]-pin_x[:, 7:nq]).max():.3e}"
         # (4) non-triviality: the mjx base position differs from pin's SE(3) base step.
         assert np.abs(q_next[0, :3] - pin_x[0, :3]).max() > 1e-4
 
@@ -759,8 +767,9 @@ def test_native_mjx_integrator_gradient_matches_oracle(go2_floating, it_name, it
         for b in range(B):
             exp[b] = integrator_gradient_pin_to_mjx(
                 pin_dAB[b], Minv[b], qdd[b, :nv], qd_pin[b, :nv], u_pin[b, :nv], R[b], dt, it_name, layout)
-        assert np.allclose(native, exp, rtol=5e-3, atol=5e-2), \
-            f"integrator_gradient mjx != oracle ({it_name}, B={B}): max|d|={np.abs(native-exp).max():.3e}"
+        scale = max(1.0, float(np.abs(exp).max()))
+        assert np.allclose(native, exp, rtol=0, atol=3e-4 * scale), \
+            f"integrator_gradient mjx != oracle ({it_name}, B={B}): max|d|={np.abs(native-exp).max():.3e} (scale {scale:.2e})"
     # non-triviality: mjx differs from feeding raw mjx inputs to the pin gradient.
     raw = np.asarray(h.integrator_gradient(qpos, qvel, u, dt, integrator_type=it_name), np.float64)
     assert np.abs(native - raw).max() > 1e-3

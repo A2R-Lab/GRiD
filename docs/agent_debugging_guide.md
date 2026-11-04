@@ -3842,6 +3842,24 @@ test and a tier-invariance test has not been validated numerically. Both
 surfaces now refuse the floating-base mjx integrator backward until the twin's
 velocity block is fixed.
 
+Resolution (2026-11-03, evening): two defects, one semantic. (1) The integrator
+and plant_step VALUE kernels reordered only the quaternion and fed the raw
+world-frame base velocity and force into the pin dynamics as local quantities,
+while the gradient kernel converted its inputs: the twins computed different
+functions, so no gradient could match the value. (2) The gradient transform
+applied the plain G reframe to the velocity rows ("a velocity output, no omega x v
+term"), but MuJoCo's step is `qvel += dt * qacc` with the MuJoCo-frame acceleration,
+whose base-linear block is `R (a + omega x v)`; the two differ by `dt R (omega x v)`,
+first order in dt, and its derivatives are exactly the measured residuals
+(`dt R ((e_a x omega) x v)` on the rotation columns, `dt R (omega x R^T e_a)` and
+`dt R (e_a x v)` on the velocity columns). The bottom rows are now `[dt Fq | I + dt Fv
+| dt Fu]` with F the validated fd gradient transform, which also fixed the numpy
+Hessian for free (complex step through the gradient). Lesson: a convention twin
+needs its semantics written down as the reference library's own step
+(`mj_Euler`), not derived from "what kind of quantity the output is"; and a value
+kernel that converts only part of its inputs is wrong even when its packing test
+passes, because the joints-match-pin check at 2e-3 never looked at the base rows.
+
 ### 7.z85 Pinocchio's LOCAL_WORLD_ALIGNED frame derivatives hold the frame origin fixed (2026-11-03, frame velocity and acceleration derivatives)
 
 The reference's `frame_velocity_derivatives` / `frame_acceleration_derivatives`

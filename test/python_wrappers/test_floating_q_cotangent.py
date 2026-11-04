@@ -417,7 +417,7 @@ def _torch_weighted_reference(ref, h, method, q, qd, u):
 
 @pytest.mark.fp64_alpha
 @pytest.mark.parametrize("backend", ["jax", "torch"])
-@pytest.mark.parametrize("method", ["inverse_dynamics", "end_effector_pose"])
+@pytest.mark.parametrize("method", ["inverse_dynamics", "end_effector_pose", "integrator"])
 def test_mujoco_public_autodiff_with_explicit_normalization(numpy_go2_mjx, backend, method):
     framework = pytest.importorskip(backend)
     if backend == "jax": framework.config.update("jax_enable_x64", True)
@@ -453,26 +453,3 @@ def test_mujoco_public_autodiff_with_explicit_normalization(numpy_go2_mjx, backe
         h.close()
 
 
-@pytest.mark.fp64_alpha
-@pytest.mark.parametrize("backend", ["jax", "torch"])
-def test_mujoco_integrator_backward_is_refused_until_the_twin_is_right(numpy_go2_mjx, backend):
-    """2026-11-03: the mjx integrator_gradient twin's velocity rows disagree with
-    finite differences of the twin's value (its configuration rows are exact),
-    so the floating-base mjx integrator backward raises instead of returning a
-    wrong gradient. The pin convention is covered by the tests above."""
-    framework = pytest.importorskip(backend)
-    if backend == "jax": framework.config.update("jax_enable_x64", True)
-    h = grid_rbd.get_robot(numpy_go2_mjx.name, backend=backend, output_convention="mujoco")
-    q, qd, u = _sample(h.num_joints, h.num_vel, True, seed=31)
-    try:
-        if backend == "jax":
-            loss = lambda x: h.integrator(x[None], qd[None], u[None], _DT, integrator_type="euler").sum()
-            with pytest.raises(NotImplementedError, match="velocity rows"):
-                framework.grad(loss)(q)
-        else:
-            T = lambda x: framework.as_tensor(x, dtype=framework.float64, device="cuda")
-            qt = T(q).requires_grad_(True)
-            with pytest.raises(NotImplementedError, match="velocity rows"):
-                h.integrator(qt[None], T(qd)[None], T(u)[None], _DT, integrator_type="euler").sum().backward()
-    finally:
-        h.close()

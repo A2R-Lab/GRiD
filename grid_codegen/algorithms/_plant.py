@@ -340,15 +340,10 @@ def gen_plant_step(self):
         # xyzw->wxyz back to mjx order (inverse of the kernel's input reorder).
         self.gen_add_sync()
         self.gen_add_code_line("if constexpr (MUJOCO_OUTPUT) {", True)
-        self.gen_mjx_retract("s_x_kp1", "s_q", "s_qd", "dt")
-        self.gen_add_code_lines([
-            "// mjx output: base quaternion xyzw->wxyz (inverse of input reorder)",
-            "if (threadIdx.x == 0 && threadIdx.y == 0) {", True,
-            "T qw_out = s_x_kp1[6];",
-            "s_x_kp1[6] = s_x_kp1[5]; s_x_kp1[5] = s_x_kp1[4]; s_x_kp1[4] = s_x_kp1[3]; s_x_kp1[3] = qw_out;",
-        ])
-        self.gen_add_end_control_flow()
-        self.gen_add_sync()
+        # the MuJoCo velocity step, the GLOBAL-add base position and the quaternion
+        # xyzw->wxyz, from the pin-converted step-k state the kernel staged (s_q /
+        # s_qd are untouched by the out-of-place integrate).
+        self.gen_mjx_integrator_output("s_x_kp1", "s_q", "s_qd", "dt", "IT == grid::IntegratorType::SEMI_IMPLICIT_EULER", nq)
         self.gen_add_end_control_flow()
     self.gen_add_end_function()
 
@@ -1970,19 +1965,23 @@ def gen_plant_step_kernel(self):
         # Small static-smem state buffer for the in-place q-only input convert (the
         # integrator_device owns the separate dynamic RBD arena). On the pin path we
         # bypass staging and call straight on global, keeping that path byte-identical.
-        self.gen_add_code_line("__shared__ T s_x_mjx[" + str(nx) + "];")
+        self.gen_add_code_line("__shared__ T s_x_mjx[" + str(nx) + "]; __shared__ T s_u_mjx[" + str(self.robot.get_num_vel()) + "];")
         self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
         self.gen_add_code_line("if constexpr (MUJOCO_OUTPUT) {", True)
-        # stage x into mutable smem, q-only reorder (RETRACT value family: qd stays
-        # RAW mjx for the global-add retract), then plant_step (pin integrate + mjx
-        # retract). u stays global (value path doesn't convert u). gen_mjx_quat_reorder
-        # is inlined here (the surrounding if-constexpr already gates MUJOCO_OUTPUT).
+        # stage x and u into mutable smem and convert them to the pin frame (the
+        # base quaternion wxyz->xyzw, the base-linear velocity and force R^T), so
+        # the integrate sees pin inputs; plant_step's mjx epilogue then forms the
+        # MuJoCo velocity step and the global-add position (until 2026-11-03 the
+        # raw world-frame velocity was fed as the local one).
         self.gen_add_parallel_loop("ind", str(nx))
         self.gen_add_code_line("s_x_mjx[ind] = d_x[k*stride_x + ind];")
         self.gen_add_end_control_flow()
+        self.gen_add_parallel_loop("ind", str(self.robot.get_num_vel()))
+        self.gen_add_code_line("s_u_mjx[ind] = d_u[k*stride_u + ind];")
+        self.gen_add_end_control_flow()
         self.gen_add_sync()
-        self.gen_mjx_quat_reorder("s_x_mjx")
-        self.gen_add_code_line("plant_step<T, IT, true>(&d_x_kp1[k*" + str(nx) + "], s_x_mjx, &d_u[k*stride_u], d_robotModel, gravity, dt);")
+        self.gen_mjx_input_convert(q_name="s_x_mjx", qd_name="(s_x_mjx + " + str(nq) + ")", u_name="s_u_mjx")
+        self.gen_add_code_line("plant_step<T, IT, true>(&d_x_kp1[k*" + str(nx) + "], s_x_mjx, s_u_mjx, d_robotModel, gravity, dt);")
         self.gen_add_end_control_flow()
         self.gen_add_code_line("else {", True)
         self.gen_add_code_line("plant_step<T, IT, false>(&d_x_kp1[k*" + str(nx) + "], &d_x[k*stride_x], &d_u[k*stride_u], d_robotModel, gravity, dt);")

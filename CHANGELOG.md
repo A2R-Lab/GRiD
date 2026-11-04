@@ -33,6 +33,21 @@ repository. Everything below describes the packaged A2R-Lab releases.
   contracted); the reference projects the same and checks the tensor
   against the chart, `Adot` along the flow and `hdot = A ydd + Adot yd`
   analytically.
+- MuJoCo-convention integrators on a floating base now take the MuJoCo step:
+  the velocity advances by `dt` times the MuJoCo-frame acceleration (whose
+  base-linear block carries `omega x v`), the base position by the
+  world-frame velocity of step k (euler) or k+1 (semi-implicit), the
+  quaternion and joints as pinocchio. The value kernels of `integrator` and
+  `plant_step` fed the raw world-frame base velocity and force into the
+  dynamics as local quantities and rotated nothing on output; the
+  `integrator_gradient` transform (numpy and kernel epilogue, and the
+  forward-mode clone of the `plant_step_hessian` twin) applied the plain
+  `G` reframe to the velocity rows, which disagrees with finite differences
+  of the MuJoCo step at first order in `dt`. The bottom rows are now
+  `[dt Fq | I + dt Fv | dt Fu]` with `F` the validated forward-dynamics
+  gradient transform. The floating-base mjx integrator backward is no longer
+  refused on the jax and torch surfaces and is checked against finite
+  differences of a loss through it in float64.
 - `f_ext_gradient` and `f_ext_gradient_dq` generate for polynomial
   couplings: `J_y^T = G^T J_f^T` with runtime `alpha(q)`, and the
   configuration derivative adds `-(dG/dy)^T J_f^T` (the follower's own

@@ -64,7 +64,7 @@ class GRiDCodeGenerator:
                          gen_topology_sparsity_helpers_python, gen_init_topology_helpers, gen_topology_helpers_pointers_for_cpp, _s_inds_stride, \
                          gen_topology_S_sign_for_cpp, gen_insert_helpers_function_call, gen_insert_helpers_func_def_params, gen_init_robotModel, gen_free_robotModel, gen_joint_limits_size, gen_init_joint_limits, gen_checked_table_tail, gen_legacy_init_wrapper, gen_checked_host_alloc, _robotModel_members, \
                          gen_grid_linalg_backend_helpers, _gen_vendored_glass, _gen_linalg_wrappers, gen_invert_matrix, gen_matmul, gen_matmul_trans, gen_crm_mul, gen_crm, gen_mxS_general, custom_is_constant, \
-                         gen_mjx_input_convert, gen_mjx_quat_reorder, gen_mjx_base_rotate, gen_mjx_symmetrize_full, gen_mjx_accel_out, gen_mjx_congruence, gen_mjx_column_reframe, gen_mjx_retract, \
+                         gen_mjx_input_convert, gen_mjx_quat_reorder, gen_mjx_base_rotate, gen_mjx_symmetrize_full, gen_mjx_accel_out, gen_mjx_congruence, gen_mjx_column_reframe, gen_mjx_retract, gen_mjx_integrator_output, \
                          robot_has_mimic_joints, _v_slot_cpp, _alpha_for_jid, _id_S_desc, gen_add_fragment_mark, \
                             robot_has_variable_couplings, _alpha_is_variable, gen_alpha_table, _coupling_leader_qslot, _coupling_alpha_cpp, _coupling_value_cpp, gen_coupling_evaluators, _jd_fold_cpp
 

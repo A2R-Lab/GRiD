@@ -861,6 +861,49 @@ def gen_mjx_retract(self, q_out, q_in, qd, dt_expr):
     self.gen_add_sync()
 
 
+def gen_mjx_integrator_output(self, x_kp1, q_name, qd_name, dt_expr, si_expr, nq):
+    """MuJoCo-convention OUTPUT of the single-stage integrators, in place on the
+    pin result ``x_kp1 = [q_{k+1} (nq); qd_{k+1,pin} (nv)]`` computed from the
+    pin-converted inputs (``q_name`` the original xyzw configuration of step k,
+    ``qd_name`` its pin velocity, both untouched by the out-of-place integrate):
+      * velocity: MuJoCo steps the world-frame velocity with the MuJoCo-frame
+        acceleration, ``qvel_{k+1} = qvel + dt qacc``, whose base-linear block is
+        ``R (a + omega x v)``; with ``qd_{k+1,pin} = v + dt a`` this is
+        ``R (qd_{k+1,pin}[0:3] + dt omega x v)`` (not ``R qd_{k+1,pin}``: the two
+        differ by ``dt R (omega x v)``);
+      * base position: the GLOBAL additive step ``q + dt W`` with ``W`` the
+        world-frame linear velocity of step k (euler, ``R v``) or of step k+1
+        (semi-implicit, the velocity just written);
+      * base quaternion xyzw -> wxyz (the inverse of the input reorder).
+    The base quaternion and the joints integrate as pin. Single thread + sync.
+    Mirrors RBDReference/tests/test_mujoco_convention._mjx_integrator_value."""
+    x, q, qd, dt = x_kp1, q_name, qd_name, "(" + dt_expr + ")"
+    o = str(nq)
+    self.gen_add_code_lines([
+        f"// mjx output: velocity step qd_{{k+1}} = qvel + dt qacc (world-linear, omega x v), base position global add, quaternion wxyz",
+        "if (threadIdx.x == 0 && threadIdx.y == 0) {", True,
+    ])
+    self.gen_add_code_lines(_gen_mjx_build_R_lines(q))
+    self.gen_add_code_lines([
+        f"T wx_ = {qd}[3], wy_ = {qd}[4], wz_ = {qd}[5];",
+        f"T vx_ = {qd}[0], vy_ = {qd}[1], vz_ = {qd}[2];",
+        f"T c0 = {x}[{o}+0] + {dt}*(wy_*vz_ - wz_*vy_);",
+        f"T c1 = {x}[{o}+1] + {dt}*(wz_*vx_ - wx_*vz_);",
+        f"T c2 = {x}[{o}+2] + {dt}*(wx_*vy_ - wy_*vx_);",
+        f"{x}[{o}+0] = R[0]*c0 + R[1]*c1 + R[2]*c2;",
+        f"{x}[{o}+1] = R[3]*c0 + R[4]*c1 + R[5]*c2;",
+        f"{x}[{o}+2] = R[6]*c0 + R[7]*c1 + R[8]*c2;",
+        f"T w0_, w1_, w2_;",
+        f"if ({si_expr}) {{ w0_ = {x}[{o}+0]; w1_ = {x}[{o}+1]; w2_ = {x}[{o}+2]; }}",
+        f"else {{ w0_ = R[0]*vx_ + R[1]*vy_ + R[2]*vz_; w1_ = R[3]*vx_ + R[4]*vy_ + R[5]*vz_; w2_ = R[6]*vx_ + R[7]*vy_ + R[8]*vz_; }}",
+        f"{x}[0] = {q}[0] + {dt}*w0_; {x}[1] = {q}[1] + {dt}*w1_; {x}[2] = {q}[2] + {dt}*w2_;",
+        f"T qw_out = {x}[6];",
+        f"{x}[6] = {x}[5]; {x}[5] = {x}[4]; {x}[4] = {x}[3]; {x}[3] = qw_out;",
+    ])
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+
+
 def gen_var_in_list(self, var_name, option_list):
     if len(option_list) == 1:
         return "(" + var_name + " == " + option_list[0] + ")"
