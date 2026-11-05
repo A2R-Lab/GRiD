@@ -42,6 +42,8 @@ _INFRA = {
     "device_pool_bytes", "set_device_pool", "device_pool_used",
     "ctx_create", "ctx_close", "ctx_default_id", "ctx_profile", "ctx_count",  # W04-B B1 runtime contexts
     "ctx_version",  # W04-B B2 model version
+    # Context-owned parameter I/O, not batched dynamics algorithms.
+    "set_armature_params", "get_armature_params", "validate_armature_params", "armature_params_size",
     "graph_begin", "graph_end",  # codex R5 replay admission
     # Multi-contact f_ext (2026-09-17): `grid_rbd_contact_fext` + `grid_rbd_num_contact_frames`
     # are HAND-WRITTEN in wrapper_template.cu under GRID_HAS_CONTACT_FRAMES (they call the

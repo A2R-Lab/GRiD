@@ -163,7 +163,7 @@ Algorithm catalog
 - External-force gradients: ``∂tau/∂f_ext = -Jᵀ`` and ``∂q̈/∂f_ext = M⁻¹Jᵀ``, plus the fixed-base ``∂(inverse_dynamics_gradient)/∂f_ext = -∂Jᵀ/∂q``
 - A trajectory-optimization-oriented ``grid_plant`` layer (emitted as a sibling ``grid_plant`` namespace): a ``plant_step`` integrator wrapper, quadratic state/input costs, an end-effector position cost (with Gauss-Newton Hessian), and joint position/velocity/torque log-barriers.
 - The Coriolis matrix ``C(q,q̇)`` (with ``C·q̇ + g(q) = nonlinear_effects``)
-- Inertial-parameter energy regressors: kinetic ``y_KE`` and potential ``y_PE`` (each length ``10·NB``, with ``KE = y_KE·π`` and ``PE = y_PE·π``)
+- Inertial-parameter energy regressors: kinetic ``y_KE`` and potential ``y_PE`` (each length ``10·NB``). Total kinetic energy is ``y_KE·π + 0.5*sum(armature*qd**2)``; the rotor term does not add columns. Potential energy is ``PE = y_PE·π``.
 - The centroidal derivatives: ``dccrba`` (the ∂A/∂q tensor, 6×NV×NV) and ``cmm_time_variation`` (the centroidal-momentum-matrix time variation Ȧ)
 - Runtime arbitrary multi-EE pose / pose-gradient (``end_effector_pose_runtime`` + ``_gradient``): the end-effector target joint id and a per-target offset become runtime arguments instead of codegen-baked, so one compiled robot serves any leaf/target frame.
 - Runtime-mutable inertial parameters (flag-gated): a ``set_inertia_params`` device entry mutates an on-device parameter table (sysID / domain randomization) with no recompile; the baked default path is byte-identical.

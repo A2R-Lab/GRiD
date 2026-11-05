@@ -12,6 +12,11 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Validate runtime armature before precision conversion or mutation, reject
+  unsupported and constant-joint slots, and read installed values from their
+  owning context rather than a registration-name cache. Forward the runtime
+  option through JAX and PyTorch registration. Include rotor kinetic energy in
+  both generated energy paths; the ten-per-body inertial regressor is unchanged.
 - Receipts: the first Jetson AGX Orin (sm_87) receipt,
   `receipts/gpu-proof-sm87.json` with its header-key ledger, recorded at the
   0.7.0 receipt commit 607efc2: 2056 tests, 2055 passed and the one expected

@@ -364,15 +364,20 @@ class GRiDCodeGenerator:
         if not getattr(self, "runtime_armature", False):
             return []
         slots = set()
-        has_mimic = self.robot_has_mimic_joints()
         for jid in range(self.robot.get_num_joints()):
             if self.robot.floating_base and jid == 0:
                 continue
             if self.robot.joint_is_spherical(jid):
                 continue
-            vs = self._v_slot_cpp(jid) if has_mimic else self.robot.get_joint_index_v(jid)
+            # Followers do not own coordinates. In particular, constant mimics
+            # carry a placeholder slot which can alias the root or exceed nv=0.
+            if self.robot.get_joint_by_id(jid).is_mimic:
+                continue
+            vs = self.robot.get_joint_index_v(jid)
             if isinstance(vs, (list, tuple)):
                 continue
+            if not 0 <= int(vs) < self.robot.get_num_vel():
+                raise ValueError(f"Independent joint {jid} has invalid armature slot {vs}.")
             slots.add(int(vs))
         return sorted(slots)
 

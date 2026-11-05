@@ -36,6 +36,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <climits>
+#include <limits>
 #include <cstdlib>
 #include <utility>
 #include <tuple>
@@ -141,6 +142,8 @@ struct CAbi {
     using fn_q_qd_out_grav_t = int (*)(long long, const CT*, const CT*, CT*, int, CT);
     using fn_q_out_grav_t   = int (*)(long long, const CT*, CT*, int, CT);
     using fn_set_params_t   = int (*)(long long, const CT*);   // set_{inertia,transform,joint_dynamics}_params
+    using fn_get_params_t   = int (*)(long long, CT*);
+    using fn_validate_params_t = int (*)(const long double*, int);
     // W04-B B1 runtime contexts: id-taking launch-override setters + the context API
     using fn_ctx_int_v_t    = int (*)(long long);                    // threads_per_block(ctx)
     using fn_ctx_int_i_t    = int (*)(long long, int);               // set_threads_per_block(ctx, n)
@@ -190,6 +193,8 @@ class RunnerT {
     using fn_q_qd_out_grav_t = typename CAbi<CT>::fn_q_qd_out_grav_t;
     using fn_q_out_grav_t = typename CAbi<CT>::fn_q_out_grav_t;
     using fn_set_params_t = typename CAbi<CT>::fn_set_params_t;
+    using fn_get_params_t = typename CAbi<CT>::fn_get_params_t;
+    using fn_validate_params_t = typename CAbi<CT>::fn_validate_params_t;
     using fn_ctx_int_v_t = typename CAbi<CT>::fn_ctx_int_v_t;
     using fn_ctx_int_i_t = typename CAbi<CT>::fn_ctx_int_i_t;
     using fn_ctx_int_ii_t = typename CAbi<CT>::fn_ctx_int_ii_t;
@@ -380,6 +385,8 @@ public:
         // runtime_armature=True (-DGRID_RBD_RUNTIME_ARMATURE). set_armature_params()
         // raises a clear error if this symbol is null.
         fn_set_armature_params_ = reinterpret_cast<fn_set_params_t>(opt_sym("grid_rbd_set_armature_params"));
+        fn_get_armature_params_ = reinterpret_cast<fn_get_params_t>(opt_sym("grid_rbd_get_armature_params"));
+        fn_validate_armature_params_ = reinterpret_cast<fn_validate_params_t>(opt_sym("grid_rbd_validate_armature_params"));
 
         // Cache constants (avoid the indirect-function-call cost on every read).
         num_joints_ = fn_num_joints_();
@@ -2044,19 +2051,39 @@ public:
     // root's six slots and spherical blocks must be zero. Copies it into the device
     // d_armature_params table; id (with qdd), crba, minv, aba, fd and everything built
     // on them read it (no recompile). Only available on a .so built with runtime_armature=True.
-    void set_armature_params(arr_t params) {
-        if (!fn_set_armature_params_) throw std::runtime_error(
+    void set_armature_params(py::array input) {
+        if (!fn_set_armature_params_ || !fn_validate_armature_params_) throw std::runtime_error(
             "set_armature_params not available in this .so: register the robot with "
             "runtime_armature=True (and force_rebuild=True) to enable the mutable armature table.");
-        if (params.ndim() != 1 || (int)params.shape(0) != num_vel_) {
+        if (input.ndim() != 1 || input.shape(0) != num_vel_) {
             throw std::runtime_error(
                 "set_armature_params: params must be a flat (" + std::to_string(num_vel_) +
-                ",) array (one entry per v-slot); got ndim=" + std::to_string(params.ndim()) +
-                ", size=" + std::to_string(params.size()));
+                ",) array (one entry per v-slot); got ndim=" + std::to_string(input.ndim()) +
+                ", size=" + std::to_string(input.size()));
         }
+        if (std::string("biuf").find(input.dtype().kind()) == std::string::npos)
+            throw py::value_error("armature must contain real numbers");
+        auto wide = py::array_t<long double, py::array::c_style | py::array::forcecast>::ensure(input);
+        if (!wide || fn_validate_armature_params_(wide.data(), num_vel_) != 0)
+            throw py::value_error("armature must be finite, nonnegative and zero on unsupported slots");
+        for (int i = 0; i < num_vel_; ++i)
+            if (wide.data()[i] > static_cast<long double>(std::numeric_limits<CT>::max()))
+                throw py::value_error("armature must remain finite in the kernel precision");
+        auto params = arr_t::ensure(input);
+        if (!params) throw py::value_error("armature cannot be converted to the kernel precision");
         const CT *pdata = params.data();
         int rc; { GridNoGil nogil; rc = fn_set_armature_params_(ctx_id_, pdata); }
         if (rc != 0) throw std::runtime_error(rc_message(rc, "set_armature_params", nullptr));
+    }
+
+    arr_t get_armature_params() {
+        if (!fn_get_armature_params_) throw std::runtime_error(
+            "get_armature_params not available: rebuild with runtime_armature=True");
+        arr_t result({num_vel_});
+        CT *data = result.mutable_data();
+        int rc; { GridNoGil nogil; rc = fn_get_armature_params_(ctx_id_, data); }
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "get_armature_params", nullptr));
+        return result;
     }
 
     // set_joint_dynamics_params(params) — runtime-mutable damping/friction (C5).
@@ -2299,6 +2326,8 @@ private:
     fn_set_params_t        fn_set_jd_params_               = nullptr;
     fn_int_v_t             fn_jd_params_size_              = nullptr;  // table length (2*nv or 3*nv)
     fn_set_params_t        fn_set_armature_params_         = nullptr;  // runtime_armature (optional)
+    fn_get_params_t        fn_get_armature_params_         = nullptr;
+    fn_validate_params_t   fn_validate_armature_params_    = nullptr;
 
     int num_joints_ = 0;
     int num_vel_    = 0;
@@ -2658,6 +2687,8 @@ static void register_runner(py::module_& m, const char* cls_name) {
              "[damping(nv) || friction(nv)], v-slot indexed (alpha-folded), or "
              "(3*num_vel,) with a trailing friction_width(nv) row on a tanh friction build. "
              "Only available on a .so built with runtime_joint_dynamics=True; raises otherwise.")
+        .def("get_armature_params", &R::get_armature_params,
+             "Read a copy of the current context's native armature table.")
         .def("set_armature_params", &R::set_armature_params,
              py::arg("params"),
              "Update the device-resident mutable rotor-armature table (runtime_armature). "

@@ -633,6 +633,13 @@ def gen_ccrba_device(self):
 
 # ----- energy (KE, PE, mechanical) device -----
 
+def _gen_energy_armature(self):
+    # Both the device helper and the spill-aware kernel finalize energy here.
+    # Rotor inertia is a reduced-coordinate contribution, not a spatial inertia.
+    for vs in self._armature_vslots():
+        self.gen_add_code_line(f"ke += static_cast<T>(0.5) * d_robotModel->d_armature_params[{vs}] * s_qd[{vs}] * s_qd[{vs}];")
+
+
 def gen_energy_device(self):
     nv = self.robot.get_num_vel()
     func_def = ("void energy_device(T *s_out, const T *s_q, const T *s_qd, const robotModel<T> *d_robotModel, const T gravity) {")
@@ -664,6 +671,7 @@ def gen_energy_device(self):
     self.gen_add_code_line("T v[6]; for (int r=0;r<6;++r){ T s=0; for(int vi=0;vi<" + str(nv) + ";++vi) s += Jb[6*vi+r]*s_qd[vi]; v[r]=s; }")
     self.gen_add_code_line("for (int r=0;r<6;++r){ T s=0; for(int k=0;k<6;++k) s += Iw[r+6*k]*v[k]; ke += static_cast<T>(0.5)*v[r]*s; }")
     self.gen_add_end_control_flow()
+    _gen_energy_armature(self)
     self.gen_add_code_line("T pe = -s_extra[0] * gravity * s_com[2]; // PE = -M*gravity*com_z (gravity=-9.81, matches RBDReference)")
     self.gen_add_code_line("s_out[0]=ke; s_out[1]=pe; s_out[2]=ke+pe;")
     self.gen_add_end_control_flow()
@@ -775,6 +783,7 @@ def _gen_kin_centroidal_kernel(self, name, out_size, has_qd, has_gravity, single
             self.gen_add_code_line("T v[6]; for (int r=0;r<6;++r){ T s=0; for(int vi=0;vi<" + str(nv) + ";++vi) s += Jb[6*vi+r]*s_qd[vi]; v[r]=s; }")
             self.gen_add_code_line("for (int r=0;r<6;++r){ T s=0; for(int k=0;k<6;++k) s += Iw[r+6*k]*v[k]; ke += static_cast<T>(0.5)*v[r]*s; }")
             self.gen_add_end_control_flow()
+            _gen_energy_armature(self)
             self.gen_add_code_line("T pe = -s_extra[0] * gravity * s_com[2]; // PE = -M*gravity*com_z (gravity=-9.81, matches RBDReference)")
             self.gen_add_code_line("s_out[0]=ke; s_out[1]=pe; s_out[2]=ke+pe;")
             self.gen_add_end_control_flow()

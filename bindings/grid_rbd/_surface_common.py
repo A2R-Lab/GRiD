@@ -290,9 +290,9 @@ class BaseDelegateMixin:
 
     @property
     def armature(self):
-        """The rotor armature installed on the device (length nv, reduced
-        coordinates); zero after registration. Only on a ``runtime_armature``
-        build."""
+        """Read a copy of this context's current device armature (length nv,
+        reduced coordinates). Inspection may synchronize. Only on a
+        ``runtime_armature`` build."""
         return self._base.armature
 
     @property
@@ -303,8 +303,8 @@ class BaseDelegateMixin:
         return self._base.runtime_armature
 
     def set_armature(self, values) -> None:
-        """Install a rotor armature at runtime (no recompile): length nv, reduced
-        coordinates, zero on the floating root and spherical blocks. Only on a
+        """Install a rotor armature at runtime (no recompile): finite, nonnegative,
+        length nv, reduced coordinates, zero on floating-root and spherical slots. Only on a
         ``runtime_armature`` build."""
         self._base.set_armature(values)
 

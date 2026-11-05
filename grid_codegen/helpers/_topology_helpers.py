@@ -474,18 +474,52 @@ def gen_init_armature_params(self):
     self.gen_legacy_init_wrapper("init_armature_params", "T")
 
 def gen_set_armature_params(self):
-    # runtime_armature (mirror of gen_set_joint_dynamics_params): public mutator,
-    # a thin cudaMemcpy of nv scalars into d_armature_params.
+    # Native consumers and Python use the same validation and checked copies.
+    # Consumers own stream synchronization; the Python C ABI adds admission.
     size = self.gen_get_armature_params_size()
-    self.gen_add_func_doc("Updates the mutable rotor-armature table on the GPU at runtime (no recompile)",
-            ["h_params is the host array of " + str(size) + " floats: armature per v-slot (reduced coordinates); the floating root's six and every spherical block's three must be zero"],
-            [], None)
+    allowed = " || ".join(f"i == {slot}" for slot in self._armature_vslots()) or "false"
+    self.gen_add_code_line("// Host-only validation. Reject before changing device bytes or model epochs.")
+    self.gen_add_code_line("template <typename T> __host__")
+    self.gen_add_code_line("cudaError_t validate_armature_params(const T *h_params, size_t count) {", True)
+    self.gen_add_code_lines([
+        f"if (count != {size} || (count && !h_params)) return cudaErrorInvalidValue;",
+        "for (size_t i = 0; i < count; ++i) {",
+        "    if (!isfinite(h_params[i]) || h_params[i] < T(0)) return cudaErrorInvalidValue;",
+        f"    if (!({allowed}) && h_params[i] != T(0)) return cudaErrorInvalidValue;",
+        "}",
+        "return cudaSuccess;",
+    ])
+    self.gen_add_end_function()
+    self.gen_add_code_line("template <typename T> __host__")
+    self.gen_add_code_line("cudaError_t set_armature_params_checked(robotModel<T> *d_robotModel, const T *h_params, size_t count) {", True)
+    self.gen_add_code_lines([
+        "cudaError_t err = validate_armature_params(h_params, count);",
+        "if (err != cudaSuccess) return err;",
+        "if (!d_robotModel) return cudaErrorInvalidValue;",
+        "if (!count) return cudaSuccess;",
+        "robotModel<T> h_robotModel;",
+        "err = cudaMemcpy(&h_robotModel, d_robotModel, sizeof(robotModel<T>), cudaMemcpyDeviceToHost);",
+        "if (err != cudaSuccess) return err;",
+        "return cudaMemcpy(h_robotModel.d_armature_params, h_params, count*sizeof(T), cudaMemcpyHostToDevice);",
+    ])
+    self.gen_add_end_function()
+    self.gen_add_code_line("template <typename T> __host__")
+    self.gen_add_code_line("cudaError_t get_armature_params_checked(const robotModel<T> *d_robotModel, T *h_params, size_t count) {", True)
+    self.gen_add_code_lines([
+        f"if (count != {size} || !d_robotModel || (count && !h_params)) return cudaErrorInvalidValue;",
+        "if (!count) return cudaSuccess;",
+        "robotModel<T> h_robotModel;",
+        "cudaError_t err = cudaMemcpy(&h_robotModel, d_robotModel, sizeof(robotModel<T>), cudaMemcpyDeviceToHost);",
+        "if (err != cudaSuccess) return err;",
+        "return cudaMemcpy(h_params, h_robotModel.d_armature_params, count*sizeof(T), cudaMemcpyDeviceToHost);",
+    ])
+    self.gen_add_end_function()
+    # Keep the existing pointer-only convenience API for C++ callers. Callers
+    # with dynamic buffer lengths should use the checked API above.
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__host__")
     self.gen_add_code_line("void set_armature_params(robotModel<T> *d_robotModel, const T *h_params) {", True)
-    self.gen_add_code_line("robotModel<T> h_robotModel;")
-    self.gen_add_code_line("gpuErrchk(cudaMemcpy(&h_robotModel,d_robotModel,sizeof(robotModel<T>),cudaMemcpyDeviceToHost));")
-    self.gen_add_code_line("gpuErrchk(cudaMemcpy(h_robotModel.d_armature_params,h_params," + str(size) + "*sizeof(T),cudaMemcpyHostToDevice));")
+    self.gen_add_code_line(f"gpuErrchk(set_armature_params_checked(d_robotModel, h_params, {size}));")
     self.gen_add_end_function()
 
 def gen_set_joint_dynamics_params(self):

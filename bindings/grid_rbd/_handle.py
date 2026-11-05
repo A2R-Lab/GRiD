@@ -24,10 +24,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-# runtime_armature: the vector last installed on each registration's device
-# table, keyed by robot name (the jax/torch surfaces wrap their own numpy
-# handle over the same table, so a poke through one surface is echoed by all).
-_ARMATURE_INSTALLED: dict = {}
+from ._armature import validated_armature
 from ._surface_common import MujocoDerivativeViewMixin, MujocoViewBase
 
 
@@ -902,19 +899,19 @@ class RobotHandle:
 
     @property
     def armature(self):
-        """The rotor armature currently installed on the device (length nv, one entry
-        per v-slot in the reduced coordinates), as last passed to
-        :py:meth:`set_armature`; all zero after registration, since a URDF carries
-        no armature. Only on a runtime_armature build (raises otherwise)."""
+        """Read this context's current rotor armature from its device table.
+
+        Returns a copy in reduced velocity order. This inspection operation may
+        synchronize; aliases of a context observe the same native table.
+        """
+        if self._runner is None:
+            raise RuntimeError("Cannot read armature from a closed robot handle.")
         if not self.runtime_armature:
             raise RuntimeError(
                 "armature is only available on a robot registered with "
                 "runtime_armature=True. Re-register with "
                 "register_robot(..., runtime_armature=True, force_rebuild=True).")
-        current = _ARMATURE_INSTALLED.get(self.name)
-        if current is None:
-            current = np.zeros(self.num_vel, dtype=self._dt)
-        return np.array(current, dtype=self._dt)
+        return self._runner.get_armature_params()
 
     def set_armature(self, values) -> None:
         """Install a rotor armature at runtime (no recompile): ``values`` is length nv
@@ -922,30 +919,21 @@ class RobotHandle:
         joint-space inertia the way Pinocchio's ``model.armature`` is: inverse
         dynamics gains ``a*qdd``, CRBA and Minv see ``M + diag(a)``, ABA solves with
         it, and forward dynamics, its derivatives and the second-order forward
-        dynamics follow. Entries on the floating root's six slots or on a spherical
+        dynamics follow. All entries must be finite and nonnegative. Entries on
+        the floating root's six slots or on a spherical
         block must be zero (the kernels never read them); a nonzero one raises. A
-        zero vector reproduces the plain kernels bit for bit. Only on a
+        zero vector leaves the effective inertia unchanged. Only on a
         runtime_armature build (raises otherwise)."""
+        if self._runner is None:
+            raise RuntimeError("Cannot set armature on a closed robot handle.")
         if not self.runtime_armature:
             raise RuntimeError(
                 "set_armature requires a robot registered with runtime_armature=True. "
                 "Re-register with register_robot(..., runtime_armature=True, force_rebuild=True).")
-        nv = self.num_vel
-        a = np.asarray(values, dtype=self._dt)
-        if a.shape != (nv,):
-            raise ValueError(f"armature must be length nv={nv} (v-slot indexed); got {a.shape}.")
-        slots = set(int(v) for v in self._meta.get("armature_slots", range(nv)))
-        bad = [int(i) for i in range(nv) if i not in slots and a[i] != 0]
-        if bad:
-            raise ValueError(
-                f"armature must be zero on v-slots {bad}: they belong to the floating "
-                f"root or to a spherical block, which carry no rotor armature.")
-        if not np.all(np.isfinite(a)):
-            raise ValueError("armature must be finite in every slot.")
-        self._runner.set_armature_params(np.ascontiguousarray(a))
-        # The device table is shared by every surface of this registration, so
-        # the installed vector is kept per robot name, not per handle object.
-        _ARMATURE_INSTALLED[self.name] = np.array(a, dtype=self._dt)
+        if "armature_slots" not in self._meta:
+            raise RuntimeError("Missing armature_slots metadata; rebuild this artifact.")
+        a = validated_armature(values, self.num_vel, self._meta["armature_slots"], self._dt)
+        self._runner.set_armature_params(a)
 
     @property
     def joint_damping(self):
@@ -2165,9 +2153,10 @@ class RobotHandle:
         return self._shape_out("coriolis_matrix", raw)
 
     def kinetic_energy_regressor(self, q, qd, *, gravity: float = -9.81, _convention=None):
-        """Kinetic-energy regressor y_KE, length ``10*num_bodies``, with
-        ``KE = y_KE · π`` (π = stacked per-link inertial parameters, body-major,
-        10 params/body). Returns ``(B, 10*num_bodies)``. Matches
+        """Link-inertia kinetic-energy regressor y_KE, length ``10*num_bodies``.
+        Total ``KE = y_KE · π + 0.5 * sum(armature * qd**2)`` (π = stacked
+        per-link inertial parameters, body-major, 10 params/body). Armature does
+        not add columns to this regressor. Returns ``(B, 10*num_bodies)``. Matches
         ``RBDReference.kinetic_energy_regressor(q, qd)`` (gravity unused).
 
         With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
@@ -2507,16 +2496,19 @@ class RobotHandle:
 
     @property
     def model_version(self) -> int:
-        """This handle's context MODEL VERSION: starts at 1 and
-        increments on every runtime-parameter mutation — :py:meth:`set_inertia_params`,
-        :py:meth:`set_transform_params`, :py:meth:`set_joint_dynamics`, hence
+        """This handle's context model epoch, allocated from its artifact's
+        monotonically increasing counter. Runtime-parameter mutations advance it:
+        :py:meth:`set_inertia_params`, :py:meth:`set_transform_params`,
+        :py:meth:`set_joint_dynamics`, :py:meth:`set_armature`, hence
         :py:meth:`attach_tool` / :py:meth:`detach_tool`. Launch overrides
         (:py:meth:`set_threads_per_block` & co.) do not bump it. A mutation is
         ordered after every admitted call and before every later one (exclusive
         admission). The torch / JAX autograd forwards stamp the version on device at
         execution time and their backwards refuse to run against a different
         version ("model mutated between forward and backward") — recompute the
-        forward after mutating."""
+        forward after mutating. Invalid armature input is rejected before its
+        epoch changes. An attempted CUDA write conservatively invalidates prior
+        state even if the device operation subsequently fails."""
         return int(self._runner.ctx_version(self._runner.ctx_id()))
 
     @property

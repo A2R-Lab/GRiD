@@ -1072,7 +1072,27 @@ GRID_RBD_RUNTIME_PARAM_SETTER(joint_dynamics, grid::JOINT_DYNAMICS_PARAMS_COUNT)
 // must stay zero (the kernels never read them). Zero-initialised, so the build
 // equals the plain kernels bit for bit until poked. Returns 0 on success.
 #ifdef GRID_RBD_RUNTIME_ARMATURE
-GRID_RBD_RUNTIME_PARAM_SETTER(armature, grid::ARMATURE_PARAMS_COUNT)
+// The high-precision validator lets Python reject invalid input BEFORE a
+// conversion to the kernel scalar type could hide it (underflow, for example).
+extern "C" int grid_rbd_validate_armature_params(const long double* h_params, int count) {
+    return (int)grid::validate_armature_params(h_params, (size_t)count);
+}
+extern "C" int grid_rbd_set_armature_params(long long ctx_id, const T* h_params) {
+    GRID_RBD_CTX_MUT_OR_RETURN(ctx_id);
+    cudaError_t err = grid::validate_armature_params(h_params, grid::ARMATURE_PARAMS_COUNT);
+    if (err != cudaSuccess) return (int)err;
+    g_ctx->version = ++g_model_epoch;  // invalidate prior autodiff before any device write attempt
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) return (int)err;
+    return (int)grid::set_armature_params_checked(g_robot, h_params, grid::ARMATURE_PARAMS_COUNT);
+}
+extern "C" int grid_rbd_get_armature_params(long long ctx_id, T* h_params) {
+    GRID_RBD_CTX_OR_RETURN(ctx_id);
+    cudaError_t err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) return (int)err;
+    return (int)grid::get_armature_params_checked(g_robot, h_params, grid::ARMATURE_PARAMS_COUNT);
+}
+extern "C" int grid_rbd_armature_params_size() { return grid::ARMATURE_PARAMS_COUNT; }
 #endif
 
 

@@ -3818,3 +3818,58 @@ dataclasses fail to resolve). Commit the receipt and the ledger together before
 untracked receipt is dirt, so the verify fails on both architectures until the
 commit exists. The primary ledger `test/gpu-proof-header-keys.json` must stay
 untouched by the secondary landing; check `git diff --stat` on it.
+
+### 7.z88 Runtime parameter readback follows model ownership, not registration names (2026-11-05, armature audit)
+
+The initial runtime-armature implementation cached reported values in a Python
+dictionary keyed by registration name. That is not the owner of the device table:
+two contexts of one artifact have independent tables under the same name, while
+different aliases may share an artifact's default context. CPU diagnostics using
+the actual RobotHandle methods with fake runners reproduced both mismatches and
+readback after close. The repair reads through the admitted native context.
+Fixed and floating iiwa GPU regressions cover independent contexts, NumPy/JAX/
+PyTorch aliases, re-registration, direct native updates, rejected-update epochs,
+close and independent Minv results. Memcheck and synccheck pass on those cases.
+Different-artifact rebinding and mutation between autograd forward/backward
+remain additional release checks; the ownership tests do not establish them.
+
+Use owner-backed native readback, or a state object whose identity and lifetime
+exactly match the native owner. A name, a metadata dictionary and a raw reusable
+context address are not sufficient identities. Cover independent contexts,
+aliases, different artifacts, native updates and close/recreate. Validate shape,
+finite/nonnegative values and supported slots at the native boundary as well as
+the Python boundary; the initial reference setter accepted nonfinite values and
+the Python setter accepted negative armature. Rejected input must not install
+data or advance the model epoch. A device write failure after validation is a
+different case and must retain conservative autograd invalidation. Validate
+before converting to the kernel precision as well: a negative or unsupported
+tiny value can otherwise become zero, while a large finite value can overflow.
+
+The full CPU lane also caught a missing option in both backend registration
+signatures. The root API forwarded `runtime_armature`, but JAX and PyTorch
+rejected it before reaching the common registration path. Exercise construction
+through every advertised entry point, not only backend lookup of a NumPy-built
+artifact. The existing forwarding referee caught this omission without a GPU.
+
+### 7.z89 A diagonal dynamics addition must reach energy and coordinate ownership (2026-11-05, armature audit)
+
+Adding armature to CRBA changes the reference kinetic energy automatically,
+because it computes `0.5 * qd.T * M * qd`. The generated energy routine instead
+sums body spatial energies and initially omitted the rotor term. Fixed iiwa and
+floating Go2 GPU regressions reproduced a zero energy increment after installing
+nonzero armature. Fixing only `energy_device` did not repair the public kernel:
+its spill-aware epilogue computes energy separately. Both now call one rotor-term
+emitter. A CPU regression checks the device, ordinary kernel and single-timestep
+kernel bodies. GPU checks on iiwa, floating Go2 and mimic fr3 at 1, 32 and 128
+threads agree with the reference and reconstruct kinetic energy from the inertial
+regressor plus `0.5 * sum(a * qd**2)`. The regressor itself stays unchanged.
+Those nine cases also pass memcheck and synccheck without reported errors.
+Test total kinetic energy with nonzero armature, not only ID, FD and Minv; audit
+each public execution path rather than assuming it delegates to a device helper.
+
+Similarly, a body's velocity placeholder is not evidence that it owns an armature
+parameter. A parsed zero-DoF constant-mimic fixture produced armature slot `[0]`
+despite `nv=0`. Derive supported slots from independent coordinate owners,
+excluding constant bodies, floating-root and spherical blocks. Include empty
+coordinate and floating constant-body controls; an ordinary one-joint fixture
+can hide a bad placeholder by aliasing its valid slot zero.
