@@ -57,11 +57,12 @@ def _gen_crba_armature_epilogue(self):
     if not slots:
         return
     nv = self.robot.get_num_vel()
-    self.gen_add_code_line("// rotor armature: M += diag(a) on the single-DoF slots (runtime table)")
+    storage = "runtime table" if self.runtime_armature else "baked values"
+    self.gen_add_code_line("// rotor armature: M += diag(a) on the single-DoF slots (" + storage + ")")
     self.gen_add_parallel_loop("k", str(len(slots)))
     self.gen_add_code_line("static const int armature_slots[" + str(len(slots)) + "] = {" + ", ".join(str(v) for v in slots) + "};")
     self.gen_add_code_line("int vs = armature_slots[k];")
-    self.gen_add_code_line("s_M[vs + " + str(nv) + "*vs] += d_robotModel->d_armature_params[vs];")
+    self.gen_add_code_line("s_M[vs + " + str(nv) + "*vs] += " + self._armature_value_cpp("vs") + ";")
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 

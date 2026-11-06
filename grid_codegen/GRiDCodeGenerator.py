@@ -1,4 +1,5 @@
 import os
+from .armature import supported_slots, validated_armature
 
 # Codegen-time frame-selection predicate shared with the idsva_so dispatcher /
 # device wrapper. The emission gate (enable_idsva_so_world_frame) MUST agree with
@@ -208,7 +209,7 @@ class GRiDCodeGenerator:
         self._code_parts.append(text)
         self._code_cache = None
 
-    def __init__(self, robotObj, DEBUG_MODE = False, NEED_PRINT_MAT = False, FILE_NAMESPACE = "grid", USE_JOINT_DYNAMICS = False, dtype = "float", MUJOCO_OUTPUT = False, LAUNCH_CONFIG_ROBOT = None, LAUNCH_CONFIG_PROFILE = "host", runtime_joint_dynamics = False, LAUNCH_CONFIG_GPU = None, FRICTION_MODEL = "sign", FRICTION_WIDTH = 0.03, runtime_armature = False):
+    def __init__(self, robotObj, DEBUG_MODE = False, NEED_PRINT_MAT = False, FILE_NAMESPACE = "grid", USE_JOINT_DYNAMICS = False, dtype = "float", MUJOCO_OUTPUT = False, LAUNCH_CONFIG_ROBOT = None, LAUNCH_CONFIG_PROFILE = "host", runtime_joint_dynamics = False, LAUNCH_CONFIG_GPU = None, FRICTION_MODEL = "sign", FRICTION_WIDTH = 0.03, runtime_armature = False, armature = None):
         self.robot = robotObj
         # runtime_joint_dynamics: when True, the id/fd/aba/*_gradient bias reads
         # the per-DOF damping/friction coefficients from a mutable device table
@@ -227,9 +228,8 @@ class GRiDCodeGenerator:
         # floating root and on spherical blocks. Enters inverse dynamics
         # (tau += a*qdd), CRBA and Minv (M + diag(a)), ABA (the articulated
         # D), and through them forward dynamics, its derivatives and the
-        # second-order forward dynamics. The URDF carries no armature, so the
-        # device table d_armature_params is zero-initialised and poked through
-        # set_armature_params; DEFAULT False keeps every emitted byte identical.
+        # second-order forward dynamics. Optional runtime storage starts from
+        # initial_armature; the default zero baked mode emits no added term.
         self.runtime_armature = runtime_armature
         # Which autotune profile to bake into launch_cfg<ALGO>::{TIER,THREADS}.
         # "host" = the C++/host throughput-optimal `bases` (default; used by the
@@ -334,6 +334,10 @@ class GRiDCodeGenerator:
         # sets the default. ints stay 32-bit regardless (int_count term is *4 below).
         if dtype not in ("float", "double"):
             raise ValueError(f"GRiDCodeGenerator dtype must be 'float' or 'double', got {dtype!r}")
+        self.armature_dtype = "float64" if dtype == "double" else "float32"
+        self.initial_armature = validated_armature(
+            [0] * self.robot.get_num_vel() if armature is None else armature,
+            self.robot.get_num_vel(), supported_slots(self.robot), self.armature_dtype).tolist()
         _default_t_bytes = "8" if dtype == "double" else "4"
         self.cuda_shared_mem_type_size_bytes = int(os.environ.get("GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES", _default_t_bytes))
 
@@ -358,28 +362,22 @@ class GRiDCodeGenerator:
                     or getattr(self, "runtime_armature", False))
 
     def _armature_vslots(self):
-        """The reduced v-slots that carry an armature entry: every single-DoF
-        joint's slot (mimic joints fold onto their target's slot, listed once),
-        never the floating root's six slots nor a spherical block."""
-        if not getattr(self, "runtime_armature", False):
-            return []
-        slots = set()
-        for jid in range(self.robot.get_num_joints()):
-            if self.robot.floating_base and jid == 0:
-                continue
-            if self.robot.joint_is_spherical(jid):
-                continue
-            # Followers do not own coordinates. In particular, constant mimics
-            # carry a placeholder slot which can alias the root or exceed nv=0.
-            if self.robot.get_joint_by_id(jid).is_mimic:
-                continue
-            vs = self.robot.get_joint_index_v(jid)
-            if isinstance(vs, (list, tuple)):
-                continue
-            if not 0 <= int(vs) < self.robot.get_num_vel():
-                raise ValueError(f"Independent joint {jid} has invalid armature slot {vs}.")
-            slots.add(int(vs))
-        return sorted(slots)
+        """Slots needing arithmetic: all mutable slots, or nonzero baked slots."""
+        return [slot for slot in supported_slots(self.robot)
+                if self.runtime_armature or self.initial_armature[slot] != 0]
+
+    def _armature_value_cpp(self, slot):
+        """Storage selection at generation time; no runtime mode branch."""
+        if self.runtime_armature:
+            return f"d_robotModel->d_armature_params[{slot}]"
+        if isinstance(slot, int):
+            return f"static_cast<T>({self.initial_armature[slot]!r})"
+        return f"armature_baked<T>({slot})"
+
+    def _armature_term_cpp(self, slot):
+        if not self._armature_vslots():
+            return ""
+        return " + " + self._armature_value_cpp(slot)
 
     def get_friction_width_baked(self):
         """Return the per-v-slot tanh friction width (length nv) the runtime table's
@@ -837,7 +835,16 @@ class GRiDCodeGenerator:
         if getattr(self, "runtime_joint_dynamics", False):
             self.gen_init_joint_dynamics_params()
             self.gen_set_joint_dynamics_params()
-        # runtime_armature: the zero-initialised per-v-slot armature table + mutator.
+        # Baked lookup is constexpr and never allocates a model table.
+        if not self.runtime_armature and self._armature_vslots():
+            self.gen_add_code_line("template <typename T> __host__ __device__ constexpr T armature_baked(int slot) {", True)
+            self.gen_add_code_line("switch (slot) {", True)
+            for slot in self._armature_vslots():
+                self.gen_add_code_line(f"case {slot}: return static_cast<T>({self.initial_armature[slot]!r});")
+            self.gen_add_code_line("default: return T(0);")
+            self.gen_add_end_control_flow()
+            self.gen_add_end_function()
+        # Runtime tables start from the same immutable artifact initializer.
         if getattr(self, "runtime_armature", False):
             self.gen_init_armature_params()
             self.gen_set_armature_params()

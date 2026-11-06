@@ -290,10 +290,25 @@ class BaseDelegateMixin:
 
     @property
     def armature(self):
-        """Read a copy of this context's current device armature (length nv,
-        reduced coordinates). Inspection may synchronize. Only on a
-        ``runtime_armature`` build."""
+        """Read a copy of this context's current armature (length nv,
+        reduced coordinates). Runtime-table inspection may synchronize."""
         return self._base.armature
+
+    @property
+    def initial_armature(self):
+        return self._base.initial_armature
+
+    @property
+    def armature_slots(self):
+        return self._base.armature_slots
+
+    @property
+    def armature_units(self):
+        return self._base.armature_units
+
+    @property
+    def num_armature_params(self):
+        return self._base.num_armature_params
 
     @property
     def runtime_armature(self) -> bool:

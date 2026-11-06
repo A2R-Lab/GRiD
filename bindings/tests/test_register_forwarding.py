@@ -29,6 +29,7 @@ _MATERIAL = dict(
     floating_base=True, ee_joint_names=["j7"], max_batch_size=64,
     algorithm_list=["inverse_dynamics"], use_joint_dynamics=True,
     runtime_joint_dynamics=True, runtime_inertia=True, runtime_transform=True, runtime_armature=True,
+    armature=[0, 0, 0, 0, 0, 0, .25],
     enable_tool=True, contact_frames=["foot_fl", "foot_fr"],
     enable_mujoco_kernels=False, dtype="float32",
 )

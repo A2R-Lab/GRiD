@@ -165,19 +165,20 @@ def gen_inverse_dynamics_armature_bias(self, use_qdd_input):
     (Pinocchio's rnea adds the armature term). Only the qdd-input value path
     carries it: the c(q, qd) path used by forward dynamics has qdd = 0 and
     the armature enters that solve through M + diag(a) instead."""
-    if not getattr(self, "runtime_armature", False) or not use_qdd_input:
+    if not use_qdd_input:
         return
     slots = self._armature_vslots()
     if not slots:
         return
     self.gen_add_code_line("//")
-    self.gen_add_code_line("// rotor armature: s_c += a * qdd per v-slot (runtime table)")
+    storage = "runtime table" if self.runtime_armature else "baked values"
+    self.gen_add_code_line("// rotor armature: s_c += a * qdd per v-slot (" + storage + ")")
     self.gen_add_code_line("//")
     self.gen_add_sync()
     self.gen_add_parallel_loop("k", str(len(slots)))
     self.gen_add_code_line("static const int armature_slots[" + str(len(slots)) + "] = {" + ", ".join(str(v) for v in slots) + "};")
     self.gen_add_code_line("int vs = armature_slots[k];")
-    self.gen_add_code_line("s_c[vs] += d_robotModel->d_armature_params[vs] * s_qdd[vs];")
+    self.gen_add_code_line("s_c[vs] += " + self._armature_value_cpp("vs") + " * s_qdd[vs];")
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 

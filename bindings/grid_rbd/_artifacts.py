@@ -227,7 +227,7 @@ def _code_options(urdf_path: Path, cuda_arch: int, *, floating_base, ee_joint_na
                   enable_mujoco_kernels, cost_frames, contact_frames, use_joint_dynamics, friction_model,
                   friction_width, runtime_inertia, runtime_transform, runtime_joint_dynamics, emit_plant,
                   collision, collision_res, collision_native, spherized_urdf, strict_collision,
-                  launch_config_profile, runtime_armature: bool = False) -> dict[str, Any]:
+                  launch_config_profile, runtime_armature: bool = False, armature=None) -> dict[str, Any]:
     if dtype not in ("float32", "float64"):
         raise ValueError(f"dtype must be 'float32' or 'float64', got {dtype!r}")
     opts: dict[str, Any] = {
@@ -270,6 +270,9 @@ def _code_options(urdf_path: Path, cuda_arch: int, *, floating_base, ee_joint_na
                         ("runtime_joint_dynamics", runtime_joint_dynamics), ("runtime_armature", runtime_armature)):
         if value:
             opts[flag] = True
+    if armature is not None:
+        from grid_codegen.armature import option_vector
+        opts["armature"] = option_vector(armature)
     if emit_plant is not None:
         opts["emit_plant"] = bool(emit_plant)
     else:
@@ -566,6 +569,7 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
                    runtime_transform: bool = False,
                    runtime_joint_dynamics: bool = False,
                    runtime_armature: bool = False,
+                   armature=None,
                    emit_plant: bool | None = None,
                    collision: bool = False,
                    collision_res: float | Sequence[float] = 0.05,
@@ -648,7 +652,7 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
         algorithm_list=algorithm_list, enable_mujoco_kernels=enable_mujoco_kernels, cost_frames=cost_frames,
         contact_frames=contact_frames, use_joint_dynamics=use_joint_dynamics, friction_model=friction_model,
         friction_width=friction_width, runtime_inertia=runtime_inertia, runtime_transform=runtime_transform,
-        runtime_joint_dynamics=runtime_joint_dynamics, runtime_armature=runtime_armature,
+        runtime_joint_dynamics=runtime_joint_dynamics, runtime_armature=runtime_armature, armature=armature,
         emit_plant=emit_plant, collision=collision,
         collision_res=collision_res, collision_native=collision_native, spherized_urdf=spherized_urdf,
         strict_collision=strict_collision, launch_config_profile=launch_config_profile)

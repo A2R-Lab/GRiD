@@ -461,6 +461,52 @@ third row of the mutable table, so ``set_joint_dynamics(friction_width=)``
 changes it without a recompile; the handle reports ``friction_model`` and
 ``joint_friction_width``.
 
+Rotor armature
+~~~~~~~~~~~~~~
+
+Pass ``armature=a`` to ``register_robot``, ``load_robot``, ``warm_robot`` or
+``build_artifact`` to bake reflected rotor inertia. The vector has shape
+``(nv,)`` in native reduced velocity order. Values must be finite and
+nonnegative; floating-root and spherical slots must be zero. Omitting the
+vector means zero armature. Baked execution adds no mutable table.
+
+``handle.armature_slots`` gives the independent scalar slots in compact column
+order. ``handle.num_armature_params`` is their count and ``handle.armature_units``
+gives kg m^2 for angular slots and kg for prismatic slots. Mimic followers do
+not own additional columns. A mimic coordinate's value is effective reduced
+inertia, not an automatically inferred motor inertia for every follower.
+
+Add ``runtime_armature=True`` only when explicit updates are needed. Each new
+context starts from the artifact's supplied vector. ``set_armature(a)`` changes
+that context without compiling; aliases observe the same table. Another
+``context()`` starts from the initializer, not the parent's current values.
+``handle.initial_armature`` returns a copy of that immutable initializer and
+``handle.armature`` returns a copy of current values in either storage mode.
+Runtime readback may synchronize and belongs outside the inner loop.
+
+Construction values and the runtime flag enter artifact identity. Changing a
+construction vector may compile another artifact. Re-registering the same
+artifact does not reset its live table. A fresh-process prepared load needs
+neither URDF parsing nor nvcc and restores the compiled initializer. Deploy
+fitted values by baking them, or save them separately and call the setter after
+loading a runtime artifact. A prepared artifact does not save live mutations.
+
+Armature adds ``diag(a)`` to the effective mass matrix and ``a*qdd`` to inverse
+dynamics. Total kinetic energy includes ``0.5*sum(a*qd**2)``. The existing
+ten-per-body inertial regressor retains its columns; rotor terms are separate.
+This is a reduced-coordinate inertia model, not explicit rotor-body dynamics.
+
+For generated C++ consumers, pass ``armature=a`` to the generator constructor.
+Runtime builds provide ``validate_armature_params``,
+``set_armature_params_checked`` and ``get_armature_params_checked`` with a
+buffer length and CUDA error return. Callers own synchronization around their
+model. Python contexts serialize mutation with admitted calls and invalidate
+deferred state-autograd work; invalid input changes neither values nor epoch.
+A failed device copy does not promise rollback.
+
+Runtime geometry limits
+~~~~~~~~~~~~~~~~~~~~~~~
+
 Runtime tables reach dynamics, not baked kinematics. ``runtime_inertia``,
 ``runtime_transform`` and ``runtime_joint_dynamics`` rebuild the dynamics
 tables from a mutable device table once per launch, so ``inverse_dynamics``,

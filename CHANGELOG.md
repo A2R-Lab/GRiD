@@ -12,6 +12,13 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Accept a baked `armature` initializer at generator, registration and consumer
+  artifact entry points, with optional runtime tables. Expose parameter slots,
+  units and immutable initial values. New contexts and prepared loads start from
+  the artifact initializer; live updates do not change compilation identity.
+- Preserve symmetric-upper inverse-mass storage on mimic and spherical models;
+  this prevents doubled off-diagonal entries in Python outputs and control-input
+  autograd. Ordinary scalar-joint recursion is unchanged.
 - Validate runtime armature before precision conversion or mutation, reject
   unsupported and constant-joint slots, and read installed values from their
   owning context rather than a registration-name cache. Forward the runtime

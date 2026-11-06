@@ -182,6 +182,7 @@ def register_robot(
     runtime_joint_dynamics: bool = False,
     runtime_armature: bool = False,
     use_joint_dynamics: bool = False,
+    armature=None,
     friction_model: str = "sign",
     friction_width=None,
     enable_tool: bool = False,
@@ -299,14 +300,14 @@ def register_robot(
         ``use_joint_dynamics`` (which bakes the URDF values as the initial
         table). Re-keys the cache.
     runtime_armature : bool, optional
-        Emits a mutable per-v-slot rotor-armature table (reflected motor
-        inertia on the diagonal of the joint-space inertia, Pinocchio's
-        ``model.armature``: single-DoF joints only, zero on the floating root
-        and on spherical blocks) and the handle gains ``armature`` /
-        ``set_armature``. The URDF carries no armature, so the table starts
-        at zero and the build equals the plain one bit for bit until poked.
-        Enters inverse dynamics (``tau += a*qdd``), CRBA, Minv, ABA and every
-        algorithm built on them. Re-keys the cache.
+        Opt into a context-owned table initialized from ``armature``. Explicit
+        ``set_armature`` updates do not compile; new contexts use the artifact's
+        initializer, not another context's mutations. The flag re-keys the cache.
+    armature : array-like, optional
+        Finite nonnegative ``(nv,)`` reduced-coordinate rotor inertia, zero by
+        default. Floating-root and spherical slots must be zero. Baked by default;
+        construction values enter artifact identity in either storage mode.
+        ``armature_slots`` and ``armature_units`` describe the scalar parameters.
     _profile_overlay : str | None, optional
         INTERNAL (underscore = not part of the public API; may change without
         notice). Which launch-config profile block of
@@ -473,7 +474,7 @@ def register_robot(
             friction_model=friction_model, friction_width=friction_width,
             cost_frames=cost_frames,
             runtime_joint_dynamics=runtime_joint_dynamics,
-            runtime_armature=runtime_armature,
+            runtime_armature=runtime_armature, armature=armature,
             runtime_inertia=runtime_inertia,
             runtime_transform=runtime_transform, enable_tool=enable_tool,
             contact_frames=contact_frames,
@@ -489,7 +490,7 @@ def register_robot(
             friction_model=friction_model, friction_width=friction_width,
             cost_frames=cost_frames,
             runtime_joint_dynamics=runtime_joint_dynamics,
-            runtime_armature=runtime_armature,
+            runtime_armature=runtime_armature, armature=armature,
             runtime_inertia=runtime_inertia,
             runtime_transform=runtime_transform, enable_tool=enable_tool,
             contact_frames=contact_frames,
@@ -502,7 +503,7 @@ def register_robot(
         dtype=dtype, runtime_inertia=runtime_inertia,
         runtime_transform=runtime_transform,
         runtime_joint_dynamics=runtime_joint_dynamics,
-        runtime_armature=runtime_armature,
+        runtime_armature=runtime_armature, armature=armature,
         use_joint_dynamics=use_joint_dynamics, enable_tool=enable_tool,
         friction_model=friction_model, friction_width=friction_width,
         contact_frames=contact_frames, cost_frames=cost_frames,
@@ -565,6 +566,7 @@ def warm_robot(
     runtime_armature: bool = False,
     use_joint_dynamics: bool = False,
     enable_tool: bool = False,
+    armature=None,
     contact_frames: list[str] | tuple[str, ...] | None = None,
     algorithm_list: list[str] | tuple[str, ...] | str | None = None,
     enable_mujoco_kernels: bool = True,
@@ -692,6 +694,9 @@ def warm_robot(
     # in the cache key only when True, so a default build reuses its .so.
     if runtime_armature:
         code_options["runtime_armature"] = True
+    if armature is not None:
+        from grid_codegen.armature import option_vector
+        code_options["armature"] = option_vector(armature)
     # Subset-build: only inject the algorithm_list into the cache key (and thus
     # re-key the cache) when the caller requests a non-default subset, so a default
     # register_robot is byte-identical to before and reuses its existing full .so.

@@ -131,6 +131,8 @@ def test_constant_body_never_owns_armature_slot(tmp_path, floating):
     assert cg._armature_vslots() == []
     ref = RBDReference(r)
     ref.set_armature(np.zeros(r.get_num_vel()))
+    assert ref.armature_slots == ()
+    assert ref.armature_regressor(np.zeros(r.get_num_vel())).shape == (r.get_num_vel(), 0)
 
 
 def test_generated_armature_has_checked_native_boundaries(robot):

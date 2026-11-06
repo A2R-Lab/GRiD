@@ -637,7 +637,7 @@ def _gen_energy_armature(self):
     # Both the device helper and the spill-aware kernel finalize energy here.
     # Rotor inertia is a reduced-coordinate contribution, not a spatial inertia.
     for vs in self._armature_vslots():
-        self.gen_add_code_line(f"ke += static_cast<T>(0.5) * d_robotModel->d_armature_params[{vs}] * s_qd[{vs}] * s_qd[{vs}];")
+        self.gen_add_code_line(f"ke += static_cast<T>(0.5) * {self._armature_value_cpp(vs)} * s_qd[{vs}] * s_qd[{vs}];")
 
 
 def gen_energy_device(self):

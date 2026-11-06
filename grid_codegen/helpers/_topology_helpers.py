@@ -458,11 +458,9 @@ def gen_get_armature_params_size(self):
     return self.robot.get_num_vel()
 
 def gen_init_armature_params(self):
-    # runtime_armature: host-side init of the mutable per-v-slot rotor armature
-    # table. The URDF carries no armature, so the table is calloc'd zero and
-    # the build is bit-identical to the no-armature kernels until
-    # set_armature_params is called.
-    self.gen_add_func_doc("Initializes the mutable rotor-armature table in GPU memory (all zero)",
+    # Every new model uses the immutable artifact initializer, never live state.
+    initial = "artifact initializer" if any(self.initial_armature) else "all zero"
+    self.gen_add_func_doc("Initializes the mutable rotor-armature table in GPU memory (" + initial + ")",
             ["Memory order is armature[0..nv-1], v-slot indexed (reduced coordinates); floating-root and spherical slots stay zero"],
             [], "A pointer to the armature-params memory in the GPU")
     self.gen_add_code_line("template <typename T>")
@@ -470,6 +468,9 @@ def gen_init_armature_params(self):
     self.gen_add_code_line("cudaError_t init_armature_params_checked(T **out, const char **failed_op = nullptr) {", True)
     size = self.gen_get_armature_params_size()
     self.gen_checked_host_alloc("h_armature_params", str(size), "T")
+    for slot, value in enumerate(self.initial_armature):
+        if value != 0:
+            self.gen_add_code_line(f"h_armature_params[{slot}] = static_cast<T>({value!r});")
     self.gen_checked_table_tail("h_armature_params", "d_armature_params", str(size), "T")
     self.gen_legacy_init_wrapper("init_armature_params", "T")
 

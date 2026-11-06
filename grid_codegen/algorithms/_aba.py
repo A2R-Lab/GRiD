@@ -65,12 +65,10 @@ def _aba_vslot(self, jid):
 
 
 def _aba_armature_term_cpp(self, dof):
-    """runtime_armature: the ``+ a[dof]`` added to the articulated D of a
+    """Armature: the ``+ a[dof]`` added to the articulated D of a
     single-DoF joint (Pinocchio's aba solves with M + diag(armature)); ``dof``
-    is a v-slot literal or a C variable name. Empty when the flag is off."""
-    if not getattr(self, "runtime_armature", False):
-        return ""
-    return " + d_robotModel->d_armature_params[" + str(dof) + "]"
+    is a v-slot literal or a C variable name. Empty for a zero baked vector."""
+    return self._armature_term_cpp(dof)
 
 
 def _aba_jd_bias_term_cpp(self, jid):

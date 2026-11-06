@@ -184,6 +184,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         launch_config_robot, options.get("cuda_arch"))
     cg = GRiDCodeGenerator(robot, debug_mode, FILE_NAMESPACE=file_namespace,
                            dtype=codegen_dtype, USE_JOINT_DYNAMICS=use_joint_dynamics,
+                           armature=options.get("armature"),
                            FRICTION_MODEL=friction_model, FRICTION_WIDTH=friction_width,
                            LAUNCH_CONFIG_ROBOT=launch_config_robot,
                            LAUNCH_CONFIG_PROFILE=launch_config_profile,
@@ -459,12 +460,19 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
             # the table's third row: the per-v-slot tanh width the device table is
             # initialized with (set_joint_dynamics(friction_width=) fetch-then-mutate).
             meta["joint_friction_width"] = [float(w) for w in cg.get_friction_width_baked()]
-    # runtime_armature: the table starts at zero (the URDF carries no armature);
-    # the slots that carry an entry are recorded so set_armature can refuse a
-    # value on the floating root or a spherical block.
+    # Both storage modes share the immutable initializer and scalar slot order.
+    # Runtime contexts initialize from these same values, not another live table.
     if runtime_armature:
         meta["runtime_armature"] = True
-        meta["armature_slots"] = [int(v) for v in cg._armature_vslots()]
+    from grid_codegen.armature import supported_slots
+    meta["armature_slots"] = supported_slots(robot)
+    meta["initial_armature"] = list(cg.initial_armature)
+    units = {}
+    for jid, kind in robot.get_joint_types_by_id().items():
+        slot = robot.get_joint_index_v(jid)
+        if not robot.get_joint_by_id(jid).is_mimic and slot in meta["armature_slots"]:
+            units[slot] = "kg" if kind == "prismatic" else "kg m^2"
+    meta["armature_units"] = [units[slot] for slot in meta["armature_slots"]]
     return meta
 
 

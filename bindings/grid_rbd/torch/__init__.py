@@ -1277,6 +1277,7 @@ def register_robot(
     use_joint_dynamics: bool = False,
     runtime_joint_dynamics: bool = False,
     runtime_armature: bool = False,
+    armature=None,
     runtime_inertia: bool = False,
     runtime_transform: bool = False,
     enable_tool: bool = False,
@@ -1308,7 +1309,7 @@ def register_robot(
         friction_model=friction_model, friction_width=friction_width,  # smooth friction (tanh)
         cost_frames=cost_frames,  # plant menu frame residuals
         runtime_joint_dynamics=runtime_joint_dynamics,  # C5 mutable damping/friction table
-        runtime_armature=runtime_armature,
+        runtime_armature=runtime_armature, armature=armature,
         runtime_inertia=runtime_inertia,  # D.4: mutable inertia table (torch op reads same device global)
         runtime_transform=runtime_transform,  # mutable joint-origin table (shared device global)
         enable_tool=enable_tool,  # tool welding: attach_tool/detach_tool/tool_fext surface

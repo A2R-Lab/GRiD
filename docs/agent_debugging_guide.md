@@ -3830,8 +3830,11 @@ readback after close. The repair reads through the admitted native context.
 Fixed and floating iiwa GPU regressions cover independent contexts, NumPy/JAX/
 PyTorch aliases, re-registration, direct native updates, rejected-update epochs,
 close and independent Minv results. Memcheck and synccheck pass on those cases.
-Different-artifact rebinding and mutation between autograd forward/backward
-remain additional release checks; the ownership tests do not establish them.
+The later baked/runtime regressions also cover different-artifact rebinding,
+backend views keyed by the loaded artifact rather than the rebound name,
+runtime mutation between PyTorch forward/backward, and fresh-process prepared
+initialization with compilation forbidden. The narrower ownership tests alone
+do not establish these properties.
 
 Use owner-backed native readback, or a state object whose identity and lifetime
 exactly match the native owner. A name, a metadata dictionary and a raw reusable
@@ -3873,3 +3876,40 @@ despite `nv=0`. Derive supported slots from independent coordinate owners,
 excluding constant bodies, floating-root and spherical blocks. Include empty
 coordinate and floating constant-body controls; an ordinary one-joint fixture
 can hide a bad placeholder by aliasing its valid slot zero.
+
+### 7.z90 Dense fallback output is not symmetric-upper storage (2026-11-05, armature acceptance)
+
+The mimic/spherical Minv fallback inverts CRBA into a full dense matrix. Ordinary
+Minv recursion returns only the upper triangle, with a zero lower triangle.
+The Python output adapter reconstructs a symmetric matrix by adding the buffer
+to its transpose and subtracting its diagonal. A full fallback buffer therefore
+doubles every off-diagonal entry. Nonzero-armature FR3 acceptance reproduced
+this at 1, 32 and 128 threads; baked and runtime modes agreed with each other
+but disagreed with the independent reference. The defect is not specific to
+armature. Control-input autograd also consumes the adapted Minv.
+
+Normalize the fallback to the documented storage contract immediately after
+inversion: a block-stride loop clears the lower triangle, followed by the
+existing block synchronization pattern. No new scratch, allocation, backend
+branch or inversion algorithm is needed. The scalar recursion is unchanged.
+The numerical matrix is unchanged in its authoritative upper triangle.
+
+Test the raw native buffer as well as the public matrix, compare with an
+independent inverse, and assert M times Minv is identity on mimic and spherical
+models. Comparing backends to the same adapted NumPy output would accept the
+bug. Likewise, checking the control-input gradient against that same faulty
+public Minv is circular; use the independent CRBA inverse. Keep these tests
+separate from armature mode parity and include zero-armature builds.
+
+Choose thread counts from the compiled kernel ceiling, not the hardware's
+1024-thread maximum. This spherical fixture reports 96 for Minv: the native
+host wrapper clamps a request for 128, but the direct JAX FFI launch honors
+the request and CUDA rejects it. The regression exercises 1, 32 and the
+reported ceiling (capped at 128), rather than counting a clamped host call as
+128-thread evidence. The host/direct-launch policy asymmetry is a separate
+follow-up; this repair does not change admission or raise a resource limit.
+
+Construction/cache acceptance also needs a stable source snapshot: changing
+even code comments during a live run can invalidate its input-cache identity.
+A test that forbids rebuilding then correctly fails. Preserve that diagnostic
+and rerun against fixed inputs; do not remove the no-compilation assertion.

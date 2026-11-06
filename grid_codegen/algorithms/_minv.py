@@ -33,11 +33,9 @@ def gen_minv_inner_temp_mem_size(self):
     return self.gen_minv_inner_F_size() + self.gen_minv_inner_no_F_size()
 
 def _minv_armature_term_cpp(self, dof):
-    """runtime_armature: ``+ a[dof]`` on the articulated D before its inverse
+    """Armature: ``+ a[dof]`` on the articulated D before its inverse
     (Minv = inv(M + diag(a))); ``dof`` is a v-slot literal or a C expression."""
-    if not getattr(self, "runtime_armature", False):
-        return ""
-    return " + d_robotModel->d_armature_params[" + str(dof) + "]"
+    return self._armature_term_cpp(dof)
 
 def gen_minv_inner_function_call(self, updated_var_names = None,
                                         f_in_smem_expr = "true"):
@@ -81,8 +79,10 @@ def _gen_minv_inner_via_crba(self, n, label):
     mimic CRBA band is <= 42*NB; the spherical CRBA band is 36*NB+36 — both <=
     no_F = 36*NV + 6*NV + d_inv + 36*2*max_bfs_width for these robots; verified
     in the equivalence test). invert_matrix writes the FULL dense symmetric
-    inverse into s_Minv; forward_dynamics_finish / gen_minv_apply read only its
-    upper triangle (SYMMETRIC_UPPER), which is correct for a dense symmetric M^-1.
+    inverse into s_Minv. Clear the lower triangle to satisfy the same
+    SYMMETRIC_UPPER storage contract as the recursive path. Python surfaces
+    reconstruct the dense matrix from this buffer; leaving both triangles set
+    doubles off-diagonal entries there and in control-input autograd.
     """
     self.gen_add_code_line("// " + label + " Minv = inv(CRBA(q))")
     # M lives in s_F[0..NV*NV); the rest of s_F (6*NV*NV total) is invert scratch.
@@ -98,6 +98,10 @@ def _gen_minv_inner_via_crba(self, n, label):
     self.gen_add_sync()
     # Invert the reduced NV x NV mass matrix into s_Minv (dense, block-cooperative).
     self.gen_add_code_line("invert_matrix(" + str(n) + ", s_M_reduced, s_Minv, s_invert_temp);")
+    self.gen_add_sync()
+    self.gen_add_parallel_loop("ind", str(n*n))
+    self.gen_add_code_line(f"if (ind % {n} > ind / {n}) s_Minv[ind] = static_cast<T>(0);")
+    self.gen_add_end_control_flow()
     self.gen_add_sync()
     self.gen_add_end_function()
 

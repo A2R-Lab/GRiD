@@ -24,7 +24,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from ._armature import validated_armature
+from grid_codegen.armature import validated_armature
 from ._surface_common import MujocoDerivativeViewMixin, MujocoViewBase
 
 
@@ -899,7 +899,7 @@ class RobotHandle:
 
     @property
     def armature(self):
-        """Read this context's current rotor armature from its device table.
+        """Read current rotor armature in reduced velocity order.
 
         Returns a copy in reduced velocity order. This inspection operation may
         synchronize; aliases of a context observe the same native table.
@@ -907,11 +907,28 @@ class RobotHandle:
         if self._runner is None:
             raise RuntimeError("Cannot read armature from a closed robot handle.")
         if not self.runtime_armature:
-            raise RuntimeError(
-                "armature is only available on a robot registered with "
-                "runtime_armature=True. Re-register with "
-                "register_robot(..., runtime_armature=True, force_rebuild=True).")
+            return self.initial_armature
         return self._runner.get_armature_params()
+
+    @property
+    def initial_armature(self):
+        """Copy of the immutable artifact initializer, also used by new contexts."""
+        return np.array(self._meta["initial_armature"], dtype=self._dt)
+
+    @property
+    def armature_slots(self):
+        """Compact parameter columns, in increasing reduced velocity-slot order."""
+        return tuple(self._meta["armature_slots"])
+
+    @property
+    def armature_units(self):
+        """Units for each compact column: kg m^2 (angular) or kg (prismatic)."""
+        return tuple(self._meta["armature_units"])
+
+    @property
+    def num_armature_params(self):
+        """Number of independent scalar armature parameters."""
+        return len(self.armature_slots)
 
     def set_armature(self, values) -> None:
         """Install a rotor armature at runtime (no recompile): ``values`` is length nv
