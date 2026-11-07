@@ -44,6 +44,11 @@ def test_armature_native_helpers_are_shard_fingerprint_inputs(module, runner):
     assert (rss.REPO_ROOT / path).is_file()
 
 
+def test_exact_gradient_runner_is_a_cuda_shard_fingerprint_input():
+    path = 'test/cuda_equivalents/cuda_plant_gradient_arena_runner.cu'
+    assert path in rss._shard_fingerprint_paths({'test_cuda_plant_gradient_arena'})
+
+
 @pytest.fixture(autouse=True)
 def unchanged_oracle_for_synthetic_receipts(monkeypatch):
     # Synthetic receipts below use fictitious commit SHAs; isolate their

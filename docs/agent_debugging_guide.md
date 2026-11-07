@@ -437,6 +437,18 @@ never changes.
     with the INDEPENDENT `multi_target_position` FK path to float32 eps — plus it already passes CUDA
     equivalence vs the numpy oracle across the robot matrix.
 
+  The November 7 TIAGo armature audit reproduced this family in a standalone
+  generated pose/Jacobian caller, without GATO. Three serial-chain product sites
+  produced 96 detailed byte hazards and three summary reports, all with identical
+  current/incoming bytes. The source alternates disjoint 16-element halves and
+  synchronizes between levels. Forty launches at 1/17/32/128/256 threads agreed
+  with the independent reference and were bit-identical; memcheck and synccheck
+  were clean. The strict racecheck invocation still returned 86 with warnings.
+  Preserve that result rather than reporting a clean racecheck. Equal bytes in
+  one trace alone are not a general proof: inspect every distinct site and its
+  buffer ownership, barriers and invariant values. This bounded reproduction
+  does not classify other warning sites in a downstream full-solver launch.
+
 **(b) `initcheck` "Uninitialized __global__ memory read" in EVERY `*_kernel_single_timing`.**
 This is the **anti-LICM feedback by design**, and it is FLEET-WIDE, not specific to any one algo.
 `gen_anti_licm_input_reload` injects a loop-carried dependency by reading a PRIOR rep's output slot —

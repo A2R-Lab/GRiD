@@ -90,6 +90,12 @@ process at a time when the box is shared.
 3. Run again in a new process with `--gpu --reload` and the same work directory.
    Generation and compilation are forbidden, so a cache miss fails the gate.
    `release-check` runs this step.
+   The GPU pair also checks the optional armature identification API against the
+   bundled double-precision oracle on NumPy, JAX and PyTorch, including the
+   regressor's acceleration derivative. The first process mutates the live
+   armature and hides the original URDF. The second forbids parsing and compiler
+   lookup and must restore the construction initializer, not the last mutation.
+   Keep both logs. Running only the construction half does not close this gate.
 4. For a wheel overlay on an existing framework environment, use
    `--package-root /absolute/unpacked-wheel-directory`. All GRiD/peer imports
    are checked to originate there. This complements, not replaces, the clean

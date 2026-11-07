@@ -18,6 +18,89 @@ URDF = '''<robot name="package_probe"><link name="base"/>
 <axis xyz="0 1 0"/><limit lower="-3" upper="3" effort="10" velocity="10"/></joint></robot>'''
 
 
+def check_identification(work, reload):
+    """Check the optional API, then restore its initializer in a fresh process.
+
+    The ordinary --gpu / --gpu --reload release pair drives this check too.
+    Saved expected values come from the bundled double-precision oracle, not
+    from another backend using the same generated kernel.
+    """
+    import numpy as np
+    import grid_rbd
+    import grid_codegen
+    import URDFParser
+    import RBDReference
+    import jax
+    import jax.numpy as jnp
+    import torch
+
+    work = work / 'identification'
+    work.mkdir(parents=True, exist_ok=True)
+    source = work / 'probe.urdf'
+    cache = work / 'cache'
+    name = 'installed_armature_identification'
+    if reload:
+        assert not source.exists(), 'Prepared identification must not have its source'
+
+        def forbidden(*a, **k):
+            raise AssertionError('Prepared identification attempted parsing or compilation')
+
+        import grid_rbd._compile as compiler
+        compiler.find_nvcc = compiler.compile_so = compiler.compile_sources = forbidden
+        grid_rbd.compile_sources = grid_rbd.generate_sources = grid_rbd.warm_robot = forbidden
+        grid_codegen.GRiDCodeGenerator.gen_all_code = forbidden
+        URDFParser.URDFParser.parse = forbidden
+        h = grid_rbd.get_robot(name, cache_dir=cache)
+    else:
+        source.write_text(URDF)
+        ref = RBDReference.RBDReference(URDFParser.URDFParser().parse(str(source)))
+        ref.set_armature([.4])
+        q = np.asarray([[.2], [.7]], np.float32)
+        v = np.asarray([[.1], [-.2]], np.float32)
+        u = np.asarray([[.3], [-.1]], np.float32)
+        expected = np.stack([
+            ref.forward_dynamics_armature_gradient(qr.astype(float), vr.astype(float), ur.astype(float))
+            for qr, vr, ur in zip(q, v, u)])
+        np.savez(work / 'expected.npz', q=q, v=v, u=u, expected=expected)
+        h = grid_rbd.register_robot(
+            name, str(source), cache_dir=cache, runtime_armature=True, armature=[.4],
+            algorithm_list=['forward_dynamics_armature_gradient'],
+            enable_mujoco_kernels=False, max_batch_size=2)
+    handles = [h]
+    try:
+        np.testing.assert_array_equal(h.armature, np.asarray([.4], np.float32))
+        with np.load(work / 'expected.npz') as data:
+            q, v, u, expected = [data[k] for k in ('q', 'v', 'u', 'expected')]
+        results = [h.forward_dynamics_armature_gradient(q, v, u)]
+        for backend in ('jax', 'torch'):
+            handle = grid_rbd.get_robot(name, backend=backend, cache_dir=cache)
+            handles.append(handle)
+            np.testing.assert_array_equal(handle.armature, np.asarray([.4], np.float32))
+            if backend == 'jax':
+                results.append(np.asarray(jax.jit(handle.forward_dynamics_armature_gradient)(
+                    jnp.asarray(q), jnp.asarray(v), jnp.asarray(u))))
+                grad = jax.grad(lambda a: handle.armature_regressor(a).sum())(jnp.asarray(u))
+            else:
+                tensors = [torch.as_tensor(a, device='cuda') for a in (q, v, u)]
+                results.append(handle.forward_dynamics_armature_gradient(*tensors).cpu().numpy())
+                acceleration = tensors[2].clone().requires_grad_(True)
+                handle.armature_regressor(acceleration).sum().backward()
+                grad = acceleration.grad.cpu().numpy()
+            np.testing.assert_array_equal(np.asarray(grad), np.ones_like(u))
+        for result in results:
+            np.testing.assert_allclose(result, expected, rtol=2e-4, atol=2e-4)
+        if not reload:
+            # Live mutation must not overwrite immutable construction metadata.
+            h.set_armature([.8])
+            np.testing.assert_array_equal(h.armature, np.asarray([.8], np.float32))
+            source.rename(work / 'source-hidden.urdf')
+    finally:
+        for handle in reversed(handles):
+            handle.close()
+    print('PASS installed identification, three backends, regressor autograd,',
+          'source-free initializer reload' if reload else 'construction and mutation')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--work', type=Path, required=True)
@@ -105,6 +188,9 @@ def main():
                                for a,b,c in zip(q,qd,qdd)]).reshape(2,1)
         np.testing.assert_allclose(np.asarray(jgrad), oracle_grad, rtol=2e-4, atol=2e-5)
         print('PASS installed NumPy/JAX/PyTorch values, autograd parity,', 'warm reload' if args.reload else 'registration')
+        for handle in handles.values():
+            handle.close()
+        check_identification(args.work, args.reload)
     print(json.dumps({'result': 'PASS', 'version': grid_rbd.__version__, 'root': str(root),
                       'bundled_peers': provenance['peers'], 'resource_count': len(provenance['resources'])}, indent=2))
 

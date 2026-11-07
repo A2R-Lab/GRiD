@@ -24,6 +24,8 @@ repository. Everything below describes the packaged A2R-Lab releases.
   artifact entry points, with optional runtime tables. Expose parameter slots,
   units and immutable initial values. New contexts and prepared loads start from
   the artifact initializer; live updates do not change compilation identity.
+  Thanks to Felix Mühlenberend (`felixmueh`) for the baked-armature prototype in
+  PR #50 and the TIAGo application feedback.
 - Preserve symmetric-upper inverse-mass storage on mimic and spherical models;
   this prevents doubled off-diagonal entries in Python outputs and control-input
   autograd. Ordinary scalar-joint recursion is unchanged.
