@@ -504,6 +504,70 @@ model. Python contexts serialize mutation with admitted calls and invalidate
 deferred state-autograd work; invalid input changes neither values nor epoch.
 A failed device copy does not promise rollback.
 
+Armature identification
+~~~~~~~~~~~~~~~~~~~~~~~
+
+``handle.armature_regressor(qdd)`` returns the compact block
+``diag(qdd) S``, where column ``c`` of ``S`` selects
+``handle.armature_slots[c]``. Its shape is ``(..., nv, num_armature_params)``;
+it depends on acceleration, not on the current armature values. NumPy, JAX and
+PyTorch evaluate this small selection directly; JAX and PyTorch can differentiate
+it with respect to acceleration. Floating-root and spherical coordinates own no
+columns. A model with no supported scalar coordinates has an empty column block.
+
+Request ``"forward_dynamics_armature_gradient"`` in ``algorithm_list`` for
+``handle.forward_dynamics_armature_gradient(q, qd, u, f_ext=...)``. It returns
+``-Minv[:, armature_slots] * qdd[armature_slots]`` in the same compact column
+order. Here ``qdd`` is the actual forward acceleration at the supplied torque,
+gravity and external loads, using the installed inertia, joint-dynamics and
+armature parameters. The derivative holds those inputs and other parameters
+fixed. Baked and runtime armature use the same formula. This API currently uses
+native/Pinocchio coordinates; it refuses a floating MuJoCo view. It provides
+explicit first parameter derivatives, not automatic higher derivatives.
+
+The sensitivity executes one forward-dynamics operation, consuming its retained
+inverse before scratch reuse. One context admission spans the calculation, so a
+setter cannot change the model between acceleration and inverse evaluation. It
+does not compose separately admitted Python ``forward_dynamics`` and ``minv``
+calls. The NumPy sensitivity releases the Python GIL during its admitted native
+call. Keep input buffers unchanged until return. This mutation-ordering contract
+does not permit simultaneous compute submissions into the same context's staging
+buffers; use separate contexts for concurrent pipelines.
+Ordinary builds allocate no additional identification output; opt-in
+builds add ``nv * num_armature_params`` output elements per batch entry but no
+new dynamics workspace.
+
+For generated CUDA, ``armature_regressor_device(out, qdd)`` is a collective
+block-stride write; keep its output disjoint from its acceleration input and
+synchronize before consuming its result.
+``forward_dynamics_armature_gradient_device`` is a shared-tier collective that
+returns synchronized output. Reserve
+``FORWARD_DYNAMICS_ARMATURE_GRADIENT_DEVICE_SHARED_MEM_BYTES<T>()`` and keep its
+inputs and output disjoint from that dynamic arena. The kernel and host surfaces
+support the existing forward-dynamics workspace-backed tiers. Native consumers
+own the model's lifetime and synchronization; the device helper cannot serialize
+external setters. Both outputs are row-major ``nv`` by the compact column count.
+The helper's size is unspilled even if a kernel tier chooses a workspace-backed
+layout. Check that it and the caller's static storage fit the device's shared
+memory limit before launching; use the kernel surface when they do not.
+
+The ten-per-body regressor is unchanged. To fit link inertia and armature
+together, concatenate ``[Y_inertia, Y_armature]`` and subtract known friction and
+external-load contributions from measured torque. This equation does not imply
+full identifiability: excitation and parameter dependencies can make the joint
+design rank deficient. The example ``examples/armature_identification.py`` keeps
+link inertias known, reports singular values and held-out torque error, and
+rejects an unexcited negative control. It uses synthetic, noise-free state and
+torque measurements. It is not a general system-identification solver.
+The example is distributed in the source repository, not the wheel. With GRiD
+installed, run ``python examples/armature_identification.py /path/to/robot.urdf``
+from a source checkout; add ``--floating-base`` for a floating model.
+
+Thread overrides are requests, not permission to exceed a compiled kernel's
+resource limit. Native, JAX and PyTorch launches clamp to that kernel's
+``maxThreadsPerBlock``. The requested value is not evidence of the executed
+thread count; inspect ``kernel_max_threads`` for algorithms that expose it.
+
 Runtime geometry limits
 ~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -517,6 +581,9 @@ tables from a mutable device table once per launch, so ``inverse_dynamics``,
 ``set_transform_params`` the kinematics still report the URDF geometry. This
 is a documented partial capability that cannot be worked around from Python;
 consistent kinematic updates are a separate feature (register item).
+Runtime inertia updates do reach energy, CoM, centroidal momentum and their
+centroidal derivatives; those quantities use the live body inertia table while
+retaining the baked joint geometry.
 
 End-effector target selection
 -----------------------------

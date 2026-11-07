@@ -66,6 +66,9 @@ CORE_HAS_MACROS = {
 
 
 def emit_feature_macros(gen, algorithms):
+    # Opt-in only: do not change headers or ordinary dynamics allocations.
+    if "forward_dynamics_armature_gradient" in algorithms:
+        gen.gen_add_code_line("#define GRID_HAS_FORWARD_DYNAMICS_ARMATURE_GRADIENT 1")
     # File-scope preprocessor mirrors of the second-order codegen gates.
     # We also emit `const int GRID_GENERATES_*_SO` inside `namespace grid`
     # below (for C++ runtime / test consumers), but `#if X` requires a

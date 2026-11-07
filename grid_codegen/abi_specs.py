@@ -325,6 +325,22 @@ ABI_SPECS: dict[str, AbiSpec] = {
         py_twin_guard='forward_dynamics_mujoco unavailable: floating-base .so only',
     ),
 
+    "forward_dynamics_armature_gradient": AbiSpec(
+        "forward_dynamics_armature_gradient",
+        inputs=(("q", "const T*"), ("qd", "const T*"), ("u", "const T*"),
+                ("out", "T*"), ("batch", "int"), ("gravity", "T"),
+                ("f_ext", "const T*")),
+        pack_mode="q_qd_u", f_ext_mode="optional", takes_gravity=True,
+        launch_algo="GRID_ALGO_COUNT", template_shape="so4",
+        out_buffer="h_dqdd_da", out_copy="memcpy_h",
+        out_size_expr="grid::NUM_VEL * grid::NUM_ARMATURE_PARAMS",
+        py_out_dims=('num_vel_', 'num_armature_params_'),
+        out_layout=("reshape", ("num_vel_", "num_armature_params_")),
+        kernel_args=("OUT", "WS", "QQDU", "STRIDE", "FEXT", "ROBOT", "GRAV", "BATCH"),
+        jax_buffer_inputs=("q", "qd", "u", "f_ext"),
+        py_rc3_msg="forward_dynamics_armature_gradient requires its algorithm_list entry",
+    ),
+
     "aba": AbiSpec(
         "aba",
         inputs=(("q", "const T*"), ("qd", "const T*"), ("u", "const T*"),
@@ -1032,23 +1048,24 @@ MJX_F_EXT_REFUSAL = (
     "convention.")
 
 
-def py_dim_tokens(nq: int, nv: int, nee: int, nb: int) -> dict[str, int]:
+def py_dim_tokens(nq: int, nv: int, nee: int, nb: int, na: int | None = None) -> dict[str, int]:
     """The substitution table for expanding an AbiSpec.py_out_dims entry."""
     return {
         "num_joints_": nq,
         "num_vel_": nv,
         "num_ees_": nee,
         "num_bodies_": nb,
+        "num_armature_params_": na,
         "second_order_tensor_size": 4 * nv ** 3,
     }
 
 
-def expand_py_out_dims(spec: "AbiSpec", nq: int, nv: int, nee: int, nb: int):
+def expand_py_out_dims(spec: "AbiSpec", nq: int, nv: int, nee: int, nb: int, na: int | None = None):
     """Expand spec.py_out_dims to concrete ints, or None when dims are absent
     or reference an unavailable token value (e.g. nb unknown on an old .so)."""
     if not spec.py_out_dims:
         return None
-    toks = py_dim_tokens(nq, nv, nee, nb)
+    toks = py_dim_tokens(nq, nv, nee, nb, na)
     out = []
     for d in spec.py_out_dims:
         expr = d
@@ -1311,7 +1328,7 @@ FAMILY_ATTR_SHORTS: dict[str, tuple[str, ...]] = {
                    "generalized_gravity", "nonlinear_effects", "coriolis_matrix", "energy"),
     "dyn_gradients": ("inverse_dynamics_gradient", "forward_dynamics_gradient",
                       "f_ext_gradient", "f_ext_gradient_dq"),
-    "regressors": ("inverse_dynamics_regressor", "forward_dynamics_parameter_gradient",
+    "regressors": ("inverse_dynamics_regressor", "forward_dynamics_parameter_gradient", "forward_dynamics_armature_gradient",
                    "kinetic_energy_regressor", "potential_energy_regressor"),
     "kinematics": ("end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian",
                    "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
@@ -1338,7 +1355,7 @@ FAMILY_OF: dict[str, str] = {
                                  "generalized_gravity", "nonlinear_effects", "coriolis_matrix", "energy")},
     **{k: "dyn_gradients" for k in ("inverse_dynamics_gradient", "forward_dynamics_gradient",
                                     "f_ext_gradient", "f_ext_gradient_dq", "f_ext_contact")},
-    **{k: "regressors" for k in ("inverse_dynamics_regressor", "forward_dynamics_parameter_gradient",
+    **{k: "regressors" for k in ("inverse_dynamics_regressor", "forward_dynamics_parameter_gradient", "forward_dynamics_armature_gradient",
                                  "kinetic_energy_regressor", "potential_energy_regressor")},
     **{k: "kinematics" for k in ("end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian",
                                  "fk_batched", "frame_jacobian", "frame_jacobian_dot", "osc_inertia",

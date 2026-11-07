@@ -232,3 +232,13 @@ def test_energy_armature_reaches_device_and_both_kernel_bodies(robot, tmp_path, 
                 assert f"ke += static_cast<T>(0.5) * d_robotModel->d_armature_params[{slot}]" in body
         else:
             assert "d_armature_params" not in body
+
+
+@pytest.mark.parametrize("runtime", [False, True])
+def test_centroidal_inertia_source_matches_storage_mode(robot, runtime):
+    cg=GRiDCodeGenerator(robot)
+    cg.runtime_inertia=runtime
+    cg.gen_centroidal_inner()
+    text=cg.code_str
+    assert ("d_inertia_params[10*jid]" in text) == runtime
+    assert ("const T *Ib = &d_robotModel->d_XImats" in text) == (not runtime)

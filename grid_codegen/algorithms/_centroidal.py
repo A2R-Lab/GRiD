@@ -381,13 +381,20 @@ def gen_centroidal_inner(self):
     self.gen_add_code_line("const T *Xw = &s_Xworld[16*jid];")
     self.gen_add_code_line("T R[9]; for (int c=0;c<3;++c) for (int r=0;r<3;++r) R[r+3*c] = Xw[r + 4*c];")
     self.gen_add_code_line("T px = Xw[12], py = Xw[13], pz = Xw[14];")
-    # body inertia (constant): Ib col-major 6x6 at d_XImats[ImatOffset + 36*jid]
-    self.gen_add_code_line("const T *Ib = &d_robotModel->d_XImats[" + str(ImatOffset) + " + 36*jid];")
-    self.gen_add_code_line("T m = Ib[5 + 6*5];")
-    # I_O (top-left 3x3, col-major): I_O[r+3c] = Ib[r + 6*c]
-    self.gen_add_code_line("T IO[9]; for (int c=0;c<3;++c) for (int r=0;r<3;++r) IO[r+3*c] = Ib[r + 6*c];")
-    # mc from top-right skew block: Ib[:3,3:6] = skew(mc) col-major -> Ib[r + 6*(3+c)]
-    self.gen_add_code_line("T mc0 = Ib[2 + 6*4]; T mc1 = Ib[0 + 6*5]; T mc2 = Ib[1 + 6*3];")
+    if getattr(self, "runtime_inertia", False):
+        # Same frozen [m,hx,hy,hz,Ixx,Ixy,Ixz,Iyy,Iyz,Izz] basis as the
+        # dynamics rebuild. Read the admitted model, not its baked initializer.
+        # The existing serial body loop and local storage remain unchanged.
+        self.gen_add_code_line("const T *pi = &d_robotModel->d_inertia_params[10*jid];")
+        self.gen_add_code_line("T m = pi[0];")
+        self.gen_add_code_line("T IO[9] = {pi[4],pi[5],pi[6],pi[5],pi[7],pi[8],pi[6],pi[8],pi[9]};")
+        self.gen_add_code_line("T mc0 = pi[1]; T mc1 = pi[2]; T mc2 = pi[3];")
+    else:
+        # Preserve baked emission exactly.
+        self.gen_add_code_line("const T *Ib = &d_robotModel->d_XImats[" + str(ImatOffset) + " + 36*jid];")
+        self.gen_add_code_line("T m = Ib[5 + 6*5];")
+        self.gen_add_code_line("T IO[9]; for (int c=0;c<3;++c) for (int r=0;r<3;++r) IO[r+3*c] = Ib[r + 6*c];")
+        self.gen_add_code_line("T mc0 = Ib[2 + 6*4]; T mc1 = Ib[0 + 6*5]; T mc2 = Ib[1 + 6*3];")
     # rotate: I_O_w = R IO R^T ; mc_w = R mc
     self.gen_add_code_line("T tmp[9];")
     self.gen_add_code_line("for (int c=0;c<3;++c) for (int r=0;r<3;++r) { T s=0; for(int k=0;k<3;++k) s += R[r+3*k]*IO[k+3*c]; tmp[r+3*c]=s; }")

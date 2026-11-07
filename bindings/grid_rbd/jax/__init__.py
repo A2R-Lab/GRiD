@@ -839,6 +839,29 @@ class JaxRobotHandle(BaseDelegateMixin):
             q, qd, u, gravity=self._np_dt(gravity))
         return self._shape_out("forward_dynamics_parameter_gradient", flat)
 
+    def armature_regressor(self, qdd):
+        """Compact diag(qdd) S; JIT-compatible and differentiable in qdd."""
+        import jax.numpy as jnp
+        qdd = jnp.asarray(qdd, dtype=self._np_dt)
+        if qdd.ndim < 1 or qdd.shape[-1] != self.num_vel:
+            raise ValueError("qdd must have final dimension num_vel")
+        return qdd[..., :, None] * jnp.eye(self.num_vel, dtype=qdd.dtype)[:, jnp.asarray(self.armature_slots, dtype=jnp.int32)]
+
+    def forward_dynamics_armature_gradient(self, q, qd, u, *, gravity=-9.81, f_ext=None):
+        """Explicit pin-frame dqdd/dalpha from one model admission, (...,nv,n_a).
+
+        Higher derivatives through this explicit sensitivity are not provided.
+        """
+        if self._mjx_active(None):
+            raise NotImplementedError("armature sensitivity requires pinocchio convention")
+        target = _register_method_target(self._so_path, self._cache_key,
+            "forward_dynamics_armature_gradient", "grid_rbd_jax_forward_dynamics_armature_gradient")
+        q, qd, u = self._prep_2d("forward_dynamics_armature_gradient", q, qd, u)
+        forces = self._f_ext_or_zeros(q, f_ext)
+        flat = self._ffi(target, self._out(q, self.num_vel * self.num_armature_params),
+                         vmap_method="broadcast_all")(q, qd, u, forces, gravity=self._np_dt(gravity))
+        return flat.reshape(flat.shape[:-1] + (self.num_vel, self.num_armature_params))
+
     def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None):
         """qdd = aba(q, qd, u) via the articulated body algorithm. Returns (B, NV).
 

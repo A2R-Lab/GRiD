@@ -48,7 +48,8 @@ def normalize_codegen_algorithms(gen, codegen_profile = "all", algorithm_list = 
     # explicitly pulls in fdsva_so + integrator below.
     opt_in_algorithms = {"frame_jacobian", "frame_jacobian_dot", "osc_inertia",
                          "end_effector_pose_runtime", "end_effector_pose_gradient_runtime",
-                         "idsva_so_world_frame", "integrator_hessian"}
+                         "idsva_so_world_frame", "integrator_hessian",
+                         "forward_dynamics_armature_gradient"}
     profile_algorithms = {
         "all": all_algorithms,
         "frame-jacobian": {"end_effector_pose", "minv", "frame_jacobian",
@@ -153,6 +154,8 @@ def normalize_codegen_algorithms(gen, codegen_profile = "all", algorithm_list = 
     # emitted an nvcc-rejected header (multi-TU family split, 2026-10-09).
     if "forward_dynamics_parameter_gradient" in algorithms:
         algorithms.update({"inverse_dynamics", "minv", "forward_dynamics", "inverse_dynamics_regressor"})
+    if "forward_dynamics_armature_gradient" in algorithms:
+        algorithms.update({"inverse_dynamics", "minv", "forward_dynamics"})
     if "inverse_dynamics_gradient" in algorithms:
         algorithms.add("inverse_dynamics")
     # B.0 dY/dx composes the id_du staging (calls inverse_dynamics_gradient_inner)

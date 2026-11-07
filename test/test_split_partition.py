@@ -33,6 +33,17 @@ def test_consumer_migration_example_is_fingerprinted():
     assert path in (rss.REPO_ROOT / "test/gpu-proof-policy-release.yaml").read_text()
 
 
+@pytest.mark.parametrize("module,runner", [
+    ("test_armature_identification", "cuda_armature_identification_runner.cu"),
+    ("test_armature_composition", "cuda_runtime_energy_runner.cu"),
+])
+def test_armature_native_helpers_are_shard_fingerprint_inputs(module, runner):
+    path = f"test/cuda_equivalents/{runner}"
+    assert path in rss.wrapper_fingerprint_paths(module)
+    assert path in rss.WRAPPER_HELPER_PATHS[module]
+    assert (rss.REPO_ROOT / path).is_file()
+
+
 @pytest.fixture(autouse=True)
 def unchanged_oracle_for_synthetic_receipts(monkeypatch):
     # Synthetic receipts below use fictitious commit SHAs; isolate their

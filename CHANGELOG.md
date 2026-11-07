@@ -12,6 +12,14 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Add compact armature torque regressors and explicit forward-dynamics parameter
+  sensitivity on native, NumPy, JAX and PyTorch surfaces. The sensitivity reuses
+  one forward solve under one model admission; ordinary builds gain no workspace.
+  Add a synthetic identification example with excitation and held-out checks.
+- Clamp direct backend thread overrides to compiled kernel limits, consistently
+  with native host calls, including the register-heavy spherical Minv path.
+- Read installed runtime inertias in the shared centroidal calculation, so
+  energy, CoM and momentum follow inertia updates rather than baked defaults.
 - Accept a baked `armature` initializer at generator, registration and consumer
   artifact entry points, with optional runtime tables. Expose parameter slots,
   units and immutable initial values. New contexts and prepared loads start from

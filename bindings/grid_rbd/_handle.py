@@ -95,9 +95,12 @@ class SecondOrderID(NamedTuple):
 
 class SecondOrderFD(NamedTuple):
     """Second-order forward-dynamics tensors, each shape ``(B, NV, NV, NV)``:
-    ``(d2qdd_dq, d2qdd_dqd, d2qdd_cross, d2qdd_du)`` (the FD analogue of
-    :class:`SecondOrderID`; consult ``RBDReference.fdsva_so`` for the exact
-    Singh/Wensing tensor semantics)."""
+    slab order is ``(qq, vq, vv, uq)``, matching ``RBDReference.fdsva_so``.
+
+    The historical field names below are retained for compatibility: the
+    second field holds the mixed ``vq`` block, and the third holds ``vv``.
+    Do not infer FD slab order from :class:`SecondOrderID`.
+    """
     d2qdd_dq: Any
     d2qdd_dqd: Any
     d2qdd_cross: Any
@@ -1450,6 +1453,31 @@ class RobotHandle:
             from . import _mujoco
             acc = _mujoco.fd_qdd_pin_to_mjx(np.asarray(acc, np.float64), qd_pin, R, True).astype(self._dt)
         return acc
+
+    def armature_regressor(self, qdd):
+        """Return diag(qdd) S, shape (..., nv, num_armature_params).
+
+        Columns follow armature_slots. This block has no q or qd dependence;
+        its qdd derivative is the constant selection structure. It adds no
+        columns to the ten-parameters-per-body inertial regressor.
+        """
+        qdd = np.asarray(qdd, dtype=self._dt)
+        if qdd.ndim < 1 or qdd.shape[-1] != self.num_vel:
+            raise ValueError("qdd must have final dimension num_vel")
+        return qdd[..., :, None] * np.eye(self.num_vel, dtype=self._dt)[:, self.armature_slots]
+
+    def forward_dynamics_armature_gradient(self, q, qd, u, *, gravity=-9.81, f_ext=None):
+        """Explicit dqdd/dalpha at fixed q, qd, u; (B, nv, n_a).
+
+        Pinocchio coordinates only. One native admission computes augmented
+        Minv and actual acceleration, including known friction and loads.
+        This is not an automatic derivative through a parameter setter.
+        """
+        if self._mjx_active(None):
+            raise NotImplementedError("armature sensitivity requires pinocchio convention")
+        q, qd, u = [np.ascontiguousarray(x, dtype=self._dt) for x in (q, qd, u)]
+        return self._runner.forward_dynamics_armature_gradient(
+            q, qd, u, float(gravity), self._prep_f_ext(f_ext))
 
     def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None) -> np.ndarray:
         """Recursive forward dynamics via Articulated Body Algorithm.

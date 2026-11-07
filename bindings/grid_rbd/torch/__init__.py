@@ -1054,6 +1054,24 @@ class TorchRobotHandle(BaseDelegateMixin):
         return self._shape_out("forward_dynamics_parameter_gradient",
                                self._ops.forward_dynamics_parameter_gradient(q, qd, u, float(gravity)))
 
+    def armature_regressor(self, qdd):
+        """Compact diag(qdd) S on the input device; differentiable in qdd."""
+        import torch
+        if qdd.ndim < 1 or qdd.shape[-1] != self.num_vel:
+            raise ValueError("qdd must have final dimension num_vel")
+        selection = torch.eye(self.num_vel, dtype=qdd.dtype, device=qdd.device)[:, list(self.armature_slots)]
+        return qdd[..., :, None] * selection
+
+    def forward_dynamics_armature_gradient(self, q, qd, u, *, gravity=-9.81, f_ext=None):
+        """Explicit pin-frame dqdd/dalpha, (B,nv,n_a), one admitted model version.
+
+        Higher derivatives through this explicit sensitivity are not provided.
+        """
+        if self._mjx_active(None):
+            raise NotImplementedError("armature sensitivity requires pinocchio convention")
+        flat = self._ops.forward_dynamics_armature_gradient(q, qd, u, float(gravity), f_ext)
+        return flat.reshape(flat.shape[0], self.num_vel, self.num_armature_params)
+
     def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81, _convention=None):
         """Second-order ID at joint acceleration ``qdd``. Returns a
         :class:`grid_rbd.SecondOrderID` NamedTuple of 4 tensors each

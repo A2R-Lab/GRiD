@@ -950,6 +950,8 @@ STATE_PATH = REPO_ROOT / "test" / ".split-suite-state.json"
 WRAPPER_HELPER_PATHS = {
     "test_release_numerics": ["tools/check_installed_numerics.py"],
     "test_consumer_artifact": ["bindings/examples/consumer_artifact_migration.py"],
+    "test_armature_identification": ["test/cuda_equivalents/cuda_armature_identification_runner.cu"],
+    "test_armature_composition": ["test/cuda_equivalents/cuda_runtime_energy_runner.cu"],
 }
 
 

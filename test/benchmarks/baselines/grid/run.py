@@ -436,6 +436,16 @@ PER_ALGO_SPECS: dict[str, dict] = {
     # `d_dqdd_dpi` is now part of gridData (hd_data->d_dqdd_dpi), so the bench no
     # longer allocates a TU-static buffer. It takes the gravity arg. See
     # _regressor_fd_parameter_gradient.py:gen_forward_dynamics_parameter_gradient_host.
+    "forward_dynamics_armature_gradient": {
+        # Opt-in compact sensitivity: ordinary batch launches, including N=1.
+        # No in-kernel repeated-single timing twin is emitted for this API.
+        "single_call": "throw std::runtime_error(\"armature sensitivity: use the batch benchmark with N=1\")",
+        "batch_with_mem": "grid::forward_dynamics_armature_gradient<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::forward_dynamics_armature_gradient_kernel<float><<<dim3(std::min(N,d->workspace_timestep_slots)),dimms,grid::FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<float>()>>>(d->d_dqdd_da,d->d_workspace,d->d_q_qd_u,3*grid::NUM_JOINTS,d->d_f_ext,m,GRAVITY,N); gpuErrchkKernel()",
+        "batch_label": "FORWARD_DYNAMICS_ARMATURE_GRADIENT",
+        "gate": "GRID_HAS_FORWARD_DYNAMICS_ARMATURE_GRADIENT",
+        "shared_mem_skip": "FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES",
+    },
     "forward_dynamics_parameter_gradient": {
         "single_call":        "grid::forward_dynamics_parameter_gradient_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
         "batch_with_mem":     "grid::forward_dynamics_parameter_gradient<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",

@@ -89,4 +89,9 @@ def test_generated_keys_within_emitter_scope():
             # hand-written launcher's fork, not by the generated body).
             assert s.sig_mjx_macro is None or s.takes_dt_it, key
         else:
-            assert s.sig_mjx_macro, key
+            if not s.sig_mjx_macro:
+                # A pin-only expanded signature needs no synthetic "defined(None)"
+                # fork. Keep the exact supported set explicit.
+                assert key == "forward_dynamics_armature_gradient"
+                assert not s.has_mjx_twin and s.template_shape == "so4"
+                assert "defined(None)" not in g.gen_body(s)

@@ -53,6 +53,10 @@ def _tier_ternary_line(name, ret_type, vals):
 
 
 def gen_add_constants_helpers(self, include_base_inertia = False, include_homogenous_transforms = False):
+    armature_identification = "forward_dynamics_armature_gradient" in getattr(self, "generated_algorithms", ())
+    if armature_identification:
+        from .armature import supported_slots
+        self.gen_add_code_line(f"constexpr int NUM_ARMATURE_PARAMS = {len(supported_slots(self.robot))};")
     # first add constants
     n = self.robot.get_num_pos()
     nv = self.robot.get_num_vel()
@@ -1481,6 +1485,10 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
         struct_lines.append("    T *d_armature_params;")
     struct_lines.append("};")
     self.gen_add_code_lines(struct_lines)
+    if armature_identification:
+        # The collective helper is unspilled even when the FD kernel's shared
+        # tier chooses a surgical F spill. Include its private qdd staging.
+        self.gen_add_code_line("template <typename T> __host__ __device__ constexpr size_t FORWARD_DYNAMICS_ARMATURE_GRADIENT_DEVICE_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(fd_device_t_count + nv) + ", TOPOLOGY_HELPERS_COUNT); }")
     self.gen_add_code_lines(["struct grid_device_pool_t;  // defined with the allocator below", \
                              "template <typename T, gridDataKind KIND = GRID_DATA_ALL>", \
                              "struct gridData {", \
@@ -1608,8 +1616,9 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              # G2 centroidal quick-wins outputs
                              "    T *h_com;", \
                              "    T *h_ccrba;", \
-                             "    T *h_energy;", \
-                             "};"])
+                             "    T *h_energy;"]
+                             + (["    T *d_dqdd_da;", "    T *h_dqdd_da;"] if armature_identification else [])
+                             + ["};"])
 
 def _derive_device_bytes_lines(code_lines):
     """Derive the body of gridData_device_bytes from THE SAME init_gridData
@@ -1805,6 +1814,8 @@ def gen_init_gridData(self):
                 "end_effector_pose_gradient", "end_effector_pose_hessian",
                 "idsva_so", "idsva_so_body_frame", "idsva_so_world_frame",
                 "idsva_so_world_frame_mjx", "fdsva_so", "fdsva_so_mjx")
+    if "forward_dynamics_armature_gradient" in getattr(self, "generated_algorithms", ()):
+        _ws_keys += ("forward_dynamics_armature_gradient",)
     code_lines = (["gridData<T, KIND> *hd_data = (gridData<T, KIND> *)calloc(1, sizeof(gridData<T, KIND>));",
                   "const bool needs_dynamics = KIND == GRID_DATA_ALL || KIND == GRID_DATA_DYNAMICS;",
                   "const bool needs_kinematics = KIND == GRID_DATA_ALL || KIND == GRID_DATA_KINEMATICS;",
@@ -2030,6 +2041,13 @@ def gen_init_gridData(self):
                   "    }"]
                   + ag_close() + [
                   "return hd_data;"])
+    if "forward_dynamics_armature_gradient" in getattr(self, "generated_algorithms", ()):
+        code_lines[-1:-1] = [
+            "#if !defined(GRID_ALLOC_GATE) || GRID_ALLOC_FORWARD_DYNAMICS_ARMATURE_GRADIENT",
+            "gpuErrchk(cudaMalloc((void**)&hd_data->d_dqdd_da, sizeof(T)*(NUM_ARMATURE_PARAMS ? NUM_VEL*NUM_ARMATURE_PARAMS*NUM_TIMESTEPS : 1)));",
+            "hd_data->h_dqdd_da = grid_host_alloc<T>(sizeof(T)*(NUM_ARMATURE_PARAMS ? NUM_VEL*NUM_ARMATURE_PARAMS*NUM_TIMESTEPS : 1));",
+            "#endif",
+        ]
     # Pinned host staging: page-locked pages let the DMA engine run at full
     # PCIe rate (measured 13.3 GB/s pageable vs ~50 GB/s pinned on gen5) and
     # are a prerequisite for async D2H overlap. cudaMallocHost can exhaust the

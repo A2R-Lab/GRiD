@@ -3913,3 +3913,65 @@ Construction/cache acceptance also needs a stable source snapshot: changing
 even code comments during a live run can invalidate its input-cache identity.
 A test that forbids rebuilding then correctly fails. Preserve that diagnostic
 and rerun against fixed inputs; do not remove the no-compilation assertion.
+
+### 7.z91 Parameter sensitivities must use one admitted model (2026-11-06)
+
+The armature sensitivity is `-Minv[:, slots] * qdd[slots]`. Its short formula
+does not make two separately admitted wrapper calls safe: a setter between
+forward dynamics and Minv would mix two physical models. Reuse the FD inner's
+inverse scratch in one kernel under one context admission, with a barrier before
+reading it. Test against parameter finite differences with nonzero loads, not
+only another implementation of this formula. Include floating mimic coordinates,
+independent contexts and runtime inertia composition. Identification remains
+opt-in; do not enlarge ordinary dynamics workspace to hold a dense regressor.
+
+The thread-override follow-up in 7.z90 now uses the existing kernel-specific
+clamp on direct Torch/JAX launch sites too. A 1024-thread request must execute
+correctly at the lower compiled ceiling. This is launch normalization, not a
+raised resource limit or a performance measurement. Keep generated launch edits
+in `wrapper_body_gen.py`; the remaining hand-written launches use the same helper.
+
+### 7.z92 Runtime inertia must reach centroidal consumers (2026-11-06)
+
+The armature composition audit scaled the installed link inertias and compared
+energy with independently updated reference inertias. FD and its sensitivity followed the
+updated table; energy did not. `centroidal_inner` read the immutable inertia
+region of `d_XImats`, bypassing the runtime table used by dynamics. Both energy
+surfaces and CoM/momentum share this inner. Runtime builds now read its mass,
+first moment and angular-inertia entries from the existing ten-parameter table;
+baked emission, scratch layout and serial/per-body parallelism are unchanged.
+Nonuniform body scaling distinguishes a real CoM update from a uniform mass
+rescaling that would leave CoM unchanged. Test energy, momentum, CoM and its
+derivatives against independently updated reference body inertias.
+
+### 7.z93 A kernel tier is not an inline-helper arena (2026-11-06)
+
+The new armature helper initially documented the FD kernel's shared-memory size
+as its allocation requirement. Source audit found that even `TIER_SHARED` can
+choose a surgical Minv-F spill on a larger model, while this collective helper
+keeps its complete inner scratch in shared memory. Those arenas are not
+interchangeable. The helper now exposes its own exact unspilled byte count,
+including its qdd staging, using the existing aligned arena-size calculation.
+Callers must admit that requirement plus their static storage; the separate
+kernel/host API supports workspace-backed execution. Keep a forced-spill CPU
+size regression, a numerical workspace-backed kernel test and native-helper
+checks using the exact published allocation, not an oversized arena that masks
+an accounting error.
+Opt-in allocation gates must also include a new kernel in the workspace-user
+list, not just allocate its output; otherwise a gated consumer can receive a
+null spill workspace even though an ordinary wrapper build passes.
+
+### 7.z94 Release the GIL around admitted parameter sensitivities (2026-11-07)
+
+The barrier-coordinated armature setter/sensitivity test passed normally but
+stalled under memcheck with one Python thread in each native call. The identical
+C ABI called through ctypes, which releases the GIL, passed the same assertions.
+The generated pybind sensitivity now uses the existing GridNoGil guard. Capture
+input and output pointers before releasing the GIL, retain their Python owners
+until return, and perform error conversion after reacquiring it. Do not access
+Python array methods inside the released scope. A CPU emitter regression pins
+that boundary; the unmodified numerical interleaving test must also pass both
+memcheck and synccheck. Preserve the failed diagnostic rather than treating a
+normal unsanitized pass as sufficient. This does not make shared staging buffers
+safe for simultaneous compute submissions: concurrent pipelines use separate
+contexts, while mutation is serialized by the existing exclusive admission.

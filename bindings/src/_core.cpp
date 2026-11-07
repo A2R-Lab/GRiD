@@ -256,6 +256,9 @@ public:
         fn_inverse_dynamics_mujoco_      = reinterpret_cast<fn_dyn_t>(opt_sym("grid_rbd_inverse_dynamics_mujoco"));
         fn_minv_             = reinterpret_cast<fn_q_out_t>(require_sym("grid_rbd_minv"));
         fn_fd_               = reinterpret_cast<fn_dyn_t>  (require_sym("grid_rbd_forward_dynamics"));
+        fn_fd_armature_       = reinterpret_cast<fn_dyn_t>(opt_sym("grid_rbd_forward_dynamics_armature_gradient"));
+        auto armature_count = reinterpret_cast<fn_int_v_t>(opt_sym("grid_rbd_num_armature_params"));
+        num_armature_params_ = armature_count ? armature_count() : 0;
         fn_aba_              = reinterpret_cast<fn_dyn_t>  (require_sym("grid_rbd_aba"));
         fn_crba_             = reinterpret_cast<fn_q_out_grav_t>(require_sym("grid_rbd_crba"));
         fn_crba_mujoco_      = reinterpret_cast<fn_q_out_grav_t>(opt_sym("grid_rbd_crba_mujoco"));  // floating only
@@ -830,6 +833,26 @@ public:
         int rc = fn_fd_mujoco_(ctx_id_, q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "forward_dynamics_mujoco",
             nullptr));
+        return out;
+    }
+
+    // forward_dynamics_armature_gradient(q, qd, u, gravity, f_ext_opt) -> (batch, num_vel_, num_armature_params_)
+    py::array_t<CT> forward_dynamics_armature_gradient(arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt)
+    {
+        if (!fn_fd_armature_) throw std::runtime_error(
+            "armature sensitivity unavailable in this artifact; rebuild with "
+            "its algorithm_list entry");
+        int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
+        check_array_2d(u, batch, num_vel_, "u");
+        arr_t fe_hold;
+        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+        py::array_t<CT> out({batch, num_vel_, num_armature_params_});
+        const CT *q_ptr = q.data(), *qd_ptr = qd.data(), *u_ptr = u.data();
+        CT *out_ptr = out.mutable_data();
+        int rc;
+        { GridNoGil nogil; rc = fn_fd_armature_(ctx_id_, q_ptr, qd_ptr, u_ptr, out_ptr, batch, gravity, fe_ptr); }
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "forward_dynamics_armature_gradient",
+            "forward_dynamics_armature_gradient requires its algorithm_list entry"));
         return out;
     }
 
@@ -2232,6 +2255,7 @@ private:
     fn_dyn_t  fn_inverse_dynamics_mujoco_    = nullptr;  // floating-base mjx ID (optional)
     fn_q_out_t  fn_minv_           = nullptr;
     fn_dyn_t    fn_fd_             = nullptr;
+    fn_dyn_t    fn_fd_armature_    = nullptr;
     fn_dyn_t    fn_aba_            = nullptr;
     fn_q_out_grav_t  fn_crba_           = nullptr;
     fn_q_out_grav_t  fn_crba_mujoco_    = nullptr;  // floating-base mjx CRBA (optional)
@@ -2333,6 +2357,7 @@ private:
     int num_vel_    = 0;
     int num_ees_    = 0;
     int num_bodies_ = 0;
+    int num_armature_params_ = 0;
     int max_batch_  = 0;
 };
 
@@ -2533,6 +2558,9 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def("inverse_dynamics_regressor", &R::inverse_dynamics_regressor,
              py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
              py::arg("gravity") = -9.81f)
+        .def("forward_dynamics_armature_gradient", &R::forward_dynamics_armature_gradient,
+             py::arg("q"), py::arg("qd"), py::arg("u"),
+             py::arg("gravity") = -9.81f, py::arg("f_ext") = py::none())
         .def_property_readonly("has_inverse_dynamics_regressor_mujoco", &R::has_inverse_dynamics_regressor_mujoco)
         .def("inverse_dynamics_regressor_mujoco", &R::inverse_dynamics_regressor_mujoco,
              py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),

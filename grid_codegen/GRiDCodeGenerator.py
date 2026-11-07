@@ -96,7 +96,7 @@ class GRiDCodeGenerator:
                             gen_minv_device, gen_minv_kernel, gen_minv_host, gen_minv, \
                             gen_forward_dynamics_inner_temp_mem_size, gen_forward_dynamics_finish_function_call, gen_forward_dynamics_finish, \
                             gen_forward_dynamics_inner_function_call, gen_forward_dynamics_inner, gen_forward_dynamics_device, \
-                            gen_forward_dynamics_kernel, gen_forward_dynamics_host, gen_forward_dynamics, \
+                            gen_forward_dynamics_kernel, gen_forward_dynamics_host, gen_forward_dynamics, gen_armature_identification, \
                             gen_inverse_dynamics_gradient_inner_temp_mem_size, gen_inverse_dynamics_gradient_temp_layout, _emit_fb_bfs_level_indexing, \
                             \
                             gen_inverse_dynamics_gradient_inner_function_call, gen_inverse_dynamics_gradient_inner, \
@@ -552,7 +552,7 @@ class GRiDCodeGenerator:
                              "end_effector_pose", "frame_jacobian", "integrator",
                              "inverse_dynamics_gradient", "forward_dynamics_gradient",
                              "aba", "idsva_so_body_frame", "idsva_so_world_frame",
-                             "fdsva_so",
+                             "fdsva_so", "forward_dynamics_armature_gradient",
                              # integrator gradient slice (2026-07-30): per-joint SO(3)
                              # dIntegrate blocks; single-stage IT only (multi-stage RK
                              # static_asserts in the device — follow-on slice).
@@ -575,7 +575,7 @@ class GRiDCodeGenerator:
                     f"end_effector_pose + its gradient/hessian + frame_jacobian + integrator + "
                     f"integrator_gradient/with_gradient (single-stage IT) + "
                     f"inverse_dynamics_gradient + forward_dynamics_gradient + aba + "
-                    f"idsva_so + fdsva_so; requested unsupported algorithm(s) "
+                    f"idsva_so + fdsva_so + forward_dynamics_armature_gradient; requested unsupported algorithm(s) "
                     f"{_unported}. Remaining algorithms are follow-on slices "
                     "(see docs/open-tasks/archive/joint_types_plan.md)."
                 )
@@ -1008,6 +1008,9 @@ class GRiDCodeGenerator:
         self.gen_add_fragment_mark("forward_dynamics")
         if "forward_dynamics" in algorithms:
             self.gen_forward_dynamics()
+        if "forward_dynamics_armature_gradient" in algorithms:
+            self.gen_add_fragment_mark("forward_dynamics_armature_gradient")
+            self.gen_armature_identification()
         self.gen_add_fragment_mark("forward_dynamics_parameter_gradient")
         # FD parameter gradient dqdd/dpi = -Minv . Y. Additive; composes the
         # regressor (Y), minv (Minv) and inverse_dynamics/forward_dynamics
