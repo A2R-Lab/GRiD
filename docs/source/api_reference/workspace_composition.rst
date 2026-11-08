@@ -29,6 +29,19 @@ replays share a mutable spill slot. Keep the model and all input/output/workspac
 allocations alive until the asynchronous work completes. Read-only model sharing
 does not make concurrent model mutation safe.
 
+Caller-owned device pools
+-------------------------
+
+The generated ``grid_device_pool_t`` is an allocation-time slab, separate from
+the per-invocation workspaces below. Its base and allocation cursor must be
+256-byte aligned, as for the allocations it replaces. Subviews of a framework
+buffer do not necessarily satisfy this condition. The allocator refuses a
+misaligned base or cursor with ``cudaErrorInvalidValue``; a short pool or an
+overflowing size request returns ``cudaErrorMemoryAllocation``. Refusal clears
+the returned pointer and leaves the cursor unchanged. The caller owns the slab
+and must keep it alive until all contexts and asynchronous users have finished.
+Rounding allocation sizes alone cannot align a misaligned slab base.
+
 Cost menus
 ----------
 

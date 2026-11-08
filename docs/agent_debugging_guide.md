@@ -4001,3 +4001,35 @@ memcheck and synccheck. Preserve the failed diagnostic rather than treating a
 normal unsanitized pass as sufficient. This does not make shared staging buffers
 safe for simultaneous compute submissions: concurrent pipelines use separate
 contexts, while mutation is serialized by the existing exclusive admission.
+
+### 7.z95 Rounded allocation sizes do not align a caller-owned slab (2026-11-08)
+
+The generated device pool rounded each allocation to 256 bytes but accepted an
+arbitrary base and cursor. Every subsequent allocation inherited a misaligned
+base. The generated-allocator regression now rejects all 255 nonzero residues
+of either base or cursor, checks exact-capacity allocation and verifies refusal
+leaves the cursor unchanged and clears the result pointer. Size rounding and
+capacity addition also need overflow-safe checks before pointer arithmetic.
+Keep these checks at allocation time, not in numerical kernels. Do not pad every
+shared slot: typed arenas promise natural alignment, while a stronger inner
+contract must establish its own alignment and reserve the required headroom.
+
+### 7.z96 A root-only free-flyer is not a one-coordinate robot (2026-11-08)
+
+The single-body floating fixture has one body, seven stored positions and six
+velocity coordinates. Its body-level S helper returns a root sentinel, not a
+valid scalar spatial-axis index. Inverse-dynamics force projection and the
+initial gradient cross-product pass used that sentinel in dof loops, producing
+wrong bias forces and A even though mass matrices and B looked plausible.
+Those two root-only paths now use the six explicit linear-then-angular axes.
+Permanent tests compare full values and discrete A/B to independent offset-COM
+Newton--Euler/SE(3) equations, with each force axis, nonzero rates, two timesteps,
+both precisions, thread variation, repeats and strict sanitizers. A/B must use
+the same fixed nominal output chart; an acceleration-only check is insufficient.
+
+The same fixture exposed a host topology upload that copied the reserved count
+(seven ints) from an inferred-size six-int initializer. Explicit array capacity
+now zero-initializes any reserved tail. CPU regression checks copied capacity
+against the host extent on scalar, floating, mimic and root-only models. Device
+memcheck alone cannot establish that a host source extent was valid. Keep body,
+position, velocity and reserved-capacity counts distinct in both code and tests.

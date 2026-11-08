@@ -846,7 +846,12 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
         self.gen_add_parallel_loop("dof_id",str(self.robot.get_num_vel())) # one component for each dof
         if 'jid' in S_ind_cpp: S_ind_cpp = S_ind_cpp.replace('jid', 'dof_id') 
         if 'jid' in S_sign_cpp: S_sign_cpp = S_sign_cpp.replace('jid', 'dof_id')
-        if self.robot.floating_base:
+        if self.robot.floating_base and n == 1:
+            # A lone free-flyer has no scalar joint. The topology helper's -1
+            # root sentinel is not a force-row index. Project its full motion
+            # subspace: internal [moment, force] -> public [force, moment].
+            self.gen_add_code_line("s_c[dof_id] = s_vaf[" + str(12*n) + " + (dof_id + 3) % 6];")
+        elif self.robot.floating_base:
             if '+' in S_ind_cpp: S_ind_cpp = S_ind_cpp.replace(']', ' - 5]') # offset back to the beginning of the S_inds
             if '+' in S_sign_cpp: S_sign_cpp = S_sign_cpp.replace(']', ' - 5]') # offset back to the beginning of the S_inds
             self.gen_add_code_line("int fb_offset = (dof_id > 5) * (6 * (dof_id - 5)); // First 6 DOF belong to floating base")

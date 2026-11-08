@@ -12,6 +12,15 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+These changes are staged for 0.7.1; publication is pending.
+
+- Repair full six-axis bias-force projection and first derivatives for a lone
+  floating body. Document body-origin base wrenches and add independent
+  offset-COM discrete A/B, rotor-map and prepared-loading regressions. This does
+  not add floating fixed-chart Hessians or a consumer actuation framework.
+- Initialize the entire reserved topology table before host-to-device upload,
+  including floating/mimic padding. Reject misaligned caller-owned allocation
+  slabs/cursors and overflowing requests without advancing the pool.
 - Align pose matrix scratch inside its queried allocation to prevent optimized
   shared loads from overlapping the concurrently written matrix bank. Callers
   still need only scalar alignment; regenerate headers and use the scratch

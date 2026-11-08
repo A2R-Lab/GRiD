@@ -85,3 +85,23 @@ def test_debug_header_asserts_only_when_helpers_exist(tmp_path):
     assert m, "inverse_dynamics_inner lacks the assert as its first line"
     _, iiwa = _gen(tmp_path, "iiwa14", False, debug=True)
     assert _ASSERT not in iiwa
+
+
+@pytest.mark.parametrize('name,floating', [('rizon4', False), ('go2', True),
+                                         ('fr3', True), ('free_body', True)])
+def test_uploaded_topology_capacity_is_initialized(name, floating):
+    from test.cuda_equivalents.free_body_contract import URDF
+    path = URDF if name == 'free_body' else robot_urdf(name)
+    gen = GRiDCodeGenerator(URDFParser().parse(str(path), floating_base=floating))
+    gen.gen_init_topology_helpers()
+    source = gen.code_str
+    match = re.search(r'int h_topology_helpers\[(\d+)\] = \{(.*?)\};', source, re.S)
+    assert match, 'host extent must include the entire device upload'
+    capacity = gen.gen_topology_helpers_size()
+    assert int(match.group(1)) == capacity
+    initializer = re.sub(r'//[^\n]*', '', match.group(2))
+    entries = [int(x.strip()) for x in initializer.split(',') if x.strip()]
+    assert len(entries) <= capacity
+    assert f'{capacity} * sizeof(int)' in source or f'{capacity}*sizeof(int)' in source
+    if name == 'free_body':
+        assert entries == [4, 5, 6, 1, 2, 3] and capacity == 7

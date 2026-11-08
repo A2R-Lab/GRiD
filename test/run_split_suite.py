@@ -339,7 +339,10 @@ def _module_local_dependencies(mod: str, exclude: set[str]) -> list[str]:
     if not source_path.exists():
         return []
     source = source_path.read_text(encoding="utf-8")
-    found = []
+    # This oracle constructs its fixture path with with_suffix(), not a literal
+    # runner path in the test. Include its data dependency explicitly.
+    found = (["test/cuda_equivalents/free_body_contract.urdf"]
+             if mod == "test_cuda_base_force" else [])
     for name in _LOCAL_CUDA_SOURCE.findall(source):
         if (CUDA_DIR / name).is_file():
             found.append(f"test/cuda_equivalents/{name}")
@@ -948,6 +951,8 @@ def aggregate_header_keys(rdir: Path, results: list[dict],
 # pins codegen/submodules by commit SHA at the receipt level instead).
 STATE_PATH = REPO_ROOT / "test" / ".split-suite-state.json"
 WRAPPER_HELPER_PATHS = {
+    "test_base_force_contract": ["test/cuda_equivalents/free_body_contract.py",
+                                 "test/cuda_equivalents/free_body_contract.urdf"],
     "test_release_numerics": ["tools/check_installed_numerics.py"],
     "test_consumer_artifact": ["bindings/examples/consumer_artifact_migration.py"],
     "test_armature_identification": ["test/cuda_equivalents/cuda_armature_identification_runner.cu"],

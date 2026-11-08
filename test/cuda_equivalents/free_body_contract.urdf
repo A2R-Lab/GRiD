@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<!-- GRiD-owned analytical fixture: body origin differs from the COM. -->
+<robot name="base_force_contract">
+  <link name="body">
+    <inertial>
+      <origin xyz="0.13 -0.07 0.09" rpy="0 0 0"/>
+      <mass value="2.3"/>
+      <inertia ixx="0.31" iyy="0.43" izz="0.57" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+  </link>
+</robot>

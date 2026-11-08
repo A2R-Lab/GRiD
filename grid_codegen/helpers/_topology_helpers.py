@@ -1538,12 +1538,16 @@ def gen_init_topology_helpers(self):
     self.gen_add_code_line("cudaError_t init_topology_helpers_checked(int **out, const char **failed_op = nullptr) {", True)
     # add the helpers needed
     code = []
+    # The upload copies the full capacity, including floating/mimic padding.
+    # An explicit extent zero-initializes that padding instead of over-reading
+    # an inferred-size host array.
+    capacity = self.gen_topology_helpers_size()
     if not self.robot.is_serial_chain():
         parent_inds = [str(self.robot.get_parent_id(jid)) for jid in range(n)]
         # generate sparsity helpers
         num_ancestors, num_subtree, running_sum_num_ancestors, running_sum_num_subtree = self.gen_topology_sparsity_helpers_python(True)
         _, _, running_sum_dva_cols_per_jid, _, _, running_sum_df_cols_per_jid, _ = self.gen_topology_sparsity_helpers_python()
-        code.extend(["int h_topology_helpers[] = {" + ",".join(parent_inds) + ", // parent_inds",
+        code.extend([f"int h_topology_helpers[{capacity}] = {{" + ",".join(parent_inds) + ", // parent_inds",
                      "                            " + ",".join(num_ancestors) + ", // num_ancestors",
                      "                            " + ",".join(num_subtree) + ", // num_subtree",
                      "                            " + ",".join(running_sum_num_ancestors) + ", // running_sum_num_ancestors",
@@ -1553,7 +1557,7 @@ def gen_init_topology_helpers(self):
             code.insert(-4,"                            " + ",".join(S_inds) + ", // S_inds")
     elif not self.robot.are_Ss_identical(list(range(n))):
             S_inds = self.robot.get_S_inds(n)
-            code.append("int h_topology_helpers[] = {" + ",".join(S_inds) + "}; // S_inds")
+            code.append(f"int h_topology_helpers[{capacity}] = {{" + ",".join(S_inds) + "}; // S_inds")
     self.gen_add_code_lines(code)
     
     # allocate and transfer data to the GPU and return the pointer to the memory

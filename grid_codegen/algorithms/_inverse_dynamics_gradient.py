@@ -462,6 +462,11 @@ def gen_inverse_dynamics_gradient_inner(self):
     self.gen_add_multi_threaded_select("selector", "==", [str(i) for i in range(4)], select_var_vals)
     if 'jid' in S_ind_cpp: S_ind_cpp = S_ind_cpp.replace('jid', 'dof_id')
     if 'jid' in S_sign_cpp: S_sign_cpp = S_sign_cpp.replace('jid', 'dof_id')
+    if self.robot.floating_base and NJ == 1:
+        # This loop visits velocity coordinates, not bodies. A lone root's
+        # body-level -1 sentinel must not select a cross-product column.
+        S_ind_cpp = "(dof_id + 3) % 6"
+        S_sign_cpp = "1"
     updated_var_names = dict(S_ind_name = S_ind_cpp, s_dst_name = "&s_temp[dstOffset + dof_id6]", s_src_name = "&src[jid6]", s_scale_name = S_sign_cpp)
     self.gen_mx_func_call_for_cpp(PEQ_FLAG = False, SCALE_FLAG = True, updated_var_names = updated_var_names)
     self.gen_add_end_control_flow()

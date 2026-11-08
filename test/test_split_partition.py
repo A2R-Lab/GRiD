@@ -54,6 +54,15 @@ def test_transform_scratch_runner_is_a_cuda_shard_fingerprint_input():
     assert path in rss._shard_fingerprint_paths({'test_cuda_transform_scratch'})
 
 
+def test_base_force_oracle_and_fixture_are_fingerprinted_on_both_surfaces():
+    cuda = rss._shard_fingerprint_paths({'test_cuda_base_force'})
+    wrappers = rss.wrapper_fingerprint_paths('test_base_force_contract')
+    for filename in ('free_body_contract.py', 'free_body_contract.urdf'):
+        path = f'test/cuda_equivalents/{filename}'
+        assert path in cuda and path in wrappers
+    assert 'test/cuda_equivalents/cuda_base_force_runner.cu' in cuda
+
+
 @pytest.fixture(autouse=True)
 def unchanged_oracle_for_synthetic_receipts(monkeypatch):
     # Synthetic receipts below use fictitious commit SHAs; isolate their
