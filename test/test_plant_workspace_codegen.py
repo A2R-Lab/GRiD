@@ -40,12 +40,16 @@ def test_exact_inner_pose_queries_follow_selected_target(tmp_path,name,target,le
     gradient_query=re.search(r'EE_TARGET_GRAD_INNER_SCRATCH_BYTES\(\).*?size_t\((\d+)\)',text)
     assert gradient_query and int(gradient_query[1])==gen.gen_end_effector_pose_gradient_inner_temp_mem_size(target)
     assert f'static_cast<size_t>({32*leaves+3})' in text.split('EE_POSE_INNER_SCRATCH_BYTES()',1)[1].split('\n',1)[0]
-    assert 's_temp = reinterpret_cast<T *>(grid_align_up(reinterpret_cast<size_t>(s_temp), 16));' in text
+    assert 's_temp += ((size_t(0) - reinterpret_cast<size_t>(s_temp)) & size_t(15)) / sizeof(T);' in text
+    assert 's_temp = reinterpret_cast<T *>(grid_align_up(reinterpret_cast<size_t>(s_temp), 16));' not in text
     # Independent bound: every legal caller residue fits both matrix banks,
     # without assuming the caller's pointer or enclosing arena is 16-aligned.
     for scalar_bytes in (4,8):
         for start in range(0,16,scalar_bytes):
             aligned=(start+15)//16*16
+            padding=(-start)&15
+            assert padding % scalar_bytes == 0
+            assert start+(padding//scalar_bytes)*scalar_bytes == aligned
             logical=32*(1 if target else leaves)*scalar_bytes
             capacity=int(pose_query[1])*scalar_bytes
             assert aligned+logical <= start+capacity

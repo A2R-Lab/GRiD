@@ -74,7 +74,8 @@ def gen_end_effector_pose_inner(self, fixed_target_name = ""):
     self.gen_add_code_line("if constexpr (!TEMP_IN_SMEM) { s_temp = d_workspace; } else { (void)d_workspace; }")
     self.gen_add_code_line("// The scratch query includes alignment headroom; callers need only alignof(T).")
     self.gen_add_code_line("// Keep widened matrix loads out of the concurrently written ping-pong half.")
-    self.gen_add_code_line("s_temp = reinterpret_cast<T *>(grid_align_up(reinterpret_cast<size_t>(s_temp), 16));")
+    self.gen_add_code_line("// Add padding to the original pointer so CUDA retains its address space.")
+    self.gen_add_code_line("s_temp += ((size_t(0) - reinterpret_cast<size_t>(s_temp)) & size_t(15)) / sizeof(T);")
     #
     # Initial Debug Prints if Requested
     #

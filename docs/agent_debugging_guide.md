@@ -438,6 +438,16 @@ headroom. No new barriers, volatile arithmetic, optimizer switches or warning
 suppression. Rebuild consumers with the new queries; hard-coded old sizes are
 not sufficient.
 
+Preserve the original pointer when aligning: compute the low-bit padding, then
+add that many T elements. Rounding an integer address and converting it back
+lost shared-address-space information in CUDA 13.2/sm_120: the iiwa pose kernel
+used generic LD/ST instructions instead of LDS/STS and measured about 5–6%
+slower. Pointer-preserving padding restores shared-specific accesses without
+requiring a stronger caller alignment. Alignment assumptions alone do not move
+the pointer and cannot replace the padding. A reported local stack allocation
+is not automatically a register spill: inspect ptxas spill counts and the
+executed paths (the initial variant's stack belonged to large-angle trig code).
+
 Permanent coverage: `test_cuda_ee_workspace_queries.py` uses optimized code,
 exact-size canary allocations at every T-aligned residue, independent numerical
 oracles, thread-count checks and strict zero-hazard racecheck/memcheck/synccheck.
