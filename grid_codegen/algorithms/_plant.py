@@ -889,7 +889,8 @@ def gen_ee_raw_evaluators(self, with_gradient = True):
          "grid::end_effector_pose_inner directly, so it is callable from another kernel's "
          "block without aliasing that kernel's dynamic-smem arena.",
          "Fills ALL " + str(num_ees) + " EE block(s); position is rows 0..2 of each 6-row block.",
-         "s_scratch must hold >= END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_COUNT elements of T, 16B aligned."],
+         "s_scratch is the enclosing arena: >= END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_COUNT elements of T, 16B aligned.",
+         "The pose inner's T-aligned temporary-pool contract does not replace this enclosing-arena contract."],
         ["s_end_effector_pose is the 6*NUM_EE pose output",
          "s_q is the joint position vector (size NUM_POS)",
          "s_scratch is caller shared scratch",
@@ -920,7 +921,8 @@ def gen_ee_raw_evaluators(self, with_gradient = True):
          "s_dXhom = nullptr) — same single-load structure as ee_pos_cost_gradient.",
          "Jacobian layout: s_end_effector_pose_gradient[6*" + str(nv) + "*ee + 6*vi + row] "
          "(position rows 0..2, orientation rows 3..5; tangent d/dv convention).",
-         "s_scratch must hold >= END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_COUNT elements of T, 16B aligned."],
+         "s_scratch is the enclosing arena: >= END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_COUNT elements of T, 16B aligned.",
+         "The pose inner's T-aligned temporary-pool contract does not replace this enclosing-arena contract."],
         ["s_end_effector_pose is the 6*NUM_EE pose output",
          "s_end_effector_pose_gradient is the 6*NUM_VEL*NUM_EE Jacobian output",
          "s_q is the joint position vector (size NUM_POS)",
@@ -1085,7 +1087,8 @@ def gen_ee_pos_cost(self, with_d2ee = False):
          "s_p_des is the desired EE position (3-vector)",
          "s_W is the per-axis position weight (3-vector)",
          "s_end_effector_pose is scratch for the 6*NUM_EE pose (the position is rows 0..2 of EE block)",
-         "s_scratch is caller shared scratch for the EE-pose helper (>= END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_COUNT, 16B aligned)",
+         "s_scratch is the enclosing arena: >= END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_COUNT elements of T, 16B aligned.",
+         "The pose inner's T-aligned temporary-pool contract does not replace this enclosing-arena contract.",
          "d_robotModel is the GPU model helpers"],
         None)
     self.gen_add_code_line("template <typename T, int EE = 0, bool ACCUMULATE = false>")
@@ -1125,8 +1128,8 @@ def gen_ee_pos_cost(self, with_d2ee = False):
         ["s_grad is the gradient over x (size NUM_POS + NUM_VEL = " + str(nx) + ")",
          "s_q / s_p_des / s_W / d_robotModel as above",
          "s_end_effector_pose is 6*NUM_EE pose scratch; s_end_effector_pose_gradient is 6*NUM_VEL*NUM_EE Jacobian scratch",
-         "s_scratch is caller shared scratch for the EE-pose+gradient helper "
-         "(>= END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_COUNT, 16B aligned)"],
+         "s_scratch is the enclosing arena: >= END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_COUNT elements of T, 16B aligned.",
+         "The pose inner's T-aligned temporary-pool contract does not replace this enclosing-arena contract."],
         None)
     self.gen_add_code_line("template <typename T, int EE = 0, bool ACCUMULATE = false" + ", bool MUJOCO_OUTPUT = false" + ">")
     self.gen_add_code_line("__device__")

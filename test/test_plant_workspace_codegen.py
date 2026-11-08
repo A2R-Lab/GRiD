@@ -31,6 +31,22 @@ def test_floating_hessian_composition_is_not_silently_advertised(tmp_path):
     assert 'enum class plant_hessian_layout' not in text
 
 
+def test_ee_inner_and_enclosing_alignment_contracts_are_distinct(tmp_path):
+    _, text = _gen(tmp_path, _robot('iiwa14'),
+                   algorithm_list=['end_effector_pose', 'end_effector_pose_gradient'])
+    for function, count in (
+        ('ee_pos', 'END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_COUNT'),
+        ('ee_pos_gradient', 'END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_COUNT'),
+        ('ee_pos_cost', 'END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_COUNT'),
+        ('ee_pos_cost_gradient', 'END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_COUNT'),
+    ):
+        declaration = text.index(f'void {function}(')
+        comment = text[text.rfind('/**', 0, declaration):declaration]
+        assert f's_scratch is the enclosing arena: >= {count} elements of T, 16B aligned.' in comment
+        assert "The pose inner's T-aligned temporary-pool contract does not replace this enclosing-arena contract." in comment
+    assert '// The scratch query includes alignment headroom; callers need only alignof(T).' in text
+
+
 @pytest.mark.parametrize('name,target,leaves', [('iiwa14','iiwa_joint_ee',1),('go2','FR_foot_joint',4),('go2','',4)])
 def test_exact_inner_pose_queries_follow_selected_target(tmp_path,name,target,leaves):
     gen,text=_gen(tmp_path,_robot(name,name=='go2'),fixed_target_name=target,
