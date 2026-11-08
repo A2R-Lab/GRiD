@@ -26,7 +26,7 @@ emitting CUDA C++ from URDFs; numpy/pinocchio reference oracle lives in `RBDRefe
 | "out of memory" on a nearly-empty GPU (big robot) | §1y (int overflow in size arithmetic), §1v (stack `const T[]`) |
 | Kernel got SLOWER after adding per-thread arrays | §1u (register-array spill — block-share it) |
 | Spill tier still over budget after "reducing" | §1t (reduction must apply inside the max()) |
-| Sanitizer (racecheck/initcheck) findings | §1r (two known non-bugs) FIRST |
+| Sanitizer (racecheck/initcheck) findings | §1r (widened loads and timing-only reads) FIRST |
 | Fixed-target EE chain silently wrong/dead | §1s (fixed jid has no link) |
 | Spherical fixed-base buffer too small | §1ab (`n+fb` is not a position-space width) |
 | Equivalence test flakes / stale results after codegen edit | §0 (cache discipline), §7 (test-infra gotchas) |
@@ -413,41 +413,46 @@ under the §1p 0xFF sweep — the slots ARE written, only their *summation order
   converted). Same family as §1b (a shared-reduce fix has fleet-wide blast radius — prefer the narrowest
   per-fold change, Gate-A byte-identical on fixed-base).
 
-### 1r. Two sanitizer findings that are NOT bugs — do not "fix" them (2026-07-11)
+### 1r. Sanitizer triage: widened loads and timing-only reads (updated 2026-11-07)
 
-Both were investigated to the bottom during Inc4b (multi_target bench registration) and cost real time.
-**Triage them with the tests below before touching any code** — the "fix" in both cases would perturb
-oracle-validated codegen (and break header byte-identity) for zero correctness gain.
+Classify distinct sites from source ownership AND optimized machine accesses.
+WARN severity, equal current/incoming bytes and repeatable numerical answers
+are not general proofs of safety. Preserve the raw report and exact compiler.
 
 **(a) `racecheck` "Potential WAR hazard (Warp Level Programming)" in `end_effector_pose_kernel`.**
-Reported as **3 hazards / 0 errors / 3 WARNINGS** (racecheck classifies genuine races as *errors*;
-"Potential ..." is advisory). It is a FALSE POSITIVE on a **structurally-constant** shared slot:
-`s_XmatsHom` is re-written each timestep from the FIXED `d_XImats` model data, and a homogeneous
-transform's `[3][3]` element is **always exactly 1.0** (products of homogeneous transforms preserve the
-bottom row `[0,0,0,1]`). So iteration *k*'s read and iteration *k+1*'s rewrite touch a slot whose value
-never changes.
-  * **The tell:** racecheck prints `Current Value : X, Incoming Value : X` — *identical* — on every
-    flagged access. A WAR can only corrupt anything if the write changes what the reader observes; when
-    incoming == current, no execution order can produce a different result. **If Current == Incoming on
-    every access, stop — it is benign.**
-  * Source check confirms it: every access pair is separated by `__syncthreads()` (`load_update_XmatsHom`
-    ends with one; every serial-chain ping-pong level ends with one), and within a level the reads/writes
-    hit **disjoint halves** of `s_temp` (`[0..15]` vs `[16..31]`).
-  * Empirical confirmation (do this, it's cheap): ee_pose is **bit-identical across 8 runs** and agrees
-    with the INDEPENDENT `multi_target_position` FK path to float32 eps — plus it already passes CUDA
-    equivalence vs the numpy oracle across the robot matrix.
+The earlier constant-slot/between-timestep explanation was incorrect. A single
+TIAGo evaluation reproduces three sites on CUDA 13.2/sm_120. Source-level reads
+and writes use disjoint ping-pong halves with barriers between products, but a
+float-aligned scratch pointer can be 4 mod 16. The compiler then emits an
+`LDS.128` starting one word before the requested column, plus a scalar last-word
+load. The first register from the wide load is unused by the arithmetic; its
+physical read overlaps the last word of the concurrently written other half.
+Racecheck sees that overlap correctly. A standalone generic-matrix reproducer
+also reports it when the current/incoming bytes DIFFER, without GRiD or GLASS.
 
-  The November 7 TIAGo armature audit reproduced this family in a standalone
-  generated pose/Jacobian caller, without GATO. Three serial-chain product sites
-  produced 96 detailed byte hazards and three summary reports, all with identical
-  current/incoming bytes. The source alternates disjoint 16-element halves and
-  synchronizes between levels. Forty launches at 1/17/32/128/256 threads agreed
-  with the independent reference and were bit-identical; memcheck and synccheck
-  were clean. The strict racecheck invocation still returned 86 with warnings.
-  Preserve that result rather than reporting a clean racecheck. Equal bytes in
-  one trace alone are not a general proof: inspect every distinct site and its
-  buffer ownership, barriers and invariant values. This bounded reproduction
-  does not classify other warning sites in a downstream full-solver launch.
+The narrow repair reserves three extra T elements in the pose scratch count
+and aligns the live matrix banks inside that allocation. Every bank and column
+then starts at a 16-byte boundary. The caller still needs only `alignof(T)`;
+native arenas, global workspace and public queries must all include the same
+headroom. No new barriers, volatile arithmetic, optimizer switches or warning
+suppression. Rebuild consumers with the new queries; hard-coded old sizes are
+not sufficient.
+
+Permanent coverage: `test_cuda_ee_workspace_queries.py` uses optimized code,
+exact-size canary allocations at every T-aligned residue, independent numerical
+oracles, thread-count checks and strict zero-hazard racecheck/memcheck/synccheck.
+`test_cuda_transform_scratch.py` stresses related gradient, Hessian, frame and
+energy-regressor world-transform paths without preemptively changing their
+layouts. Keep those tests optimized: debug and ptxas -O0 hid the original issue.
+Inspect SASS access width, address and register use when source ownership looks
+correct; don't generalize this specific diagnosis to uninspected solver reports.
+
+The same audit caught a debug-only accounting error: arena carves ended at the
+last live slot, but `grid_shared_arena_bytes` rounds the capacity to 16 bytes.
+`GRID_CUDA_DEBUG_LAYOUT` now rounds the final offset before its exact equality
+check. This is not a relaxed bound or extra release-mode work. Exercise this
+guard in the optimized public-pose regression; a Go2 control reproduced the
+old assertion failure with a correctly sized allocation.
 
 **(b) `initcheck` "Uninitialized __global__ memory read" in EVERY `*_kernel_single_timing`.**
 This is the **anti-LICM feedback by design**, and it is FLEET-WIDE, not specific to any one algo.
@@ -3657,12 +3662,11 @@ finite-output, poison/reuse and exact thread/storage checks are unchanged.
 Negative controls reject nonfinite results, zero/nonzero differences and an
 above-bound perturbation. Preserve the original diagnostic failures.
 
-The exact EE scratch tests also reproduce section 1r's homogeneous constant-slot
-WAR warning in FP32, not FP64. Keep detailed raw reports and the known-warning
-disposition distinct from clean sanitizer passes. The narrow classifier in
-test/ee_constant_slot_warnings.py requires the reviewed call sites, counts and
-equal constant bytes; malformed reports, other hazards or errors fail closed.
-Do not generalize that classifier into permission to ignore racecheck warnings.
+Historical Package 3 EE scratch evidence retained a known-warning disposition,
+not clean sanitizer passes. The November 7 investigation in §1r supersedes the
+constant-slot explanation. `test/ee_constant_slot_warnings.py` remains only for
+interpreting those archived reports; new scratch acceptance requires zero
+hazards and must not call that classifier to waive a finding.
 
 ### 7.z78 Fixed base does not mean affine coordinates
 

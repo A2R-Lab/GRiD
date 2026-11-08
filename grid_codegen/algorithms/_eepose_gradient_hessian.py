@@ -12,7 +12,11 @@ from grid_codegen.helpers._code_generation_helpers import host_q_compressed_inpu
 
 def gen_end_effector_pose_inner_temp_mem_size(self, fixed_target_name = ""):
     num_ees = self.robot.get_total_leaf_nodes() if fixed_target_name == "" else 1
-    return 2*16*num_ees
+    # Caller scratch is only T-aligned. Reserve up to three T elements so the
+    # inner can align its ping-pong matrices to 16 bytes (FP32 and FP64). This
+    # keeps compiler-widened shared loads inside their read-only matrix half.
+    # All native arenas, spill sizes and public scratch queries use this count.
+    return 2*16*num_ees + 3
 
 def gen_end_effector_pose_inner_function_call(self, updated_var_names = None, fixed_target_name = "",
                                               temp_in_smem_expr = "true"):
@@ -68,6 +72,9 @@ def gen_end_effector_pose_inner(self, fixed_target_name = ""):
     # workspace moves to d_workspace when !TEMP_IN_SMEM. Reassigning s_temp at the
     # top keeps every s_temp[...] reference below unchanged.
     self.gen_add_code_line("if constexpr (!TEMP_IN_SMEM) { s_temp = d_workspace; } else { (void)d_workspace; }")
+    self.gen_add_code_line("// The scratch query includes alignment headroom; callers need only alignof(T).")
+    self.gen_add_code_line("// Keep widened matrix loads out of the concurrently written ping-pong half.")
+    self.gen_add_code_line("s_temp = reinterpret_cast<T *>(grid_align_up(reinterpret_cast<size_t>(s_temp), 16));")
     #
     # Initial Debug Prints if Requested
     #

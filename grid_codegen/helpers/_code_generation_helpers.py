@@ -1296,6 +1296,10 @@ def gen_declare_shared_arena(self, t_buffers, temp_mem_size, include_topology_he
         # it uniformly even when this robot allocates no topology helpers.
         self.gen_add_code_line("int *" + topology_name + " = nullptr;")
     self.gen_add_code_line("#ifdef GRID_CUDA_DEBUG_LAYOUT")
+    # The size authority includes trailing 16-byte padding, whereas the carve
+    # stops after the final live slot. Compare like-for-like without relaxing
+    # the equality or adding any release-mode allocation/work.
+    self.gen_add_code_line("s_arena_offset = grid_align_up(s_arena_offset, 16);")
     if tier_workspace_expr is not None and temp_size_int != 0:
         # Different t_region_count per tier: PERF includes temp; LITE+ excludes it
         self.gen_add_code_line("if constexpr (RESOURCE_TIER == TIER_SHARED) {", True)

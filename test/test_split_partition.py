@@ -49,6 +49,11 @@ def test_exact_gradient_runner_is_a_cuda_shard_fingerprint_input():
     assert path in rss._shard_fingerprint_paths({'test_cuda_plant_gradient_arena'})
 
 
+def test_transform_scratch_runner_is_a_cuda_shard_fingerprint_input():
+    path = 'test/cuda_equivalents/cuda_transform_scratch_runner.cu'
+    assert path in rss._shard_fingerprint_paths({'test_cuda_transform_scratch'})
+
+
 @pytest.fixture(autouse=True)
 def unchanged_oracle_for_synthetic_receipts(monkeypatch):
     # Synthetic receipts below use fictitious commit SHAs; isolate their

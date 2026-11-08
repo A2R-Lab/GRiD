@@ -132,3 +132,11 @@ describe only the inner's temporary pool, not its input, output, XI tables or a
 complete enclosing kernel. A fixed named target can have a smaller pool than the
 generic all-leaf call. Scratch from one entry point must not be used to size a
 differently carved wrapper.
+
+Pose scratch queries include internal 16-byte alignment headroom. The caller
+still supplies only a ``T``-aligned pointer and exactly the queried capacity;
+the inner aligns its two matrix banks within that allocation. Do not hard-code
+``32 * number_of_targets`` elements or round the supplied pointer yourself
+without accounting for the lost capacity. The same rule applies when the pose
+scratch is placed in global workspace. Regenerate consumer headers and rebuild
+their allocations together when updating GRiD.

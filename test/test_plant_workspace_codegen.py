@@ -16,6 +16,8 @@ def test_workspace_surfaces_and_scope(tmp_path):
     assert 'reinterpret_cast<uintptr_t>(workspace) % 16' in text
     assert 'FRAME_EVAL_DYNAMIC_SHARED_MEM_BYTES<T>()' in text
     assert 'rows > 93 ? rows : 93' in text
+    assert '#ifdef GRID_CUDA_DEBUG_LAYOUT\n' in text
+    assert 's_arena_offset = grid_align_up(s_arena_offset, 16);' in text
     slots = _plant_hessian_shared_slots(gen, False, False)
     assert dict(slots)['s_d2AB'] == 18 * 7 ** 3
     assert 's_d2AB' not in dict(_plant_hessian_shared_slots(gen, True, True))
@@ -34,10 +36,20 @@ def test_exact_inner_pose_queries_follow_selected_target(tmp_path,name,target,le
     gen,text=_gen(tmp_path,_robot(name,name=='go2'),fixed_target_name=target,
                  algorithm_list=['end_effector_pose','end_effector_pose_gradient'])
     pose_query=re.search(r'EE_TARGET_POSE_INNER_SCRATCH_BYTES\(\).*?size_t\((\d+)\)',text)
-    assert pose_query and int(pose_query[1])==32*(1 if target else leaves)
+    assert pose_query and int(pose_query[1])==32*(1 if target else leaves)+3
     gradient_query=re.search(r'EE_TARGET_GRAD_INNER_SCRATCH_BYTES\(\).*?size_t\((\d+)\)',text)
     assert gradient_query and int(gradient_query[1])==gen.gen_end_effector_pose_gradient_inner_temp_mem_size(target)
-    assert f'static_cast<size_t>({32*leaves})' in text.split('EE_POSE_INNER_SCRATCH_BYTES()',1)[1].split('\n',1)[0]
+    assert f'static_cast<size_t>({32*leaves+3})' in text.split('EE_POSE_INNER_SCRATCH_BYTES()',1)[1].split('\n',1)[0]
+    assert 's_temp = reinterpret_cast<T *>(grid_align_up(reinterpret_cast<size_t>(s_temp), 16));' in text
+    # Independent bound: every legal caller residue fits both matrix banks,
+    # without assuming the caller's pointer or enclosing arena is 16-aligned.
+    for scalar_bytes in (4,8):
+        for start in range(0,16,scalar_bytes):
+            aligned=(start+15)//16*16
+            logical=32*(1 if target else leaves)*scalar_bytes
+            capacity=int(pose_query[1])*scalar_bytes
+            assert aligned+logical <= start+capacity
+            assert aligned % 16 == 0
 
 
 def test_runtime_hessian_query_matches_resolved_kernel_layout(tmp_path):

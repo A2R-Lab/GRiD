@@ -12,6 +12,12 @@ repository. Everything below describes the packaged A2R-Lab releases.
 
 ## [Unreleased]
 
+- Align pose matrix scratch inside its queried allocation to prevent optimized
+  shared loads from overlapping the concurrently written matrix bank. Callers
+  still need only scalar alignment; regenerate headers and use the scratch
+  queries rather than hard-coded counts. Add optimized, exact-capacity
+  sanitizer coverage for pose and neighboring transform-chain consumers, and
+  account for trailing alignment padding in the debug arena equality check.
 - Add compact armature torque regressors and explicit forward-dynamics parameter
   sensitivity on native, NumPy, JAX and PyTorch surfaces. The sensitivity reuses
   one forward solve under one model admission; ordinary builds gain no workspace.
