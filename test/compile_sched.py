@@ -1,8 +1,10 @@
 """RAM-aware parallel compile scheduler (2026-08-18, user-directed).
 
 Runs a queue of compile jobs (each an argv subprocess) in parallel, bounded by
-PREDICTED peak RSS so the box never OOMs: a job is admitted only while the sum
-of running jobs' predicted peaks stays under the memory budget. Predictions
+PREDICTED peak RSS to reduce OOM risk. Predictions are not enforced RSS limits;
+other processes can also change pressure after admission. The legacy profile
+allows a first job above budget for forward progress. With strict_memory=True,
+that job is refused and all unattempted jobs are reported as such. Predictions
 come from a rolling max-over-history ledger (test/.split_suite/compile_rss.json,
 schema 2) measured by SAMPLING THE JOB'S WHOLE PROCESS TREE (every process in the
 worker's session, summed RSS, 0.5 s cadence) — `/usr/bin/time -v`'s ru_maxrss
@@ -154,6 +156,7 @@ class Ledger:
                    "secs": max(cur["secs"], float(secs))}
             if new != cur:
                 self.data[key] = new
+                self.path.parent.mkdir(parents=True, exist_ok=True)
                 tmp = self.path.with_suffix(f".{os.getpid()}.tmp")
                 tmp.write_text(json.dumps({"schema": LEDGER_SCHEMA, "jobs": self.data},
                                           indent=0, sort_keys=True))
@@ -174,6 +177,7 @@ class RamScheduler:
         margin: float = DEFAULT_MARGIN,
         default_peak_kb: int = DEFAULT_PEAK_KB,
         label: str = "compile",
+        strict_memory: bool = False,
     ):
         self.ledger = ledger
         self.max_jobs = max(1, int(max_jobs))
@@ -181,6 +185,8 @@ class RamScheduler:
         self.margin = margin
         self.default_peak_kb = default_peak_kb
         self.label = label
+        self.strict_memory = strict_memory
+        self.resource_blocked: str | None = None
         # Static pool sized at construction; the live MemAvailable backstop at
         # each admission covers external memory pressure appearing later.
         self.budget_kb = max(mem_available_kb() - floor_kb, default_peak_kb)
@@ -304,11 +310,23 @@ class RamScheduler:
                     pred = self.ledger.predict_kb(
                         job.ledger_key, self.default_peak_kb, self.margin
                     )
-                    if running and predicted_sum + pred > self.budget_kb:
-                        continue
+                    if self.strict_memory:
+                        pred = max(pred, int(self.default_peak_kb * self.margin))
+                    available = mem_available_kb()
+                    fits = (predicted_sum + pred <= self.budget_kb
+                            and available - pred >= self.floor_kb)
+                    if self.strict_memory and not running and not fits:
+                        self.resource_blocked = (
+                            f"{job.name}: predicted {pred} KiB, available {available} KiB, "
+                            f"reserve {self.floor_kb} KiB, budget {self.budget_kb} KiB")
+                        print(f"[{self.label}] RESOURCE BLOCKED: {self.resource_blocked}", flush=True)
+                        self.stop()
+                        break
                     # Live backstop: real MemAvailable must still clear the floor
                     # after this job's predicted peak (guards external pressure).
-                    if running and mem_available_kb() - pred < self.floor_kb:
+                    # The legacy first-job progress exception is opt-out; the
+                    # receipt's strict profile refuses instead of oversubscribing.
+                    if (running or self.strict_memory) and not fits:
                         continue
                     pending.remove(job)
                     if not self._launch(job, pred, running, busy_groups):
@@ -324,7 +342,9 @@ class RamScheduler:
         # Anything never launched (stop() mid-queue) resolves as rc=-1 so
         # waiters unblock and callers can distinguish "not attempted".
         for job in pending:
-            self.results[job.name] = JobResult(job.name, -1, 0.0, 0, "not attempted (stopped)")
+            reason = (f"not attempted (resource blocked: {self.resource_blocked})"
+                      if self.resource_blocked else "not attempted (stopped)")
+            self.results[job.name] = JobResult(job.name, -1, 0.0, 0, reason)
             self.done_events[job.name].set()
 
     def _launch(self, job: Job, pred_kb: int, running: dict, busy_groups: set) -> bool:

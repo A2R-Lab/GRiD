@@ -137,6 +137,42 @@ signature, complete scope and release policy on the clean descendant. No carried
 shards, policy bypass or tolerance relaxation: a release receipt is one fresh full
 pass at the release tip, verified under `test/gpu-proof-policy-release.yaml`.
 
+### Primary receipt resource profile
+
+The tracked launcher selects `GRID_SPLIT_RESOURCE_PROFILE=serial`: one prewarm
+worker, then one GPU shard at a time, with two compiler units per wrapper build.
+The complete prewarm phase drains before any shard starts. A cap on prewarm
+workers alone does not bound memory: tests can compile additional wrappers and
+temporary executables inline. Serial phases prevent that overlap without
+omitting tests, changing numerical thresholds or changing compiled algorithms.
+Serialization is between workers and shards, not inside a test: the consumer
+artifact concurrency regression deliberately starts two builds. The whole-shard
+allowance includes descendants; the compiler-unit cap applies per build, not
+globally across those descendants.
+
+Every prewarm admission, including the first, requires its predicted process-tree
+peak plus a 14 GiB host reserve to fit the live `MemAvailable` and pool budget.
+The peak allowance is at least 16 GiB before a 1.3 margin; larger recorded peaks
+still apply. Each test shard separately requires that base allowance and reserve
+(34.8 GiB total) before starting because it may compile inline. These are
+planning allowances, not enforced process RSS limits: monitor actual peaks and
+other workloads, and do not assume an unmeasured model is bounded by the default.
+The primary launcher's profile overrides inherited concurrency settings.
+Direct split-driver runs retain the older overlap profile unless explicitly
+configured; the secondary/Jetson recipe below is separate.
+
+Insufficient admission writes `resource-blocked.json` and `PAUSE` in the split
+run directory and returns nonzero without merging receipts. Completed shard
+results remain intact. After inspecting memory pressure, remove that run's
+`PAUSE` marker and resume at the same clean commit with the same full/refresh
+mode. A manual PAUSE during prewarm stops queued builds and lets the current
+build finish before returning; resume reuses its content cache. A paused or
+unattempted shard is never reported as passing. Estimate both cold and warm
+passes from the intended cache and worker configuration, not a past run's
+elapsed time. Receipt recording still requires its separate approval.
+
+### Architecture receipts
+
 One receipt per architecture. The primary receipt, `gpu-proof.json`, is recorded
 on the RTX 5090 (sm_120); it gates CI, defines the collection manifest and is the
 only receipt the release workflow verifies. Secondary receipts document other

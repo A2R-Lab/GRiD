@@ -4033,3 +4033,29 @@ now zero-initializes any reserved tail. CPU regression checks copied capacity
 against the host extent on scalar, floating, mimic and root-only models. Device
 memcheck alone cannot establish that a host source extent was valid. Keep body,
 position, velocity and reserved-capacity counts distinct in both code and tests.
+
+### 7.z97 A compile-pool limit does not limit inline compilers (2026-11-08)
+
+The primary receipt could run three prewarm jobs and two test shards together.
+Each shard could start its own multi-unit wrapper build outside the RAM-aware
+pool. Reducing only the pool's worker count left that overlap intact; a quiet
+GPU was not evidence of enough host RAM. The candidate also had no local peak
+ledger, and its private correctness caches were not the receipt's defaults.
+
+The primary launcher now selects serial resource phases: one prewarm worker,
+then one test shard, with two wrapper compiler units. Strict admission checks
+the first job too, retaining the legacy progress exception only for other
+profiles. A resource refusal preserves results and leaves PAUSE for explicit
+resume, never a passing row or reduced collection. CPU regressions cover exact
+admission boundaries, memory pressure between shards, prewarm drain, pause and
+resume. Measure the whole worker session/process tree, not just GNU time's
+largest descendant. Estimates plus a host reserve reduce risk; they cannot
+guarantee against a larger unmeasured build or later external memory pressure.
+Do not confuse shard serialization with internal test serialization: the
+consumer artifact race regression intentionally starts two builders. Preserve
+that coverage and account for all descendants in the whole-shard allowance.
+The fresh-checkout live probe also caught a missing parent directory when
+persisting the first measured peak. Ledger writes now create that directory;
+a CPU regression starts from an absent nested path and verifies reload and
+the retained peak after a cheaper build. GPU test success alone does not prove
+the reporting/ledger phase completed successfully.

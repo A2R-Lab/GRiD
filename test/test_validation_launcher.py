@@ -32,6 +32,11 @@ def launch(tmp_path, monkeypatch):
                 raise KeyboardInterrupt
             if state.outcome == 'driver-fail':
                 return SimpleNamespace(returncode=3)
+            if state.outcome == 'resource-pause':
+                shards = launcher.Path(command[-1])
+                shards.mkdir(parents=True)
+                (shards / 'PAUSE').touch()
+                return SimpleNamespace(returncode=3)
             if state.outcome == 'noop':
                 return SimpleNamespace(returncode=0)
             shards = launcher.Path(command[-1])
@@ -140,6 +145,17 @@ def test_noop_refresh_verifies_existing_receipt(launch):
     assert launch.receipt()['identity'] == 'original'
 
 
+def test_resource_pause_is_not_failed_or_promoted_evidence(launch):
+    launch.outcome = 'resource-pause'
+    with pytest.raises(RuntimeError, match='Driver rc=3'):
+        launch.invoke('--execute')
+    assert launch.status()['status'] == 'paused'
+    assert launch.receipt()['identity'] == 'original'
+    assert launch.status()['resource_profile'] == {
+        'GRID_SPLIT_RESOURCE_PROFILE': 'serial', 'GRID_SPLIT_COMPILE_JOBS': '1',
+        'GRID_SPLIT_SHARD_JOBS': '1', 'GRID_RBD_BUILD_JOBS': '2'}
+
+
 def test_busy_lock_never_starts_driver(launch):
     with launcher.LOCK_PATH.open('a') as lock:
         launcher.fcntl.flock(lock, launcher.fcntl.LOCK_EX | launcher.fcntl.LOCK_NB)
@@ -237,17 +253,19 @@ def test_finalize_real_git_evidence_transition(tmp_path, monkeypatch):
 
 def test_validation_env_strips_overrides_and_sets_receipt_knobs(monkeypatch):
     """The launcher owns the driver's env: stray GRID_*/SPLIT*/pytest overrides
-    are dropped; the receipt knobs (compile pool 3, two GPU shards side by
-    side — W1 2026-10-10 — and 4 nvcc units per bindings build) are set here,
+    are dropped; the serial receipt profile (one pool worker, one GPU shard,
+    no prewarm/inline overlap and two nvcc units per build) is set here,
     not inherited."""
     monkeypatch.setenv('GRID_SPLIT_SHARD_JOBS', '9')
     monkeypatch.setenv('GRID_RBD_BUILD_JOBS', '99')
+    monkeypatch.setenv('GRID_SPLIT_RESOURCE_PROFILE', 'overlap')
     monkeypatch.setenv('GRID_CUDA_KIN_THREADS', '1')
     monkeypatch.setenv('PYTEST_ADDOPTS', '-x')
     env = launcher.validation_env()
-    assert env['GRID_SPLIT_SHARD_JOBS'] == '2'
-    assert env['GRID_SPLIT_COMPILE_JOBS'] == '3'
-    assert env['GRID_RBD_BUILD_JOBS'] == '4'
+    assert env['GRID_SPLIT_RESOURCE_PROFILE'] == 'serial'
+    assert env['GRID_SPLIT_SHARD_JOBS'] == '1'
+    assert env['GRID_SPLIT_COMPILE_JOBS'] == '1'
+    assert env['GRID_RBD_BUILD_JOBS'] == '2'
     assert 'GRID_CUDA_KIN_THREADS' not in env and 'PYTEST_ADDOPTS' not in env
 
 

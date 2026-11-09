@@ -85,8 +85,15 @@ test/gpu-proof-tests.txt`) and commit it BEFORE recording — it is a fingerprin
 
 Prefer the crash-isolated split driver for full GPU passes:
 `test/run_validation.py` (the receipt launcher) strips `GRID_*` from its env and sets its own
-(`GRID_SPLIT_COMPILE_JOBS=3`, `GRID_SPLIT_SHARD_JOBS=2` — two GPU shards side by side since
-2026-10-10 — and `GRID_RBD_BUILD_JOBS=4` per compile job); it refuses a dirty tree and requires HEAD
+(`GRID_SPLIT_RESOURCE_PROFILE=serial`, one compile-pool worker, one GPU shard,
+and `GRID_RBD_BUILD_JOBS=2`). Prewarm finishes before shards start, so inline
+compiles cannot overlap the pool. Admission reserves 14 GiB plus a predicted
+whole-process allowance of at least 16 GiB times 1.3; insufficient memory
+creates a resumable PAUSE, including for the first job. This is conservative
+admission, not a hard RSS limit or protection against later external pressure.
+Tests that deliberately exercise concurrent builds retain their internal
+concurrency; the two-unit cap is per build, not a global process limit.
+It refuses a dirty tree and requires HEAD
 unchanged for the whole run — the main checkout must stay BYTE-CLEAN (no edits, docs included, no
 commits) until it prints "Recording complete" (use a worktree for side work).
 `test/run_split_suite.py` runs `python_wrappers` as per-module shards (compile-warm
@@ -110,11 +117,13 @@ workers (predicted peak RSS from a rolling ledger at `test/.split_suite/compile_
 — schema 2 since 2026-10-10: the job's whole process TREE is sampled, because
 `/usr/bin/time -v`'s ru_maxrss reports only the largest single child and under-predicted a
 multi-unit build ~4x; the ledger also keeps wall time so each consumer's heaviest job
-launches first — conservative default + margin + MemAvailable floor) and OVERLAP GPU shard execution — a shard only waits for its own compile
+launches first — conservative default + margin + MemAvailable floor). Direct
+driver invocations retain the historical overlap profile by default; a shard only waits for its own compile
 jobs, so the pool is the sole writer of a cache key until that shard starts (the
 unlocked cache writers are never raced; a mimic robot's cells share one header and
 fold into one serial job). `GRID_SPLIT_COMPILE_JOBS` sizes the pool (default 5;
-`0` = legacy serial inline warm).
+`0` = legacy serial inline warm). The tracked primary receipt launcher selects
+the conservative serial profile instead; see `RELEASING.md` for pause/resume.
 **Receipt policies (two-tier, user decision 2026-08-20).** The committed
 `gpu-proof.json` goes stale — and CI's verify-receipt job goes RED — the
 moment a push touches the correctness inputs listed in `pyproject.toml`

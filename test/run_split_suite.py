@@ -11,8 +11,9 @@ every failure after it (three times in the week of 2026-08-03). This driver:
       so a compile failure is its own named row, never a mid-suite surprise.
       Warms run through a RAM-aware parallel pool (``test/compile_sched.py``;
       ``GRID_SPLIT_COMPILE_JOBS``, default 5, 0 = legacy serial) that also
-      admits the cuda flagship header/exe pre-warms and OVERLAPS Phase B —
-      a shard only waits for its own compile jobs.
+      admits the cuda flagship header/exe pre-warms. The default overlap
+      profile waits only for each shard's own compiles. The tracked receipt
+      selects the serial resource profile: finish Phase A before Phase B.
   Phase B (run):  runs each test module in its OWN pytest subprocess
       (``GRID_SPLIT_SHARD_JOBS`` at a time on the GPU, default 1 = serial) with
       ``--junitxml`` and an explicitly captured exit code. A module
@@ -1268,11 +1269,11 @@ def shard_jobs() -> int:
     writer gained a per-key flock (cuda_harness._cache_key_lock; executable_cache
     already had one) — two shards sharing one cache dir wait for each other's
     build of a key instead of racing it. Host RAM is the practical bound: a
-    shard's INLINE nvcc builds are NOT pool-admitted. The receipt launcher
-    (test/run_validation.py) sets 2 since 2026-10-10: the 2026-10-01 pilot ran
-    four CUDA shards two at a time clean (~800 MiB VRAM each, ~1.8x throughput)
-    and the runners now register only the kernels they launch, so inline
-    humanoid builds peak ~2-4 GB instead of 6-15. The driver default stays 1."""
+    shard's INLINE nvcc builds are NOT pool-admitted. The primary receipt
+    therefore selects the serial resource profile: one shard, no overlap with
+    prewarming, and a separate memory admission before each shard."""
+    if serial_resource_profile():
+        return 1
     raw = os.environ.get("GRID_SPLIT_SHARD_JOBS", "1")
     try:
         return max(1, int(raw))
@@ -1293,6 +1294,59 @@ CUDA_CACHE_DIR_DEFAULT = str(REPO_ROOT / ".grid_build_cache" / "cuda")
 # Host-RAM floor once GPU shards are running (jax/torch shards need real RAM
 # on top of the compile pool's own floor).
 GPU_PHASE_FLOOR_KB = 14 * 1024 * 1024
+
+# Whole-process-tree planning allowance, including inline shard compilation.
+# This is admission headroom, NOT a bound on arbitrary tests or external users.
+SERIAL_PEAK_KB = 16 * 1024 * 1024
+SERIAL_MARGIN = 1.3
+
+
+def serial_resource_profile() -> bool:
+    profile = os.environ.get("GRID_SPLIT_RESOURCE_PROFILE", "overlap")
+    if profile not in ("serial", "overlap"):
+        raise SystemExit(f"Unknown GRID_SPLIT_RESOURCE_PROFILE: {profile!r}")
+    return profile == "serial"
+
+
+def pause_for_resources(out_dir: Path, reason: str) -> None:
+    """Persist a non-successful, resumable stop; never manufacture test rows."""
+    (out_dir / "resource-blocked.json").write_text(json.dumps({"reason": reason}, indent=2) + "\n")
+    (out_dir / "PAUSE").touch()
+    print(f"RESOURCE BLOCKED: {reason}; inspect memory, remove {out_dir / 'PAUSE'} "
+          "and resume (no scope change)", flush=True)
+
+
+def finish_compile_phase(pool, thread, out_dir: Path) -> bool:
+    """Serial profile: drain prewarm before any shard can compile inline.
+
+    PAUSE stops queued work and lets the current compile finish. Resume builds
+    missing entries again through the content cache; no test is marked passed.
+    """
+    paused = False
+    while thread.is_alive():
+        if (out_dir / "PAUSE").exists():
+            paused = True
+            pool.stop()
+        thread.join(timeout=.25)
+    if pool.resource_blocked:
+        pause_for_resources(out_dir, pool.resource_blocked)
+        paused = True
+    return paused or (out_dir / "PAUSE").exists()
+
+
+def run_phases(shards, out_dir, receipts, extra_args, prior, pool, pool_jobs, prereqs):
+    """One dispatch point for overlapped and serial profiles, including resume."""
+    if (out_dir / "PAUSE").exists():
+        return list(prior), True
+    if serial_resource_profile():
+        print("Resource profile: serial prewarm then serial shards; two wrapper compiler units; "
+              "strict memory admission (no first-job bypass)", flush=True)
+    if pool is not None:
+        thread = pool.run_async(pool_jobs)
+        if serial_resource_profile() and finish_compile_phase(pool, thread, out_dir):
+            return list(prior), True
+    return phase_run(shards, out_dir, receipts, extra_args, prior,
+                     pool=pool, prereqs=prereqs)
 
 
 def cuda_worker_env() -> dict[str, str]:
@@ -1399,7 +1453,11 @@ def build_compile_pool(out_dir: Path, *, warm: bool, cuda_shards: list,
         print(f"  compile ledger: schema {compile_sched.LEDGER_SCHEMA} (process-tree "
               f"peaks); {ledger.dropped_legacy} legacy ru_maxrss entries dropped — "
               f"unmeasured jobs predict {compile_sched.DEFAULT_PEAK_KB >> 20} GB until re-measured")
-    pool = compile_sched.RamScheduler(ledger, max_jobs=max_jobs, label="pool")
+    options = (dict(max_jobs=1, floor_kb=GPU_PHASE_FLOOR_KB,
+                    default_peak_kb=SERIAL_PEAK_KB, margin=SERIAL_MARGIN,
+                    strict_memory=True) if serial_resource_profile()
+               else dict(max_jobs=max_jobs))
+    pool = compile_sched.RamScheduler(ledger, label="pool", **options)
     # Unblock earlier shards before warming unrelated robots alphabetically;
     # within a consumer, heaviest (ledger wall time) first.
     ordered_names = list(modules) + [s.name for s in cuda_shards]
@@ -1615,9 +1673,21 @@ def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
                       f"launches; {len(running)} in flight, {len(pending)} pending "
                       f"(rm it, then --resume {out_dir})", flush=True)
             while not paused and pending and len(running) < jobs:
+                if serial_resource_profile():
+                    import compile_sched
+                    available = compile_sched.mem_available_kb()
+                    required = int(SERIAL_PEAK_KB * SERIAL_MARGIN) + GPU_PHASE_FLOOR_KB
+                    if available < required:
+                        pause_for_resources(out_dir, f"shard admission: available {available} KiB "
+                                            f"< required {required} KiB (compile allowance + reserve)")
+                        paused = True
+                        break
                 spec = next_ready_shard(pending, pool, prereqs)
                 if spec is None:
                     break
+                if serial_resource_profile():
+                    print(f"[resource] admit shard {spec.name}: available {available} KiB, "
+                          f"required {required} KiB", flush=True)
                 waiting = False
                 pending.remove(spec)
                 run = _launch_shard(spec, out_dir, receipts, extra_args)
@@ -1713,6 +1783,12 @@ def main() -> int:
     ap.add_argument("pytest_args", nargs="*", default=[],
                     help="extra args passed to every pytest invocation (after --)")
     args = ap.parse_args()
+
+    if serial_resource_profile():
+        # The profile is authoritative even for direct driver invocations.
+        os.environ['GRID_RBD_BUILD_JOBS'] = '2'
+        os.environ['GRID_SPLIT_COMPILE_JOBS'] = '1'
+        os.environ['GRID_SPLIT_SHARD_JOBS'] = '1'
 
     if args.warm_one:
         return warm_one_worker(args.warm_one)
@@ -1972,10 +2048,12 @@ def main() -> int:
             modules=[s.name for s in to_run if s.domain == "wrappers"],
             max_jobs=pool_jobs_n)
         if pool is not None:
+            schedule = ("finishes before GPU shards" if serial_resource_profile()
+                        else "overlaps GPU shard execution")
             print(f"=== compile pool: {len(pool_jobs)} job(s), "
                   f"{pool_jobs_n} slots, budget "
                   f"{pool.budget_kb // (1024 * 1024)} GiB "
-                  f"(overlaps GPU shard execution) ===")
+                  f"({schedule}) ===")
 
     import signal
 
@@ -1987,11 +2065,8 @@ def main() -> int:
     print(f"=== Phase B: per-shard runs -> {out_dir} ===")
     try:
         # Start workers only after cancellation handling and cleanup are active.
-        if pool is not None:
-            pool.run_async(pool_jobs)
-        results, paused = phase_run(to_run, out_dir, args.receipts,
-                                    args.pytest_args, prior,
-                                    pool=pool, prereqs=prereqs)
+        results, paused = run_phases(to_run, out_dir, args.receipts, args.pytest_args,
+                                    prior, pool, pool_jobs, prereqs)
     except KeyboardInterrupt:
         if pool is not None:
             pool.kill_all()

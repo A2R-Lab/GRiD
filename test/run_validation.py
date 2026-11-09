@@ -32,22 +32,12 @@ def validation_env():
             env.pop(key)
     env.update(OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1',
                NUMEXPR_NUM_THREADS='1', MAX_JOBS='1',
-               GRID_SPLIT_COMPILE_JOBS='3',
-               # W1 (2026-10-10): two GPU shards side by side. Pilot 2026-10-01 ran
-               # the four CUDA shards two at a time clean (~800 MiB VRAM each,
-               # 1.1–1.3x per-shard slowdown → ~1.8x throughput); the cuda caches
-               # are per-key flock'd and python_wrappers modules run one per
-               # process (jax claims 35 % of VRAM per process). The overnight
-               # 2026-10-10 run never admitted a pool job below 38 GiB available
-               # on the 62 GB box, so a second shard's inline nvcc fits.
-               GRID_SPLIT_SHARD_JOBS='2',
-               # Multi-unit robot.so builds (2026-10-10): each compile job runs up to
-               # GRID_RBD_BUILD_JOBS nvcc units in parallel. Measured: a humanoid at
-               # the default 8 units takes ~15 GB. The pool ledger now samples the
-               # whole process tree (schema 2), but the first run after a ledger
-               # reset predicts the 8 GB default, so keep units per job capped at 4
-               # (3 jobs x 4 units x ~2.5 GB ≈ 30 GB worst case on a 62 GB box).
-               GRID_RBD_BUILD_JOBS='4')
+               # Inline compilers in test shards are not pool-admitted. Finish
+               # the one-worker prewarm phase before running one shard at a
+               # time; enforce memory admission even for the first pool job.
+               GRID_SPLIT_RESOURCE_PROFILE='serial',
+               GRID_SPLIT_COMPILE_JOBS='1', GRID_SPLIT_SHARD_JOBS='1',
+               GRID_RBD_BUILD_JOBS='2')
     return env
 
 
@@ -175,7 +165,11 @@ def main():
     keys_path = ROOT / 'test/gpu-proof-header-keys.json'
     before = json.loads(keys_path.read_text())
     (out / 'header-keys.before.json').write_text(json.dumps(before, indent=2) + '\n')
+    env = validation_env()
     state = {'candidate': candidate, 'command': command, 'shard_dir': str(shard_dir), 'full': args.full,
+             'resource_profile': {key: env[key] for key in (
+                 'GRID_SPLIT_RESOURCE_PROFILE', 'GRID_SPLIT_COMPILE_JOBS',
+                 'GRID_SPLIT_SHARD_JOBS', 'GRID_RBD_BUILD_JOBS')},
              'status': 'waiting-for-lock'}
     def save():
         (out / 'state.json').write_text(json.dumps(state, indent=2) + '\n')
@@ -188,6 +182,8 @@ def main():
                 result = run_driver(command, log=log, lock=lock)
             state['driver_rc'] = result.returncode
             if result.returncode:
+                if result.returncode == 3 and (shard_dir / 'PAUSE').exists():
+                    state['status'] = 'paused'
                 raise RuntimeError(f'Driver rc={result.returncode}; evidence retained in {shard_dir}')
             if git('rev-parse', 'HEAD') != candidate:
                 raise RuntimeError('HEAD changed during recording')
@@ -215,7 +211,7 @@ def main():
                 verify_receipt(ROOT / 'gpu-proof.json', out)
                 state['status'] = 'verified'; save()
     except BaseException as exc:
-        state.update(status='failed', error=repr(exc)); save()
+        state.update(status='paused' if state['status'] == 'paused' else 'failed', error=repr(exc)); save()
         raise
 
 
