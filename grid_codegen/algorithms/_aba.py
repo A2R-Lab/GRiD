@@ -746,9 +746,11 @@ def gen_aba_inner(self):
                 vblk = self.robot.get_joint_index_v(jid)
                 for k in range(3):
                     self.gen_add_code_line("mx" + str(k) + "_peq_scaled<T>(&s_temp[" + str(72*n + jid6) + "], &s_va[" + str(jid6) + "], s_qd[" + str(vblk[k]) + "]);")
-            else:
+            elif self.robot.S_is_cardinal_by_id(jid):
                 s_ind = self.robot.get_S_index_by_id(jid); s_sign = self.robot.get_S_sign_by_id(jid)
                 self.gen_add_code_line("mx" + str(s_ind) + "_peq_scaled<T>(&s_temp[" + str(72*n + jid6) + "], &s_va[" + str(jid6) + "], static_cast<T>(" + str(s_sign) + ") * s_qd[" + str(_qd_idx(jid)) + "]);")
+            else:
+                self.gen_add_code_line("{ const T S_skew[6] = " + _aba_Svec_cpp(self.robot, jid) + "; mxS_general_peq_scaled<T>(&s_temp[" + str(72*n + jid6) + "], &s_va[" + str(jid6) + "], S_skew, s_qd[" + str(_qd_idx(jid)) + "]); }")
         self.gen_add_end_control_flow()
     elif HAS_SKEW:
         # Tier B: c[k] = crm(v[k]) * S[k] * qd[k] with a dense S column. Serial
@@ -923,17 +925,30 @@ def gen_aba_inner(self):
                     # cardinal single-DoF joint (possibly downstream of a spherical):
                     # scalar D path with SHIFTED tau slot. U = IA*S, d = S^T*U,
                     # u = tau - S^T*pA, Ia = IA - U U^T/d, pa = pA + Ia*c + U*u/d.
-                    s_ind = self.robot.get_S_index_by_id(jid)
-                    s_sign = self.robot.get_S_sign_by_id(jid)
+                    cardinal = self.robot.S_is_cardinal_by_id(jid)
+                    if cardinal:
+                        s_ind = self.robot.get_S_index_by_id(jid)
+                        s_sign = self.robot.get_S_sign_by_id(jid)
+                    else:
+                        self.gen_add_code_line("{ const T S_skew[6] = " + _aba_Svec_cpp(self.robot, jid) + ";")
                     _jd_bias = _aba_jd_bias_term_cpp(self, jid)
                     _jd_sub = (" - (" + _jd_bias + ")") if _jd_bias else ""
                     self.gen_add_parallel_loop("row", "6")
-                    self.gen_add_code_line("s_temp[" + str(84*n + jid6) + " + row] = (" + str(s_sign) + ") * s_temp[" + str(36*jid) + " + row + 6*" + str(s_ind) + "];")
+                    if cardinal:
+                        self.gen_add_code_line("s_temp[" + str(84*n + jid6) + " + row] = (" + str(s_sign) + ") * s_temp[" + str(36*jid) + " + row + 6*" + str(s_ind) + "];")
+                    else:
+                        self.gen_add_code_line("s_temp[" + str(84*n + jid6) + " + row] = dot_prod<T,6,6,1>(&s_temp[" + str(36*jid) + " + row], S_skew);")
                     self.gen_add_end_control_flow()
                     self.gen_add_sync()
                     self.gen_add_serial_ops()
-                    self.gen_add_code_line("s_temp[" + str(96*n + jid) + "] = (" + str(s_sign) + ") * s_temp[" + str(84*n + jid6 + s_ind) + "]" + _aba_armature_term_cpp(self, _aba_vslot(self, jid)) + ";")
-                    self.gen_add_code_line("s_temp[" + str(97*n + jid) + "] = s_tau[" + str(_tau_idx(jid)) + "]" + _jd_sub + " - (" + str(s_sign) + ") * s_temp[" + str(78*n + jid6 + s_ind) + "];")
+                    if cardinal:
+                        dterm = "(" + str(s_sign) + ") * s_temp[" + str(84*n + jid6 + s_ind) + "]"
+                        pterm = "(" + str(s_sign) + ") * s_temp[" + str(78*n + jid6 + s_ind) + "]"
+                    else:
+                        dterm = "dot_prod<T,6,1,1>(S_skew, &s_temp[" + str(84*n + jid6) + "])"
+                        pterm = "dot_prod<T,6,1,1>(S_skew, &s_temp[" + str(78*n + jid6) + "])"
+                    self.gen_add_code_line("s_temp[" + str(96*n + jid) + "] = " + dterm + _aba_armature_term_cpp(self, _aba_vslot(self, jid)) + ";")
+                    self.gen_add_code_line("s_temp[" + str(97*n + jid) + "] = s_tau[" + str(_tau_idx(jid)) + "]" + _jd_sub + " - " + pterm + ";")
                     self.gen_add_end_control_flow()
                     self.gen_add_sync()
                     self.gen_add_parallel_loop("ind", "36")
@@ -946,6 +961,8 @@ def gen_aba_inner(self):
                     self.gen_add_code_line("s_temp[" + str(90*n + jid6) + " + row] = s_temp[" + str(78*n + jid6) + " + row] + dot_prod<T,6,6,1>(&s_temp[" + str(36*(n+jid)) + " + row], &s_temp[" + str(72*n + jid6) + "]) + Uval;")
                     self.gen_add_end_control_flow()
                     self.gen_add_sync()
+                    if not cardinal:
+                        self.gen_add_code_line("}")
         elif level_has_skew:
             # Tier B (skew): U = IA*S_dense (full 6x6 * 6 matvec); d = S^T*U;
             # u = tau - S^T*pA. Loop over every joint in the level (branching ok);
@@ -1209,10 +1226,12 @@ def gen_aba_inner(self):
                     fblk = self.robot.get_joint_index_f(jid)
                     for k in range(3):
                         self.gen_add_code_line("s_va[" + str(6*n + jid6 + k) + "] += s_qdd[" + str(fblk[k]) + "];")
-                else:
+                elif self.robot.S_is_cardinal_by_id(jid):
                     s_ind_val = self.robot.get_S_index_by_id(jid)
                     s_sign_val = self.robot.get_S_sign_by_id(jid)
                     self.gen_add_code_line("s_va[" + str(6*n + jid6 + s_ind_val) + "] += (" + str(s_sign_val) + ") * s_qdd[" + str(_qd_idx(jid)) + "];")
+                else:
+                    self.gen_add_code_line("{ const T S_skew[6] = " + _aba_Svec_cpp(self.robot, jid) + "; for (int r = 0; r < 6; r++) { s_va[" + str(6*n + jid6) + " + r] += S_skew[r] * s_qdd[" + str(_qd_idx(jid)) + "]; } }")
             self.gen_add_end_control_flow()
             self.gen_add_sync()
             continue

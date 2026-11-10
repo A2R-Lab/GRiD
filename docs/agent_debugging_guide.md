@@ -4071,3 +4071,16 @@ reject subnormal entries. Test zero, the smallest normal value, a subnormal and
 a value that rounds to zero, including unchanged readback and epoch on rejection.
 Rebuild the native extension before exercising a changed C++ validator: an
 editable Python checkout does not rebuild the already loaded extension.
+
+### 7.z99 Mixed joint families must compose their motion subspaces (2026-11-10)
+
+The fixed-base ABA dispatch chooses the spherical path for the entire robot,
+not only the ball joint's level. Its scalar-joint branches assumed a cardinal
+axis, so a downstream skew joint raised in generation. The skew-only branch
+was not reached; changing that branch's armature index alone would not repair
+the mixed model. Use the existing dense S projection in the spherical path's
+bias, articulated-inertia and acceleration stages, retaining the parser's
+velocity slots. Keep cardinal emission unchanged. Permanent CPU and CUDA tests
+combine revolute, spherical and skew joints, with baked and runtime armature,
+and compare standalone ABA against the reference mass-matrix solve at several
+thread counts.
