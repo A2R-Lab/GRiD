@@ -3,6 +3,7 @@ finished generated source (no generator state). Split out of
 GRiDCodeGenerator.py (H4 hygiene wave, 2026-08-27) verbatim.
 """
 import re
+import warnings
 
 
 _HOST_CLAMP_HELPER = """\
@@ -52,8 +53,8 @@ def _extract_kernel_expr(before_launch):
 def _apply_host_thread_clamp_pass(code_str):
     lines = code_str.split("\n")
     # Overloaded kernels (same name, different parameter lists — e.g. the
-    # qdd-flag variants) make `&name<targs>` ambiguous; detect them by counting
-    # __global__ definitions per name and leave those launches unclamped.
+    # qdd-flag variants) make `&name<targs>` ambiguous. Retain the emitted
+    # signatures and select the unique arity of the actual host launch.
     _kernel_defs = {}
     for _i, _ln in enumerate(lines):
         if "__global__" not in _ln or _ln.lstrip().startswith("//"):
@@ -61,9 +62,12 @@ def _apply_host_thread_clamp_pass(code_str):
         for _j in range(_i, min(_i + 4, len(lines))):  # __global__ / __launch_bounds__ / void name(
             _m = re.search(r"\bvoid\s+([A-Za-z_]\w*)\s*\(", lines[_j])
             if _m:
-                _kernel_defs[_m.group(1)] = _kernel_defs.get(_m.group(1), 0) + 1
+                declaration = lines[_j].split("(", 1)[1].rsplit(")", 1)[0]
+                types = [re.sub(r"\b\w+\s*$", "", p).strip()
+                         for p in declaration.split(",") if p.strip()]
+                _kernel_defs.setdefault(_m.group(1), []).append(types)
                 break
-    _overloaded = {name for name, cnt in _kernel_defs.items() if cnt > 1}
+    _overloaded = {name for name, defs in _kernel_defs.items() if len(defs) > 1}
     # inject the helper right after the grid_workspace_slot() block (early in
     # namespace grid, before every host wrapper)
     out = []
@@ -95,23 +99,50 @@ def _apply_host_thread_clamp_pass(code_str):
                 skipped += 1
                 prev_expr = None
                 continue
+            target = "&" + expr
             if expr.split("<")[0] in _overloaded:
-                # &name<targs> is ambiguous across parameter-list overloads
-                out.append(ln)
-                skipped += 1
-                prev_expr = None
-                continue
+                # Count only the outer argument separators; casts and nested
+                # pointer expressions must not select a different overload.
+                arguments = ln.split(">>>", 1)[1].lstrip()
+                depth, arity = 0, 1
+                for char in arguments:
+                    if char == "(":
+                        depth += 1
+                    elif char == ")":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    elif char == "," and depth == 1:
+                        arity += 1
+                if depth != 0 or not arguments.startswith("("):
+                    raise RuntimeError("host-thread-clamp: malformed launch arguments")
+                signatures = [types for types in _kernel_defs[expr.split("<")[0]]
+                              if len(types) == arity]
+                if len(signatures) != 1:
+                    raise RuntimeError("host-thread-clamp: ambiguous kernel signature")
+                target = f"static_cast<void(*)({', '.join(signatures[0])})>(&{expr})"
             stripped = ln.lstrip()
             indent = ln[:len(ln) - len(stripped)]
-            if stripped.startswith("else") and expr == prev_expr and prev_var is not None:
+            if stripped.startswith("else") and target == prev_expr and prev_var is not None:
                 var = prev_var  # sibling branch launches the same instantiation
             else:
                 var_n += 1
                 var = f"_grid_thr_clamped_{var_n}"
-                out.append(f"{indent}dim3 {var} = grid_host_clamp_threads((const void*)&{expr}, thread_dimms);")
+                declaration = f"dim3 {var} = grid_host_clamp_threads((const void*){target}, thread_dimms);"
+                if stripped.startswith("else"):
+                    # A different overload needs its own declaration INSIDE
+                    # the else block, never between a closed if and its else.
+                    if "{" not in ln:
+                        raise RuntimeError("host-thread-clamp: else launch needs a block")
+                    rewritten_ln = ln.replace("thread_dimms", var)
+                    out.append(rewritten_ln.replace("{", "{ " + declaration + " ", 1))
+                    rewritten += 1
+                    prev_expr, prev_var = target, var
+                    continue
+                out.append(f"{indent}{declaration}")
             out.append(ln.replace("thread_dimms", var))
             rewritten += 1
-            prev_expr, prev_var = expr, var
+            prev_expr, prev_var = target, var
         else:
             if "<<<" not in ln:
                 # only a directly-adjacent else-branch may reuse the clamp var

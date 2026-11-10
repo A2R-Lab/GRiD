@@ -4084,3 +4084,18 @@ velocity slots. Keep cardinal emission unchanged. Permanent CPU and CUDA tests
 combine revolute, spherical and skew joints, with baked and runtime armature,
 and compare standalone ABA against the reference mass-matrix solve at several
 thread counts.
+
+### 7.z100 Host launch clamps must select overloaded kernels (2026-11-10)
+
+Taking the address of a kernel with qdd and no-qdd overloads is ambiguous.
+Leaving those launches unclamped made the native host path reject oversized
+blocks while the backend launchers clamped them. Select the unique emitted
+parameter signature for the launch's arity and cast its kernel pointer before
+querying the limit. Reject ambiguous signatures instead of silently omitting
+the clamp. Count nested call arguments correctly. An else branch that selects
+a different overload needs its declaration inside the branch, not between if
+and else. Generation tests inspect both branches; the full floating default
+registration test compiles them and compares oversized NumPy/JAX/PyTorch
+launches against a legal thread count. Keep that deliberate all-default build
+in the compile-hygiene exception list with its reason rather than reducing its
+algorithm coverage.
