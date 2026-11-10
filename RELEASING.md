@@ -155,7 +155,7 @@ writer and collection writer produce identical manifest bytes for identical IDs.
 
 ### Primary receipt resource profile
 
-The tracked launcher selects `GRID_SPLIT_RESOURCE_PROFILE=serial`: one prewarm
+The tracked launcher defaults to `GRID_SPLIT_RESOURCE_PROFILE=serial`: one prewarm
 worker, then one GPU shard at a time, with two compiler units per wrapper build.
 The complete prewarm phase drains before any shard starts. A cap on prewarm
 workers alone does not bound memory: tests can compile additional wrappers and
@@ -176,6 +176,31 @@ other workloads, and do not assume an unmeasured model is bounded by the default
 The primary launcher's profile overrides inherited concurrency settings.
 Direct split-driver runs retain the older overlap profile unless explicitly
 configured; the secondary/Jetson recipe below is separate.
+
+Both tracked profiles disable JAX GPU preallocation and record that setting,
+matching the correctness gates and pilot when JAX and PyTorch share a shard.
+The optional tracked `--resource-profile bounded-overlap` selects ceilings of
+two pool builds, one GPU shard and two compiler units per build. One atomic
+admission authority reserves memory for both the pool and the entire shard,
+including inline compilers. Only the unspent part of a reservation is deducted
+from live available memory: resident pages have already reduced that value.
+Unknown pool jobs retain the 16 GiB allowance before margin; measured jobs have
+an 8 GiB floor before margin and retain larger recorded peaks. Shards retain
+the full 16 GiB allowance. The 14 GiB host reserve is unchanged. Sampled
+process-tree peaks and headroom are logged in `memory-admission.jsonl`; short
+peaks between samples can still be missed. Admission is not a hard RSS limit.
+Pressure stops new work and drains owned compilers rather than killing peers.
+
+Select bounded overlap only after a cold-build, inline-cache-miss pilot on the
+same scope as serial demonstrates safe, useful throughput. This is validation
+throughput, not runtime performance evidence. A small pilot cannot certify the
+largest receipt models; those must still fit admission or stop. The resource
+profile does not change collection, numerical checks or expected skips.
+Resume requires the recorded profile. To fall back, let the old run exit and
+use a new output directory with `--full --resource-profile serial
+--fallback-from <old-launcher-directory>`. This records the transition and runs
+the full scope without carrying outcomes; the source must still match exactly.
+Never edit a frozen harness to obtain fallback.
 
 Insufficient admission writes `resource-blocked.json` and `PAUSE` in the split
 run directory and returns nonzero without merging receipts. Completed shard
@@ -200,15 +225,17 @@ Jetson and run `SPLIT=1 test/run_gpu_proof.sh` on a clean checkout of the releas
 tip; the driver detects the architecture, writes that row's path and never
 touches `gpu-proof.json`. Commit the receipt with its header-key ledger.
 The signing key stays on the desktop, so a Jetson records with
-`PYTEST_ARGS="--gpu-proof-signing-backend none"`; the driver's final merge then
-refuses the unsigned shards (rc=1 after a clean shard board) and writes neither
-the receipt nor the ledger. Copy the run directory's `receipts/` to the desktop,
-branch from the release tip, merge and sign there with
-`gpu-proof merge --out receipts/gpu-proof-sm87.json --repo . <shard receipts>`,
-build the ledger from the shard sidecars with the driver's
-`aggregate_header_keys` pointed at `receipts/gpu-proof-sm87-header-keys.json`,
-commit both, then run `make verify-all`: the policy refuses a dirty
-verification tree, and the receipt itself counts as dirt until it is committed.
+`PYTEST_ARGS="--gpu-proof-signing-backend none"`. The driver merges the unsigned
+shards into an unsigned run-directory receipt, verifies it under the everyday
+policy with `--allow-unsigned` (scope, expected skips, fingerprint, ancestry),
+writes the durations and the header-key ledger at the row's path, and the
+launcher refuses to publish the unsigned receipt. Copy the run directory's
+`receipts/` and the ledger to the desktop, branch from the release tip, merge and
+sign there with `gpu-proof merge --out receipts/gpu-proof-sm87.json --repo .
+<shard receipts>`, commit the receipt with the ledger, then run `make
+verify-all`: the policy refuses a dirty verification tree, and the receipt
+itself counts as dirt until it is committed. CI's verify job runs the same
+`--verify-all` over every committed secondary receipt.
 `make verify-all` verifies every receipt on disk, one line per architecture, and
 `test/receipt_integrity.py --table` prints their rows for the compatibility page.
 A release does not wait for secondary receipts; they are documentation of the

@@ -56,8 +56,8 @@ def emit_model_metadata(descriptor, namespace='grid'):
         values += ['joint_kind::'+j['kind'], str(j['owns_coordinates']).lower(),
                    str(j['axis'] is not None).lower(), str(j['pitch'] is not None).lower(),
                    str(mimic is not None).lower(), optional(None if mimic is None else mimic['leader_joint']),
-                   number(1.0 if mimic is None else mimic['multiplier']),
-                   number(0.0 if mimic is None else mimic['offset']), array(j['axis'] or [0., 0., 0.]),
+                   number(1.0 if mimic is None else (0.0 if mimic['multiplier'] is None else mimic['multiplier'])),
+                   number(0.0 if mimic is None else (0.0 if mimic['offset'] is None else mimic['offset'])), array(j['axis'] or [0., 0., 0.]),
                    number(j['pitch'] or 0.0), array(flat(j['T_parent_joint_zero']))]
         pos = j['limits']['position'] or [None, None]
         vel, effort = j['limits']['velocity'], j['limits']['effort']

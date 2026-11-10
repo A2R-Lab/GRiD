@@ -53,6 +53,14 @@ jobs:
             --policy test/gpu-proof-policy.yaml \
             --expected-skips test/gpu-proof-expected-skips.txt
 
+      - name: Verify secondary receipts
+        # Every receipt listed in test/gpu-proof-receipts.yaml that exists on
+        # disk (the Jetson rows under receipts/), each against its own
+        # expected-skips baseline. A missing secondary is reported, not an
+        # error; a stale or unsigned one fails here instead of only on the
+        # maintainer's `make verify-all`.
+        run: python test/receipt_integrity.py --verify-all
+
   cpu-lane:
     runs-on: ubuntu-latest
     strategy:

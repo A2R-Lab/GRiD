@@ -50,7 +50,11 @@ if not _GO2.exists():
 pytestmark = pytest.mark.python_wrappers
 
 _ALGOS = ["inverse_dynamics", "inverse_dynamics_gradient", "forward_dynamics",
-          "forward_dynamics_gradient", "minv", "end_effector_pose", "end_effector_pose_gradient"]
+          "forward_dynamics_gradient", "minv", "end_effector_pose", "end_effector_pose_gradient",
+          "integrator", "integrator_gradient"]
+_SPHERICAL_ALGOS = _ALGOS   # the integrators included: the wrapper names only the single-stage gradient cases on a spherical model
+_DT = 0.01       # the integrator step; euler, so q_{k+1} depends on (q, qd) and qd_{k+1} on (q, qd, u)
+_METHODS = ["inverse_dynamics", "forward_dynamics", "end_effector_pose", "integrator"]
 _EPS = 1e-6
 _NP = {"float32": np.float32, "float64": np.float64}
 # Gradient-vs-oracle tolerances as (rtol, atol per unit of the oracle's scale).
@@ -143,8 +147,17 @@ def _reference_cases(ref, h):
                                           np.float64).reshape(-1) for leaf in leaves])
         return float(w_pose @ pose)
 
+    w_x = np.linspace(-1.0, 1.0, h.num_joints + h.num_vel)
+
+    def integrator(q, qd, u):
+        # x_{k+1} = [q_{k+1} (nq); qd_{k+1} (nv)]: the cotangent of the next
+        # configuration crosses the chart's output map (integrator_state_cotangent).
+        x = ref.integrator(_normalized_q(q, layout), np.asarray(qd, np.float64),
+                           np.asarray(u, np.float64), _DT, integrator_type="euler")
+        return float(w_x @ np.asarray(x, np.float64).reshape(-1))
+
     return {"inverse_dynamics": inverse_dynamics, "forward_dynamics": forward_dynamics,
-            "end_effector_pose": end_effector_pose}
+            "end_effector_pose": end_effector_pose, "integrator": integrator}
 
 
 @pytest.fixture(scope="module")
@@ -169,15 +182,17 @@ def _jax_cases(h):
     nv = h.num_vel
     w_tau = np.linspace(0.5, 1.5, h.num_vel)
     w_pose = np.linspace(-1.0, 1.0, 6 * h.num_ees)
+    w_x = np.linspace(-1.0, 1.0, h.num_joints + h.num_vel)
     return {
         "inverse_dynamics": lambda q, qd, u: jnp.sum(jnp.asarray(w_tau) * h.inverse_dynamics(q[None], qd[None])[0]),
         "forward_dynamics": lambda q, qd, u: jnp.sum(jnp.asarray(w_tau) * h.forward_dynamics(q[None], qd[None], u[None])[0]),
         "end_effector_pose": lambda q, qd, u: jnp.sum(jnp.asarray(w_pose) * h.end_effector_pose(q[None]).reshape(-1)),
+        "integrator": lambda q, qd, u: jnp.sum(jnp.asarray(w_x) * h.integrator(q[None], qd[None], u[None], _DT, integrator_type="euler")[0]),
     }
 
 
 @pytest.mark.parametrize("unit_quat", [True, False], ids=["unit-quat", "non-unit-quat"])
-@pytest.mark.parametrize("method", ["inverse_dynamics", "forward_dynamics", "end_effector_pose"])
+@pytest.mark.parametrize("method", _METHODS)
 def test_jax_q_gradient_matches_ambient_finite_differences(jax_go2, ref_go2, dtype, method, unit_quat):
     import jax
     h = jax_go2
@@ -212,7 +227,7 @@ def torch_go2(dtype):
 
 
 @pytest.mark.parametrize("unit_quat", [True, False], ids=["unit-quat", "non-unit-quat"])
-@pytest.mark.parametrize("method", ["inverse_dynamics", "forward_dynamics", "end_effector_pose"])
+@pytest.mark.parametrize("method", _METHODS)
 def test_torch_q_gradient_matches_ambient_finite_differences(torch_go2, ref_go2, dtype, method, unit_quat):
     import torch
     h = torch_go2
@@ -221,6 +236,7 @@ def test_torch_q_gradient_matches_ambient_finite_differences(torch_go2, ref_go2,
     q64, qd64, u64 = (np.asarray(a, dtype=np.float64) for a in (q, qd, u))
     w_tau = torch.linspace(0.5, 1.5, h.num_vel, dtype=tdt, device="cuda")
     w_pose = torch.linspace(-1.0, 1.0, 6 * h.num_ees, dtype=tdt, device="cuda")
+    w_x = torch.linspace(-1.0, 1.0, h.num_joints + h.num_vel, dtype=tdt, device="cuda")
     T = lambda a: torch.as_tensor(a, dtype=tdt, device="cuda")
 
     def loss(qt, qdt, ut):
@@ -228,6 +244,8 @@ def test_torch_q_gradient_matches_ambient_finite_differences(torch_go2, ref_go2,
             return (w_tau * h.inverse_dynamics(qt[None], qdt[None])[0]).sum()
         if method == "forward_dynamics":
             return (w_tau * h.forward_dynamics(qt[None], qdt[None], ut[None])[0]).sum()
+        if method == "integrator":
+            return (w_x * h.integrator(qt[None], qdt[None], ut[None], _DT, integrator_type="euler")[0]).sum()
         return (w_pose * h.end_effector_pose(qt[None]).reshape(-1)).sum()
 
     if dtype == "float64":
@@ -242,6 +260,13 @@ def test_torch_q_gradient_matches_ambient_finite_differences(torch_go2, ref_go2,
     _assert_grad_close(g_q, fd_q, dtype,
                        err_msg=f"{method}: torch d/dq vs ambient central differences ({dtype})")
     assert abs(g_q[-1]) > 1e-6 and np.abs(g_q[3:7]).max() > 1e-6
+    if method != "end_effector_pose":
+        qdt = T(qd).requires_grad_(True)
+        loss(T(q), qdt, T(u)).backward()
+        g_qd = qdt.grad.detach().cpu().numpy()
+        fd_qd = _central_fd(lambda x: (float(loss(T(q), T(x), T(u)).item()) if dtype == "float64"
+                                       else _reference_cases(ref_go2, h)[method](q64, x, u64)), qd64)
+        _assert_grad_close(g_qd, fd_qd, dtype, err_msg=f"{method}: torch d/dqd vs central differences ({dtype})")
 
 
 # ---------------------------------------------------------------- mujoco convention (numpy driver)
@@ -260,7 +285,8 @@ def test_torch_q_gradient_matches_ambient_finite_differences(torch_go2, ref_go2,
 def numpy_go2_mjx():
     h = grid_rbd.register_robot("w01_probe_go2_mjx", str(_GO2), floating_base=True,
                                 algorithm_list=["inverse_dynamics", "inverse_dynamics_gradient",
-                                                "end_effector_pose", "end_effector_pose_gradient"],
+                                                "end_effector_pose", "end_effector_pose_gradient",
+                                                "integrator", "integrator_gradient"],
                                 enable_mujoco_kernels=True, output_convention="mujoco",
                                 dtype="float64")
     yield h
@@ -306,15 +332,19 @@ def test_mujoco_convention_q_cotangent_is_the_on_manifold_pullback(numpy_go2_mjx
 def spherical_handle(request, dtype):
     name, floating = request.param
     urdf = REPO_ROOT / "external/URDFParser/tests/fixtures" / f"{name}.urdf"
+    # The integrators are in: the spherical-joint gradient is single-stage only
+    # (a static assertion), and since 2026-11-03 the wrapper's gradient dispatch
+    # names only those cases on such a model (GRID_INTEGRATOR_GRADIENT_SINGLE_STAGE_ONLY),
+    # so the build compiles and the multi-stage codes fail at call time.
     h = grid_rbd.register_robot(f"w01_{name}_{floating}_{dtype}", str(urdf),
-                                floating_base=floating, algorithm_list=_ALGOS,
+                                floating_base=floating, algorithm_list=_SPHERICAL_ALGOS,
                                 enable_mujoco_kernels=False, max_batch_size=8, dtype=dtype)
     yield h, _reference(urdf, floating)
     h.close()
 
 
 @pytest.mark.parametrize("backend", ["jax", "torch"])
-@pytest.mark.parametrize("method", ["inverse_dynamics", "forward_dynamics", "end_effector_pose"])
+@pytest.mark.parametrize("method", _METHODS)
 def test_spherical_public_q_gradient(spherical_handle, dtype, backend, method):
     framework = pytest.importorskip(backend)
     if backend == "jax": framework.config.update("jax_enable_x64", True)
@@ -345,6 +375,7 @@ def test_spherical_public_q_gradient(spherical_handle, dtype, backend, method):
             def f(x):
                 if method == "end_effector_pose": out = h.end_effector_pose(x[None])
                 elif method == "inverse_dynamics": out = h.inverse_dynamics(x[None], T(qd)[None])
+                elif method == "integrator": out = h.integrator(x[None], T(qd)[None], T(u)[None], _DT, integrator_type="euler")
                 else: out = h.forward_dynamics(x[None], T(qd)[None], T(u)[None])
                 w = framework.linspace(.5, 1.5, out.numel(), dtype=out.dtype, device=out.device)
                 return (out.reshape(-1)*w).sum()
@@ -375,15 +406,45 @@ def _torch_weighted_reference(ref, h, method, q, qd, u):
                                          np.float64).reshape(-1) for leaf in leaves])
     elif method == "inverse_dynamics":
         out, *_ = ref.inverse_dynamics(qn, qd, GRAVITY=-9.81)
+    elif method == "integrator":
+        out = ref.integrator(qn, qd, u, _DT, integrator_type="euler")
     else:
         out = ref.forward_dynamics(qn, qd, u)
     out = np.asarray(out, np.float64).reshape(-1)
     return float(out @ np.linspace(.5, 1.5, out.size))
 
 
+def test_spherical_integrator_gradient_single_stage_only(spherical_handle, dtype):
+    """A spherical model's integrator gradient compiles with the single-stage
+    schemes only: euler, semi-implicit euler and constant acceleration run and
+    match the float64 reference at the normalized configuration, while the
+    multi-stage codes are refused at call time (rc=3) instead of failing the
+    build (2026-11-03; before that the build failed on the static assertion)."""
+    base, ref = spherical_handle
+    rng = np.random.default_rng(83)
+    q = rng.uniform(-.5, .5, base.num_joints)
+    for kind, qi, vi, nq, nv in base.configuration_layout:
+        if kind != "euclidean":
+            start = qi + (3 if kind == "floating" else 0)
+            q[start:start+4] /= np.linalg.norm(q[start:start+4])
+    qd = rng.uniform(-.2, .2, base.num_vel); u = rng.uniform(-.3, .3, base.num_vel)
+    tol = 1e-8 if dtype == "float64" else 2e-3
+    for it in ("euler", "semi_implicit_euler", "constant_acceleration"):
+        got = np.asarray(base.integrator_gradient(q[None].astype(_NP[dtype]), qd[None].astype(_NP[dtype]),
+                                                  u[None].astype(_NP[dtype]), _DT, integrator_type=it), np.float64)[0]
+        exp = np.asarray(ref.integrator_gradient(q, qd, u, _DT, integrator_type=it), np.float64)
+        scale = max(1.0, float(np.abs(exp).max()))
+        np.testing.assert_allclose(got, exp, rtol=0, atol=tol * scale, err_msg=it)
+    for it in ("midpoint", "rk4", "trapezoidal"):
+        with pytest.raises(RuntimeError):
+            base.integrator_gradient(q[None].astype(_NP[dtype]), qd[None].astype(_NP[dtype]),
+                                     u[None].astype(_NP[dtype]), _DT, integrator_type=it)
+
+
+
 @pytest.mark.fp64_alpha
 @pytest.mark.parametrize("backend", ["jax", "torch"])
-@pytest.mark.parametrize("method", ["inverse_dynamics", "end_effector_pose"])
+@pytest.mark.parametrize("method", ["inverse_dynamics", "end_effector_pose", "integrator"])
 def test_mujoco_public_autodiff_with_explicit_normalization(numpy_go2_mjx, backend, method):
     framework = pytest.importorskip(backend)
     if backend == "jax": framework.config.update("jax_enable_x64", True)
@@ -395,6 +456,7 @@ def test_mujoco_public_autodiff_with_explicit_normalization(numpy_go2_mjx, backe
             def loss(x):
                 normalized = xp.concatenate((x[:3], x[3:7]/xp.linalg.norm(x[3:7]), x[7:]))
                 if method == "inverse_dynamics": out = h.inverse_dynamics(normalized[None], qd[None])
+                elif method == "integrator": out = h.integrator(normalized[None], qd[None], xp.zeros_like(qd)[None], _DT, integrator_type="euler")
                 else: out = h.end_effector_pose(normalized[None])
                 return (out.reshape(-1)*xp.linspace(.5, 1.5, out.size)).sum()
             actual = np.asarray(framework.jit(framework.grad(loss))(q))
@@ -404,6 +466,7 @@ def test_mujoco_public_autodiff_with_explicit_normalization(numpy_go2_mjx, backe
             def loss(x):
                 normalized = framework.cat((x[:3], x[3:7]/framework.linalg.vector_norm(x[3:7]), x[7:]))
                 if method == "inverse_dynamics": out = h.inverse_dynamics(normalized[None], T(qd)[None])
+                elif method == "integrator": out = h.integrator(normalized[None], T(qd)[None], T(np.zeros_like(qd))[None], _DT, integrator_type="euler")
                 else: out = h.end_effector_pose(normalized[None])
                 w = framework.linspace(.5, 1.5, out.numel(), dtype=out.dtype, device=out.device)
                 return (out.reshape(-1)*w).sum()

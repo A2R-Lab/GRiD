@@ -183,9 +183,9 @@ WARM_MANIFEST: dict[str, list[dict]] = {
                         _r("fr3", max_batch_size=64),
                         _r("iiwa14", max_batch_size=64, floating_base=True,
                            enable_mujoco_kernels=False)],
-    # The receipt's one fp64 build (2026-10-15): the numpy iiwa14 canary in
-    # test_fp64_parity. Every other fp64 test is in the fp64_alpha lane
-    # (make test-fp64), outside the receipt, and builds on demand.
+    # The wrapper prewarm's one fp64 build: the numpy iiwa14 canary.
+    # Existing native momentum/branching-workspace double cells are also in
+    # the primary receipt. fp64_alpha-marked cells remain outside it.
     "test_fp64_parity": [_r("iiwa14", max_batch_size=8, dtype="float64"),
                          _r("iiwa14", max_batch_size=8)],
     "test_g1_plant_hessian_smoke": [_r("g1", max_batch_size=8,
@@ -215,8 +215,9 @@ WARM_MANIFEST: dict[str, list[dict]] = {
 # GRID_SPLIT_HARD_TIMEOUT. Historical expected COLD durations, for triage only:
 # g1_plant_hessian / joint_dynamics / runtime_joint_dynamics ~1-2h (multi-build,
 # incl. float64); ee_named_target_floating_multileaf ~2h (5 in-module builds).
-# Since 2026-10-15 the fp64 tier is alpha: the receipt's only fp64 build is the
-# test_fp64_parity canary above; fp64_alpha tests are not part of these shards.
+# Since 2026-10-15 the broad fp64 tier is alpha: test_fp64_parity is the wrapper
+# canary; existing native double contract cells retain their primary coverage.
+# fp64_alpha-marked tests are not part of these shards.
 
 
 def discover_modules() -> list[str]:
@@ -369,7 +370,13 @@ def collect_cuda_node_ids(cuda_k: str | None) -> list[str]:
 
 
 _LOCAL_CUDA_SOURCE = re.compile(r"""["']([A-Za-z0-9_]+\.(?:cu|cuh))["']""")
-_LOCAL_HELPER_IMPORT = re.compile(r"^from test\.cuda_equivalents\.([A-Za-z0-9_]+) import", re.MULTILINE)
+# Both spellings a module uses for a sibling helper: `from test.cuda_equivalents.x
+# import f` and `from test.cuda_equivalents import x [as y]` (2026-11-03: the
+# second form carried revolute_mimic_mechanics.py and test_cuda_frame_jacobian.py
+# outside their importers' fingerprints).
+_LOCAL_HELPER_IMPORT = re.compile(
+    r"^from test\.cuda_equivalents(?:\.([A-Za-z0-9_]+) import|"
+    r" import ([A-Za-z0-9_]+)(?:\s+as\s+[A-Za-z0-9_]+)?\s*$)", re.MULTILINE)
 
 
 def _module_local_dependencies(mod: str, exclude: set[str]) -> list[str]:
@@ -389,7 +396,8 @@ def _module_local_dependencies(mod: str, exclude: set[str]) -> list[str]:
     for name in _LOCAL_CUDA_SOURCE.findall(source):
         if (CUDA_DIR / name).is_file():
             found.append(f"test/cuda_equivalents/{name}")
-    for helper in _LOCAL_HELPER_IMPORT.findall(source):
+    for dotted, bare in _LOCAL_HELPER_IMPORT.findall(source):
+        helper = dotted or bare
         if helper != "cuda_harness" and (CUDA_DIR / f"{helper}.py").is_file():
             found.append(f"test/cuda_equivalents/{helper}.py")
     return [path for path in dict.fromkeys(found) if path not in exclude]
@@ -920,6 +928,34 @@ def refuse_cross_arch_carry(source: str, row) -> str | None:
             f"across architectures; record a fresh full pass on this GPU.")
 
 
+def shard_receipts_unsigned(paths: list[str]) -> bool | None:
+    """True when every shard receipt carries ``signature: null`` (recorded
+    with ``--gpu-proof-signing-backend none``, the Jetson route: the signing
+    key stays on the desktop), False when every shard is signed, None when
+    the shards disagree (a mixed set is refused before the merge)."""
+    flags: set[bool] = set()
+    for path in paths:
+        try:
+            flags.add(json.loads(Path(path).read_text()).get("signature") is None)
+        except (OSError, json.JSONDecodeError):
+            flags.add(False)
+    return flags.pop() if len(flags) == 1 else None
+
+
+def merge_command(shards: list[str], carry_from: str | None, unsigned: bool,
+                  out: Path, repo: Path = REPO_ROOT) -> list[str]:
+    """The ``gpu-proof merge`` invocation. Signed shards are authenticated
+    against the signer's GitHub keys (``--verify-inputs``); unsigned shards
+    merge into an unsigned receipt (``--unsigned``) that the desktop re-signs
+    from the same shards (guide 7.z83), so the scope gate, the durations and
+    the header-key ledger still run on the recording machine."""
+    cmd = [GPU_PROOF, "merge", "--unsigned" if unsigned else "--verify-inputs",
+           "--out", str(out), "--repo", str(repo)]
+    if carry_from:
+        cmd += ["--carry-from", carry_from]
+    return cmd + list(shards)
+
+
 def aggregate_header_keys(rdir: Path, results: list[dict],
                           merged_receipt: Path | None = None) -> None:
     """A4 (2026-09-11): fold the per-shard header content-key sidecars
@@ -1314,7 +1350,7 @@ def shard_jobs() -> int:
     shard's INLINE nvcc builds are NOT pool-admitted. The primary receipt
     therefore selects the serial resource profile: one shard, no overlap with
     prewarming, and a separate memory admission before each shard."""
-    if serial_resource_profile():
+    if serial_resource_profile() or bounded_overlap_profile():
         return 1
     raw = os.environ.get("GRID_SPLIT_SHARD_JOBS", "1")
     try:
@@ -1345,9 +1381,13 @@ SERIAL_MARGIN = 1.3
 
 def serial_resource_profile() -> bool:
     profile = os.environ.get("GRID_SPLIT_RESOURCE_PROFILE", "overlap")
-    if profile not in ("serial", "overlap"):
+    if profile not in ("serial", "overlap", "bounded-overlap"):
         raise SystemExit(f"Unknown GRID_SPLIT_RESOURCE_PROFILE: {profile!r}")
     return profile == "serial"
+
+
+def bounded_overlap_profile() -> bool:
+    return os.environ.get("GRID_SPLIT_RESOURCE_PROFILE") == "bounded-overlap"
 
 
 def pause_for_resources(out_dir: Path, reason: str) -> None:
@@ -1387,12 +1427,31 @@ def run_phases(shards, out_dir, receipts, extra_args, prior, pool, pool_jobs, pr
     if serial_resource_profile():
         print("Resource profile: serial prewarm then serial shards; two wrapper compiler units; "
               "strict memory admission (no first-job bypass)", flush=True)
+    admission = None
+    if bounded_overlap_profile():
+        import compile_sched
+        from resource_admission import MemoryAdmission
+        admission = MemoryAdmission(floor_kb=GPU_PHASE_FLOOR_KB,
+            available=compile_sched.mem_available_kb, rss=compile_sched.session_tree_rss_kb,
+            log_path=out_dir / "memory-admission.jsonl")
+        if pool is not None:
+            pool.admission = admission
+        print("Resource profile: bounded-overlap; at most 2 pool jobs / 1 shard / 2 units; "
+              "one reservation authority includes inline builds", flush=True)
     if pool is not None:
         thread = pool.run_async(pool_jobs)
         if serial_resource_profile() and finish_compile_phase(pool, thread, out_dir):
             return list(prior), True
-    return phase_run(shards, out_dir, receipts, extra_args, prior,
-                     pool=pool, prereqs=prereqs)
+    kwargs = dict(pool=pool, prereqs=prereqs)
+    if admission is not None:
+        kwargs['admission'] = admission
+    result = phase_run(shards, out_dir, receipts, extra_args, prior, **kwargs)
+    if admission is not None and pool is not None:
+        # Pressure is drain-only. Do not let main's emergency cleanup kill a
+        # healthy owned compiler merely because no further shard can start.
+        pool.stop()
+        thread.join()
+    return result
 
 
 def cuda_worker_env() -> dict[str, str]:
@@ -1499,9 +1558,9 @@ def build_compile_pool(out_dir: Path, *, warm: bool, cuda_shards: list,
         print(f"  compile ledger: schema {compile_sched.LEDGER_SCHEMA} (process-tree "
               f"peaks); {ledger.dropped_legacy} legacy ru_maxrss entries dropped — "
               f"unmeasured jobs predict {compile_sched.DEFAULT_PEAK_KB >> 20} GB until re-measured")
-    options = (dict(max_jobs=1, floor_kb=GPU_PHASE_FLOOR_KB,
+    options = (dict(max_jobs=1 if serial_resource_profile() else 2, floor_kb=GPU_PHASE_FLOOR_KB,
                     default_peak_kb=SERIAL_PEAK_KB, margin=SERIAL_MARGIN,
-                    strict_memory=True) if serial_resource_profile()
+                    strict_memory=True) if serial_resource_profile() or bounded_overlap_profile()
                else dict(max_jobs=max_jobs))
     pool = compile_sched.RamScheduler(ledger, label="pool", **options)
     # Unblock earlier shards before warming unrelated robots alphabetically;
@@ -1692,7 +1751,7 @@ def _finish_shard(run: _ShardRun, rc, results: list[dict], out_dir: Path) -> Non
 def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
               extra_args: list[str],
               prior_results: list[dict],
-              pool=None, prereqs: dict | None = None) -> tuple[list[dict], bool]:
+              pool=None, prereqs: dict | None = None, admission=None) -> tuple[list[dict], bool]:
     """Returns (results incl. prior clean rows, paused).
 
     Runs ``shard_jobs()`` shards at a time (see that docstring for why >1 is
@@ -1713,6 +1772,13 @@ def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
     paused = False
     try:
         while pending or running:
+            if admission is not None and not paused:
+                if admission.pressure() or (pool is not None and pool.resource_blocked):
+                    reason = admission.blocked or pool.resource_blocked
+                    pause_for_resources(out_dir, reason)
+                    if pool is not None:
+                        pool.stop()
+                    paused = True
             if not paused and (out_dir / "PAUSE").exists():
                 paused = True
                 print(f"[{datetime.now():%H:%M:%S}] PAUSE file present — no new "
@@ -1731,12 +1797,28 @@ def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
                 spec = next_ready_shard(pending, pool, prereqs)
                 if spec is None:
                     break
+                token = "shard:" + spec.name
+                if admission is not None:
+                    if not admission.reserve(token, int(SERIAL_PEAK_KB * SERIAL_MARGIN)):
+                        if not admission.active:
+                            pause_for_resources(out_dir, admission.refusal)
+                            paused = True
+                            if pool is not None:
+                                pool.stop()
+                        break
                 if serial_resource_profile():
                     print(f"[resource] admit shard {spec.name}: available {available} KiB, "
                           f"required {required} KiB", flush=True)
                 waiting = False
                 pending.remove(spec)
-                run = _launch_shard(spec, out_dir, receipts, extra_args)
+                try:
+                    run = _launch_shard(spec, out_dir, receipts, extra_args)
+                except BaseException:
+                    if admission is not None:
+                        admission.release(token)
+                    raise
+                if admission is not None:
+                    admission.attach(token, run.proc.pid)
                 # Resolve the owner on each poll: workers can finish or start
                 # while this shard waits for their content-key lock.
                 run.compile_owners = lambda: (
@@ -1753,12 +1835,18 @@ def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
                 # A bounded wait lets a later shard become runnable first and
                 # keeps PAUSE responsive.
                 need = pending_compile_jobs(pending[0], pool, prereqs)
-                pool.done_events[need[0]].wait(timeout=0.25)
+                if need:
+                    pool.done_events[need[0]].wait(timeout=0.25)
+                else:
+                    # Ready shard waiting for a pool reservation to drain.
+                    time.sleep(.25)
                 continue
             finished = [(run, rc) for run in running for rc in (run.poll(),) if rc is not None]
             for run, rc in finished:
                 running.remove(run)
                 run.close()
+                if admission is not None:
+                    admission.release("shard:" + run.spec.name)
                 _finish_shard(run, rc, results, out_dir)
             if not finished:
                 time.sleep(5)
@@ -1766,6 +1854,8 @@ def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
         for run in running:
             _kill_group(run.proc)
             run.close()
+            if admission is not None:
+                admission.release("shard:" + run.spec.name)
         raise
     return results, paused
 
@@ -1856,10 +1946,10 @@ def main() -> int:
             print(f"Manifest matches all {len(ids)} scheduled IDs")
         return 0
 
-    if serial_resource_profile():
+    if serial_resource_profile() or bounded_overlap_profile():
         # The profile is authoritative even for direct driver invocations.
         os.environ['GRID_RBD_BUILD_JOBS'] = '2'
-        os.environ['GRID_SPLIT_COMPILE_JOBS'] = '1'
+        os.environ['GRID_SPLIT_COMPILE_JOBS'] = '1' if serial_resource_profile() else '2'
         os.environ['GRID_SPLIT_SHARD_JOBS'] = '1'
 
     if args.warm_one:
@@ -2202,33 +2292,40 @@ def main() -> int:
         shards = sorted(str(p) for p in rdir.glob("*.json")) if rdir.exists() else []
         if shards:
             merged = out_dir / "gpu-proof.json"
-            # --verify-inputs (pytest-gpu-proof 0.4.1): every shard receipt's
-            # signature is authenticated against the signer's GitHub keys
-            # before it can contribute to the merged receipt.
-            cmd = [GPU_PROOF, "merge", "--verify-inputs",
-                   "--out", str(merged), "--repo", str(REPO_ROOT)]
-            if args.receipts_carry_from:
-                cmd += ["--carry-from", args.receipts_carry_from]
-            cmd += shards
-            mrc = subprocess.run(cmd, cwd=REPO_ROOT).returncode
-            print(f"  receipts: merged {len(shards)} shard(s) -> {merged} (rc={mrc})"
-                  + (f" carrying from {args.receipts_carry_from}"
-                     if args.receipts_carry_from else ""))
+            unsigned = shard_receipts_unsigned(shards)
+            if unsigned is None:
+                print("  receipts: shard receipts disagree on signing (some "
+                      "signed, some unsigned); refusing to merge")
+                mrc = 1
+            else:
+                cmd = merge_command(shards, args.receipts_carry_from, unsigned,
+                                    merged)
+                mrc = subprocess.run(cmd, cwd=REPO_ROOT).returncode
+                print(f"  receipts: merged {len(shards)} shard(s) -> {merged} "
+                      f"(rc={mrc}{', unsigned' if unsigned else ''})"
+                      + (f" carrying from {args.receipts_carry_from}"
+                         if args.receipts_carry_from else ""))
             if mrc == 0:
                 # The ONE scope/policy gate, fired here while the tree is
                 # still byte-clean (header keys are written below): the
                 # everyday policy's required_test_manifest (exact collection),
-                # expected-skips baseline, fingerprint, ancestry, signature.
-                # A short or drifted collection fails HERE, before the
-                # launcher promotes the receipt. --full runs re-verify under
-                # the release policy at --finalize.
+                # expected-skips baseline, fingerprint, ancestry, signature
+                # (an unsigned merge is accepted loudly and re-signed on the
+                # desktop; the launcher never publishes it).
                 vcmd = [GPU_PROOF, "verify", "--receipt", str(merged),
                         "--repo", str(REPO_ROOT),
                         "--policy", str(REPO_ROOT / "test/gpu-proof-policy.yaml"),
                         "--expected-skips",
                         str(REPO_ROOT / receipt_row.expected_skips)]
+                if unsigned:
+                    vcmd.append("--allow-unsigned")
                 vrc = subprocess.run(vcmd, cwd=REPO_ROOT).returncode
                 print(f"  receipts: everyday-policy verify of {merged} (rc={vrc})")
+                if unsigned and vrc == 0:
+                    print(f"  receipts: UNSIGNED merge verified; re-sign on the "
+                          f"desktop from the same shards: gpu-proof merge --out "
+                          f"{receipt_row.receipt} --repo . {rdir}/*.json and "
+                          f"commit it with {receipt_row.header_keys}")
                 mrc = vrc
             if mrc != 0:
                 bad += 1

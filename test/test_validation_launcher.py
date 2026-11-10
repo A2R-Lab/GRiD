@@ -78,6 +78,47 @@ def test_dry_launcher_has_no_output_or_lock_side_effects(launch):
     assert not launcher.LOCK_PATH.exists()
 
 
+def test_bounded_profile_is_explicit_and_persisted(launch):
+    launch.invoke('--execute', '--full', '--resource-profile', 'bounded-overlap')
+    assert launch.status()['resource_profile'] == {
+        'GRID_SPLIT_RESOURCE_PROFILE': 'bounded-overlap', 'GRID_SPLIT_COMPILE_JOBS': '2',
+        'GRID_SPLIT_SHARD_JOBS': '1', 'GRID_RBD_BUILD_JOBS': '2',
+        'XLA_PYTHON_CLIENT_PREALLOCATE': 'false'}
+
+
+def test_resume_cannot_silently_switch_resource_profiles(launch):
+    launch.out.mkdir()
+    shards = launch.out / 'shards'
+    shards.mkdir()
+    (launch.out / 'state.json').write_text(json.dumps(dict(candidate='candidate',
+        full=True, resource_profile={'GRID_SPLIT_RESOURCE_PROFILE': 'bounded-overlap'})))
+    with pytest.raises(SystemExit, match='profile'):
+        launch.invoke('--execute', '--full', '--resume', str(shards))
+    assert not launch.calls
+
+
+def test_serial_fallback_is_fresh_and_does_not_carry_results(launch, tmp_path):
+    prior = tmp_path / 'prior'
+    prior.mkdir()
+    (prior / 'state.json').write_text(json.dumps(dict(candidate='candidate', full=True,
+        status='paused', resource_profile={'GRID_SPLIT_RESOURCE_PROFILE': 'bounded-overlap'})))
+    launch.invoke('--execute', '--full', '--fallback-from', str(prior))
+    assert launch.status()['fallback']['strategy'] == 'fresh-full-no-carries'
+    command = launch.status()['command']
+    assert '--resume' not in command and '--refresh-from' not in command
+    assert launch.status()['shard_dir'] == str(launch.out / 'shards')
+
+
+@pytest.mark.parametrize('status', ['running', 'verified', 'awaiting-evidence-commit'])
+def test_fallback_refuses_active_or_completed_source(launch, tmp_path, status):
+    prior = tmp_path / 'prior'
+    prior.mkdir()
+    (prior / 'state.json').write_text(json.dumps(dict(candidate='candidate', full=True, status=status)))
+    with pytest.raises(SystemExit, match='stopped full run'):
+        launch.invoke('--execute', '--full', '--fallback-from', str(prior))
+    assert not launch.out.exists()
+
+
 def test_real_sigterm_forwards_to_owned_driver_and_waits(tmp_path):
     """Real CPU subprocesses, no receipt or GPU; parent SIGTERM leaves no child."""
     import os
@@ -153,7 +194,8 @@ def test_resource_pause_is_not_failed_or_promoted_evidence(launch):
     assert launch.receipt()['identity'] == 'original'
     assert launch.status()['resource_profile'] == {
         'GRID_SPLIT_RESOURCE_PROFILE': 'serial', 'GRID_SPLIT_COMPILE_JOBS': '1',
-        'GRID_SPLIT_SHARD_JOBS': '1', 'GRID_RBD_BUILD_JOBS': '2'}
+        'GRID_SPLIT_SHARD_JOBS': '1', 'GRID_RBD_BUILD_JOBS': '2',
+        'XLA_PYTHON_CLIENT_PREALLOCATE': 'false'}
 
 
 def test_busy_lock_never_starts_driver(launch):
@@ -266,11 +308,13 @@ def test_validation_env_strips_overrides_and_sets_receipt_knobs(monkeypatch):
     monkeypatch.setenv('GRID_SPLIT_RESOURCE_PROFILE', 'overlap')
     monkeypatch.setenv('GRID_CUDA_KIN_THREADS', '1')
     monkeypatch.setenv('PYTEST_ADDOPTS', '-x')
+    monkeypatch.setenv('XLA_PYTHON_CLIENT_PREALLOCATE', 'true')
     env = launcher.validation_env()
     assert env['GRID_SPLIT_RESOURCE_PROFILE'] == 'serial'
     assert env['GRID_SPLIT_SHARD_JOBS'] == '1'
     assert env['GRID_SPLIT_COMPILE_JOBS'] == '1'
     assert env['GRID_RBD_BUILD_JOBS'] == '2'
+    assert env['XLA_PYTHON_CLIENT_PREALLOCATE'] == 'false'
     assert 'GRID_CUDA_KIN_THREADS' not in env and 'PYTEST_ADDOPTS' not in env
 
 

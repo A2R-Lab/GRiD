@@ -136,6 +136,7 @@ struct CAbi {
     using fn_q_qd_out_t     = int (*)(long long, const CT*, const CT*, CT*, int);
     using fn_frame_jac_t    = int (*)(long long, const CT*, CT*, int, int, int);
     using fn_frame_jac_dot_t = int (*)(long long, const CT*, const CT*, CT*, int, int, int);
+    using fn_frame_acc_t    = int (*)(long long, const CT*, const CT*, const CT*, CT*, int, int, int);
     using fn_ee_runtime_t   = int (*)(long long, const CT*, CT*, int, int, const CT*);
     using fn_tool_fext_t    = int (*)(long long, const CT*, const CT*, int, const CT*, CT*, int);  // grid_rbd_tool_fext
     using fn_contact_fext_t = int (*)(long long, const CT*, const CT*, CT*, int);                   // grid_rbd_contact_fext
@@ -187,6 +188,7 @@ class RunnerT {
     using fn_q_qd_out_t = typename CAbi<CT>::fn_q_qd_out_t;
     using fn_frame_jac_t = typename CAbi<CT>::fn_frame_jac_t;
     using fn_frame_jac_dot_t = typename CAbi<CT>::fn_frame_jac_dot_t;
+    using fn_frame_acc_t = typename CAbi<CT>::fn_frame_acc_t;
     using fn_ee_runtime_t = typename CAbi<CT>::fn_ee_runtime_t;
     using fn_tool_fext_t = typename CAbi<CT>::fn_tool_fext_t;
     using fn_contact_fext_t = typename CAbi<CT>::fn_contact_fext_t;
@@ -268,6 +270,10 @@ public:
         fn_coriolis_matrix_mujoco_ = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_coriolis_matrix_mujoco"));
         fn_frame_jacobian_mujoco_  = reinterpret_cast<fn_frame_jac_t>(opt_sym("grid_rbd_frame_jacobian_mujoco"));
         fn_frame_jacobian_dot_mujoco_ = reinterpret_cast<fn_frame_jac_dot_t>(opt_sym("grid_rbd_frame_jacobian_dot_mujoco"));
+        fn_frame_velocity_mujoco_     = reinterpret_cast<fn_frame_jac_dot_t>(opt_sym("grid_rbd_frame_velocity_mujoco"));
+        fn_frame_acceleration_mujoco_ = reinterpret_cast<fn_frame_acc_t>(opt_sym("grid_rbd_frame_acceleration_mujoco"));
+        fn_frame_velocity_gradient_mujoco_     = reinterpret_cast<fn_frame_jac_dot_t>(opt_sym("grid_rbd_frame_velocity_gradient_mujoco"));
+        fn_frame_acceleration_gradient_mujoco_ = reinterpret_cast<fn_frame_acc_t>(opt_sym("grid_rbd_frame_acceleration_gradient_mujoco"));
         fn_osc_inertia_mujoco_     = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_osc_inertia_mujoco"));
         // floating-base mjx value kernels (optional; present only on a floating .so)
         fn_minv_mujoco_      = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_minv_mujoco"));
@@ -342,6 +348,10 @@ public:
         fn_nonlinear_effects_mujoco_ = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_nonlinear_effects_mujoco"));  // floating only
         fn_frame_jacobian_     = reinterpret_cast<fn_frame_jac_t>(require_sym("grid_rbd_frame_jacobian"));
         fn_frame_jacobian_dot_ = reinterpret_cast<fn_frame_jac_dot_t>(require_sym("grid_rbd_frame_jacobian_dot"));
+        fn_frame_velocity_     = reinterpret_cast<fn_frame_jac_dot_t>(require_sym("grid_rbd_frame_velocity"));
+        fn_frame_acceleration_ = reinterpret_cast<fn_frame_acc_t>(require_sym("grid_rbd_frame_acceleration"));
+        fn_frame_velocity_gradient_     = reinterpret_cast<fn_frame_jac_dot_t>(require_sym("grid_rbd_frame_velocity_gradient"));
+        fn_frame_acceleration_gradient_ = reinterpret_cast<fn_frame_acc_t>(require_sym("grid_rbd_frame_acceleration_gradient"));
         fn_osc_inertia_        = reinterpret_cast<fn_q_out_t>(require_sym("grid_rbd_osc_inertia"));
         fn_ee_pose_runtime_      = reinterpret_cast<fn_ee_runtime_t>(require_sym("grid_rbd_end_effector_pose_runtime"));
         fn_ee_pose_grad_runtime_ = reinterpret_cast<fn_ee_runtime_t>(require_sym("grid_rbd_end_effector_pose_gradient_runtime"));
@@ -1346,6 +1356,141 @@ public:
         return out;
     }
 
+    // frame_velocity(q, qd, target_jid, reference_frame) -> (batch, 6)
+    py::array_t<CT> frame_velocity(arr_t q, arr_t qd, int target_jid, int reference_frame)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
+        py::array_t<CT> out({batch, 6});
+        int rc = fn_frame_velocity_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_velocity",
+            "frame_velocity not built into this robot .so — add "
+            "'frame_velocity' to algorithm_list in register_robot() and rebuild"));
+        return out;
+    }
+
+    bool has_frame_velocity_mujoco() const { return fn_frame_velocity_mujoco_ != nullptr; }
+    // frame_velocity_mujoco(q, qd, target_jid, reference_frame) -> (batch, 6)
+    py::array_t<CT> frame_velocity_mujoco(arr_t q, arr_t qd, int target_jid, int reference_frame)
+    {
+        if (!fn_frame_velocity_mujoco_) throw std::runtime_error(
+            "frame_velocity_mujoco unavailable: floating-base .so with "
+            "frame_jacobian only");
+        int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
+        py::array_t<CT> out({batch, 6});
+        int rc = fn_frame_velocity_mujoco_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_velocity_mujoco",
+            nullptr));
+        return out;
+    }
+
+    // frame_acceleration(q, qd, qdd_opt, target_jid, reference_frame) -> (batch, 6)
+    py::array_t<CT> frame_acceleration(arr_t q, arr_t qd, py::object qdd_opt, int target_jid, int reference_frame)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
+        const CT* qdd_ptr = nullptr;
+        if (!qdd_opt.is_none()) {
+            auto qdd = qdd_opt.cast<arr_t>();
+            check_array_2d(qdd, batch, num_vel_, "qdd");
+            qdd_ptr = qdd.data();
+        }
+        py::array_t<CT> out({batch, 6});
+        int rc = fn_frame_acceleration_(ctx_id_, q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, target_jid, reference_frame);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_acceleration",
+            "frame_acceleration not built into this robot .so — add "
+            "'frame_acceleration' to algorithm_list in register_robot() and "
+            "rebuild"));
+        return out;
+    }
+
+    bool has_frame_acceleration_mujoco() const { return fn_frame_acceleration_mujoco_ != nullptr; }
+    // frame_acceleration_mujoco(q, qd, qdd_opt, target_jid, reference_frame) -> (batch, 6)
+    py::array_t<CT> frame_acceleration_mujoco(arr_t q, arr_t qd, py::object qdd_opt, int target_jid, int reference_frame)
+    {
+        if (!fn_frame_acceleration_mujoco_) throw std::runtime_error(
+            "frame_acceleration_mujoco unavailable: floating-base .so with "
+            "frame_jacobian only");
+        int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
+        const CT* qdd_ptr = nullptr;
+        if (!qdd_opt.is_none()) {
+            auto qdd = qdd_opt.cast<arr_t>();
+            check_array_2d(qdd, batch, num_vel_, "qdd");
+            qdd_ptr = qdd.data();
+        }
+        py::array_t<CT> out({batch, 6});
+        int rc = fn_frame_acceleration_mujoco_(ctx_id_, q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, target_jid, reference_frame);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_acceleration_mujoco",
+            nullptr));
+        return out;
+    }
+
+    // frame_velocity_gradient(q, qd, target_jid, reference_frame) -> (batch, 12 * num_vel_)
+    py::array_t<CT> frame_velocity_gradient(arr_t q, arr_t qd, int target_jid, int reference_frame)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
+        py::array_t<CT> out({batch, 12 * num_vel_});
+        int rc = fn_frame_velocity_gradient_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_velocity_gradient",
+            "frame_velocity_gradient not built into this robot .so — add "
+            "'frame_velocity_gradient' to algorithm_list in register_robot() "
+            "and rebuild"));
+        return out;
+    }
+
+    bool has_frame_velocity_gradient_mujoco() const { return fn_frame_velocity_gradient_mujoco_ != nullptr; }
+    // frame_velocity_gradient_mujoco(q, qd, target_jid, reference_frame) -> (batch, 12 * num_vel_)
+    py::array_t<CT> frame_velocity_gradient_mujoco(arr_t q, arr_t qd, int target_jid, int reference_frame)
+    {
+        if (!fn_frame_velocity_gradient_mujoco_) throw std::runtime_error(
+            "frame_velocity_gradient_mujoco unavailable: floating-base .so with "
+            "frame_jacobian only");
+        int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
+        py::array_t<CT> out({batch, 12 * num_vel_});
+        int rc = fn_frame_velocity_gradient_mujoco_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_velocity_gradient_mujoco",
+            nullptr));
+        return out;
+    }
+
+    // frame_acceleration_gradient(q, qd, qdd_opt, target_jid, reference_frame) -> (batch, 18 * num_vel_)
+    py::array_t<CT> frame_acceleration_gradient(arr_t q, arr_t qd, py::object qdd_opt, int target_jid, int reference_frame)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
+        const CT* qdd_ptr = nullptr;
+        if (!qdd_opt.is_none()) {
+            auto qdd = qdd_opt.cast<arr_t>();
+            check_array_2d(qdd, batch, num_vel_, "qdd");
+            qdd_ptr = qdd.data();
+        }
+        py::array_t<CT> out({batch, 18 * num_vel_});
+        int rc = fn_frame_acceleration_gradient_(ctx_id_, q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, target_jid, reference_frame);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_acceleration_gradient",
+            "frame_acceleration_gradient not built into this robot .so — add "
+            "'frame_acceleration_gradient' to algorithm_list in "
+            "register_robot() and rebuild"));
+        return out;
+    }
+
+    bool has_frame_acceleration_gradient_mujoco() const { return fn_frame_acceleration_gradient_mujoco_ != nullptr; }
+    // frame_acceleration_gradient_mujoco(q, qd, qdd_opt, target_jid, reference_frame) -> (batch, 18 * num_vel_)
+    py::array_t<CT> frame_acceleration_gradient_mujoco(arr_t q, arr_t qd, py::object qdd_opt, int target_jid, int reference_frame)
+    {
+        if (!fn_frame_acceleration_gradient_mujoco_) throw std::runtime_error(
+            "frame_acceleration_gradient_mujoco unavailable: floating-base .so "
+            "with frame_jacobian only");
+        int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
+        const CT* qdd_ptr = nullptr;
+        if (!qdd_opt.is_none()) {
+            auto qdd = qdd_opt.cast<arr_t>();
+            check_array_2d(qdd, batch, num_vel_, "qdd");
+            qdd_ptr = qdd.data();
+        }
+        py::array_t<CT> out({batch, 18 * num_vel_});
+        int rc = fn_frame_acceleration_gradient_mujoco_(ctx_id_, q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, target_jid, reference_frame);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_acceleration_gradient_mujoco",
+            nullptr));
+        return out;
+    }
+
     // generalized_gravity(q, gravity) -> (batch, num_vel_)
     py::array_t<CT> generalized_gravity(arr_t q, CT gravity)
     {
@@ -2269,6 +2414,10 @@ private:
     fn_q_qd_out_grav_t fn_coriolis_matrix_mujoco_ = nullptr;
     fn_frame_jac_t     fn_frame_jacobian_mujoco_  = nullptr;
     fn_frame_jac_dot_t fn_frame_jacobian_dot_mujoco_ = nullptr;
+    fn_frame_jac_dot_t fn_frame_velocity_mujoco_     = nullptr;
+    fn_frame_acc_t     fn_frame_acceleration_mujoco_ = nullptr;
+    fn_frame_jac_dot_t fn_frame_velocity_gradient_mujoco_     = nullptr;
+    fn_frame_acc_t     fn_frame_acceleration_gradient_mujoco_ = nullptr;
     fn_q_out_t         fn_osc_inertia_mujoco_     = nullptr;
     fn_q_out_t          fn_minv_mujoco_            = nullptr;
     fn_q_out_t         fn_com_mujoco_             = nullptr;
@@ -2332,6 +2481,10 @@ private:
     fn_q_qd_out_grav_t fn_nonlinear_effects_mujoco_ = nullptr;  // floating mjx (optional)
     fn_frame_jac_t     fn_frame_jacobian_      = nullptr;
     fn_frame_jac_dot_t fn_frame_jacobian_dot_  = nullptr;
+    fn_frame_jac_dot_t fn_frame_velocity_      = nullptr;
+    fn_frame_acc_t     fn_frame_acceleration_  = nullptr;
+    fn_frame_jac_dot_t fn_frame_velocity_gradient_     = nullptr;
+    fn_frame_acc_t     fn_frame_acceleration_gradient_ = nullptr;
     fn_q_out_t         fn_osc_inertia_         = nullptr;
     fn_ee_runtime_t    fn_ee_pose_runtime_      = nullptr;
     fn_ee_runtime_t    fn_ee_pose_grad_runtime_ = nullptr;
@@ -2493,6 +2646,20 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def_property_readonly("has_frame_jacobian_dot_mujoco", &R::has_frame_jacobian_dot_mujoco)
         .def("frame_jacobian_dot_mujoco", &R::frame_jacobian_dot_mujoco,
              py::arg("q"), py::arg("qd"), py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
+        .def_property_readonly("has_frame_velocity_mujoco", &R::has_frame_velocity_mujoco)
+        .def("frame_velocity_mujoco", &R::frame_velocity_mujoco,
+             py::arg("q"), py::arg("qd"), py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
+        .def_property_readonly("has_frame_acceleration_mujoco", &R::has_frame_acceleration_mujoco)
+        .def("frame_acceleration_mujoco", &R::frame_acceleration_mujoco,
+             py::arg("q"), py::arg("qd"), py::arg("qdd"),
+             py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
+        .def_property_readonly("has_frame_velocity_gradient_mujoco", &R::has_frame_velocity_gradient_mujoco)
+        .def("frame_velocity_gradient_mujoco", &R::frame_velocity_gradient_mujoco,
+             py::arg("q"), py::arg("qd"), py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
+        .def_property_readonly("has_frame_acceleration_gradient_mujoco", &R::has_frame_acceleration_gradient_mujoco)
+        .def("frame_acceleration_gradient_mujoco", &R::frame_acceleration_gradient_mujoco,
+             py::arg("q"), py::arg("qd"), py::arg("qdd"),
+             py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
         .def_property_readonly("has_osc_inertia_mujoco", &R::has_osc_inertia_mujoco)
         .def("osc_inertia_mujoco", &R::osc_inertia_mujoco, py::arg("q"))
         .def_property_readonly("has_minv_mujoco", &R::has_minv_mujoco,
@@ -2663,6 +2830,18 @@ static void register_runner(py::module_& m, const char* cls_name) {
              py::arg("q"), py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
         .def("frame_jacobian_dot", &R::frame_jacobian_dot,
              py::arg("q"), py::arg("qd"),
+             py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
+        .def("frame_velocity", &R::frame_velocity,
+             py::arg("q"), py::arg("qd"),
+             py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
+        .def("frame_acceleration", &R::frame_acceleration,
+             py::arg("q"), py::arg("qd"), py::arg("qdd"),
+             py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
+        .def("frame_velocity_gradient", &R::frame_velocity_gradient,
+             py::arg("q"), py::arg("qd"),
+             py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
+        .def("frame_acceleration_gradient", &R::frame_acceleration_gradient,
+             py::arg("q"), py::arg("qd"), py::arg("qdd"),
              py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
         .def("osc_inertia", &R::osc_inertia, py::arg("q"))
         .def("end_effector_pose_runtime", &R::end_effector_pose_runtime,

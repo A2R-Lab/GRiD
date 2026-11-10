@@ -56,7 +56,7 @@ class GRiDCodeGenerator:
                          gen_device_wrapper, gen_tier_dispatch, gen_spatial_algebra_helpers, \
                          gen_get_XI_size, gen_init_XImats, gen_get_inertia_params_size, gen_init_inertia_params, gen_set_inertia_params, \
                          gen_get_transform_params_size, gen_init_transform_params, gen_set_transform_params, \
-                         _joint_dynamics_folded_by_vslot, gen_get_joint_dynamics_params_size, \
+                         _joint_dynamics_folded_by_vslot, _jd_alpha_fold, gen_get_joint_dynamics_params_size, \
                          gen_init_joint_dynamics_params, gen_set_joint_dynamics_params, \
                          gen_get_armature_params_size, gen_init_armature_params, gen_set_armature_params, \
                          gen_load_update_XImats_helpers_temp_mem_size, gen_load_update_XImats_helpers_function_call, \
@@ -65,8 +65,9 @@ class GRiDCodeGenerator:
                          gen_topology_sparsity_helpers_python, gen_init_topology_helpers, gen_topology_helpers_pointers_for_cpp, _s_inds_stride, \
                          gen_topology_S_sign_for_cpp, gen_insert_helpers_function_call, gen_insert_helpers_func_def_params, gen_init_robotModel, gen_free_robotModel, gen_joint_limits_size, gen_init_joint_limits, gen_checked_table_tail, gen_legacy_init_wrapper, gen_checked_host_alloc, _robotModel_members, \
                          gen_grid_linalg_backend_helpers, _gen_vendored_glass, _gen_linalg_wrappers, gen_invert_matrix, gen_matmul, gen_matmul_trans, gen_crm_mul, gen_crm, gen_mxS_general, custom_is_constant, \
-                         gen_mjx_input_convert, gen_mjx_quat_reorder, gen_mjx_base_rotate, gen_mjx_symmetrize_full, gen_mjx_accel_out, gen_mjx_congruence, gen_mjx_column_reframe, gen_mjx_retract, \
-                         robot_has_mimic_joints, _v_slot_cpp, _alpha_for_jid, _id_S_desc, gen_add_fragment_mark
+                         gen_mjx_input_convert, gen_mjx_quat_reorder, gen_mjx_base_rotate, gen_mjx_symmetrize_full, gen_mjx_accel_out, gen_mjx_congruence, gen_mjx_column_reframe, gen_mjx_retract, gen_mjx_integrator_output, \
+                         robot_has_mimic_joints, _v_slot_cpp, _alpha_for_jid, _id_S_desc, gen_add_fragment_mark, \
+                            robot_has_variable_couplings, _alpha_is_variable, gen_alpha_table, _coupling_leader_qslot, _coupling_alpha_cpp, _coupling_value_cpp, gen_coupling_evaluators, _jd_fold_cpp
 
     # then import all of the algorithms
     from .algorithms import gen_inverse_dynamics_inner_temp_mem_size, gen_inverse_dynamics_inner_function_call, \
@@ -156,6 +157,11 @@ class GRiDCodeGenerator:
                             gen_frame_jacobian_kernel, gen_frame_jacobian_host, gen_frame_jacobian, \
                             gen_frame_jacobian_dot_device, gen_frame_jacobian_dot_kernel, \
                             gen_frame_jacobian_dot_host, gen_frame_jacobian_dot, \
+                            gen_frame_velocity_device, gen_frame_velocity, \
+                            gen_frame_acceleration_device, gen_frame_acceleration, \
+                            frame_kin_gradient_inner_temp_mem_size, gen_frame_kinematics_gradient_inner, \
+                            gen_frame_velocity_gradient_device, gen_frame_velocity_gradient, \
+                            gen_frame_acceleration_gradient_device, gen_frame_acceleration_gradient, \
                             gen_osc_inertia_device, gen_osc_inertia_kernel, \
                             gen_osc_inertia_host, gen_osc_inertia, \
                             gen_end_effector_pose_runtime_inner, gen_end_effector_pose_runtime_device, \
@@ -538,6 +544,29 @@ class GRiDCodeGenerator:
         if (self.enable_mujoco_kernels and self.robot.floating_base
                 and ({"inverse_dynamics_gradient", "fdsva_so"} & set(algorithms))):
             algorithms = set(algorithms) | {"crba"}
+        # Variable couplings (polynomial followers, 2026-11-03): the fold sites
+        # converted to read alpha(q) at runtime cover the dynamics values below;
+        # every other algorithm still bakes a constant multiplier and is refused
+        # here rather than emitted wrong (the conversion campaign of item E).
+        if self.robot_has_variable_couplings():
+            supported = {"inverse_dynamics", "crba", "minv", "forward_dynamics", "aba",
+                         "inverse_dynamics_gradient", "forward_dynamics_gradient",
+                         "end_effector_pose", "end_effector_pose_gradient",
+                         "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
+                         "frame_velocity", "frame_acceleration",
+                         "frame_velocity_gradient", "frame_acceleration_gradient",
+                         "integrator", "integrator_gradient", "integrator_with_gradient",
+                         "inverse_dynamics_regressor", "kinetic_energy_regressor", "potential_energy_regressor",
+                         "forward_dynamics_parameter_gradient", "com", "ccrba",
+                         "generalized_gravity", "nonlinear_effects", "energy",
+                         "end_effector_pose_runtime", "end_effector_pose_gradient_runtime",
+                         "coriolis_matrix", "dccrba", "cmm_time_variation",
+                         "f_ext_gradient", "f_ext_gradient_dq"}
+            unsupported = sorted(set(algorithms) - supported)
+            if unsupported:
+                raise NotImplementedError(
+                    "polynomial couplings: these algorithms still bake a constant mimic multiplier and "
+                    "are not generated yet: " + ", ".join(unsupported) + " (supported: " + ", ".join(sorted(supported)) + ")")
         # SPHERICAL (Tier-C) slices: inverse_dynamics + crba + minv + forward_dynamics
         # (dynamics) plus end_effector_pose + frame_jacobian (kinematics) are ported.
         # forward_dynamics routes through minv (= inv(CRBA(q))) + the compute_c RNEA,
@@ -803,6 +832,7 @@ class GRiDCodeGenerator:
         self.gen_grid_linalg_backend_helpers()
         # then the spatial algebra related helpers
         self.gen_spatial_algebra_helpers()
+        self.gen_coupling_evaluators()
         self.gen_crm()
         self.gen_crm_mul()
         # Tier-B (skew/general axis) helper: additive, emitted ONLY when the
@@ -1135,6 +1165,44 @@ class GRiDCodeGenerator:
                 if self.robot.floating_base:
                     self.gen_lie_group_helpers()
                 self.gen_frame_jacobian_dot()
+            # Item C (2026-11-03): frame velocity J qd and frame acceleration
+            # J qdd + Jdot qd on the same inners. The velocity device owns the
+            # frame_jacobian arena plus a 6*NV J buffer; the acceleration device
+            # runs the Jdot wrapper (its arena is the larger) then the J wrapper,
+            # both into static shared buffers.
+            if "frame_velocity" in algorithms:
+                fv_t_count = Xhom_size_fj + (16 * NJ_fj) + (6 * nv_fj)
+                self.gen_add_code_line(
+                    "template <typename T> __host__ __device__ constexpr size_t FRAME_VELOCITY_DYNAMIC_SHARED_MEM_BYTES() "
+                    "{ return grid_shared_arena_bytes<T>(" + str(fv_t_count) + ", TOPOLOGY_HELPERS_COUNT); }")
+                self.gen_add_code_line("#define GRID_HAS_FRAME_VELOCITY 1")
+                self.gen_frame_velocity()
+            if "frame_acceleration" in algorithms:
+                self.gen_add_code_line(
+                    "template <typename T> __host__ __device__ constexpr size_t FRAME_ACCELERATION_DYNAMIC_SHARED_MEM_BYTES() "
+                    "{ return FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES<T>(); }")
+                self.gen_add_code_line("#define GRID_HAS_FRAME_ACCELERATION 1")
+                self.gen_frame_acceleration()
+            # Item C derivatives: one shared inner (world-origin Plucker sweep, one
+            # thread per velocity slot), two devices. The arena = XmatsHom + the
+            # inner's s_Xworld / columns / twists; the acceleration device adds a
+            # 6*NV dv/dq scratch the LWA classical rows read.
+            if "frame_velocity_gradient" in algorithms or "frame_acceleration_gradient" in algorithms:
+                self.gen_frame_kinematics_gradient_inner()
+            if "frame_velocity_gradient" in algorithms:
+                fvg_t_count = Xhom_size_fj + self.frame_kin_gradient_inner_temp_mem_size()
+                self.gen_add_code_line(
+                    "template <typename T> __host__ __device__ constexpr size_t FRAME_VELOCITY_GRADIENT_DYNAMIC_SHARED_MEM_BYTES() "
+                    "{ return grid_shared_arena_bytes<T>(" + str(fvg_t_count) + ", TOPOLOGY_HELPERS_COUNT); }")
+                self.gen_add_code_line("#define GRID_HAS_FRAME_VELOCITY_GRADIENT 1")
+                self.gen_frame_velocity_gradient()
+            if "frame_acceleration_gradient" in algorithms:
+                fag_t_count = Xhom_size_fj + self.frame_kin_gradient_inner_temp_mem_size() + (6 * nv_fj)
+                self.gen_add_code_line(
+                    "template <typename T> __host__ __device__ constexpr size_t FRAME_ACCELERATION_GRADIENT_DYNAMIC_SHARED_MEM_BYTES() "
+                    "{ return grid_shared_arena_bytes<T>(" + str(fag_t_count) + ", TOPOLOGY_HELPERS_COUNT); }")
+                self.gen_add_code_line("#define GRID_HAS_FRAME_ACCELERATION_GRADIENT 1")
+                self.gen_frame_acceleration_gradient()
             # Lambda (osc_inertia) is emitted for mimic robots too. It composes
             # Minv on device via minv_inner, whose mimic path routes
             # through crba_inner -> invert_matrix (== RBDReference.minv's mimic

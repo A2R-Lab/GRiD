@@ -9,6 +9,7 @@ from grid_assets import robot_urdf
 from grid_codegen import GRiDCodeGenerator
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from test.cuda_equivalents.executable_cache import cached_nvcc_executable
+from test.cuda_equivalents.thread_invariance import thread_sweep
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
@@ -56,16 +57,16 @@ def test_constant_mimic_kinematics(tmp_path, kind, precision):
         # Independent transform finite difference, not the reference/generator.
         h = 1e-6
         jac = (expected(q+h)[0] - expected(q-h)[0])/(2*h)
-        baseline = None
-        for threads in (1, 17, 32, 64, 256):
+        def run(threads):
             result = subprocess.run([str(exe), str(threads), str(q)], capture_output=True, text=True)
             assert result.returncode == 0, result.stdout + result.stderr
-            values = np.fromstring(result.stdout.strip().splitlines()[-1], sep=' ')
+            return np.fromstring(result.stdout.strip().splitlines()[-1], sep=' ')
+
+        def check(values, threads):
             assert values.size == (26 if threads >= 32 else 19)
             np.testing.assert_allclose(values[:12], np.r_[pose, jac], atol=tol, rtol=tol)
             np.testing.assert_allclose(values[12:19], frame, atol=tol, rtol=tol)
             if threads >= 32:
                 np.testing.assert_allclose(values[19:26], frame, atol=tol, rtol=tol)
-            if baseline is not None:
-                np.testing.assert_array_equal(values[:19], baseline)
-            baseline = values[:19]
+
+        thread_sweep((1, 17, 32, 64, 256), run, check, select=lambda values, _: values[:19])

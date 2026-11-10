@@ -595,7 +595,11 @@ def group_jacobian_jobs(self, fill_jobs, anchors):
         # The disjoint-column fast path writes an unscaled axis. A lone mimic
         # contribution still needs its multiplier, even after constant jobs
         # have been removed from this column.
-        if len(grp) == 1 and (not has_mimic or self._alpha_for_jid(grp[0][2]["j"]) == 1.0):
+        # (A polynomial follower's placeholder multiplier reads as one, so it is
+        # tested by kind: alone on a chain whose anchor its leader does not reach,
+        # it still scales by alpha(q) through the serial path.)
+        if len(grp) == 1 and (not has_mimic or (self._alpha_for_jid(grp[0][2]["j"]) == 1.0
+                                                and not self._alpha_is_variable(grp[0][2]["j"]))):
             single_jobs.append(grp[0])
         else:
             multi_groups.append(grp)
@@ -684,6 +688,10 @@ def emit_geometric_jacobian_jvjw(self, nv, num_ees, single_jobs, multi_groups, h
                 self.gen_add_code_line("  T axw_1 = s_Xworld[16*" + str(j) + " + 1]*ax0 + s_Xworld[16*" + str(j) + " + 5]*ax1 + s_Xworld[16*" + str(j) + " + 9]*ax2;")
                 self.gen_add_code_line("  T axw_2 = s_Xworld[16*" + str(j) + " + 2]*ax0 + s_Xworld[16*" + str(j) + " + 6]*ax1 + s_Xworld[16*" + str(j) + " + 10]*ax2;")
                 a = repr(float(alpha))
+                if self._alpha_is_variable(j):
+                    # polynomial follower: the fold multiplier alpha(q_l) at runtime
+                    self.gen_add_code_line("  const T al_v = " + self._coupling_alpha_cpp(j) + ";")
+                    a = "al_v"
                 if job["revolute"]:
                     self.gen_add_code_line("  s_Jw[" + str(col_base) + " + 0] += static_cast<T>(" + a + ") * axw_0; s_Jw[" + str(col_base) + " + 1] += static_cast<T>(" + a + ") * axw_1; s_Jw[" + str(col_base) + " + 2] += static_cast<T>(" + a + ") * axw_2;")
                     self.gen_add_code_line("  T dx = s_Xworld[16*" + str(ee_anchor) + " + 12] - s_Xworld[16*" + str(j) + " + 12];")
@@ -2723,6 +2731,8 @@ def _ee_pose_inner_angle_expr(self, jid):
     lets the standalone (d_robotModel-free) FK inner support mimic robots without
     the general load_update path's s_q_eff scratch."""
     joint = self.robot.get_joint_by_id(jid)
+    if joint is not None and joint.is_mimic_joint() and not joint.is_linear_coupling():
+        return self._coupling_value_cpp(jid)
     if joint is not None and joint.is_mimic_joint():
         src = int(joint.get_mimic_target_id())
         mult = float(joint.get_mimic_multiplier())

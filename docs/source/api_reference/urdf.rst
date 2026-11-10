@@ -49,6 +49,22 @@ Planar joints expand into two prismatic joints and one continuous joint;
 Fixed joints are merged into the moving-body model. Mimic bodies remain in
 the tree, but their coordinates are tied to the independent driver.
 
+A mimic may also be a polynomial follower, GRiD's reading of the MuJoCo
+joint equality: ``<mimic joint="l" polycoef="c0 c1 c2 c3 c4" q0="..."/>``
+sets ``q = c0 + c1 (q_l - q0) + c2 (q_l - q0)^2 + c3 (q_l - q0)^3 + c4
+(q_l - q0)^4`` (at most four coefficients beyond the constant; trailing
+zeros may be omitted; ``multiplier`` and ``offset`` are excluded, since
+they are the degree-one polynomial, which is stored as a plain mimic). Its
+fold multiplier ``dq/dq_l`` varies with the leader, so the joint's constant
+accessors raise and consumers read ``coupling_alpha(q_l)`` with its first
+and second derivatives; chains through a polynomial follower are not
+supported. ``parse(..., reduce_couplings=False)`` returns the full spanning
+tree, every follower independent, with the couplings on ``robot.couplings``;
+the numpy reference projects that tree onto the independent coordinates for
+such robots. The generated code evaluates the multiplier on the device; the
+algorithms whose folds read it at run time are listed in the changelog, the
+others are refused for a polynomial robot.
+
 Helical (screw) joints are a one-degree-of-freedom joint whose single
 coordinate drives coupled rotation about and translation along the same axis,
 ``S = [axis; pitch·axis]``. URDF has no native helical type, so the pitch is

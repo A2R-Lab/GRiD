@@ -38,7 +38,8 @@ def test_empty_tensor_fold_has_no_jobs():
 def test_lone_mimic_column_keeps_its_scale(alpha):
     from types import SimpleNamespace
     gen = SimpleNamespace(robot_has_mimic_joints=lambda: True,
-                          _alpha_for_jid=lambda jid: alpha)
+                          _alpha_for_jid=lambda jid: alpha,
+                          _alpha_is_variable=lambda jid: False)   # a constant ratio (the polynomial kind is tested by kind)
     job = {'j': 1, 'vi': 0}
     direct, weighted, mimic = group_jacobian_jobs(gen, [[job]], [1])
     assert mimic

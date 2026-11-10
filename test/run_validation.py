@@ -23,7 +23,9 @@ sys.path.insert(0, str(ROOT))
 from test.receipt_integrity import verify_header_keys
 
 
-def validation_env():
+def validation_env(profile='serial'):
+    if profile not in ('serial', 'bounded-overlap'):
+        raise ValueError(f'Unsupported receipt profile: {profile}')
     env = dict(os.environ)
     # Scope/numerical/cache overrides belong in a reviewed test configuration,
     # not inherited accidentally from an unrelated experiment.
@@ -32,11 +34,14 @@ def validation_env():
             env.pop(key)
     env.update(OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1',
                NUMEXPR_NUM_THREADS='1', MAX_JOBS='1',
-               # Inline compilers in test shards are not pool-admitted. Finish
-               # the one-worker prewarm phase before running one shard at a
-               # time; enforce memory admission even for the first pool job.
-               GRID_SPLIT_RESOURCE_PROFILE='serial',
-               GRID_SPLIT_COMPILE_JOBS='1', GRID_SPLIT_SHARD_JOBS='1',
+               # Match correctness/pilot allocation: do not reserve most of
+               # VRAM before the other backend in a shard has initialized.
+               XLA_PYTHON_CLIENT_PREALLOCATE='false',
+               # Serial drains prewarm first; bounded overlap reserves the
+               # whole shard, including inline compilers, with the pool.
+               # Both enforce admission even for the first job.
+               GRID_SPLIT_RESOURCE_PROFILE=profile,
+               GRID_SPLIT_COMPILE_JOBS='1' if profile == 'serial' else '2', GRID_SPLIT_SHARD_JOBS='1',
                GRID_RBD_BUILD_JOBS='2')
     return env
 
@@ -98,7 +103,7 @@ def finalize(out):
     print('Receipt verified; no collection or compilation was started.')
 
 
-def run_driver(command, *, log, lock):
+def run_driver(command, *, log, lock, profile='serial'):
     """Forward cancellation to our isolated driver, keeping its lock until exit."""
     previous = signal.getsignal(signal.SIGTERM)
     def interrupt(signum, frame):
@@ -106,7 +111,7 @@ def run_driver(command, *, log, lock):
     signal.signal(signal.SIGTERM, interrupt)
     process = None
     try:
-        process = subprocess.Popen(command, cwd=ROOT, env=validation_env(),
+        process = subprocess.Popen(command, cwd=ROOT, env=validation_env(profile),
                                    stdout=log, stderr=subprocess.STDOUT,
                                    start_new_session=True, pass_fds=(lock.fileno(),))
         return subprocess.CompletedProcess(command, process.wait())
@@ -131,10 +136,13 @@ def main():
     parser.add_argument('--resume', type=Path, help='Existing split-driver directory to resume')
     parser.add_argument('--execute', action='store_true')
     parser.add_argument('--full', action='store_true', help='Fresh full release run; no carried shards')
+    parser.add_argument('--resource-profile', choices=('serial', 'bounded-overlap'), default='serial')
+    parser.add_argument('--fallback-from', type=Path,
+                        help='Prior failed/paused launcher directory; start a fresh full SERIAL run with no carries')
     parser.add_argument('--finalize', type=Path, help='Verify an existing run after committing its generated evidence; no GPU work')
     args = parser.parse_args()
     if args.finalize:
-        if args.out or args.resume or args.execute or args.full:
+        if args.out or args.resume or args.execute or args.full or args.fallback_from or args.resource_profile != 'serial':
             parser.error('--finalize is a verification-only operation; do not combine with launch options')
         with LOCK_PATH.open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -161,16 +169,32 @@ def main():
             raise SystemExit('Resume must preserve the original full/refresh mode')
         if prior_state.get('candidate') != candidate:
             raise SystemExit('Resume candidate differs from the original run; freeze and plan a new refresh.')
+        original_profile = prior_state.get('resource_profile', {}).get('GRID_SPLIT_RESOURCE_PROFILE', 'serial')
+        if original_profile != args.resource_profile:
+            raise SystemExit('Resume must preserve resource profile; use a fresh full serial fallback instead')
+    fallback = None
+    if args.fallback_from:
+        if not args.full or args.resume or args.resource_profile != 'serial':
+            raise SystemExit('Fallback requires --full, serial, and no --resume; no prior outcomes are carried')
+        fallback = json.loads((args.fallback_from.resolve() / 'state.json').read_text())
+        if (fallback.get('candidate') != candidate or not fallback.get('full')
+                or fallback.get('status') not in ('failed', 'paused', 'interrupted')):
+            raise SystemExit('Fallback source must be a stopped full run of this exact candidate')
     out.mkdir(parents=True, exist_ok=False)
     keys_path = ROOT / 'test/gpu-proof-header-keys.json'
     before = json.loads(keys_path.read_text())
     (out / 'header-keys.before.json').write_text(json.dumps(before, indent=2) + '\n')
-    env = validation_env()
+    env = validation_env(args.resource_profile)
     state = {'candidate': candidate, 'command': command, 'shard_dir': str(shard_dir), 'full': args.full,
              'resource_profile': {key: env[key] for key in (
                  'GRID_SPLIT_RESOURCE_PROFILE', 'GRID_SPLIT_COMPILE_JOBS',
-                 'GRID_SPLIT_SHARD_JOBS', 'GRID_RBD_BUILD_JOBS')},
+                 'GRID_SPLIT_SHARD_JOBS', 'GRID_RBD_BUILD_JOBS',
+                 'XLA_PYTHON_CLIENT_PREALLOCATE')},
              'status': 'waiting-for-lock'}
+    if fallback is not None:
+        state['fallback'] = {'from': str(args.fallback_from.resolve()),
+            'previous_profile': fallback.get('resource_profile'),
+            'strategy': 'fresh-full-no-carries'}
     def save():
         (out / 'state.json').write_text(json.dumps(state, indent=2) + '\n')
     save()
@@ -186,7 +210,7 @@ def main():
                         cwd=ROOT, env=env, stdout=collection_log,
                         stderr=subprocess.STDOUT, check=True)
             with (out / 'driver.log').open('x') as log:
-                result = run_driver(command, log=log, lock=lock)
+                result = run_driver(command, log=log, lock=lock, profile=args.resource_profile)
             state['driver_rc'] = result.returncode
             if result.returncode:
                 if result.returncode == 3 and (shard_dir / 'PAUSE').exists():

@@ -27,6 +27,8 @@ CONVERTED = {
     "cuda_plant_smoke_runner.cu": {"integrator", "integrator_gradient"},
     "cuda_centroidal_smoke_runner.cu": set(),
     "cuda_centroidal_mimic_smoke_runner.cu": set(),
+    # 2026-11-03: frame velocity / acceleration device functions inside a runner-local kernel
+    "cuda_frame_kinematics_smoke_runner.cu": set(),
     # 2026-10-12 sweep (the remaining runners)
     "cuda_batched_host_runner.cu": {"minv", "crba"},
     "cuda_energy_regressor_smoke_runner.cu": {"kinetic_energy_regressor", "potential_energy_regressor"},

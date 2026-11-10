@@ -92,6 +92,10 @@ ALGO_REGISTRY: tuple[AlgoEntry, ...] = (
     AlgoEntry("end_effector_pose_hessian",      "END_EFFECTOR_POSE_HESSIAN (2nd-order EE Jacobian)", "Kinematics"),
     AlgoEntry("frame_jacobian",       "FRAME_JACOBIAN (general-frame J: LOCAL/WORLD/LWA)", "Kinematics"),
     AlgoEntry("frame_jacobian_dot",   "FRAME_JACOBIAN_DOT (time derivative Jdot of the general-frame J)", "Kinematics"),
+    AlgoEntry("frame_velocity",       "FRAME_VELOCITY (frame twist J qd in LOCAL/WORLD/LWA)", "Kinematics"),
+    AlgoEntry("frame_acceleration",   "FRAME_ACCELERATION (J qdd + Jdot qd: spatial in LOCAL/WORLD, classical in LWA)", "Kinematics"),
+    AlgoEntry("frame_velocity_gradient",     "FRAME_VELOCITY_GRADIENT ([dv/dq | dv/dqd] of the frame twist)", "Kinematics"),
+    AlgoEntry("frame_acceleration_gradient", "FRAME_ACCELERATION_GRADIENT ([da/dq | da/dqd | da/dqdd] of the frame acceleration)", "Kinematics"),
     AlgoEntry("osc_inertia",          "OSC_INERTIA (operational-space inertia Lambda = (J Minv J^T)^-1)", "Kinematics"),
     AlgoEntry("end_effector_pose_runtime",          "END_EFFECTOR_POSE_RUNTIME (runtime target/offset pose [xyz;rpy])", "Kinematics"),
     AlgoEntry("end_effector_pose_gradient_runtime", "END_EFFECTOR_POSE_GRADIENT_RUNTIME (runtime target/offset pose Jacobian)", "Kinematics"),
@@ -296,6 +300,16 @@ ALGO_DESCRIPTORS: tuple[AlgoDescriptor, ...] = (
     #   append-only ABI (see test_algo_descriptor_parity's golden anchors) ─
     AlgoDescriptor("inverse_dynamics_regressor_gradient",
                    autotune_keys=("inverse_dynamics_regressor_gradient",), launch_cfg_batch=2),
+    # batch 4 (2026-11-03): frame kinematics, appended so the GridAlgo enum prefix
+    # (the launch-config ABI) stays stable.
+    AlgoDescriptor("frame_velocity", autotune_keys=("frame_velocity",), launch_cfg_batch=2,
+                   tier_blind_bytes=True),
+    AlgoDescriptor("frame_acceleration", autotune_keys=("frame_acceleration",), launch_cfg_batch=2,
+                   tier_blind_bytes=True),
+    AlgoDescriptor("frame_velocity_gradient", autotune_keys=("frame_velocity_gradient",), launch_cfg_batch=2,
+                   tier_blind_bytes=True),
+    AlgoDescriptor("frame_acceleration_gradient", autotune_keys=("frame_acceleration_gradient",), launch_cfg_batch=2,
+                   tier_blind_bytes=True),
 
     # Plant (no standalone kernel)
     AlgoDescriptor("plant", has_kernel_attr=False),

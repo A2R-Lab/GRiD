@@ -10,6 +10,7 @@ from grid_codegen import GRiDCodeGenerator
 from URDFParser import URDFParser
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from test.cuda_equivalents.executable_cache import cached_nvcc_executable
+from test.cuda_equivalents.thread_invariance import thread_sweep
 
 
 @pytest.mark.cuda_equivalence
@@ -44,16 +45,17 @@ def test_embedded_glass_restricted_handoffs(tmp_path, scalar, atol, rtol):
     stdin = " ".join(format(x, ".17g") for x in inputs) + "\n"
     (tmp_path / "input.txt").write_text(stdin)
     for storage in (0, 1):
-        baseline = None
-        for threads in (1, 17, 32, 64, 128, 256):
+        def run(threads):
             result = subprocess.run([str(exe), str(threads), str(storage)], input=stdin,
                                     capture_output=True, text=True, timeout=60)
             assert result.returncode == 0, result.stdout + result.stderr
             values = np.array([np.fromstring(line, sep=" ") for line in result.stdout.splitlines()])
             assert values.shape == (3, len(expected)), result.stdout
+            return values
+
+        def check(values, _):
             np.testing.assert_allclose(values, np.broadcast_to(expected, values.shape), atol=atol, rtol=rtol)
             np.testing.assert_array_equal(values[0], values[1])
             np.testing.assert_array_equal(values[0], values[2])
-            if baseline is not None:
-                np.testing.assert_array_equal(values[0], baseline)
-            baseline = values[0]
+
+        thread_sweep((1, 17, 32, 64, 128, 256), run, check, select=lambda values, _: values[0])

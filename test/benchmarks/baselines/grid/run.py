@@ -272,7 +272,9 @@ def generate_header(
             algorithm_list=(
                 [a.strip() for a in os.environ["GRID_BENCH_ALGORITHM_LIST"].split(",") if a.strip()]
                 if os.environ.get("GRID_BENCH_ALGORITHM_LIST")
-                else ["all", "frame_jacobian", "frame_jacobian_dot", "osc_inertia"]
+                else ["all", "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
+                      "frame_velocity", "frame_acceleration",
+                      "frame_velocity_gradient", "frame_acceleration_gradient"]
             ),
             enable_idsva_so_world_frame=True,
             enable_floating_second_order=True,
@@ -509,6 +511,38 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_label": "FRAME_JACOBIAN_DOT",
         "gate": "GRID_HAS_FRAME_JACOBIAN_DOT",
         "shared_mem_skip": "FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "frame_velocity": {
+        "single_call":        "grid::frame_velocity_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::frame_velocity<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::frame_velocity_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "FRAME_VELOCITY",
+        "gate": "GRID_HAS_FRAME_VELOCITY",
+        "shared_mem_skip": "FRAME_VELOCITY_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "frame_acceleration": {
+        "single_call":        "grid::frame_acceleration_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::frame_acceleration<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::frame_acceleration_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "FRAME_ACCELERATION",
+        "gate": "GRID_HAS_FRAME_ACCELERATION",
+        "shared_mem_skip": "FRAME_ACCELERATION_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "frame_velocity_gradient": {
+        "single_call":        "grid::frame_velocity_gradient_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::frame_velocity_gradient<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::frame_velocity_gradient_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "FRAME_VELOCITY_GRADIENT",
+        "gate": "GRID_HAS_FRAME_VELOCITY_GRADIENT",
+        "shared_mem_skip": "FRAME_VELOCITY_GRADIENT_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "frame_acceleration_gradient": {
+        "single_call":        "grid::frame_acceleration_gradient_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::frame_acceleration_gradient<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::frame_acceleration_gradient_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "FRAME_ACCELERATION_GRADIENT",
+        "gate": "GRID_HAS_FRAME_ACCELERATION_GRADIENT",
+        "shared_mem_skip": "FRAME_ACCELERATION_GRADIENT_DYNAMIC_SHARED_MEM_BYTES",
     },
     "osc_inertia": {
         "single_call":        "grid::osc_inertia_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",

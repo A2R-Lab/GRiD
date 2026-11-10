@@ -176,7 +176,7 @@ humanoids) launched with `cudaErrorInvalidValue` ("invalid argument") while thei
   manifest-parity test over relying on a GPU run to surface it.
 
 ### 1g. In-kernel mjx OUTPUT-BAND scratch must be spill-aware (aliases spilled buffers → state-dependent garbage)
-**Found in fdsva_so mjx (2026-06-09, still open).** An mjx epilogue that writes a large output band into
+**Found in fdsva_so mjx (2026-06-09; closed 2026-06-10 by 6b96d3e2, the epilogue recomputes into a disjoint `d_mjx_scratch` band, unguarded in 8c0fbb46 and validated against the oracle on go2; this entry stayed marked open until 2026-11-03).** An mjx epilogue that writes a large output band into
 "dead" scratch (`s_temp`) is WRONG on robots where the algorithm SPILLS: `s_temp`==`d_workspace`, and the
 spilled live buffers (`s_df_du`, `s_Minv`) ALSO live in `d_workspace` → the band overlaps them →
 state-dependent garbage (the result depends on the PREVIOUS kernel call's `d_workspace` contents; jax≠torch
@@ -185,8 +185,9 @@ in an interleaved test but deterministic in isolation — the tell-tale signatur
   after a different op (changes? → reads cross-call global state = a spilled-buffer alias).
 - **Rule:** an in-kernel scratch band must be provably DEAD *and* DISJOINT in BOTH the smem and the spilled
   layouts. A buffer that's disjoint in smem can alias in `d_workspace`. (Reusing `s_idsva_so` made fdsva_so
-  deterministic but still wrong — `s_df_du`/`s_Minv` are likely clobbered before the epilogue reads them, a
-  second liveness bug. Open.) This is the general **mjx-vs-tier-spill** hazard: the spill classifier never saw
+  deterministic but still wrong — `s_df_du`/`s_Minv` were clobbered before the epilogue read them, the
+  second liveness bug; the fix recomputes Minv, qdd and the first-order gradients fresh into their own
+  spill-disjoint band.) This is the general **mjx-vs-tier-spill** hazard: the spill classifier never saw
   the mjx epilogue's scratch usage.
 
 ### 1h. Templating a wrapper on a flag that only ONE kernel overload carries
@@ -3845,6 +3846,109 @@ untracked receipt is dirt, so the verify fails on both architectures until the
 commit exists. The primary ledger `test/gpu-proof-header-keys.json` must stay
 untouched by the secondary landing; check `git diff --stat` on it.
 
+Fixed 2026-11-03: `shard_receipts_unsigned` and `merge_command` in the driver
+merge an all-unsigned shard set with `--unsigned`, verify it with
+`--allow-unsigned`, and still write the durations and the ledger; a mixed set
+is refused before the merge; `run_gpu_proof.sh` never publishes an unsigned
+receipt and prints the desktop re-sign command; CI verifies every committed
+secondary receipt with `receipt_integrity.py --verify-all`.
+
+### 7.z84 A convention twin's gradient must be checked against its own value, block by block (2026-11-03, mjx integrator_gradient)
+
+The MuJoCo-convention twin of `integrator_gradient` had only ever been checked for
+packing against the numpy surface. The first ambient finite-difference test of a
+loss through it (the floating integrator VJP work) failed on the quaternion slots,
+and the guess "the chart map is wrong" was wrong: probing the twin block by block
+showed its configuration rows exact in the world-linear, local-angular chart
+(8e-11) and its velocity rows off (angular columns of d qd_{k+1}/dq by 7e-2, the
+qd block by 1e-2). Rules: when a new VJP disagrees with finite differences, split
+the chain and test each piece against finite differences of the kernel's own
+value in its own chart before touching the maps; a twin that passes a packing
+test and a tier-invariance test has not been validated numerically. Both
+surfaces now refuse the floating-base mjx integrator backward until the twin's
+velocity block is fixed.
+
+Resolution (2026-11-03, evening): two defects, one semantic. (1) The integrator
+and plant_step VALUE kernels reordered only the quaternion and fed the raw
+world-frame base velocity and force into the pin dynamics as local quantities,
+while the gradient kernel converted its inputs: the twins computed different
+functions, so no gradient could match the value. (2) The gradient transform
+applied the plain G reframe to the velocity rows ("a velocity output, no omega x v
+term"), but MuJoCo's step is `qvel += dt * qacc` with the MuJoCo-frame acceleration,
+whose base-linear block is `R (a + omega x v)`; the two differ by `dt R (omega x v)`,
+first order in dt, and its derivatives are exactly the measured residuals
+(`dt R ((e_a x omega) x v)` on the rotation columns, `dt R (omega x R^T e_a)` and
+`dt R (e_a x v)` on the velocity columns). The bottom rows are now `[dt Fq | I + dt Fv
+| dt Fu]` with F the validated fd gradient transform, which also fixed the numpy
+Hessian for free (complex step through the gradient). Lesson: a convention twin
+needs its semantics written down as the reference library's own step
+(`mj_Euler`), not derived from "what kind of quantity the output is"; and a value
+kernel that converts only part of its inputs is wrong even when its packing test
+passes, because the joints-match-pin check at 2e-3 never looked at the base rows.
+
+### 7.z85 Pinocchio's LOCAL_WORLD_ALIGNED frame derivatives hold the frame origin fixed (2026-11-03, frame velocity and acceleration derivatives)
+
+The reference's `frame_velocity_derivatives` / `frame_acceleration_derivatives`
+(world-origin Plücker form, `dA_k/dq_j = A_j x A_k` for every column at or
+below j) matched chart finite differences of the reference's own
+`frame_velocity` / `frame_acceleration` to 1e-9 on every robot of the
+manifest, mimic and floating included, and matched Pinocchio's
+`getFrameVelocityDerivatives` / `getFrameAccelerationDerivatives` to 1e-15 in
+LOCAL and WORLD, yet disagreed with Pinocchio in LOCAL_WORLD_ALIGNED by O(1)
+whenever qd was nonzero. The hypothesis "Pinocchio differentiates with the
+frame origin held fixed" was testable in one line: `pin + [w x dp_f/dq; 0]`
+(and `[wdot x dp_f/dq; 0]` for the acceleration) reproduced the reference to
+1e-13. Pinocchio's LWA q-derivatives are the WORLD derivatives shifted to the
+current origin; the derivative of the function `q -> v_lwa(q, qd)` also moves
+the origin. GRiD keeps the derivative of the function (it is what a task-space
+constraint Jacobian needs and what finite differences through the chart give)
+and the Pinocchio backend converts before the comparison. Rules: when an
+oracle matches its own chart finite differences but not the external library
+in one frame only, suspect a definitional difference in that frame before a
+bug, and write the suspected correction as a numerical test; and never make
+the external library's convention the oracle's by default when the project's
+own finite differences disagree with it.
+
+### 7.z86 A ratio of one hides the power of alpha (2026-11-03, joint dynamics on mimic followers)
+
+The damping and friction fold of a mimic follower carried a single power of alpha
+(`tau_l += alpha*b*qd_l`) for a year, with the reference, the generator, their tests
+and a docstring agreeing that this was intentional. Every test ran on fr3, whose
+finger follower has a multiplier of exactly one, where `alpha` and `alpha^2`
+coincide; the tests were also built from the same formula they checked. The physical
+fold is `alpha^2 b qd_l + |alpha| f sign(qd_l)` (the follower's own torque, projected
+through alpha; the congruence `G^T B G`), and the single-alpha version injects energy
+on a negative ratio. Lessons: (1) a convention test needs a parameter value at which
+the candidate conventions differ, here a ratio other than one and a negative one;
+(2) an expected value built from the implementation's own formula is a regression
+lock, not an oracle, so prefer a witness that involves no reduced-coordinate
+convention at all (the projection of a full spanning tree that carries the quantity
+itself) plus an invariant (dissipated power non-negative); (3) Pinocchio ignores
+`model.damping` in rnea and aba, so joint dynamics has no external oracle and must be
+pinned this way. Witness: `RBDReference/tests/test_joint_dynamics_coupling_fold.py`,
+`test/cuda_equivalents/test_cuda_polynomial_coupling.py::test_coupled_joint_dynamics_match_reference`.
+
+### 7.z87 A smoke runner's hardcoded thread count can exceed a production kernel's launch bound, and only cudaGetLastError says so (2026-11-03, multitarget runners)
+
+The multitarget runners launched the production `*_kernel<T, TIER_SHARED>` with 128
+threads. The generator sizes `MAX_PERF_LEVEL_THREADS` from the topology, and
+`__launch_bounds__(tier_max_threads<TIER>())` makes it a hard cap: a four-joint branched
+chain gets 96, the launch fails with cudaErrorInvalidValue, the output buffer keeps its
+zeros, and `cudaDeviceSynchronize` reports nothing because a launch-configuration error
+is not a sticky device error. The runner's tier self-check then blamed the kernel
+("tier non-bit-identical 2.4e-1"). The production host never hits this (it clamps
+through grid_host_clamp_threads), and the shipped robots all cap above 128, so only the
+tiny synthetic chains of the coupling tests exposed it. Rules: a runner that launches a
+generated kernel clamps its thread count to `grid::tier_max_threads<TIER>()` (or the
+host clamp) and checks `cudaGetLastError()` right after the launch; a "tier mismatch"
+where one tier is all zeros is a failed launch until proven otherwise.
+
+Found on the way: a polynomial follower whose leader is not on the anchor's chain (the
+cross-finger coupling of a gripper) is a lone Jacobian job, and `group_jacobian_jobs`
+took it for an unscaled single job because the placeholder multiplier compares equal to
+one. Test the kind (`_alpha_is_variable`), never the placeholder's value. The branched
+chain of `polynomial_coupling_model.py` (`branched=True`) is the witness.
+
 ### 7.z88 Runtime parameter readback follows model ownership, not registration names (2026-11-05, armature audit)
 
 The initial runtime-armature implementation cached reported values in a Python
@@ -3926,6 +4030,13 @@ models. Comparing backends to the same adapted NumPy output would accept the
 bug. Likewise, checking the control-input gradient against that same faulty
 public Minv is circular; use the independent CRBA inverse. Keep these tests
 separate from armature mode parity and include zero-armature builds.
+
+During the combined branch merge, the incoming polynomial CUDA test still
+expected the old dense fallback buffer. Preserve its independent dense oracle,
+but first assert the raw lower triangle is zero and reconstruct symmetry once.
+Do not restore dense kernel storage merely to satisfy a stale test, or drop the
+storage assertion while adapting it. The cold resource pilot exposed this test
+mismatch; a failed correctness leg is not usable throughput evidence.
 
 Choose thread counts from the compiled kernel ceiling, not the hardware's
 1024-thread maximum. This spherical fixture reports 96 for Minv: the native
@@ -4099,3 +4210,28 @@ registration test compiles them and compares oversized NumPy/JAX/PyTorch
 launches against a legal thread count. Keep that deliberate all-default build
 in the compile-hygiene exception list with its reason rather than reducing its
 algorithm coverage.
+
+### 7.z101 Topology capacity must cover emitted sections (2026-11-10)
+
+A small floating mimic chain emitted ten S-index entries into a nine-entry
+table. A floating root contributes six entries while scalar followers still
+contribute body entries; neither the reduced coordinate count nor the body
+count alone bounds their sum. Size the S-index section from its actual emitted
+length, retaining historical padding when it is larger. Keep offsets and slot
+semantics unchanged. CPU tests count initializer entries on serial and branched
+linear and polynomial followers; a floating wrapper regression compiles and
+checks values, frame derivatives and integrator backward. Larger robots can
+hide this under-allocation because their unrelated padding is sufficient.
+
+### 7.z102 Reduced references need independent parameter additions (2026-11-10)
+
+The polynomial embedding reference delegates dynamics to a full spanning tree.
+That delegation bypassed the reduced model's installed armature: a correct CUDA
+implementation then disagreed with its oracle. Add the independent-coordinate
+rotor torque, diagonal mass and kinetic energy at the reduced boundary. Derive
+forward dynamics and its sensitivity from that augmented mass matrix. Do not
+put a follower rotor into the independent table: a variable coupling would
+require configuration-dependent reflected inertia and velocity terms. Test the
+reference independently on fixed and floating embeddings before using it as a
+GPU oracle. A floating mimic model still has no MuJoCo twin; test that refusal
+and use a supported ordinary floating model for MuJoCo composition.

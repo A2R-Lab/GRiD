@@ -144,8 +144,8 @@ no equivalent. The implementation is ``bindings/grid_rbd/_mujoco.py``
    | **dccrba** dh_dq ⚠REVISED | dh_dq·G^{-1} + A_pin·Jv_q on base-ROT cols (Jv_q=_cross_cols(v_lin,−1)); dhdot_dq/dv/da same family | column-reframe + **vel-couple** | naive off 25→**1.5e-8** |
    | id/fd gradient, idsva_so, fdsva_so | full (rows+cols+couplings) | gradient/SO | done in oracle |
    | **end_effector_pose_hessian** ⚠REVISED | H_mjx[i,a,k]=Σ H_pin[i,b,c]G^{-1}[b,a]G^{-1}[c,k] + sym(dpose_pin·∂(G^{-1})/∂θ_k); ∂(G^{-1})/∂θ_a base-lin block=−[e_a]×R^T; **symmetrize** in the 2 tangent idx (GRiD analytic hess IS symmetric; raw Lie 2nd-deriv isn't) | tensor-slab + frame | FD-mjx 2.1e-10 |
-   | **integrator** (euler+rk) | mjx retract: floating pos += dt·qvel[:3] GLOBAL (vs pin SE(3) V(φ), O(dt²) wrong) | retract | mj_integratePos **0.0** |
-   | integrator_gradient | mjx_dIntegrate (base-lin→I, no lin↔ang) + fd value transform + minv_pin_to_mjx velocity rows | retract | FD-mjx 2.7e-10 |
+   | **integrator** (euler, si-euler) | inputs to pin (quat, R^T on base-linear qd and u); the MuJoCo velocity step qvel += dt·qacc_mjx (the ω×v term of the MuJoCo-frame acceleration, first order in dt, not G applied to the pin step); pos += dt·w GLOBAL (w = qvel[:3] euler, qvel_{k+1}[:3] si) | retract | mj_Euler (velocity + position), kernel vs qvel + dt·fd_mjx 2e-3 fp32 |
+   | integrator_gradient | top rows: pin tangent reframed, base-linear rows the global-add tangent; bottom rows [dt·Fq \| I + dt·Fv \| dt·Fu] with F the fd gradient transform (fd_gradient_pin_to_mjx; before 2026-11-03 the plain G reframe, off by dt·R((e_a×ω)×v) and dt·R(ω×R^T e_a), dt·R(e_a×v)) | retract | FD of the mjx value 1e-5 (numpy), kernel vs oracle 3e-4·scale fp32, surface VJP vs FD fp64 |
    | plant_step | composes fd qdd transform (ω×v) + mjx retract | retract | mj_step (semi_implicit_euler) 1e-16 |
    | plant_step_gradient | == integrator_gradient (byte-identical) | retract | diff 0.0 |
    | plant_step_hessian | retract Jacobian + fdsva_so SO transform, base-localized | retract | ~loc base-rot |

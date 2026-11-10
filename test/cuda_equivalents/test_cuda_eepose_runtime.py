@@ -42,6 +42,7 @@ from test.cuda_equivalents.cuda_harness import (
     _parse_runner_output,
     _run_runner,
 )
+from test.cuda_equivalents.thread_invariance import thread_sweep
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec
 from RBDReference.equivalents.reference_backend import build_project_adapter
@@ -268,15 +269,11 @@ def test_cuda_eepose_runtime_thread_invariance(tmp_path, robot_id, base_mode):
     sample = samples[0]
     stdin = _stdin(target_jid, _XTOOL, np.asarray(sample.q, np.float64))
 
-    ref = None
-    for nthreads in (1, 32, 100, 256):
+    def run(nthreads):
         out = _parse_runner_output(_run_runner(executable, stdin, cmd, num_threads=nthreads))
-        block = np.concatenate([out[k].reshape(-1) for k in ("pose0", "poseN", "grad0", "gradN")])
-        if ref is None:
-            ref = block
-        else:
-            np.testing.assert_array_equal(
-                block, ref, err_msg=f"{robot_id}-{base_mode} thread-count {nthreads} diverged")
+        return np.concatenate([out[k].reshape(-1) for k in ("pose0", "poseN", "grad0", "gradN")])
+
+    thread_sweep((1, 32, 100, 256), run)
 
 
 @pytest.mark.cuda_equivalence

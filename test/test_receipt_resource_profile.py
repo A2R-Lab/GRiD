@@ -138,6 +138,48 @@ def test_existing_pause_never_starts_pool(tmp_path, monkeypatch):
     assert (tmp_path/'results.json').read_text().strip() == '[]'
 
 
+@pytest.mark.parametrize('profile', ['serial', 'bounded-overlap'])
+def test_profiles_execute_the_same_scope_once(tmp_path, monkeypatch, profile):
+    from test.resource_admission import MemoryAdmission
+    monkeypatch.setenv('GRID_SPLIT_RESOURCE_PROFILE', profile)
+    monkeypatch.setenv('GRID_SPLIT_SHARD_JOBS', '99')
+    monkeypatch.setattr(compile_sched, 'mem_available_kb', lambda: 100_000_000)
+    assert driver.shard_jobs() == 1
+    shards = [SimpleNamespace(name=n) for n in ('a', 'b')]
+    launched = []
+    def launch(spec, *args):
+        launched.append(spec.name)
+        return SimpleNamespace(spec=spec, proc=SimpleNamespace(pid=1), poll=lambda:0, close=lambda:None)
+    monkeypatch.setattr(driver, '_launch_shard', launch)
+    monkeypatch.setattr(driver, '_finish_shard',
+        lambda run, rc, results, out: results.append({'shard':run.spec.name, 'rc':rc}))
+    admission = MemoryAdmission(floor_kb=driver.GPU_PHASE_FLOOR_KB,
+        available=lambda:100_000_000, rss=lambda pid:0) if profile == 'bounded-overlap' else None
+    result, paused = driver.phase_run(shards, tmp_path, False, [], [{'shard':'prior'}], admission=admission)
+    assert not paused and launched == ['a', 'b']
+    assert [r['shard'] for r in result] == ['prior','a','b']
+    assert admission is None or not admission.active
+
+
+def test_bounded_shard_pressure_preserves_completed_results(tmp_path, monkeypatch):
+    from test.resource_admission import MemoryAdmission
+    monkeypatch.setenv('GRID_SPLIT_RESOURCE_PROFILE', 'bounded-overlap')
+    free = [100_000_000]
+    b = MemoryAdmission(floor_kb=driver.GPU_PHASE_FLOOR_KB, available=lambda:free[0], rss=lambda pid:0)
+    shards = [SimpleNamespace(name=n) for n in ('a','b')]
+    def launch(spec, *args):
+        def poll():
+            free[0] = 1
+            return 0
+        return SimpleNamespace(spec=spec, proc=SimpleNamespace(pid=1), poll=poll, close=lambda:None)
+    monkeypatch.setattr(driver, '_launch_shard', launch)
+    monkeypatch.setattr(driver, '_finish_shard',
+        lambda run, rc, results, out: results.append({'shard':run.spec.name,'rc':rc}))
+    result, paused = driver.phase_run(shards, tmp_path, False, [], [], admission=b)
+    assert paused and result == [{'shard':'a','rc':0}] and not b.active
+    assert (tmp_path/'PAUSE').exists()
+
+
 def test_wrappers_only_prewarm_pause_has_resume_anchor(tmp_path, monkeypatch):
     monkeypatch.setenv('GRID_SPLIT_RESOURCE_PROFILE', 'serial')
     monkeypatch.setattr(driver, 'phase_run', lambda *a, **k: pytest.fail('no shard yet'))

@@ -60,6 +60,8 @@ GENERATED_KEYS: tuple[str, ...] = (
     "energy", "com", "ccrba", "dccrba", "cmm_time_variation",
     "kinetic_energy_regressor", "potential_energy_regressor",
     "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
+    "frame_velocity", "frame_acceleration",
+    "frame_velocity_gradient", "frame_acceleration_gradient",
     # increment 2a: expanded style (sig-fork; std5/so4 template shapes).
     # Canonicalized vs the hand originals: no nj/nv locals (grid:: names
     # inline) and a uniform (size_t)batch cast — both meaning-preserving,
@@ -142,6 +144,10 @@ CEIL_ROWS: tuple[tuple[str, str], ...] = (
     ("frame_jacobian", "frame_jacobian"),
     ("frame_jacobian_dot", "frame_jacobian_dot"),
     ("osc_inertia", "osc_inertia"),
+    ("frame_velocity", "frame_velocity"),
+    ("frame_acceleration", "frame_acceleration"),
+    ("frame_velocity_gradient", "frame_velocity_gradient"),
+    ("frame_acceleration_gradient", "frame_acceleration_gradient"),
     ("generalized_gravity", "generalized_gravity"),
     ("nonlinear_effects", "nonlinear_effects"),
     ("energy", "energy"),
@@ -282,6 +288,18 @@ BODY_COMMENTS: dict[str, str] = {
     "frame_jacobian_dot": (
         "    // -1 per arg => \"use default\" (leaf-EE / LWA); the host resolves each\n"
         "    // INDEPENDENTLY, so a default target with an explicit frame is honored."),
+    "frame_velocity": (
+        "    // -1 per arg => \"use default\" (leaf-EE / LWA); the host resolves each\n"
+        "    // INDEPENDENTLY, so a default target with an explicit frame is honored."),
+    "frame_acceleration": (
+        "    // -1 per arg => \"use default\" (leaf-EE / LWA); the host resolves each\n"
+        "    // INDEPENDENTLY, so a default target with an explicit frame is honored."),
+    "frame_velocity_gradient": (
+        "    // -1 per arg => \"use default\" (leaf-EE / LWA); the host resolves each\n"
+        "    // INDEPENDENTLY, so a default target with an explicit frame is honored."),
+    "frame_acceleration_gradient": (
+        "    // -1 per arg => \"use default\" (leaf-EE / LWA); the host resolves each\n"
+        "    // INDEPENDENTLY, so a default target with an explicit frame is honored."),
 }
 
 _PACK = {
@@ -348,7 +366,10 @@ def gen_body(spec: AbiSpec) -> str:
     if spec.key in BODY_COMMENTS:
         L.append(BODY_COMMENTS[spec.key])
     if spec.it_dispatch:
-        L.append(f"    GRID_RBD_IT_DISPATCH(it, {IT_LAUNCHER[spec.key]}, batch, gravity, dt);")
+        # the gradient names only the single-stage cases on a model whose gradient
+        # kernels support no multi-stage scheme (GRID_RBD_IT_DISPATCH_GRAD)
+        macro = "GRID_RBD_IT_DISPATCH_GRAD" if spec.key == "integrator_gradient" else "GRID_RBD_IT_DISPATCH"
+        L.append(f"    {macro}(it, {IT_LAUNCHER[spec.key]}, batch, gravity, dt);")
     else:
         grav = "gravity, " if spec.takes_gravity else ""
         trail = "".join(", " + a for a in spec.trailing_runtime_args)
@@ -707,7 +728,8 @@ TORCH_SURFACE_KEYS: tuple[str, ...] = (
     "nonlinear_effects", "coriolis_matrix", "kinetic_energy_regressor",
     "potential_energy_regressor", "energy", "com", "ccrba",
     "cmm_time_variation", "dccrba", "frame_jacobian", "frame_jacobian_dot",
-    "osc_inertia")
+    "osc_inertia", "frame_velocity", "frame_acceleration",
+    "frame_velocity_gradient", "frame_acceleration_gradient")
 JAX_SURFACE_KEYS: tuple[str, ...] = (
     "forward_dynamics_armature_gradient",
     "inverse_dynamics", "minv", "forward_dynamics", "aba", "crba",
@@ -718,7 +740,8 @@ JAX_SURFACE_KEYS: tuple[str, ...] = (
     "nonlinear_effects", "coriolis_matrix", "kinetic_energy_regressor",
     "potential_energy_regressor", "energy", "com", "ccrba",
     "cmm_time_variation", "dccrba", "frame_jacobian", "frame_jacobian_dot",
-    "osc_inertia")
+    "osc_inertia", "frame_velocity", "frame_acceleration",
+    "frame_velocity_gradient", "frame_acceleration_gradient")
 _TORCH_REGION_BANNERS = {"inverse_dynamics_regressor": "torch_sysid",
                          "generalized_gravity": "torch_ptier1"}
 _JAX_REGION_BANNERS = {"inverse_dynamics_regressor": "jax_regressor",
@@ -1101,8 +1124,9 @@ TORCH_TABLE_ORDER: tuple[str, ...] = (
     "generalized_gravity", "nonlinear_effects", "coriolis_matrix",
     "kinetic_energy_regressor", "potential_energy_regressor", "energy",
     "com", "ccrba", "cmm_time_variation", "dccrba", "frame_jacobian",
-    "frame_jacobian_dot", "osc_inertia", "end_effector_pose_runtime",
-    "end_effector_pose_gradient_runtime",
+    "frame_jacobian_dot", "osc_inertia", "frame_velocity", "frame_acceleration",
+    "frame_velocity_gradient", "frame_acceleration_gradient",
+    "end_effector_pose_runtime", "end_effector_pose_gradient_runtime",
     # Wave D 2026-09-12: the plant cost quartet are REAL spec rows now (the
     # old COST side table dissolved); their table names de-prefix in
     # _torch_table_row (historical torch op naming).

@@ -12,7 +12,9 @@ The forward-only centroidal / energy / kinematics surface mirrors the numpy
 handle: ``generalized_gravity``, ``nonlinear_effects``, ``energy``, ``com``,
 ``ccrba``, ``dccrba``, ``cmm_time_variation``, ``coriolis_matrix``,
 ``kinetic_energy_regressor``, ``potential_energy_regressor``, ``frame_jacobian``,
-``frame_jacobian_dot``, ``osc_inertia``, ``end_effector_pose_runtime``,
+``frame_jacobian_dot``, ``osc_inertia``, ``frame_velocity``,
+``frame_acceleration``, ``frame_velocity_gradient``,
+``frame_acceleration_gradient``, ``end_effector_pose_runtime``,
 ``end_effector_pose_gradient_runtime`` (the gated ones raise an actionable
 "not generated for this robot" error when their kernel is absent from the .so).
 
@@ -61,6 +63,12 @@ from grid_rbd._handle import RobotHandle, SecondOrderID, SecondOrderFD, _integra
 from .._out_transform import apply_out_layout
 from .._surface_common import BaseDelegateMixin, MujocoDerivativeViewMixin, MujocoViewBase
 
+# 2026-11-03: the MuJoCo-convention integrator_gradient twin's velocity rows
+# (d qd_{k+1} / dq, d qd_{k+1} / dqd) disagree with finite differences of the
+# twin's own value on go2 (angular columns by 7e-2, joint columns by 1e-4, the
+# qd block by 1e-2) while its configuration rows are exact; the pin kernel passes
+# the same check. Until the twin is fixed its backward is refused rather than
+# returning a wrong gradient (docs/open-tasks plan, item D; guide 7.z84).
 
 # ─── op-library registry (process-global, idempotent) ───────────────────────
 
@@ -204,7 +212,8 @@ def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None, ctx_i
     # ABI_SPECS[key].vjp and runs through the shared _vjp_common.vjp_backward
     # driver, identical to the jax surface.
     from grid_codegen.abi_specs import ABI_SPECS
-    from .._vjp_common import vjp_backward
+    from .._vjp_common import integrator_state_cotangent, vjp_backward
+
 
     # B2 (K4): every forward allocates an int32 model-version stamp that the op
     # fills at execution time (`stamp_out`); the backward hands it back to each
@@ -331,26 +340,22 @@ def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None, ctx_i
         @staticmethod
         def forward(ctx, q, qd, u, dt, it, gravity):
             stamp = _stamp(q)
-            ctx.save_for_backward(q, qd, u, stamp)
+            out = _op("integrator")(q, qd, u, dt, it, gravity, stamp_out=stamp)
+            # x_{k+1} is a residual: on a quaternion model the state cotangent
+            # is pulled onto the gradient kernel's tangent rows at q_{k+1}.
+            ctx.save_for_backward(q, qd, u, stamp, out)
             ctx.dt, ctx.it, ctx.gravity = dt, it, gravity
-            return _op("integrator")(q, qd, u, dt, it, gravity, stamp_out=stamp)
+            return out
 
         @staticmethod
         def backward(ctx, grad_x):
-            q, qd, u, stamp = ctx.saved_tensors
-            # A3-audit fix (2026-09-09): this used to shadow the closure's nv
-            # with q.shape[1] (= nq). Fixed base: nq == nv, worked by luck.
-            # Floating base: nq = nv+1, so the reshape below mis-sized AND the
-            # tangent (2nv-wide) Jacobian cannot be chained to the (nq+nv)-wide
-            # x cotangent without the quaternion-chart VJP — unimplemented, so
-            # say so instead of crashing on a confusing reshape.
-            if q.shape[1] != nv:
-                raise NotImplementedError(
-                    "integrator backward on a floating base is not implemented: it "
-                    "needs the SE(3) chart VJP (tangent 2*nv Jacobian against the "
-                    "nq+nv state cotangent). Differentiate the integrator_gradient "
-                    "outputs directly, or use a fixed-base robot.")
-            g = vjp_backward(ABI_SPECS["integrator"].vjp, grad_x, {
+            q, qd, u, stamp, out = ctx.saved_tensors
+            # nq != nv (floating root or spherical joints): the (nq+nv)-wide x
+            # cotangent is chained to the tangent (2nv-wide) Jacobian through
+            # the chart's output map (2026-11-03; refused before that).
+            ct = integrator_state_cotangent(grad_x, out, nq=q.shape[1], nv=nv, mjx=mujoco,
+                                            layout=configuration_layout)
+            g = vjp_backward(ABI_SPECS["integrator"].vjp, ct, {
                 # h_dAB is (2*NV x 3*NV) column-major per ts → shared out-layout
                 # (colmajor_whole → row-major (B, 2NV, 3NV)); thirds = gq/gqd/gu.
                 "grad": lambda: apply_out_layout(
@@ -911,6 +916,61 @@ class TorchRobotHandle(BaseDelegateMixin):
         tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
         raw = self._op(_convention, "frame_jacobian_dot")(q, qd, int(tj), int(rf))
         return self._shape_out("frame_jacobian_dot", raw)
+
+    def frame_velocity(self, q, qd, *, target_jid=None, reference_frame=None, _convention=None):
+        """Frame twist ``v = J(q) qd`` (``[linear; angular]``) in the chosen
+        reference frame. Returns ``(B, 6)``.
+
+        ``target_jid`` / ``reference_frame`` are runtime int op args (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``); see :py:meth:`frame_jacobian`.
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention inputs; the twist is a frame quantity, so it is not
+        reframed."""
+        from .._handle import _resolve_frame_args
+        tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
+        raw = self._op(_convention, "frame_velocity")(q, qd, int(tj), int(rf))
+        return self._shape_out("frame_velocity", raw)
+
+    def frame_acceleration(self, q, qd, qdd, *, target_jid=None, reference_frame=None, _convention=None):
+        """Frame acceleration ``a = J(q) qdd + Jdot(q, qd) qd`` (``[linear;
+        angular]``), the time derivative of the twist measured in the chosen
+        reference frame (classical acceleration in ``LOCAL_WORLD_ALIGNED``).
+        Returns ``(B, 6)``. ``qdd`` is required.
+
+        ``target_jid`` / ``reference_frame`` are runtime int op args (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``); see :py:meth:`frame_jacobian`.
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd``/``qdd``
+        are MuJoCo-convention inputs; the acceleration is not reframed."""
+        from .._handle import _resolve_frame_args
+        tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
+        raw = self._op(_convention, "frame_acceleration")(q, qd, qdd, int(tj), int(rf))
+        return self._shape_out("frame_acceleration", raw)
+
+    def frame_velocity_gradient(self, q, qd, *, target_jid=None, reference_frame=None, _convention=None):
+        """``[dv/dq | dv/dqd]`` of :py:meth:`frame_velocity` as ``(B, 6, 2*NV)``
+        (the second block is the frame Jacobian), in the local tangent chart;
+        forward only. See the NumPy handle for the frame conventions.
+
+        ``target_jid`` / ``reference_frame`` are runtime int op args (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``)."""
+        from .._handle import _resolve_frame_args
+        tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
+        raw = self._op(_convention, "frame_velocity_gradient")(q, qd, int(tj), int(rf))
+        return self._shape_out("frame_velocity_gradient", raw)
+
+    def frame_acceleration_gradient(self, q, qd, qdd, *, target_jid=None, reference_frame=None, _convention=None):
+        """``[da/dq | da/dqd | da/dqdd]`` of :py:meth:`frame_acceleration` as
+        ``(B, 6, 3*NV)`` (the last block is the frame Jacobian), in the local
+        tangent chart; forward only. ``qdd`` is required.
+
+        ``target_jid`` / ``reference_frame`` are runtime int op args (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``)."""
+        from .._handle import _resolve_frame_args
+        tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
+        raw = self._op(_convention, "frame_acceleration_gradient")(q, qd, qdd, int(tj), int(rf))
+        return self._shape_out("frame_acceleration_gradient", raw)
 
     def osc_inertia(self, q, *, _convention=None):
         """Operational-space (task) inertia Lambda = (J·M⁻¹·Jᵀ)⁻¹ (6 x 6) for

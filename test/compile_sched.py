@@ -57,9 +57,12 @@ _PAGE_KB = os.sysconf("SC_PAGE_SIZE") // 1024
 
 
 def session_tree_rss_kb(sid: int) -> int:
-    """Summed RSS (kB) of every live process whose session id is `sid` (the
-    worker runs under setsid, so its whole compiler tree shares it)."""
-    total = 0
+    """Session members plus descendants, including children that call setsid.
+
+    Workers remain alive while waiting for their children. Session membership
+    also retains orphaned ordinary compiler children until they are reaped.
+    """
+    rows = {}
     for name in os.listdir("/proc"):
         if not name.isdigit():
             continue
@@ -70,9 +73,15 @@ def session_tree_rss_kb(sid: int) -> int:
             continue  # exited between listdir and open
         rest = stat[stat.rfind(")") + 2:].split()   # comm may contain spaces/parens
         # fields after comm: [0]=state [1]=ppid [2]=pgrp [3]=session ... [21]=rss (pages)
-        if len(rest) > 21 and int(rest[3]) == sid:
-            total += int(rest[21]) * _PAGE_KB
-    return total
+        if len(rest) > 21:
+            rows[int(name)] = (int(rest[1]), int(rest[3]), int(rest[21]) * _PAGE_KB)
+    owned = {pid for pid, (_, session, _) in rows.items() if session == sid or pid == sid}
+    while True:
+        children = {pid for pid, (parent, _, _) in rows.items() if parent in owned}
+        if children <= owned:
+            break
+        owned.update(children)
+    return sum(rows[pid][2] for pid in owned)
 DEFAULT_FLOOR_KB = 10 * 1024 * 1024    # never plan below 10 GB MemAvailable
 DEFAULT_MARGIN = 1.3
 DEFAULT_MAX_JOBS = 5
@@ -178,6 +187,7 @@ class RamScheduler:
         default_peak_kb: int = DEFAULT_PEAK_KB,
         label: str = "compile",
         strict_memory: bool = False,
+        admission=None,
     ):
         self.ledger = ledger
         self.max_jobs = max(1, int(max_jobs))
@@ -186,6 +196,7 @@ class RamScheduler:
         self.default_peak_kb = default_peak_kb
         self.label = label
         self.strict_memory = strict_memory
+        self.admission = admission
         self.resource_blocked: str | None = None
         # Static pool sized at construction; the live MemAvailable backstop at
         # each admission covers external memory pressure appearing later.
@@ -265,6 +276,18 @@ class RamScheduler:
         try:
             self._run_pool_inner(pending)
         except BaseException as exc:   # the thread must never die silently
+            if self.admission is not None:
+                self.stop()
+                self.admission.halt(f"compile scheduler failure: {exc!r}")
+                # A launch failure must not strand the reservations of healthy
+                # earlier jobs. Drain our children before resolving their events.
+                with self._state_lock:
+                    owned = list(self._procs.items())
+                for name, proc in owned:
+                    proc.wait()
+                    self.admission.release("compile:" + name)
+                with self._state_lock:
+                    self._procs.clear()
             # Every job without a result, including the one whose launch raised
             # (already taken off `pending`), resolves so waiters unblock.
             unresolved = [n for n in self.done_events if n not in self.results]
@@ -294,12 +317,19 @@ class RamScheduler:
                     log_f.close()
                 with self._state_lock:
                     self._procs.pop(name, None)
-                self.results[name] = self._collect(job, proc, time.monotonic() - t0,
-                                                   peak_holder[0])
+                try:
+                    self.results[name] = self._collect(job, proc, time.monotonic() - t0,
+                                                       peak_holder[0])
+                finally:
+                    if self.admission is not None:
+                        self.admission.release("compile:" + name)
                 self.done_events[name].set()
 
         while pending or running:
             reap()
+            if self.admission is not None and self.admission.pressure():
+                self.resource_blocked = self.admission.blocked
+                self.stop()
             launched = False
             if not self._stop.is_set():
                 for job in list(pending):
@@ -311,11 +341,26 @@ class RamScheduler:
                         job.ledger_key, self.default_peak_kb, self.margin
                     )
                     if self.strict_memory:
-                        pred = max(pred, int(self.default_peak_kb * self.margin))
+                        # Shared admission may use measured cold-build peaks,
+                        # still floored at the conservative 8 GiB pool allowance.
+                        # Unseen jobs retain default_peak_kb (16 GiB in the
+                        # release profiles); ledger values never lower that.
+                        floor = (min(DEFAULT_PEAK_KB, self.default_peak_kb)
+                                 if self.admission is not None else self.default_peak_kb)
+                        pred = max(pred, int(floor * self.margin))
                     available = mem_available_kb()
                     fits = (predicted_sum + pred <= self.budget_kb
                             and available - pred >= self.floor_kb)
-                    if self.strict_memory and not running and not fits:
+                    token = "compile:" + job.name
+                    if self.admission is not None:
+                        fits = self.admission.reserve(token, pred)
+                        if not fits:
+                            if self.admission.active:
+                                continue  # a shard may still own the headroom
+                            self.resource_blocked = self.admission.refusal
+                            self.stop()
+                            break
+                    if self.admission is None and self.strict_memory and not running and not fits:
                         self.resource_blocked = (
                             f"{job.name}: predicted {pred} KiB, available {available} KiB, "
                             f"reserve {self.floor_kb} KiB, budget {self.budget_kb} KiB")
@@ -329,9 +374,18 @@ class RamScheduler:
                     if (running or self.strict_memory) and not fits:
                         continue
                     pending.remove(job)
-                    if not self._launch(job, pred, running, busy_groups):
-                        pending.append(job)
-                        break
+                    try:
+                        if not self._launch(job, pred, running, busy_groups):
+                            if self.admission is not None:
+                                self.admission.release(token)
+                            pending.append(job)
+                            break
+                    except BaseException:
+                        if self.admission is not None:
+                            self.admission.release(token)
+                        raise
+                    if self.admission is not None:
+                        self.admission.attach(token, running[job.name][1].pid)
                     predicted_sum += pred
                     launched = True
             elif not running:

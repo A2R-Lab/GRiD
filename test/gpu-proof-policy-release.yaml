@@ -43,6 +43,7 @@ required_fingerprint_paths:
   - test/run_gpu_proof.sh
   - test/run_split_suite.py
   - test/compile_sched.py
+  - test/resource_admission.py
   - test/prewarm_cuda_flagship.py
   - test/codegen_neutrality.py
   - test/header_key_replay.py

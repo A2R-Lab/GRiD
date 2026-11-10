@@ -102,7 +102,7 @@ def run_smoke_job(job, *, inspect_only=False):
                                    inspect_only=inspect_only)
         kwargs = {}
         if job['base'] == 'floating':
-            fdsva = os.environ.get('GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA', '0') == '1'
+            fdsva = os.environ.get('GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA', '1') == '1'
             kwargs.update(enable_floating_second_order=True, enable_fdsva=fdsva,
                           algorithm_list='idsva_so_body_frame,fdsva_so' if fdsva else 'idsva_so_body_frame',
                           enable_idsva_so_body_frame=True)

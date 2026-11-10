@@ -1481,7 +1481,7 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
         struct_lines.append("    T *d_joint_dynamics_params;")
     if getattr(self, "runtime_armature", False):
         # runtime_armature: flag-gated mutable per-v-slot rotor-armature table
-        # (nv floats, zero-initialised). Emitted ONLY under runtime_armature.
+        # (nv scalars, initialized from the artifact). Emitted ONLY under runtime_armature.
         struct_lines.append("    T *d_armature_params;")
     struct_lines.append("};")
     self.gen_add_code_lines(struct_lines)
@@ -1536,6 +1536,10 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              # 6 x NUM_VEL each; osc_inertia: 6 x 6 task inertia Lambda)
                              "    T *d_frame_jacobian;       // frame_jacobian (6 x NUM_VEL)", \
                              "    T *d_frame_jacobian_dot;   // frame_jacobian_dot (6 x NUM_VEL)", \
+                             "    T *d_frame_velocity;       // frame_velocity (6)", \
+                             "    T *d_frame_acceleration;   // frame_acceleration (6)", \
+                             "    T *d_frame_velocity_gradient;      // frame_velocity_gradient (6 x 2*NUM_VEL)", \
+                             "    T *d_frame_acceleration_gradient;  // frame_acceleration_gradient (6 x 3*NUM_VEL)", \
                              "    T *d_osc_inertia;          // osc_inertia Lambda (6 x 6)", \
                              # runtime-target pose/pose-gradient (additive, opt-in). The 3-vector
                              # runtime tool/tip transform is a single device buffer, host-init to identity.
@@ -1597,6 +1601,10 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              # E2/S1: general-frame Jacobian host buffers
                              "    T *h_frame_jacobian;", \
                              "    T *h_frame_jacobian_dot;", \
+                             "    T *h_frame_velocity;", \
+                             "    T *h_frame_acceleration;", \
+                             "    T *h_frame_velocity_gradient;", \
+                             "    T *h_frame_acceleration_gradient;", \
                              "    T *h_osc_inertia;", \
                              "    T *h_eePose;", \
                              "    T *h_eePoseGrad;"] \
@@ -1931,9 +1939,17 @@ def gen_init_gridData(self):
                   # E2/S1: general-frame Jacobian outputs (J / Jdot: 6*NV each ; Lambda: 36)
                   "    gpuErrchk(cudaMalloc((void**)&hd_data->d_frame_jacobian, 6*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));", \
                   "    gpuErrchk(cudaMalloc((void**)&hd_data->d_frame_jacobian_dot, 6*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));", \
+                  "    gpuErrchk(cudaMalloc((void**)&hd_data->d_frame_velocity, 6*NUM_TIMESTEPS*sizeof(T)));", \
+                  "    gpuErrchk(cudaMalloc((void**)&hd_data->d_frame_acceleration, 6*NUM_TIMESTEPS*sizeof(T)));", \
+                  "    gpuErrchk(cudaMalloc((void**)&hd_data->d_frame_velocity_gradient, 12*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));", \
+                  "    gpuErrchk(cudaMalloc((void**)&hd_data->d_frame_acceleration_gradient, 18*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));", \
                   "    gpuErrchk(cudaMalloc((void**)&hd_data->d_osc_inertia, 36*NUM_TIMESTEPS*sizeof(T)));", \
                   "    hd_data->h_frame_jacobian = grid_host_alloc<T>(6*NUM_VEL*NUM_TIMESTEPS*sizeof(T));", \
                   "    hd_data->h_frame_jacobian_dot = grid_host_alloc<T>(6*NUM_VEL*NUM_TIMESTEPS*sizeof(T));", \
+                  "    hd_data->h_frame_velocity = grid_host_alloc<T>(6*NUM_TIMESTEPS*sizeof(T));", \
+                  "    hd_data->h_frame_acceleration = grid_host_alloc<T>(6*NUM_TIMESTEPS*sizeof(T));", \
+                  "    hd_data->h_frame_velocity_gradient = grid_host_alloc<T>(12*NUM_VEL*NUM_TIMESTEPS*sizeof(T));", \
+                  "    hd_data->h_frame_acceleration_gradient = grid_host_alloc<T>(18*NUM_VEL*NUM_TIMESTEPS*sizeof(T));", \
                   "    hd_data->h_osc_inertia = grid_host_alloc<T>(36*NUM_TIMESTEPS*sizeof(T));", \
                   # runtime-target pose / pose-gradient (additive, opt-in). The runtime
                   # 3-vector offset is a single device buffer init to {0,0,0} (frame origin);

@@ -10,9 +10,17 @@ Rigid Body Dynamics with Analytical Gradients*. That implementation is preserved
 in the archival [robot-acceleration/GRiD](https://github.com/robot-acceleration/GRiD)
 repository. Everything below describes the packaged A2R-Lab releases.
 
-## [Unreleased]
+## [0.7.1] - 2026-11-10
 
-These changes are staged for 0.7.1; publication is pending.
+Publication is pending.
+
+Output changes from 0.7.0: mimic and spherical inverse-mass matrices no longer
+double off-diagonal entries in Python or forward-dynamics torque pullbacks;
+native buffers have zeros below their symmetric upper triangle. Floating
+MuJoCo integrators take the MuJoCo step and therefore have different values and
+gradients. Retraction normalizes the input quaternion. Rizon4 uses vendor
+inertials. Native and backend thread overrides clamp to the compiled kernel
+limit, including overloaded and multitarget launches.
 
 - Repair full six-axis bias-force projection and first derivatives for a lone
   floating body. Document body-origin base wrenches and add independent
@@ -21,6 +29,13 @@ These changes are staged for 0.7.1; publication is pending.
 - Initialize the entire reserved topology table before host-to-device upload,
   including floating/mimic padding. Reject misaligned caller-owned allocation
   slabs/cursors and overflowing requests without advancing the pool.
+- Size the topology S-index section from its emitted entries as well as its
+  historical padding. Small floating mimic chains previously declared fewer
+  entries than their root and followers required and failed CUDA compilation.
+- Preserve independent-slot armature in the polynomial embedding reference's
+  torque, mass and energy. This does not add follower rotor parameters or
+  floating-mimic MuJoCo twins. Permanent cross-feature tests cover supported
+  baked/runtime dynamics, frame derivatives and native/MuJoCo integration.
 - Align pose matrix scratch inside its queried allocation to prevent optimized
   shared loads from overlapping the concurrently written matrix bank. Callers
   still need only scalar alignment; regenerate headers and use the scratch
@@ -50,6 +65,151 @@ These changes are staged for 0.7.1; publication is pending.
   owning context rather than a registration-name cache. Forward the runtime
   option through JAX and PyTorch registration. Include rotor kinetic energy in
   both generated energy paths; the ten-per-body inertial regressor is unchanged.
+- Joint damping and friction on a coupled (mimic) joint now fold into the
+  leader's coordinate with `alpha^2 * damping` and `|alpha| * friction`
+  (the congruence `G^T B G` of the follower's own torque), in the generated
+  bias and gradients, the runtime joint-dynamics table and the numpy
+  reference. The previous fold used a single power of `alpha`, which
+  coincides on a ratio of one (fr3) and injected energy on a negative
+  ratio. Polynomial followers evaluate `alpha(q)` in the fold and gain the
+  `2 alpha alpha' b qd + sign(alpha) alpha' f s(qd)` term in `dtau/dq`;
+  the constant per-slot `runtime_joint_dynamics` table is refused for a
+  damped polynomial follower.
+- `coriolis_matrix` generates for polynomial couplings: the embedding's
+  reduced matrix `G^T C_f G + G^T M_f Gdot`, whose inertia term the kernel
+  assembles from the composite inertias of its backward pass with `alpha(q)`
+  and `alpha'(q)` read at runtime; the numpy reference projects the same
+  expression and checks `C qd + g = bias` and `C + C^T = dM/dt`.
+- `dccrba` and `cmm_time_variation` generate for polynomial couplings: the
+  derivative of `A_y = A_f G` adds the full tree's momentum column of each
+  follower times `alpha'(q)` at its leader's cell (times `qd` when
+  contracted); the reference projects the same and checks the tensor
+  against the chart, `Adot` along the flow and `hdot = A ydd + Adot yd`
+  analytically.
+- MuJoCo-convention integrators on a floating base now take the MuJoCo step:
+  the velocity advances by `dt` times the MuJoCo-frame acceleration (whose
+  base-linear block carries `omega x v`), the base position by the
+  world-frame velocity of step k (euler) or k+1 (semi-implicit), the
+  quaternion and joints as pinocchio. The value kernels of `integrator` and
+  `plant_step` fed the raw world-frame base velocity and force into the
+  dynamics as local quantities and rotated nothing on output; the
+  `integrator_gradient` transform (numpy and kernel epilogue, and the
+  forward-mode clone of the `plant_step_hessian` twin) applied the plain
+  `G` reframe to the velocity rows, which disagrees with finite differences
+  of the MuJoCo step at first order in `dt`. The bottom rows are now
+  `[dt Fq | I + dt Fv | dt Fu]` with `F` the validated forward-dynamics
+  gradient transform. The floating-base mjx integrator backward is no longer
+  refused on the jax and torch surfaces and is checked against finite
+  differences of a loss through it in float64.
+- A polynomial follower whose leader is not on an end effector's chain (a
+  gripper's cross-finger coupling) is now scaled by `alpha(q)` in the pose
+  and multitarget gradients; its lone Jacobian column was treated as an
+  unscaled single job. The multitarget smoke runners clamp their shared-tier
+  launches to the kernel's launch bound and check the launch.
+- A spherical-joint model builds with `integrator_gradient` in its algorithm
+  list. Its gradient kernels support the single-stage schemes only (euler,
+  semi-implicit euler, constant acceleration; the multi-stage instantiations
+  are a static assertion), and the wrapper's gradient dispatch used to name
+  every scheme, so the build failed to compile. The generated header now
+  sets `GRID_INTEGRATOR_GRADIENT_SINGLE_STAGE_ONLY` and the integrator and
+  plant-step gradient dispatch on the three surfaces names only the
+  supported cases; a multi-stage request fails at call time with a message.
+- `f_ext_gradient` and `f_ext_gradient_dq` generate for polynomial
+  couplings: `J_y^T = G^T J_f^T` with runtime `alpha(q)`, and the
+  configuration derivative adds `-(dG/dy)^T J_f^T` (the follower's own
+  pushdown row times `alpha'`) to the two-table `alpha_j alpha_m` product;
+  the reference projects the same and checks the affine identity in
+  `f_ext` and the chart.
+
+- Frame kinematics: `frame_velocity` (the twist `J qd` of a frame) and
+  `frame_acceleration` (`J qdd + Jdot qd`, the spatial acceleration in
+  `LOCAL` and `WORLD` and the classical acceleration in
+  `LOCAL_WORLD_ALIGNED`) join the frame Jacobian family as opt-in generated
+  kernels with batched launchers and three-mode hosts; the numpy reference
+  gains the same functions, checked against Pinocchio's
+  `getFrameVelocity`, `getFrameAcceleration` and
+  `getFrameClassicalAcceleration`. Both are in the default `register_robot`
+  algorithm list and bound on the three Python surfaces as
+  `frame_velocity(q, qd, target_jid=, reference_frame=)` and
+  `frame_acceleration(q, qd, qdd, ...)`, returning `(B, 6)`; a floating
+  base gets the MuJoCo-convention twins (input conversion only, since the
+  outputs are frame quantities). Their derivatives follow:
+  `frame_velocity_gradient` (`[dv/dq | dv/dqd]`, 6 x 2 nv) and
+  `frame_acceleration_gradient` (`[da/dq | da/dqd | da/dqdd]`, 6 x 3 nv) in
+  the local tangent chart, on one generated inner (a world-origin Plücker
+  sweep, then one thread per velocity slot), bound on the three surfaces
+  with MuJoCo-convention twins (column reframe); the reference gains
+  `frame_velocity_derivatives` / `frame_acceleration_derivatives`, checked
+  against Pinocchio's `getFrameVelocityDerivatives` /
+  `getFrameAccelerationDerivatives` and against chart finite differences on
+  every robot of the manifest. Pinocchio's LOCAL_WORLD_ALIGNED
+  q-derivatives hold the frame origin fixed; GRiD's differentiate the
+  function, so they also carry the moving origin (and, for the
+  acceleration, the classical term), which is what a task-space constraint
+  needs.
+- Closed loops by constraint embedding, first step (item E of 0.8):
+  polynomial couplings. URDFParser reads `<mimic joint="l" polycoef="c0 c1
+  c2 c3 c4" q0="..."/>` (the MuJoCo joint equality, q = sum c_i (q_l -
+  q0)^i; a degree-one polynomial is the plain mimic) and offers
+  `parse(..., reduce_couplings=False)`, the full spanning tree with the
+  couplings recorded. The reference projects the full tree onto the
+  independent coordinates (`RBDReference/_embedding.py`: q = F(y),
+  qd = G yd, qdd = G ydd + Gdot yd, tau_y = G^T tau) for any robot with a
+  polynomial follower; on a mimic robot the projection equals the reduced
+  recursions to round-off. The generator evaluates alpha = dq_f/dq_l and
+  its two derivatives on the device from the leader's coordinate; inverse
+  dynamics, CRBA, Minv, forward dynamics, ABA and both first-order gradients
+  carry the new terms (the follower accelerates by alpha' qd_l^2, the
+  gradients gain the alpha' and alpha'' terms and (dG/dq)^T f) and are
+  checked on the GPU against the projection on both bases; so do the
+  end-effector pose and its gradient and the frame Jacobian family (J,
+  Jdot with its alpha' qd_l term, the task inertia, the frame velocity and
+  acceleration and their derivatives), the six integrators with their
+  `[A | B]` gradients, the joint-torque regressor and the energy
+  regressors, the forward-dynamics parameter gradient, the generalized
+  gravity and bias, the CoM, the centroidal momentum matrix and the
+  energies. Coriolis, momentum-matrix derivatives, external-force gradients
+  and runtime end-effector pose also support polynomial couplings. The pose
+  Hessian, regressor gradient, second-order dynamics and plant layer remain
+  refused. Polynomial followers own no armature slots: a constant hand-fold
+  of follower rotor inertia is not valid when alpha depends on configuration.
+  Armature on independent scalar slots remains a constant reduced inertia.
+- Correctness: the floating-base integrator retract built the position update
+  from the raw input quaternion, so a non-unit quaternion moved the base by
+  its squared norm; the retract now normalises the input like every other
+  kernel (`f = f o normalize`). Unit inputs are unchanged.
+- Differentiation: the integrator backward runs on floating-base and
+  spherical-joint models on the jax and torch surfaces. The state cotangent
+  of `x_{k+1}` is pulled onto the gradient kernel's tangent rows at `q_{k+1}`
+  through the chart's output map (`integrator_state_cotangent`: `R(q)` on the
+  pin linear block, `0.5 q (x) (delta, 0)` on each quaternion block, identity
+  on the MuJoCo linear block), then the `q` cotangent is pulled back to the
+  input quaternion as for every other op. Both surfaces refused these models
+  before; jax fell back to a non-differentiable call.
+- Correctness: the second-order forward dynamics kernel (`fdsva_so`) now
+  forwards the model pointer to the forward dynamics inner it reuses. With
+  `runtime_joint_dynamics=True` on a damped robot the inner's bias read the
+  runtime table through a null pointer; builds without runtime joint dynamics
+  are byte-identical.
+- Codegen: `enable_floating_second_order=False` no longer warns that
+  floating-base second order is "under development"; it is a plain opt-out.
+- Receipts: the floating-base second-order diagnostic includes `fdsva_so` by
+  default (`GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA=0` opts out), so the
+  standalone floating `fdsva_so` is checked against the oracle on every robot
+  of the diagnostic instead of only through the go2 plant Hessian.
+- Tests: one shared thread-sweep helper (`test/cuda_equivalents/
+  thread_invariance.py`) replaces the per-module loops in fifteen CUDA
+  equivalence modules; the split driver fingerprints `from
+  test.cuda_equivalents import helper` imports too (two helper modules had
+  escaped it). gen3 joins the frame, tool-offset, quaternion-derivative,
+  dCCRBA and integrator oracle tests, with its continuous-joint round-off
+  classes recorded per key; the operational-space inertia oracle test checks
+  every sample through the backward-error tiers instead of skipping
+  ill-conditioned ones.
+- Assets: the bundled rizon4 URDF's eight inertial elements now carry the
+  vendor's current table (flexiv_description `jazzy` at 7d5dd28c, 2026-10-19)
+  in place of hand-rounded values; kinematics and limits are unchanged.
+  `grid_assets/robots/URDF_SOURCES.md` records the provenance.
 - Receipts: the first Jetson AGX Orin (sm_87) receipt,
   `receipts/gpu-proof-sm87.json` with its header-key ledger, recorded at the
   0.7.0 receipt commit 607efc2: 2056 tests, 2055 passed and the one expected
@@ -653,7 +813,7 @@ update on top of that, organised here by theme:
 - Closed kinematic loops are unsupported.
 - No Windows, macOS, Jetson or precompiled-robot wheels.
 
-[Unreleased]: https://github.com/A2R-Lab/GRiD/compare/v0.7.0...HEAD
+[0.7.1]: https://github.com/A2R-Lab/GRiD/compare/v0.7.0...HEAD
 [0.7.0]: https://github.com/A2R-Lab/GRiD/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/A2R-Lab/GRiD/compare/v0.5.5...v0.6.0
 [0.5.5]: https://github.com/A2R-Lab/GRiD/compare/v0.5.4...v0.5.5

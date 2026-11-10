@@ -21,13 +21,14 @@ def test_floating_default_registration(runtime):
         robot = URDFParser().parse(str(robot_urdf("go2")), floating_base=True)
     armature = np.zeros(robot.get_num_vel(), dtype=np.float32)
     armature[supported_slots(robot)] = .25
-    ref = RBDReference(robot)
+    ref = RBDReference(robot, use_joint_dynamics=True)
     ref.set_armature(armature)
     # Deliberately omit algorithm_list and enable_mujoco_kernels: this is the
     # registration most users call, not a hand-selected compile subset.
     h = grid_rbd.register_robot(
         f"armature_default_{runtime}", str(robot_urdf("go2")),
         floating_base=True, armature=armature, runtime_armature=runtime,
+        use_joint_dynamics=True, runtime_joint_dynamics=True,
         max_batch_size=1,
     )
     try:

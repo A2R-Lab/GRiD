@@ -145,6 +145,18 @@ pass the same value to both for cross-validation.
      - ``(B, 6, NV)`` / ``(B, 6, NV)`` / ``(B, 6, 6)``
      - General-frame J / J̇ (runtime ``target_jid`` + ``reference_frame``) and
        operational-space inertia Λ.
+   * - ``frame_velocity(q, qd)`` / ``frame_acceleration(q, qd, qdd)``
+     - ``(B, 6)`` / ``(B, 6)``
+     - Frame twist ``J q̇`` and frame acceleration ``J q̈ + J̇ q̇`` (runtime
+       ``target_jid`` + ``reference_frame``): pinocchio's ``getFrameVelocity``
+       and ``getFrameAcceleration`` in LOCAL and WORLD, the classical
+       acceleration in LOCAL_WORLD_ALIGNED.
+   * - ``frame_velocity_gradient(q, qd)`` / ``frame_acceleration_gradient(q, qd, qdd)``
+     - ``(B, 6, 2*NV)`` / ``(B, 6, 3*NV)``
+     - ``[dv/dq | dv/dq̇]`` and ``[da/dq | da/dq̇ | da/dq̈]`` of the two above
+       in the local tangent chart (pinocchio's ``getFrameVelocityDerivatives``
+       / ``getFrameAccelerationDerivatives`` in LOCAL and WORLD; in
+       LOCAL_WORLD_ALIGNED the q block also moves the frame origin).
    * - ``end_effector_pose_runtime(q, ee_joint_names=None, ee_offsets=None)``
      - ``(B, 6*NUM_EES)``
      - Runtime arbitrary multi-EE pose (runtime target joints + per-target
@@ -174,10 +186,12 @@ pass the same value to both for cross-validation.
        joint-local ``f_ext``; needs a ``register_robot(contact_frames=[...])``
        build.
    * - ``set_inertia_params(t)`` / ``set_transform_params(t)`` /
-       ``set_joint_dynamics(damping=, friction=, friction_width=)``
+       ``set_joint_dynamics(damping=, friction=, friction_width=)`` /
+       ``set_armature(a)``
      - none
      - Runtime-mutable model tables (flag-gated builds; no recompile).
-       ``friction_width`` is accepted on a ``friction_model="tanh"`` build.
+       ``friction_width`` is accepted on a ``friction_model="tanh"`` build;
+       ``set_armature`` on a ``runtime_armature`` build.
    * - ``fk_batched(q)``
      - ``(B, 7)``
      - Large-batch forward kinematics for the leaf EE frame
@@ -409,10 +423,14 @@ else is forward-only on every backend.
        forward-only.
    * - ``integrator``
      - ``q``, ``qd``, ``u``
-     - fixed-base only (the SE(3)-chart VJP is not implemented); through
-       the baked ``integrator_with_gradient`` kernel (the same fused step +
-       Jacobian that ``integrator_gradient`` / ``plant_step_gradient`` return);
-       ``dt``/steps are static.
+     - through the baked ``integrator_with_gradient`` kernel (the same fused
+       step + Jacobian that ``integrator_gradient`` / ``plant_step_gradient``
+       return); ``dt``/steps are static. On a floating base or a spherical
+       joint the state cotangent of ``x_{k+1}`` is pulled onto the kernel's
+       tangent rows at ``q_{k+1}`` by the chart's output map (``R(q_{k+1})``
+       on the pin linear block, ``0.5 q (x) (delta, 0)`` on each quaternion
+       block), then the ``q`` cotangent is pulled back to the input
+       quaternion as for every other op.
    * - ``inverse_dynamics_wrt_params``
      - ``params``, ``q``, ``qd``
      - local parameter sensitivity (``∂τ/∂π`` via the regressor at
@@ -444,7 +462,9 @@ offer a functional parameterized forward.
 
 Joint damping and friction are opt-in. ``register_robot(use_joint_dynamics=True)``
 applies the URDF ``<dynamics damping= friction=>`` values as the joint-local
-bias ``damping*qd + friction*s(qd)`` in ``inverse_dynamics``,
+bias ``damping*qd + friction*s(qd)`` (a mimic follower's folds into its
+leader's slot as ``alpha^2*damping`` and ``|alpha|*friction``, see
+:doc:`/user_guide/concepts/closed_loops`) in ``inverse_dynamics``,
 ``forward_dynamics`` and ``aba``, and carries its derivative through the
 gradients. The shape ``s`` is ``friction_model``: ``"sign"`` (the default)
 applies ``sign(qd)``, whose derivative is zero almost everywhere, so a
@@ -478,6 +498,10 @@ order. ``handle.num_armature_params`` is their count and ``handle.armature_units
 gives kg m^2 for angular slots and kg for prismatic slots. Mimic followers do
 not own additional columns. A mimic coordinate's value is effective reduced
 inertia, not an automatically inferred motor inertia for every follower.
+For a constant-ratio transmission a caller may supply the effective inertia
+on its independent slot. This hand fold does not apply to a polynomial
+follower: its configuration-dependent ratio would add both variable inertia
+and velocity terms. Follower rotor identification is not supported.
 
 Add ``runtime_armature=True`` only when explicit updates are needed. Each new
 context starts from the artifact's supplied vector. ``set_armature(a)`` changes
@@ -575,7 +599,7 @@ Runtime geometry limits
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 Runtime tables reach dynamics, not baked kinematics. ``runtime_inertia``,
-``runtime_transform`` and ``runtime_joint_dynamics`` rebuild the dynamics
+``runtime_transform``, ``runtime_joint_dynamics`` and ``runtime_armature`` rebuild the dynamics
 tables from a mutable device table once per launch, so ``inverse_dynamics``,
 ``forward_dynamics``, their gradients and the second-order kernels follow
 ``set_*_params`` with no recompile. The homogeneous-transform path used by
@@ -733,7 +757,8 @@ the plain wrapper's tuple-of-four convention), with autograd-aware
 centroidal / kinematics value ops (``generalized_gravity``,
 ``nonlinear_effects``, ``energy``, ``com``, ``ccrba``, ``dccrba``,
 ``cmm_time_variation``, ``coriolis_matrix``, ``frame_jacobian`` /
-``frame_jacobian_dot``, ``osc_inertia``, and the KE/PE regressors) are
+``frame_jacobian_dot``, ``frame_velocity`` / ``frame_acceleration`` and
+their gradients, ``osc_inertia``, and the KE/PE regressors) are
 exposed on the jax and torch surfaces too (forward-only, no autograd).
 
 PyTorch backend (``backend="torch"``)

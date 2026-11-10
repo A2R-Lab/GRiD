@@ -88,7 +88,7 @@ recording merely to discover IDs; the manifest remains a fingerprint path.
 Prefer the crash-isolated split driver for full GPU passes:
 `test/run_validation.py` (the receipt launcher) strips `GRID_*` from its env and sets its own
 (`GRID_SPLIT_RESOURCE_PROFILE=serial`, one compile-pool worker, one GPU shard,
-and `GRID_RBD_BUILD_JOBS=2`). Prewarm finishes before shards start, so inline
+and `GRID_RBD_BUILD_JOBS=2`, by default). Prewarm finishes before shards start, so inline
 compiles cannot overlap the pool. Admission reserves 14 GiB plus a predicted
 whole-process allowance of at least 16 GiB times 1.3; insufficient memory
 creates a resumable PAUSE, including for the first job. This is conservative
@@ -125,7 +125,13 @@ jobs, so the pool is the sole writer of a cache key until that shard starts (the
 unlocked cache writers are never raced; a mimic robot's cells share one header and
 fold into one serial job). `GRID_SPLIT_COMPILE_JOBS` sizes the pool (default 5;
 `0` = legacy serial inline warm). The tracked primary receipt launcher selects
-the conservative serial profile instead; see `RELEASING.md` for pause/resume.
+the conservative serial profile by default. Its opt-in `--resource-profile
+bounded-overlap` uses one shared memory-admission authority for two pool builds
+and one whole shard, including inline compilation, with two compiler units per
+build. Require a cold pilot before choosing it for a release. Pressure drains
+owned work, never peers. Resume preserves the profile; serial fallback starts
+a fresh full run without carried outcomes. See `RELEASING.md` for admission,
+pause/resume and fallback provenance.
 **Receipt policies (two-tier, user decision 2026-08-20).** The committed
 `gpu-proof.json` goes stale — and CI's verify-receipt job goes RED — the
 moment a push touches the correctness inputs listed in `pyproject.toml`

@@ -13,6 +13,7 @@ from grid_assets import robot_urdf
 from grid_codegen import GRiDCodeGenerator
 from URDFParser import URDFParser
 from test.cuda_equivalents import revolute_mimic_mechanics as mech
+from test.cuda_equivalents.thread_invariance import thread_sweep
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
@@ -39,8 +40,7 @@ def test_revolute_mimic_dynamics_against_independent_mechanics(tmp_path, monkeyp
         np.testing.assert_allclose(reference.crba(np.array([q])), [[mass]], atol=1e-12, rtol=1e-12)
         np.testing.assert_allclose(reference.inverse_dynamics(np.array([q]), np.array([qd]), np.zeros(1))[0],
                                    [bias], atol=1e-12, rtol=1e-12)
-        baseline = None
-        for threads in (1, 32, 64, 128):
+        def run(threads):
             stdout = _run_runner(exe, f"{q}\n{qd}\n{torque}\n", command, num_threads=threads)
             outputs = _parse_runner_output(stdout)
             actual = []
@@ -50,6 +50,6 @@ def test_revolute_mimic_dynamics_against_independent_mechanics(tmp_path, monkeyp
                 assert result.size == 1, (name, result)
                 np.testing.assert_allclose(result, [value], atol=2e-4, rtol=2e-4, err_msg=name)
                 actual.extend(result)
-            if baseline is not None:
-                np.testing.assert_array_equal(actual, baseline)
-            baseline = actual
+            return np.asarray(actual)
+
+        thread_sweep((1, 32, 64, 128), run)

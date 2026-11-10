@@ -25,6 +25,8 @@ Surface (parity with the plain ``RobotHandle``):
   ``dccrba``, ``cmm_time_variation``, ``coriolis_matrix``,
   ``kinetic_energy_regressor``, ``potential_energy_regressor``,
   ``frame_jacobian``, ``frame_jacobian_dot``, ``osc_inertia``,
+  ``frame_velocity``, ``frame_acceleration``,
+  ``frame_velocity_gradient``, ``frame_acceleration_gradient``,
   ``end_effector_pose``, ``end_effector_pose_gradient``,
   ``end_effector_pose_hessian``, ``end_effector_pose_runtime``,
   ``end_effector_pose_gradient_runtime``,
@@ -53,6 +55,12 @@ import numpy as np
 from .._handle import _integrator_code, _resolve_frame_args
 from .._surface_common import BaseDelegateMixin, MujocoDerivativeViewMixin, MujocoViewBase
 
+# 2026-11-03: the MuJoCo-convention integrator_gradient twin's velocity rows
+# (d qd_{k+1} / dq, d qd_{k+1} / dqd) disagree with finite differences of the
+# twin's own value on go2 (angular columns by 7e-2, joint columns by 1e-4, the
+# qd block by 1e-2) while its configuration rows are exact; the pin kernel passes
+# the same check. Until the twin is fixed its backward is refused rather than
+# returning a wrong gradient (docs/open-tasks plan, item D; guide 7.z84).
 import grid_rbd as _grid_rbd
 from grid_rbd._handle import RobotHandle, SecondOrderID, SecondOrderFD
 
@@ -425,7 +433,8 @@ class JaxRobotHandle(BaseDelegateMixin):
         # callables and maps the driver's {name: cotangent} onto its own
         # argument order.
         from grid_codegen.abi_specs import ABI_SPECS
-        from .._vjp_common import vjp_backward
+        from .._vjp_common import integrator_state_cotangent, vjp_backward
+
 
         # ── forward_dynamics: qdd = f(q,qd,u);  ∂qdd/∂q,∂qdd/∂qd via the
         #    analytic gradient FFI, ∂qdd/∂u = M⁻¹. ───────────────────────────
@@ -626,11 +635,11 @@ class JaxRobotHandle(BaseDelegateMixin):
 
         fd_pi.defvjp(fd_pi_fwd, fd_pi_bwd)
 
-        # ── integrator: x_{k+1} = step(q, qd, u; dt, it) — FIXED base only
-        #    (VjpSpec.fixed_base_only: the SE(3)-chart VJP is unimplemented;
-        #    the public method keeps the direct non-differentiable FFI on a
-        #    floating base). NEW 2026-09-09: torch had this VJP, jax did not —
-        #    the vjp table made the asymmetry visible. ─────────────────────────
+        # ── integrator: x_{k+1} = step(q, qd, u; dt, it). NEW 2026-09-09:
+        #    torch had this VJP, jax did not — the vjp table made the
+        #    asymmetry visible. Since 2026-11-03 the quaternion models go
+        #    through it too: the state cotangent is pulled onto the gradient
+        #    kernel's tangent rows at q_{k+1} (integrator_state_cotangent). ──
         @functools.partial(jax.custom_vjp, nondiff_argnums=(0, 1, 2))
         def integ(gravity, dt, it, q, qd, u):
             t = _t("integrator", "grid_rbd_jax_integrator")
@@ -643,11 +652,13 @@ class JaxRobotHandle(BaseDelegateMixin):
             out, stamp = self._ffi(ts, (self._out(q, nj + nv), STAMP), vmap_method=VM)(
                 q, qd, u, dt=self._np_dt(dt), it=np.int64(it),
                 gravity=self._np_dt(gravity))
-            return out, (q, qd, u, stamp)
+            return out, (q, qd, u, stamp, out)
 
         def integ_bwd(gravity, dt, it, res, ct):
-            q, qd, u, stamp = res
+            q, qd, u, stamp, out = res
             tg = _tv("integrator_gradient", "grid_rbd_jax_integrator_gradient", "_checked")
+            ct = integrator_state_cotangent(ct, out, nq=nj, nv=nv, mjx=mjx,
+                                            layout=configuration_layout)
             g = vjp_backward(ABI_SPECS["integrator"].vjp, ct, {
                 "grad": lambda: self._shape_out(
                     "integrator_gradient",
@@ -1079,6 +1090,71 @@ class JaxRobotHandle(BaseDelegateMixin):
             q, qd, target_jid=np.int64(tj), reference_frame=np.int64(rf))
         return self._shape_out("frame_jacobian_dot", raw)
 
+    def frame_velocity(self, q, qd, *, target_jid=None, reference_frame=None, _convention=None):
+        """Frame twist ``v = J(q) qd`` (``[linear; angular]``) in the chosen
+        reference frame. Returns ``(B, 6)``.
+
+        ``target_jid`` / ``reference_frame`` are runtime int64 FFI attrs (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``); see :py:meth:`frame_jacobian`.
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention inputs; the twist is a frame quantity, so it is not
+        reframed."""
+        target = self._mt(_convention, "frame_velocity", "grid_rbd_jax_frame_velocity")
+        tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
+        (q, qd) = self._prep_2d("frame_velocity", q, qd)
+        raw = self._ffi(target, self._out(q, 6), vmap_method="broadcast_all")(
+            q, qd, target_jid=np.int64(tj), reference_frame=np.int64(rf))
+        return self._shape_out("frame_velocity", raw)
+
+    def frame_acceleration(self, q, qd, qdd, *, target_jid=None, reference_frame=None, _convention=None):
+        """Frame acceleration ``a = J(q) qdd + Jdot(q, qd) qd`` (``[linear;
+        angular]``), the time derivative of the twist measured in the chosen
+        reference frame (classical acceleration in ``LOCAL_WORLD_ALIGNED``).
+        Returns ``(B, 6)``. ``qdd`` is required.
+
+        ``target_jid`` / ``reference_frame`` are runtime int64 FFI attrs (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``); see :py:meth:`frame_jacobian`.
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd``/``qdd``
+        are MuJoCo-convention inputs; the acceleration is not reframed."""
+        target = self._mt(_convention, "frame_acceleration", "grid_rbd_jax_frame_acceleration")
+        tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
+        (q, qd, qdd) = self._prep_2d("frame_acceleration", q, qd, qdd)
+        raw = self._ffi(target, self._out(q, 6), vmap_method="broadcast_all")(
+            q, qd, qdd, target_jid=np.int64(tj), reference_frame=np.int64(rf))
+        return self._shape_out("frame_acceleration", raw)
+
+    def frame_velocity_gradient(self, q, qd, *, target_jid=None, reference_frame=None, _convention=None):
+        """``[dv/dq | dv/dqd]`` of :py:meth:`frame_velocity` as ``(B, 6, 2*NV)``
+        (the second block is the frame Jacobian), in the local tangent chart;
+        forward only. See the NumPy handle for the frame conventions.
+
+        ``target_jid`` / ``reference_frame`` are runtime int64 FFI attrs (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``)."""
+        target = self._mt(_convention, "frame_velocity_gradient", "grid_rbd_jax_frame_velocity_gradient")
+        tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
+        (q, qd) = self._prep_2d("frame_velocity_gradient", q, qd)
+        nv = self.num_vel
+        raw = self._ffi(target, self._out(q, 12 * nv), vmap_method="broadcast_all")(
+            q, qd, target_jid=np.int64(tj), reference_frame=np.int64(rf))
+        return self._shape_out("frame_velocity_gradient", raw)
+
+    def frame_acceleration_gradient(self, q, qd, qdd, *, target_jid=None, reference_frame=None, _convention=None):
+        """``[da/dq | da/dqd | da/dqdd]`` of :py:meth:`frame_acceleration` as
+        ``(B, 6, 3*NV)`` (the last block is the frame Jacobian), in the local
+        tangent chart; forward only. ``qdd`` is required.
+
+        ``target_jid`` / ``reference_frame`` are runtime int64 FFI attrs (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``)."""
+        target = self._mt(_convention, "frame_acceleration_gradient", "grid_rbd_jax_frame_acceleration_gradient")
+        tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
+        (q, qd, qdd) = self._prep_2d("frame_acceleration_gradient", q, qd, qdd)
+        nv = self.num_vel
+        raw = self._ffi(target, self._out(q, 18 * nv), vmap_method="broadcast_all")(
+            q, qd, qdd, target_jid=np.int64(tj), reference_frame=np.int64(rf))
+        return self._shape_out("frame_acceleration_gradient", raw)
+
     def osc_inertia(self, q, *, _convention=None):
         """Operational-space (task) inertia Lambda = (J·M⁻¹·Jᵀ)⁻¹ (6 x 6) for
         the leaf-EE frame (LWA). Returns ``(B, 6, 6)``.
@@ -1328,19 +1404,11 @@ class JaxRobotHandle(BaseDelegateMixin):
         import jax
         import jax.numpy as jnp
         (q, qd, u) = self._prep_2d("integrator", q, qd, u)
-        if not self.floating_base:
-            # differentiable route (A4-1 vjp table): custom_vjp backed by the
-            # analytic integrator_gradient — jax.grad now works, matching the
-            # torch surface. Primal path = the same FFI call as before.
-            return self._differentiable(self._resolve_convention(_convention))["integrator"](
-                float(gravity), float(dt), int(_integrator_code(integrator_type)), q, qd, u)
-        # FLOATING base: direct (non-differentiable) FFI — the SE(3)-chart VJP
-        # is unimplemented (VjpSpec.fixed_base_only). vmap-able since 2026-09-09.
-        target = self._mt(_convention, "integrator", "grid_rbd_jax_integrator")
-        out_type = self._out(q, self.num_joints + self.num_vel)
-        return self._ffi(target, out_type, vmap_method="broadcast_all")(
-            q, qd, u, dt=self._np_dt(dt), it=np.int64(_integrator_code(integrator_type)),
-            gravity=self._np_dt(gravity))
+        # Differentiable route (A4-1 vjp table): custom_vjp backed by the
+        # analytic integrator_gradient, on every base (the floating and
+        # spherical charts since 2026-11-03). Primal path = the same FFI call.
+        return self._differentiable(self._resolve_convention(_convention))["integrator"](
+            float(gravity), float(dt), int(_integrator_code(integrator_type)), q, qd, u)
 
     def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81,
                             _convention=None):

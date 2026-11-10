@@ -1072,3 +1072,57 @@ def test_report_pool_labels_drained_jobs_cancelled_not_failed(tmp_path, capsys):
     # an UNstopped pool reports every non-zero rc as a failure (no silent masking)
     pool = SimpleNamespace(results=results, stopped=False, ledger=None)
     assert rss.report_pool(pool, tmp_path) == 3
+
+
+def test_merge_command_signed_shards_verify_inputs(tmp_path):
+    """Signed shards are authenticated at merge time; the command carries
+    --verify-inputs and no --unsigned."""
+    a = tmp_path / "a.json"; b = tmp_path / "b.json"
+    a.write_text(json.dumps({"signature": {"value": "x"}}))
+    b.write_text(json.dumps({"signature": {"value": "y"}}))
+    shards = [str(a), str(b)]
+    assert rss.shard_receipts_unsigned(shards) is False
+    cmd = rss.merge_command(shards, None, False, tmp_path / "m.json", tmp_path)
+    assert cmd[1:3] == ["merge", "--verify-inputs"] and "--unsigned" not in cmd
+    assert cmd[-2:] == shards and "--carry-from" not in cmd
+    cmd = rss.merge_command(shards, "old.json", False, tmp_path / "m.json", tmp_path)
+    assert cmd[cmd.index("--carry-from") + 1] == "old.json"
+
+
+def test_merge_command_unsigned_shards_merge_unsigned(tmp_path):
+    """2026-11-02 (guide 7.z83): a Jetson records with the signing backend
+    off; its shards carry signature null and used to be refused by
+    --verify-inputs, so the driver exited 1 after a clean board with the
+    receipt, the ledger and the durations unwritten. They now merge with
+    --unsigned (re-signed on the desktop); a mixed set is refused."""
+    a = tmp_path / "a.json"; b = tmp_path / "b.json"
+    a.write_text(json.dumps({"signature": None}))
+    b.write_text(json.dumps({"signature": None}))
+    shards = [str(a), str(b)]
+    assert rss.shard_receipts_unsigned(shards) is True
+    cmd = rss.merge_command(shards, None, True, tmp_path / "m.json", tmp_path)
+    assert cmd[1:3] == ["merge", "--unsigned"] and "--verify-inputs" not in cmd
+    b.write_text(json.dumps({"signature": {"value": "y"}}))
+    assert rss.shard_receipts_unsigned(shards) is None
+    (tmp_path / "bad.json").write_text("not json")
+    assert rss.shard_receipts_unsigned([str(a), str(tmp_path / "bad.json")]) is None
+
+
+def test_fingerprint_follows_package_form_helper_imports(tmp_path, monkeypatch):
+    """2026-11-03: `from test.cuda_equivalents import helper as h` is a local
+    helper import too; it used to escape the fingerprint (revolute_mimic_
+    mechanics.py, test_cuda_frame_jacobian.py), so an edit to the helper left
+    the importing shard carried against stale bytes."""
+    cuda = tmp_path / "cuda"; cuda.mkdir()
+    (cuda / "helper_a.py").write_text("A = 1\n")
+    (cuda / "helper_b.py").write_text("B = 1\n")
+    (cuda / "cuda_harness.py").write_text("H = 1\n")
+    (cuda / "test_cuda_x.py").write_text(
+        "from test.cuda_equivalents import helper_a as a\n"
+        "from test.cuda_equivalents.helper_b import B\n"
+        "from test.cuda_equivalents import cuda_harness\n"
+        "import numpy as np\n"
+        "def f():\n    from test.cuda_equivalents import helper_missing\n")
+    monkeypatch.setattr(rss, "CUDA_DIR", cuda)
+    deps = rss._module_local_dependencies("test_cuda_x", set())
+    assert deps == ["test/cuda_equivalents/helper_a.py", "test/cuda_equivalents/helper_b.py"]

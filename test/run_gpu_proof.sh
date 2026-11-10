@@ -190,6 +190,19 @@ if [[ "${SPLIT:-0}" = "1" ]]; then
     # nothing (the committed receipt already covers the tree) — that is
     # success, not a missing file.
     if [[ -f "$OUT_DIR/gpu-proof.json" ]]; then
+        if "$PYTHON" - "$OUT_DIR/gpu-proof.json" <<'PY'
+import json, sys
+sys.exit(0 if json.load(open(sys.argv[1])).get("signature") is None else 1)
+PY
+        then
+            # Recorded with --gpu-proof-signing-backend none (a Jetson: the
+            # signing key stays on the desktop). The scope gate, durations and
+            # header-key ledger ran; the receipt itself is re-signed on the
+            # desktop from the same shards and committed with the ledger.
+            echo "[run_gpu_proof] SPLIT receipt is UNSIGNED; not published to $RECEIPT_PATH."
+            echo "  Re-sign on the desktop: gpu-proof merge --out $RECEIPT_PATH --repo . $OUT_DIR/receipts/*.json"
+            exit 0
+        fi
         cp "$OUT_DIR/gpu-proof.json" "$RECEIPT_PATH"
         echo "[run_gpu_proof] SPLIT receipt written to $RECEIPT_PATH (shards in $OUT_DIR)"
     else

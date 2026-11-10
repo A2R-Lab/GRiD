@@ -81,7 +81,7 @@ def _aba_jd_bias_term_cpp(self, jid):
     the SAME joint-local bias that gen_inverse_dynamics_joint_dynamics_bias folds
     into ``s_c``. The articulated inertia ``d``/``IA`` is left untouched (the
     explicit-value path puts damping only in the bias, exactly as the oracle does).
-    Returned string is ``alpha*(b*qd + f*sign(qd))`` (reading ``s_qd[vs]``); callers
+    Returned string is ``alpha^2*b*qd + |alpha|*f*sign(qd)`` (reading ``s_qd[vs]``); callers
     subtract it from the per-joint ``s_tau`` read at each ``u`` site.
 
     EMITTED ONLY when USE_JOINT_DYNAMICS is enabled AND the robot declares nonzero
@@ -128,16 +128,16 @@ def _aba_jd_bias_term_cpp(self, jid):
                          + "] * static_cast<T>((" + qd + " > static_cast<T>(0)) - ("
                          + qd + " < static_cast<T>(0)))")
         return " + ".join(terms)
+    b_cpp, f_cpp = self._jd_fold_cpp(jid, alpha, b, fr)
     if b != 0.0:
-        terms.append("static_cast<T>(" + repr(alpha * b) + ") * " + qd)
+        terms.append(b_cpp + " * " + qd)
     if fr != 0.0 and TANH:
-        # smooth model: alpha*f*tanh(qd/w) with the per-v-slot width baked.
-        terms.append("static_cast<T>(" + repr(alpha * fr) + ") * tanh(" + qd
+        # smooth model: |alpha|*f*tanh(qd/w) with the per-v-slot width baked.
+        terms.append(f_cpp + " * tanh(" + qd
                      + " / static_cast<T>(" + repr(float(self.get_friction_width_baked()[vs])) + "))")
     elif fr != 0.0:
         # exact sign matching np.sign (0 at qd==0): (qd>0) - (qd<0).
-        terms.append("static_cast<T>(" + repr(alpha * fr)
-                     + ") * static_cast<T>((" + qd + " > static_cast<T>(0)) - ("
+        terms.append(f_cpp + " * static_cast<T>((" + qd + " > static_cast<T>(0)) - ("
                      + qd + " < static_cast<T>(0)))")
     return " + ".join(terms)
 

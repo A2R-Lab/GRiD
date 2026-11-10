@@ -214,7 +214,9 @@ def gen_f_ext_gradient_jacobianT_inner(self):
         # MIMIC fold: per-job mimic multiplier alpha (only emitted for mimic robots
         # so non-mimic grid.cuh stays alpha-free; alpha == 1.0 for non-mimic).
         if HAS_MIMIC:
-            self.gen_bake_const_array("feg_job_alpha", job_alpha, "T")
+            # a baked table for constant multipliers; a runtime table filled from
+            # the leader coordinates when a polynomial follower is on a chain
+            self.gen_alpha_table("feg_job_alpha", [job["j"] for job in jobs])
 
         njobs = len(jobs)
         # Two-phase to avoid += races on shared (i, v_j) destinations: (1) each job
@@ -350,8 +352,37 @@ def _f_ext_gradient_dq_jobs(self):
                             "Sj": Sjcol, "Sm": Smcol,
                             "pre": list(pre), "post": list(post),
                             "alpha": float(alpha_j * alpha_m),
+                            "j": int(j), "m": int(m),
                         })
     return NB, nv, subjobs
+
+
+def _f_ext_gradient_dq_follower_jobs(self):
+    """The embedding term of -dJ_y^T/dy for polynomial followers. With
+    J_y^T = G^T J_f^T, the derivative against the leader coordinate l of a
+    follower f carries (dG/dy_l)^T J_f^T: row l of the dq = l slice gains
+    alpha'(q_l) J_f^T[fv, :], the follower's own (unscaled) Jacobian-transpose
+    row, i.e. the pushdown col_{i,f} = X[i]..X[f+1] S_f for every body i the
+    follower moves. The output is the negative. One job per (follower, body).
+    Returns [(f, l, i, S_f column, chain [f+1..i])]."""
+    import numpy as _np
+    jobs = []
+    if not self.robot_has_variable_couplings():
+        return jobs
+    NB = self.robot.get_num_bodies()
+    for f in range(NB):
+        if not self._alpha_is_variable(f):
+            continue
+        S = _np.asarray(self.robot.get_S_by_id(f), dtype=_np.float64).reshape(6, -1)
+        l = int(self._v_slot_cpp(f))
+        for i in sorted(self.robot.get_subtree_by_id(f)):
+            chain = []
+            m = i
+            while m != f:
+                chain.append(int(m))
+                m = self.robot.get_parent_id(m)
+            jobs.append((f, l, int(i), [float(x) for x in S[:6, 0]], list(reversed(chain))))
+    return jobs
 
 
 def gen_f_ext_gradient_dq_num_jobs(self):
@@ -451,7 +482,12 @@ def _emit_f_ext_gradient_dq_body(self, out_ptr_expr, in_timestep_loop, slab_in_s
     self.gen_bake_const_array("fegdq_vm", vm_arr, "int")
     self.gen_bake_const_array("fegdq_Sj", [x for v in Sj_arr for x in v], "T")
     self.gen_bake_const_array("fegdq_Sm", [x for v in Sm_arr for x in v], "T")
-    if HAS_MIMIC:
+    HAS_VARIABLE = self.robot_has_variable_couplings()
+    if HAS_VARIABLE:
+        # the product alpha_j alpha_m of two runtime tables (polynomial followers)
+        self.gen_alpha_table("fegdq_alpha_j", [sj["j"] for sj in subjobs])
+        self.gen_alpha_table("fegdq_alpha_m", [sj["m"] for sj in subjobs])
+    elif HAS_MIMIC:
         self.gen_bake_const_array("fegdq_alpha", alpha_arr, "T")
 
     # parallel over sub-jobs: fold col_{m,j}, cross with S_m, push down X_{m->i}
@@ -490,7 +526,10 @@ def _emit_f_ext_gradient_dq_body(self, out_ptr_expr, in_timestep_loop, slab_in_s
     # so the output contribution is +alpha*(X_{m->i}(S_m x col)) = +alpha*term.
     if HAS_MIMIC:
         # stage into the per-sub slab; the serial reduce folds shared v-slots below.
-        self.gen_add_code_line("T a = fegdq_alpha[sb];")
+        if HAS_VARIABLE:
+            self.gen_add_code_line("T a = fegdq_alpha_j[sb] * fegdq_alpha_m[sb];")
+        else:
+            self.gen_add_code_line("T a = fegdq_alpha[sb];")
         self.gen_add_code_line("#pragma unroll")
         self.gen_add_code_line("for (int r = 0; r < 6; ++r) { s_dq_slab[6*sb + r] = a * term[r]; }")
     else:
@@ -512,6 +551,20 @@ def _emit_f_ext_gradient_dq_body(self, out_ptr_expr, in_timestep_loop, slab_in_s
         self.gen_add_code_line("#pragma unroll")
         self.gen_add_code_line("for (int r = 0; r < 6; ++r) { s_f_ext_gradient_dq[vj + " + str(nv) + "*(6*i + r) + " + str(nv * out6) + "*vm] += s_dq_slab[6*sb + r]; }")
         self.gen_add_end_control_flow()
+        self.gen_add_end_control_flow()
+        self.gen_add_sync()
+    fjobs = _f_ext_gradient_dq_follower_jobs(self)
+    if fjobs:
+        # embedding term: -alpha'(q_l) col_{i,f} into [l, block i, dq = l] per polynomial follower
+        self.gen_add_code_line("// polynomial followers: -(dG/dy_l)^T J_f^T, the follower's own pushdown row times alpha'(q_l)")
+        self.gen_alpha_table("fegdq_f_alphad", [jb[0] for jb in fjobs], order=1)
+        self.gen_add_serial_ops()
+        for t, (f, l, i, Scol, chain) in enumerate(fjobs):
+            self.gen_add_code_line("{ T col[6] = {" + ", ".join("static_cast<T>(" + repr(float(x)) + ")" for x in Scol) + "};")
+            for m in chain:
+                self.gen_add_code_line("  { const T *X = &s_XImats[" + str(36 * m) + "]; T tmp[6]; for (int r = 0; r < 6; ++r) tmp[r] = dot_prod<T,6,6,1>(&X[r], col); for (int r = 0; r < 6; ++r) col[r] = tmp[r]; }")
+            self.gen_add_code_line("  const T ad = fegdq_f_alphad[" + str(t) + "];")
+            self.gen_add_code_line("  for (int r = 0; r < 6; ++r) s_f_ext_gradient_dq[" + str(l) + " + " + str(nv) + "*(" + str(6 * i) + " + r) + " + str(nv * out6 * l) + "] += -ad * col[r]; }")
         self.gen_add_end_control_flow()
         self.gen_add_sync()
 
