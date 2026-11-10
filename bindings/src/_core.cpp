@@ -2089,9 +2089,13 @@ public:
         auto wide = py::array_t<long double, py::array::c_style | py::array::forcecast>::ensure(input);
         if (!wide || fn_validate_armature_params_(wide.data(), num_vel_) != 0)
             throw py::value_error("armature must be finite, nonnegative and zero on unsupported slots");
-        for (int i = 0; i < num_vel_; ++i)
+        for (int i = 0; i < num_vel_; ++i) {
             if (wide.data()[i] > static_cast<long double>(std::numeric_limits<CT>::max()))
                 throw py::value_error("armature must remain finite in the kernel precision");
+            if (wide.data()[i] > 0 &&
+                wide.data()[i] < static_cast<long double>(std::numeric_limits<CT>::min()))
+                throw py::value_error("armature is too small to preserve in the kernel precision");
+        }
         auto params = arr_t::ensure(input);
         if (!params) throw py::value_error("armature cannot be converted to the kernel precision");
         const CT *pdata = params.data();

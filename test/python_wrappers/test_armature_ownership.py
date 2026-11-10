@@ -71,7 +71,7 @@ def test_invalid_native_and_python_updates_preserve_epoch(owner):
     owner.set_armature(good)
     try:
         version = owner.model_version
-        for badval in (-.1, -1e-100, np.nan, np.inf, 1e100):
+        for badval in (-.1, -1e-100, np.nan, np.inf, 1e100, 1e-100, 1e-40):
             bad = good.astype(np.float64)
             bad[slot] = badval
             for setter in (owner.set_armature, owner._runner.set_armature_params):

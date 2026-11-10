@@ -486,6 +486,7 @@ def gen_set_armature_params(self):
         f"if (count != {size} || (count && !h_params)) return cudaErrorInvalidValue;",
         "for (size_t i = 0; i < count; ++i) {",
         "    if (!isfinite(h_params[i]) || h_params[i] < T(0)) return cudaErrorInvalidValue;",
+        "    if (h_params[i] != T(0) && !std::isnormal(h_params[i])) return cudaErrorInvalidValue;",
         f"    if (!({allowed}) && h_params[i] != T(0)) return cudaErrorInvalidValue;",
         "}",
         "return cudaSuccess;",

@@ -64,7 +64,7 @@ def test_closed_handle_cannot_read_or_mutate():
 
 @pytest.mark.parametrize("values", [
     [-.1, 0], [-1e-100, 0], [np.nan, 0], [np.inf, 0], [1e100, 0],
-    [[0, 0]], [0], [0j, 0],
+    [[0, 0]], [0], [0j, 0], [1e-100, 0], [1e-40, 0],
 ])
 def test_python_invalid_update_preserves_values_and_version(values):
     h = handle()
@@ -74,6 +74,16 @@ def test_python_invalid_update_preserves_values_and_version(values):
         h.set_armature(values)
     np.testing.assert_array_equal(h.armature, before)
     assert h._runner.version == version
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_armature_precision_boundary(dtype):
+    from grid_codegen.armature import validated_armature
+    tiny = np.finfo(dtype).tiny
+    np.testing.assert_array_equal(
+        validated_armature([0, tiny], 2, [0, 1], dtype), [0, tiny])
+    with pytest.raises(ValueError, match="too small"):
+        validated_armature([0, tiny / 2], 2, [0, 1], dtype)
 
 
 def test_unsupported_slot_checked_before_precision_conversion():
@@ -190,7 +200,12 @@ int main() {
     assert(set_armature_params_checked(&model, input, 7) == cudaErrorInvalidValue);
     input[0] = std::numeric_limits<float>::quiet_NaN();
     assert(set_armature_params_checked(&model, input, 7) == cudaErrorInvalidValue);
+    input[0] = std::numeric_limits<float>::denorm_min();
+    assert(set_armature_params_checked(&model, input, 7) == cudaErrorInvalidValue);
     assert(copies == 0 && table[0] == 0);
+    input[0] = std::numeric_limits<float>::min();
+    assert(set_armature_params_checked(&model, input, 7) == cudaSuccess);
+    assert(table[0] == input[0]);
     input[0] = .25f;
     assert(set_armature_params_checked(&model, input, 7) == cudaSuccess);
     assert(table[0] == .25f);

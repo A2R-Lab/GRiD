@@ -29,6 +29,10 @@ def validated_armature(values, nv, slots, dtype):
         result = np.array(raw, dtype=dtype, order="C", copy=True)
     if not np.all(np.isfinite(result)):
         raise ValueError("armature must remain finite in the selected precision.")
+    # CUDA builds may flush subnormals to zero. Reject before mutation so the
+    # host table cannot describe a rotor that the kernel silently omits.
+    if np.any((raw > 0) & (raw < np.finfo(result.dtype).tiny)):
+        raise ValueError("armature is too small to preserve in the selected precision.")
     result[result == 0] = 0
     return result
 

@@ -4059,3 +4059,15 @@ persisting the first measured peak. Ledger writes now create that directory;
 a CPU regression starts from an absent nested path and verifies reload and
 the retained peak after a cheaper build. GPU test success alone does not prove
 the reporting/ledger phase completed successfully.
+
+### 7.z98 Parameter narrowing and flush-to-zero must agree with readback (2026-11-10)
+
+A positive armature value can be finite before conversion yet disappear in a
+float kernel, either during narrowing or under flush-to-zero compilation.
+Validate the original input against the selected precision's smallest normal
+value before changing the model epoch or device table. The Python constructor,
+Python setter and native Runner must agree. Typed native table setters also
+reject subnormal entries. Test zero, the smallest normal value, a subnormal and
+a value that rounds to zero, including unchanged readback and epoch on rejection.
+Rebuild the native extension before exercising a changed C++ validator: an
+editable Python checkout does not rebuild the already loaded extension.
