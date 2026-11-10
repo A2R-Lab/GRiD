@@ -44,6 +44,8 @@ _BIG_ROBOT_HINTS = ("g1", "h1_2", "h2_plus", "humanoid", "atlas")
 # {relpath: reason} -- deliberate full-surface builds. Each MUST justify why the whole
 # surface (or the mjx twins) is the point of that file.
 _ALLOWLIST = {
+    "test/python_wrappers/test_armature_default_registration.py":
+        "armature public-default regression: all algorithms and floating mjx twins are the contract under test",
     # The native-mjx reference tests: their entire purpose is to exercise the mjx-convention
     # twin of the second-order + gradient surface against the numpy oracle, across jax/torch.
     "bindings/tests/test_mujoco_kernel.py": "native mjx reference: must build the mjx surface",
