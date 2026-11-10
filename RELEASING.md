@@ -137,6 +137,22 @@ signature, complete scope and release policy on the clean descendant. No carried
 shards, policy bypass or tolerance relaxation: a release receipt is one fresh full
 pass at the release tip, verified under `test/gpu-proof-policy-release.yaml`.
 
+Before that freeze commit, plan the manifest from authoritative collection:
+
+```bash
+.venv/bin/python test/run_split_suite.py --plan-manifest test/gpu-proof-tests.txt
+```
+
+This does not compile, execute tests or record evidence. It uses the split
+driver's wrapper modules and CUDA partition, with the same `gpu_proof` marker
+selection as the recording. Review additions and removals, then commit the
+manifest with the correctness inputs. The full launcher checks canonical
+collection equality before starting builds; any partial or duplicate collection
+is an error. The empty expected-skips baseline stays empty. FP64 alpha tests
+remain in their separate lane, not as skips in the receipt. This one-pass
+protocol supersedes the October 26 two-pass manifest procedure; the receipt
+writer and collection writer produce identical manifest bytes for identical IDs.
+
 ### Primary receipt resource profile
 
 The tracked launcher selects `GRID_SPLIT_RESOURCE_PROFILE=serial`: one prewarm

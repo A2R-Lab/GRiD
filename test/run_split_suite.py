@@ -224,6 +224,48 @@ def discover_modules() -> list[str]:
     return mods
 
 
+def wrapper_specs(modules):
+    return [ShardSpec(name=mod, domain="wrappers",
+                      targets=[f"test/python_wrappers/{mod}.py"],
+                      fingerprint_paths=wrapper_fingerprint_paths(mod),
+                      apply_marker=True) for mod in modules]
+
+
+def collect_wrapper_node_ids(specs):
+    """Collect the same marked scope that wrapper receipt shards execute."""
+    targets = [target for spec in specs for target in spec.targets]
+    if not targets or len(targets) != len(set(targets)):
+        raise ValueError("Wrapper collection requires unique, nonempty targets")
+    result = subprocess.run(
+        [PYTHON, "-m", "pytest", *targets, "-m", "gpu_proof",
+         "--collect-only", "-q", "-p", "no:cacheprovider"],
+        cwd=REPO_ROOT, capture_output=True, text=True, timeout=900)
+    ids = [line for line in result.stdout.splitlines()
+           if line.startswith("test/python_wrappers/") and "::" in line]
+    if result.returncode != 0 or not ids:
+        raise RuntimeError(f"wrapper collection failed ({result.returncode}):\n"
+                           f"{result.stdout[-4000:]}\n{result.stderr[-4000:]}")
+    if any(node.split("::", 1)[0] not in targets for node in ids):
+        raise ValueError("Wrapper collection contains an unscheduled test")
+    return ids
+
+
+def plan_release_scope(budget_secs):
+    """No compilation or recording: exact IDs from the driver's shard plan."""
+    wrappers = wrapper_specs(discover_modules())
+    wrapper_ids = collect_wrapper_node_ids(wrappers)
+    cuda_shards, cuda_ids = build_cuda_shards(None, budget_secs)
+    scheduled_cuda = [node for spec in cuda_shards for node in spec.targets]
+    if (not cuda_ids or len(cuda_ids) != len(set(cuda_ids)) or
+            len(scheduled_cuda) != len(set(scheduled_cuda)) or
+            set(scheduled_cuda) != set(cuda_ids)):
+        raise ValueError("CUDA partition is not an exact, unique collection")
+    ids = wrapper_ids + scheduled_cuda
+    if len(ids) != len(set(ids)):
+        raise ValueError("Duplicate scheduled test IDs")
+    return sorted(ids)
+
+
 # ─── cuda_equivalents granular partition ─────────────────────────────────────
 # Atom = the smallest node-id group never split across shards:
 #   * test_cuda_executable_equivalence (720 tests = 72% of the suite):
@@ -1336,6 +1378,10 @@ def finish_compile_phase(pool, thread, out_dir: Path) -> bool:
 
 def run_phases(shards, out_dir, receipts, extra_args, prior, pool, pool_jobs, prereqs):
     """One dispatch point for overlapped and serial profiles, including resume."""
+    # A wrappers-only prewarm can pause before its first shard. Persist even
+    # the empty ledger so this valid run has a resume anchor without CUDA's
+    # partition.json; do not manufacture any successful test rows.
+    _write_ledger(out_dir, list(prior))
     if (out_dir / "PAUSE").exists():
         return list(prior), True
     if serial_resource_profile():
@@ -1769,6 +1815,11 @@ def main() -> int:
                          "policy refuses them). Implies --receipts, both "
                          "domains, full scope.")
     ap.add_argument("--out", default=None, help="output dir (default test/.split_suite/<stamp>)")
+    scope = ap.add_mutually_exclusive_group()
+    scope.add_argument("--plan-manifest", type=Path,
+                       help="write the full release manifest from collection only")
+    scope.add_argument("--check-manifest", type=Path,
+                       help="check full collection against a frozen manifest, without builds")
     ap.add_argument("--prune-receipts", type=int, default=None, metavar="N",
                     help="delete all but the newest N timestamped run dirs under "
                          "test/.split_suite/ (receipt_* and bare <stamp> dirs; the "
@@ -1783,6 +1834,27 @@ def main() -> int:
     ap.add_argument("pytest_args", nargs="*", default=[],
                     help="extra args passed to every pytest invocation (after --)")
     args = ap.parse_args()
+
+    if args.plan_manifest or args.check_manifest:
+        if (args.resume or args.refresh_from or args.modules is not None or
+                args.cuda_k or args.changed_only or args.receipts or
+                args.receipts_carry_from or args.pytest_args or args.skip_warm or
+                args.warm_one or args.prune_receipts is not None):
+            ap.error("manifest planning requires the unnarrowed, non-recording scope")
+        from test.receipt_integrity import write_manifest_ids
+        if not receipt_row_for_this_gpu().primary:
+            raise ValueError("The release manifest must be planned on the primary receipt GPU")
+        ids = plan_release_scope(args.shard_budget_mins * 60)
+        if args.plan_manifest:
+            write_manifest_ids(ids, args.plan_manifest)
+            print(f"Planned {len(ids)} IDs -> {args.plan_manifest}")
+        else:
+            expected = [line for line in args.check_manifest.read_text().splitlines()
+                        if line and not line.startswith('#')]
+            if expected != ids:
+                raise ValueError("Full collection differs from the canonical frozen manifest")
+            print(f"Manifest matches all {len(ids)} scheduled IDs")
+        return 0
 
     if serial_resource_profile():
         # The profile is authoritative even for direct driver invocations.
@@ -1996,10 +2068,7 @@ def main() -> int:
         # cuda domain (grid_codegen inputs there would turn every codegen edit
         # into a multi-day full-domain refresh; that class stays covered by the
         # byte-gates + equivalence smokes + release-policy full passes).
-        specs += [ShardSpec(name=mod, domain="wrappers",
-                            targets=[f"test/python_wrappers/{mod}.py"],
-                            fingerprint_paths=wrapper_fingerprint_paths(mod))
-                  for mod in modules]
+        specs += wrapper_specs(modules)
 
     if run_cuda:
         if refresh_cuda_shards is not None:

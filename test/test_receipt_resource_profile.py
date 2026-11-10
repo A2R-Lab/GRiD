@@ -135,6 +135,18 @@ def test_existing_pause_never_starts_pool(tmp_path, monkeypatch):
     assert driver.run_phases(['pending'], tmp_path, False, [], [],
         fake_pool(events, tmp_path), ['warm'], {}) == ([], True)
     assert events == []
+    assert (tmp_path/'results.json').read_text().strip() == '[]'
+
+
+def test_wrappers_only_prewarm_pause_has_resume_anchor(tmp_path, monkeypatch):
+    monkeypatch.setenv('GRID_SPLIT_RESOURCE_PROFILE', 'serial')
+    monkeypatch.setattr(driver, 'phase_run', lambda *a, **k: pytest.fail('no shard yet'))
+    results, paused = driver.run_phases(['wrapper'], tmp_path, False, [], [],
+        fake_pool([], tmp_path, pause=True), ['warm'], {})
+    assert paused and results == []
+    assert not (tmp_path/'partition.json').exists()
+    assert driver.load_prior_results(tmp_path, {'wrapper'}) == []
+    assert (tmp_path/'results.json').is_file()
 
 
 def test_shard_memory_refusal_then_resume_preserves_scope(tmp_path, monkeypatch):

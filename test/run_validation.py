@@ -178,6 +178,13 @@ def main():
         with LOCK_PATH.open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             state['status'] = 'running'; save()
+            if args.full:
+                with (out / 'collection.log').open('x') as collection_log:
+                    subprocess.run(
+                        [sys.executable, str(ROOT / 'test/run_split_suite.py'),
+                         '--check-manifest', str(ROOT / 'test/gpu-proof-tests.txt')],
+                        cwd=ROOT, env=env, stdout=collection_log,
+                        stderr=subprocess.STDOUT, check=True)
             with (out / 'driver.log').open('x') as log:
                 result = run_driver(command, log=log, lock=lock)
             state['driver_rc'] = result.returncode

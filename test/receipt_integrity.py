@@ -2,7 +2,7 @@
 
 The receipt scope itself is enforced by pytest-gpu-proof (policy
 required_test_manifest = test/gpu-proof-tests.txt, an EXACT node-ID set); this
-module only writes that manifest from a verified receipt. Header-key checks
+module serializes that manifest from a receipt or authoritative driver collection. Header-key checks
 distinguish carried evidence from freshly recorded sidecars and never restore
 an old header-key file over a fresh recording.
 
@@ -11,7 +11,7 @@ gpu-proof.json, gates CI and defines the manifest; secondary receipts
 (receipts/gpu-proof-sm<arch>.json) document other GPUs. This module reads the
 table, picks the row for a detected compute capability, verifies every receipt
 on disk (``--verify-all``) and prints their rows for the compatibility page
-(``--table``). The manifest is written from the primary receipt only.
+(``--table``). The manifest is defined by the primary GPU's scope only.
 """
 from __future__ import annotations
 
@@ -45,10 +45,18 @@ def write_manifest(receipt, path):
     (added AND removed node IDs) is reviewed in the PR, and the file is a
     receipt fingerprint path, so it must be committed BEFORE recording."""
     ids = node_ids(receipt)
+    return write_manifest_ids(ids, path)
+
+
+def write_manifest_ids(node_ids, path):
+    """Canonical manifest serialization shared by collection and receipts."""
+    ids = list(node_ids)
+    if not ids or len(ids) != len(set(ids)):
+        raise ValueError('Manifest requires nonempty, unique test node IDs')
     header = [line for line in path.read_text().splitlines()
               if line.startswith('#')] if path.exists() else []
     path.write_text('\n'.join(header + sorted(ids)) + '\n')
-    return ids
+    return set(ids)
 
 
 def read_sidecar(path):

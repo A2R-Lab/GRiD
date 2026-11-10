@@ -190,7 +190,7 @@ def test_full_command_never_carries():
 
 
 def test_finalize_real_git_evidence_transition(tmp_path, monkeypatch):
-    """Real clean/dirty Git states; only GPU driver and signature CLI are stubbed."""
+    """Real Git states; collection, GPU driver and signature CLI are stubbed."""
     import subprocess
     root = tmp_path / 'repo'
     (root / 'test').mkdir(parents=True)
@@ -203,7 +203,12 @@ def test_finalize_real_git_evidence_transition(tmp_path, monkeypatch):
     (root / 'gpu-proof.json').write_text('{}')
     (root / 'test/gpu-proof-header-keys.json').write_text('{"shards": {}}')
     (root / 'test/gpu-proof-tests.txt').write_text('required\n')
-    git('add', 'source.py', 'gpu-proof.json', 'test/gpu-proof-header-keys.json', 'test/gpu-proof-tests.txt')
+    (root / 'test/run_split_suite.py').write_text(
+        'import pathlib, sys\n'
+        'assert sys.argv[1] == "--check-manifest"\n'
+        'assert pathlib.Path(sys.argv[2]).read_text() == "required\\n"\n')
+    git('add', 'source.py', 'gpu-proof.json', 'test/gpu-proof-header-keys.json',
+        'test/gpu-proof-tests.txt', 'test/run_split_suite.py')
     git('commit', '-qm', 'Candidate')
     out = tmp_path / 'run'
     monkeypatch.setattr(launcher, 'ROOT', root)
