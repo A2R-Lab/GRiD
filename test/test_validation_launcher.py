@@ -12,6 +12,7 @@ def launch(tmp_path, monkeypatch):
     root = tmp_path / 'repo'
     (root / 'test').mkdir(parents=True)
     original = {'tests': [{'node_id': 'required'}],
+                'session': {'node_ids': ['required']},
                 'shards': [{'name': 'fresh'}], 'identity': 'original'}
     before = {'shards': {'fresh': [{'content_sha256': 'old'}]}}
     (root / 'gpu-proof.json').write_text(json.dumps(original))
@@ -49,6 +50,10 @@ def launch(tmp_path, monkeypatch):
             receipt = dict(original, identity='new')
             if state.outcome == 'missing-scope':
                 receipt['tests'] = []
+            if state.outcome == 'extra-scope':
+                receipt['tests'] = original['tests'] + [{'node_id': 'extra'}]
+            if state.outcome == 'duplicate-scope':
+                receipt['session'] = {'node_ids': ['required', 'required']}
             if state.outcome == 'bad-headers':
                 (shards / 'receipts/fresh.header_keys.jsonl').unlink()
             if state.outcome == 'head-moved':
@@ -168,6 +173,7 @@ def test_recording_preserves_fresh_headers_and_awaits_evidence_commit(launch):
 
 @pytest.mark.parametrize('outcome', [
     'driver-fail', 'interrupt', 'bad-headers', 'head-moved',
+    'missing-scope', 'extra-scope', 'duplicate-scope',
 ])
 def test_failure_retains_evidence_without_promoting_receipt(launch, outcome):
     launch.outcome = outcome
@@ -261,7 +267,8 @@ def test_finalize_real_git_evidence_transition(tmp_path, monkeypatch):
         assert '--refresh-from' not in command
         shards = out / 'shards'
         (shards / 'receipts').mkdir(parents=True)
-        receipt = {'tests': [{'node_id': 'required'}], 'shards': [{'name': 'fresh'}]}
+        receipt = {'tests': [{'node_id': 'required'}], 'shards': [{'name': 'fresh'}],
+                   'session': {'node_ids': ['required']}}
         row = {'content_sha256': 'new'}
         (shards / 'receipts/fresh.header_keys.jsonl').write_text(json.dumps(row) + '\n')
         (root / 'test/gpu-proof-header-keys.json').write_text(json.dumps({'shards': {'fresh': [row]}}))

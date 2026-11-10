@@ -152,6 +152,11 @@ is an error. The empty expected-skips baseline stays empty. FP64 alpha tests
 remain in their separate lane, not as skips in the receipt. This one-pass
 protocol supersedes the October 26 two-pass manifest procedure; the receipt
 writer and collection writer produce identical manifest bytes for identical IDs.
+The old receipt is stale during this transition. CPU pre-freeze tests exercise
+exact-scope rejection with controlled missing, extra and duplicate outcomes;
+the launcher applies that same check to the completed receipt before promotion
+and again at finalization. Both external verification policies still require
+the current manifest. No old receipt is accepted for the expanded scope.
 
 ### Primary receipt resource profile
 

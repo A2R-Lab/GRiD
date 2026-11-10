@@ -4235,3 +4235,15 @@ require configuration-dependent reflected inertia and velocity terms. Test the
 reference independently on fixed and floating embeddings before using it as a
 GPU oracle. A floating mimic model still has no MuJoCo twin; test that refusal
 and use a supported ordinary floating model for MuJoCo composition.
+
+### 7.z103 One-pass planning separates source gates from evidence gates (2026-11-10)
+
+Planning the larger manifest made a CPU test compare new scope with the previous
+release's receipt. That creates a circular pre-freeze gate: the fresh recording
+cannot exist until the new manifest is frozen. Keep exact equality, but enforce
+it on the completed receipt before promotion and at finalization. Check both
+the declared collection and actual outcome IDs, including duplicates. Permanent
+CPU cases reject missing, extra and duplicate rows and exercise non-promotion
+through the launcher. Both external policies continue to require the current
+manifest, so verification of old evidence remains red. Do not fabricate a new
+receipt, change the skip baseline or waive scope to resolve this transition.

@@ -39,6 +39,25 @@ def node_ids(receipt):
     return set(ids)
 
 
+def verify_manifest_scope(receipt, path):
+    """Reject missing, extra or duplicate outcomes before evidence promotion.
+
+    A newly planned manifest deliberately makes old evidence stale. Compare
+    it to the completed recording here, not to last release's receipt during
+    CPU-only pre-freeze tests. The external policy verifier remains mandatory.
+    """
+    expected = [line for line in path.read_text().splitlines()
+                if line and not line.startswith('#')]
+    if not expected or expected != sorted(set(expected)):
+        raise ValueError('Manifest must be nonempty, unique and canonically sorted')
+    declared = receipt['session']['node_ids']
+    if len(declared) != len(set(declared)):
+        raise ValueError('Duplicate collected node IDs in receipt')
+    wanted = set(expected)
+    if node_ids(receipt) != wanted or set(declared) != wanted:
+        raise ValueError('Completed receipt scope differs from the frozen manifest')
+
+
 def write_manifest(receipt, path):
     """Rewrite the reviewed scope manifest from a receipt's collection, keeping
     the file's leading comment block. Explicit maintainer action: the diff

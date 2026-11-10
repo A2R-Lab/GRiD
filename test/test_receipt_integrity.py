@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from test.receipt_integrity import write_manifest, verify_header_keys
+from test.receipt_integrity import write_manifest, verify_header_keys, verify_manifest_scope
 from test.run_split_suite import _locked_compile_dependency
 
 
@@ -35,15 +35,40 @@ def test_manifest_is_exact_sorted_and_keeps_its_header(tmp_path):
         write_manifest({'tests': [{'node_id': 'a'}, {'node_id': 'a'}]}, path)
 
 
-def test_committed_manifest_matches_the_committed_receipt():
-    """The policy gate is EXACT: the reviewed manifest and the committed
-    receipt's collection must agree in both directions."""
+def test_both_verification_policies_require_the_current_exact_manifest():
+    """Old evidence may be stale during pre-freeze work; CI still rejects it.
+
+    Exact outcome equality runs on fresh evidence before promotion/finalize,
+    and remains mandatory in both external verification policies.
+    """
     from pathlib import Path
+    import yaml
     root = Path(__file__).resolve().parents[1]
-    receipt = json.loads((root / 'gpu-proof.json').read_text())
-    manifest = {l.strip() for l in (root / 'test/gpu-proof-tests.txt').read_text().splitlines()
-                if l.strip() and not l.startswith('#')}
-    assert set(receipt['session']['node_ids']) == manifest
+    for name in ('gpu-proof-policy.yaml', 'gpu-proof-policy-release.yaml'):
+        policy = yaml.safe_load((root / 'test' / name).read_text())
+        assert policy['required_test_manifest'] == 'test/gpu-proof-tests.txt'
+    assert policy['allow_carried'] is False
+
+
+@pytest.mark.parametrize('outcomes,declared,valid', [
+    (['a', 'b'], ['a', 'b'], True),
+    (['a'], ['a', 'b'], False),
+    (['a', 'b', 'c'], ['a', 'b'], False),
+    (['a', 'b', 'b'], ['a', 'b'], False),
+    (['a', 'b'], ['a'], False),
+    (['a', 'b'], ['a', 'b', 'c'], False),
+    (['a', 'b'], ['a', 'b', 'b'], False),
+])
+def test_completed_evidence_requires_exact_outcomes_and_collection(tmp_path, outcomes, declared, valid):
+    manifest = tmp_path / 'manifest.txt'
+    manifest.write_text('# reviewed\na\nb\n')
+    receipt = {'tests': [{'node_id': n} for n in outcomes],
+               'session': {'node_ids': declared}}
+    if valid:
+        verify_manifest_scope(receipt, manifest)
+    else:
+        with pytest.raises(ValueError):
+            verify_manifest_scope(receipt, manifest)
 
 
 def test_fresh_headers_may_change_count_but_carried_may_not(tmp_path):
