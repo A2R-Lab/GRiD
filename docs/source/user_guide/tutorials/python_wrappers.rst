@@ -469,6 +469,9 @@ Pass ``armature=a`` to ``register_robot``, ``load_robot``, ``warm_robot`` or
 ``(nv,)`` in native reduced velocity order. Values must be finite and
 nonnegative; floating-root and spherical slots must be zero. Omitting the
 vector means zero armature. Baked execution adds no mutable table.
+Positive values below the selected precision's smallest normal number are
+rejected, including values that would round to zero. This keeps host readback
+consistent with kernels compiled with flush-to-zero arithmetic.
 
 ``handle.armature_slots`` gives the independent scalar slots in compact column
 order. ``handle.num_armature_params`` is their count and ``handle.armature_units``

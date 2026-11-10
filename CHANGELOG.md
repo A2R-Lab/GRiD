@@ -45,7 +45,8 @@ These changes are staged for 0.7.1; publication is pending.
   this prevents doubled off-diagonal entries in Python outputs and control-input
   autograd. Ordinary scalar-joint recursion is unchanged.
 - Validate runtime armature before precision conversion or mutation, reject
-  unsupported and constant-joint slots, and read installed values from their
+  positive values lost to narrowing or flush-to-zero, reject unsupported and
+  constant-joint slots, and read installed values from their
   owning context rather than a registration-name cache. Forward the runtime
   option through JAX and PyTorch registration. Include rotor kinetic energy in
   both generated energy paths; the ten-per-body inertial regressor is unchanged.

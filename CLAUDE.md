@@ -80,8 +80,10 @@ cuda byte-neutrality); `gpu-proof merge --verify-inputs` authenticates every sha
 verified under the everyday policy right after the merge (tree still byte-clean), before the launcher promotes it; and
 a refresh with zero stale shards whose RECEIPT-LEVEL fingerprint moved (driver / pyproject / manifest edit) re-runs the
 cheapest carried wrapper module so the merge can re-sign at HEAD (§7.z45). After a reviewed collection change,
-regenerate the manifest (`test/receipt_integrity.py --receipt <run>/gpu-proof.json --write-manifest
-test/gpu-proof-tests.txt`) and commit it BEFORE recording — it is a fingerprint path.
+plan the manifest (`test/run_split_suite.py --plan-manifest test/gpu-proof-tests.txt`)
+from the primary GPU's authoritative collection and commit it BEFORE recording.
+The full launcher checks exact scope before any builds. This avoids a preliminary
+recording merely to discover IDs; the manifest remains a fingerprint path.
 
 Prefer the crash-isolated split driver for full GPU passes:
 `test/run_validation.py` (the receipt launcher) strips `GRID_*` from its env and sets its own
