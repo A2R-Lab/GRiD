@@ -78,6 +78,19 @@ def _stdin(target_jid, q, qd, qdd):
     return "\n".join(rows) + "\n"
 
 
+def _build_case(project_model, tmp_path, robot_id, base_mode, *, inspect_only=False):
+    build_dir = tmp_path / f"{robot_id}_{base_mode}_frame_kin"
+    build_dir.mkdir()
+    _generate_header(project_model, build_dir)
+    glass_inc = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
+    arch = _detect_cuda_arch()
+    return cached_nvcc_executable(
+        sources=[RUNNER_SOURCE, build_dir / "grid.cuh"],
+        flags=["-std=c++17", "-O0", "-gencode", f"arch=compute_{arch},code=sm_{arch}", f"-I{glass_inc}"],
+        exe_name="cuda_frame_kinematics_smoke_runner", fallback_dir=build_dir, include_dirs=[build_dir],
+        what=f"frame kinematics runner {robot_id}-{base_mode}", inspect_only=inspect_only)
+
+
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 @pytest.mark.robot_smoke
@@ -86,16 +99,7 @@ def test_cuda_frame_kinematics_matches_reference(tmp_path, robot_id, base_mode):
     spec = _robot_spec(robot_id, base_mode)
     resolved = resolve_robot_spec(spec)
     project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
-    build_dir = tmp_path / f"{robot_id}_{base_mode}_frame_kin"
-    build_dir.mkdir()
-    _generate_header(project_model, build_dir)
-    glass_inc = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
-    arch = _detect_cuda_arch()
-    exe, cmd = cached_nvcc_executable(
-        sources=[RUNNER_SOURCE, build_dir / "grid.cuh"],
-        flags=["-std=c++17", "-O0", "-gencode", f"arch=compute_{arch},code=sm_{arch}", f"-I{glass_inc}"],
-        exe_name="cuda_frame_kinematics_smoke_runner", fallback_dir=build_dir, include_dirs=[build_dir],
-        what=f"frame kinematics runner {robot_id}-{base_mode}")
+    exe, cmd = _build_case(project_model, tmp_path, robot_id, base_mode)
 
     robot = project_model.robot
     leaf_id = robot.get_leaf_nodes()[0]

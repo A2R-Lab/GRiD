@@ -581,6 +581,28 @@ memory limit before launching; use the kernel surface when they do not.
 The ten-per-body regressor is unchanged. To fit link inertia and armature
 together, concatenate ``[Y_inertia, Y_armature]`` and subtract known friction and
 external-load contributions from measured torque. This equation does not imply
+that those contributions are part of the inertial or armature columns. For
+batched states and accelerations in the native coordinate convention, a NumPy
+stacking recipe is:
+
+.. code-block:: python
+
+   # Request "inverse_dynamics_regressor" when registering handle.
+   Y_inertia = handle.inverse_dynamics_regressor(q, qd, qdd)
+   Y_armature = handle.armature_regressor(qdd)
+   Y = np.concatenate((Y_inertia, Y_armature), axis=-1)
+   # theta = [ten-per-body inertial parameters in the regressor's order,
+   #          armature[handle.armature_slots]], not the full nv-slot table.
+   design = Y.reshape(-1, Y.shape[-1])
+   target = (measured_torque - known_bias).reshape(-1)
+   theta, residuals, rank, singular_values = np.linalg.lstsq(
+       design, target, rcond=None)
+
+Here ``known_bias`` contains independently known friction and external-load
+torques with their inverse-dynamics signs, at the same states as the samples.
+Do not subtract gravity: its inertial contribution is already in
+``Y_inertia``. This unconstrained least-squares recipe does not enforce physical
+inertias or nonnegative armature, and does not imply
 full identifiability: excitation and parameter dependencies can make the joint
 design rank deficient. The example ``examples/armature_identification.py`` keeps
 link inertias known, reports singular values and held-out torque error, and

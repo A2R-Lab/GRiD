@@ -147,6 +147,12 @@ def _r(robot, **kw):
     return {"robot": robot, **kw}
 
 WARM_MANIFEST: dict[str, list[dict]] = {
+    "test_armature_default_registration": [
+        _r("go2", floating_base=True, armature=[0.] * 6 + [.25] * 12,
+           runtime_armature=runtime, use_joint_dynamics=True,
+           runtime_joint_dynamics=True, max_batch_size=1)
+        for runtime in (False, True)
+    ],
     "test_release_numerics": [
         _r(robot, max_batch_size=32, floating_base=floating,
            enable_mujoco_kernels=False,
@@ -1390,6 +1396,45 @@ def bounded_overlap_profile() -> bool:
     return os.environ.get("GRID_SPLIT_RESOURCE_PROFILE") == "bounded-overlap"
 
 
+def resource_environment() -> dict:
+    """Snapshot once per driver, including actual generator and toolchain identity."""
+    import resource_history
+    from grid_rbd._cache import (_codegen_source_hash, build_identity,
+                                 detect_cuda_arch, package_version)
+    if not hasattr(resource_environment, '_snapshot'):
+        arch = detect_cuda_arch()
+        env = resource_history.build_environment(_nvcc_version(), str(arch))
+        # Reuse the artifact contract: generation knobs, split compile, ABI,
+        # multi-architecture and dependency bytes must also re-key memory history.
+        env.update(codegen=_codegen_source_hash(), build_identity=build_identity(arch),
+                   package=package_version())
+        import importlib.metadata
+        env['python'] = sys.version
+        env['host_compiler'] = subprocess.check_output(
+            [os.environ.get('CXX', 'c++'), '--version'], text=True)
+        for package in ('numpy', 'torch', 'jax', 'jaxlib', 'pybind11'):
+            try:
+                env[package] = importlib.metadata.version(package)
+            except importlib.metadata.PackageNotFoundError:
+                env[package] = '<absent>'
+        for module in ('RBDReference', 'URDFParser', 'GLASS'):
+            path = REPO_ROOT / 'external' / module
+            env[module] = subprocess.check_output(
+                ['git', '-C', str(path), 'rev-parse', 'HEAD'], text=True).strip()
+            env[module + '_diff'] = subprocess.check_output(
+                ['git', '-C', str(path), 'diff', 'HEAD'], text=True)
+        resource_environment._snapshot = env
+    return resource_environment._snapshot
+
+
+def shard_resource_key(spec, extra_args):
+    import resource_history
+    return resource_history.identity(REPO_ROOT,
+        [*spec.fingerprint_paths, 'test/conftest.py'],
+        dict(targets=spec.targets, marker=spec.apply_marker, args=extra_args),
+        resource_environment())
+
+
 def pause_for_resources(out_dir: Path, reason: str) -> None:
     """Persist a non-successful, resumable stop; never manufacture test rows."""
     (out_dir / "resource-blocked.json").write_text(json.dumps({"reason": reason}, indent=2) + "\n")
@@ -1428,7 +1473,7 @@ def run_phases(shards, out_dir, receipts, extra_args, prior, pool, pool_jobs, pr
         print("Resource profile: serial prewarm then serial shards; two wrapper compiler units; "
               "strict memory admission (no first-job bypass)", flush=True)
     admission = None
-    if bounded_overlap_profile():
+    if bounded_overlap_profile() or serial_resource_profile():
         import compile_sched
         from resource_admission import MemoryAdmission
         admission = MemoryAdmission(floor_kb=GPU_PHASE_FLOOR_KB,
@@ -1436,8 +1481,9 @@ def run_phases(shards, out_dir, receipts, extra_args, prior, pool, pool_jobs, pr
             log_path=out_dir / "memory-admission.jsonl")
         if pool is not None:
             pool.admission = admission
-        print("Resource profile: bounded-overlap; at most 2 pool jobs / 1 shard / 2 units; "
-              "one reservation authority includes inline builds", flush=True)
+        if bounded_overlap_profile():
+            print("Resource profile: bounded-overlap; at most 2 pool jobs / 1 shard / 2 units; "
+                  "one reservation authority includes inline builds", flush=True)
     if pool is not None:
         thread = pool.run_async(pool_jobs)
         if serial_resource_profile() and finish_compile_phase(pool, thread, out_dir):
@@ -1446,7 +1492,7 @@ def run_phases(shards, out_dir, receipts, extra_args, prior, pool, pool_jobs, pr
     if admission is not None:
         kwargs['admission'] = admission
     result = phase_run(shards, out_dir, receipts, extra_args, prior, **kwargs)
-    if admission is not None and pool is not None:
+    if bounded_overlap_profile() and pool is not None:
         # Pressure is drain-only. Do not let main's emergency cleanup kill a
         # healthy owned compiler merely because no further shard can start.
         pool.stop()
@@ -1552,6 +1598,31 @@ def build_compile_pool(out_dir: Path, *, warm: bool, cuda_shards: list,
 
     if not jobs:
         return None, [], {}
+    if serial_resource_profile() or bounded_overlap_profile():
+        import resource_history
+        env = resource_environment()
+        units = int(env['GRID_RBD_BUILD_JOBS'])
+        identities = {}
+        for job in jobs:
+            spec_path = cdir / f'{job.name}.spec.json'
+            if spec_path.exists():
+                recipe = json.loads(spec_path.read_text())['entry']
+                kind, robot = 'wrapper', recipe['robot']
+                paths = ['grid_assets', 'test/conftest.py', 'bindings/grid_rbd', 'bindings/src']
+                job_env = {k: v for k, v in env.items()
+                           if k != 'GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA'}
+            else:
+                recipe = plan['jobs'][job.name]
+                kind, robot = 'native', recipe.get('robot', '')
+                paths = ['grid_assets', 'test/conftest.py', 'test/cuda_equivalents',
+                         'test/prewarm_cuda_flagship.py']
+                job_env = env
+            job.ledger_key = resource_history.identity(REPO_ROOT, paths, recipe, job_env)
+            job.peak_floor_kb = resource_history.compile_floor_kb(kind, robot, units, recipe)
+            job.record_history = True
+            identities[job.name] = dict(key=job.ledger_key, floor_kb=job.peak_floor_kb,
+                                        kind=kind, recipe=recipe, environment=job_env, paths=paths)
+        (cdir / 'resource-identities.json').write_text(json.dumps(identities, indent=2))
     ledger = compile_sched.Ledger(
         REPO_ROOT / "test" / ".split_suite" / "compile_rss.json")
     if ledger.dropped_legacy:
@@ -1645,7 +1716,7 @@ def report_pool(pool, out_dir: Path) -> int:
             failed += 1
             print(f"  POOL-FAIL {name}: rc={res.rc} {detail} "
                   f"(log: {cdir / (name + '.log')})")
-        if real_build and res.peak_kb > 0:
+        if real_build and res.peak_kb > 0 and not (cdir / 'resource-identities.json').exists():
             job_key = (f"warm:{json.loads((cdir / f'{name}.spec.json').read_text())['desc']}"
                        if (cdir / f"{name}.spec.json").exists() else name)
             pool.ledger.record(job_key, res.peak_kb, res.secs)
@@ -1770,6 +1841,13 @@ def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
     running: list[_ShardRun] = []
     waiting = False
     paused = False
+    resource_ledger = None
+    if serial_resource_profile() or bounded_overlap_profile():
+        import compile_sched
+        import resource_history
+        resource_ledger = compile_sched.Ledger(REPO_ROOT / 'test/.split_suite/shard_rss.json')
+        resource_keys = {s.name: shard_resource_key(s, extra_args) for s in shards}
+        (out_dir / 'shard-resource-identities.json').write_text(json.dumps(resource_keys, indent=2))
     try:
         while pending or running:
             if admission is not None and not paused:
@@ -1785,21 +1863,26 @@ def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
                       f"launches; {len(running)} in flight, {len(pending)} pending "
                       f"(rm it, then --resume {out_dir})", flush=True)
             while not paused and pending and len(running) < jobs:
+                spec = next_ready_shard(pending, pool, prereqs)
+                if spec is None:
+                    break
+                predicted = int(SERIAL_PEAK_KB * SERIAL_MARGIN)
+                if resource_ledger is not None:
+                    floor = resource_history.shard_floor_kb(spec.targets)
+                    predicted = max(int(floor * SERIAL_MARGIN), resource_ledger.predict_kb(
+                        resource_keys[spec.name], floor, SERIAL_MARGIN))
                 if serial_resource_profile():
                     import compile_sched
                     available = compile_sched.mem_available_kb()
-                    required = int(SERIAL_PEAK_KB * SERIAL_MARGIN) + GPU_PHASE_FLOOR_KB
+                    required = predicted + GPU_PHASE_FLOOR_KB
                     if available < required:
                         pause_for_resources(out_dir, f"shard admission: available {available} KiB "
                                             f"< required {required} KiB (compile allowance + reserve)")
                         paused = True
                         break
-                spec = next_ready_shard(pending, pool, prereqs)
-                if spec is None:
-                    break
                 token = "shard:" + spec.name
                 if admission is not None:
-                    if not admission.reserve(token, int(SERIAL_PEAK_KB * SERIAL_MARGIN)):
+                    if not admission.reserve(token, predicted):
                         if not admission.active:
                             pause_for_resources(out_dir, admission.refusal)
                             paused = True
@@ -1846,7 +1929,10 @@ def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
                 running.remove(run)
                 run.close()
                 if admission is not None:
-                    admission.release("shard:" + run.spec.name)
+                    peak = admission.release("shard:" + run.spec.name)
+                    if resource_ledger is not None:
+                        resource_ledger.record(resource_keys[run.spec.name], peak,
+                                               time.monotonic() - run.t0)
                 _finish_shard(run, rc, results, out_dir)
             if not finished:
                 time.sleep(5)

@@ -10,6 +10,13 @@ sys.path.insert(0, 'test')
 import compile_sched
 
 
+@pytest.fixture(autouse=True)
+def synthetic_resource_keys(monkeypatch, tmp_path):
+    # These state-machine tests do not load a GPU or hash the real checkout.
+    monkeypatch.setattr(driver, 'shard_resource_key', lambda spec, args: 'synthetic:' + spec.name)
+    monkeypatch.setattr(driver, 'REPO_ROOT', tmp_path)
+
+
 def test_first_measurement_creates_missing_ledger_directory(tmp_path):
     path = tmp_path/'new-checkout'/'.split_suite'/'compile_rss.json'
     ledger = compile_sched.Ledger(path)
@@ -145,11 +152,11 @@ def test_profiles_execute_the_same_scope_once(tmp_path, monkeypatch, profile):
     monkeypatch.setenv('GRID_SPLIT_SHARD_JOBS', '99')
     monkeypatch.setattr(compile_sched, 'mem_available_kb', lambda: 100_000_000)
     assert driver.shard_jobs() == 1
-    shards = [SimpleNamespace(name=n) for n in ('a', 'b')]
+    shards = [SimpleNamespace(name=n, targets=['synthetic']) for n in ('a', 'b')]
     launched = []
     def launch(spec, *args):
         launched.append(spec.name)
-        return SimpleNamespace(spec=spec, proc=SimpleNamespace(pid=1), poll=lambda:0, close=lambda:None)
+        return SimpleNamespace(spec=spec, proc=SimpleNamespace(pid=1), poll=lambda:0, close=lambda:None, t0=0)
     monkeypatch.setattr(driver, '_launch_shard', launch)
     monkeypatch.setattr(driver, '_finish_shard',
         lambda run, rc, results, out: results.append({'shard':run.spec.name, 'rc':rc}))
@@ -166,12 +173,12 @@ def test_bounded_shard_pressure_preserves_completed_results(tmp_path, monkeypatc
     monkeypatch.setenv('GRID_SPLIT_RESOURCE_PROFILE', 'bounded-overlap')
     free = [100_000_000]
     b = MemoryAdmission(floor_kb=driver.GPU_PHASE_FLOOR_KB, available=lambda:free[0], rss=lambda pid:0)
-    shards = [SimpleNamespace(name=n) for n in ('a','b')]
+    shards = [SimpleNamespace(name=n, targets=['synthetic']) for n in ('a','b')]
     def launch(spec, *args):
         def poll():
             free[0] = 1
             return 0
-        return SimpleNamespace(spec=spec, proc=SimpleNamespace(pid=1), poll=poll, close=lambda:None)
+        return SimpleNamespace(spec=spec, proc=SimpleNamespace(pid=1), poll=poll, close=lambda:None, t0=0)
     monkeypatch.setattr(driver, '_launch_shard', launch)
     monkeypatch.setattr(driver, '_finish_shard',
         lambda run, rc, results, out: results.append({'shard':run.spec.name,'rc':rc}))
@@ -195,10 +202,11 @@ def test_shard_memory_refusal_then_resume_preserves_scope(tmp_path, monkeypatch)
     monkeypatch.setenv('GRID_SPLIT_RESOURCE_PROFILE', 'serial')
     monkeypatch.setenv('GRID_SPLIT_SHARD_JOBS', '9')
     assert driver.shard_jobs() == 1
-    required = int(driver.SERIAL_PEAK_KB * driver.SERIAL_MARGIN) + driver.GPU_PHASE_FLOOR_KB
+    from test.resource_history import shard_floor_kb
+    required = int(shard_floor_kb(['synthetic']) * driver.SERIAL_MARGIN) + driver.GPU_PHASE_FLOOR_KB
     memory = [required - 1]
     monkeypatch.setattr(compile_sched, 'mem_available_kb', lambda: memory[0])
-    shards = [SimpleNamespace(name=n) for n in ('a', 'b')]
+    shards = [SimpleNamespace(name=n, targets=['synthetic']) for n in ('a', 'b')]
     launched = []
     def launch(spec, *a):
         launched.append(spec.name)

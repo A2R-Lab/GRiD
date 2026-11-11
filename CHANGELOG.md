@@ -193,10 +193,15 @@ limit, including overloaded and multitarget launches.
   are byte-identical.
 - Codegen: `enable_floating_second_order=False` no longer warns that
   floating-base second order is "under development"; it is a plain opt-out.
-- Receipts: the floating-base second-order diagnostic includes `fdsva_so` by
-  default (`GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA=0` opts out), so the
-  standalone floating `fdsva_so` is checked against the oracle on every robot
-  of the diagnostic instead of only through the go2 plant Hessian.
+- Known limit: on free-floating arms at very high accelerations, standalone
+  float32 `fdsva_so` returns only two to three significant digits in the
+  investigated cases; this behaviour is unchanged from 0.7.0. The tested
+  double builds are accurate. Its standalone floating oracle diagnostic is
+  opt-in again (`GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA=1`), uniformly
+  for all eight robots, and is not part of the default receipt coverage.
+  Both original and zero-base-wrench inputs retain their unchanged tolerances
+  behind the flag. Algorithm-level FP32 accuracy work is deferred; no
+  mixed-precision implementation or expanded scratch layout is included.
 - Tests: one shared thread-sweep helper (`test/cuda_equivalents/
   thread_invariance.py`) replaces the per-module loops in fifteen CUDA
   equivalence modules; the split driver fingerprints `from

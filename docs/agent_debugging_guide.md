@@ -4247,3 +4247,29 @@ CPU cases reject missing, extra and duplicate rows and exercise non-promotion
 through the launcher. Both external policies continue to require the current
 manifest, so verification of old evidence remains red. Do not fabricate a new
 receipt, change the skip baseline or waive scope to resolve this transition.
+
+### 7.z104 Shared sample slots can conflate acceleration and torque (2026-11-11)
+
+The second-order smoke runner reads its third slot as acceleration for IDSVA
+and generalized force for FDSVA. Reusing one sample therefore applies its six
+base acceleration values as a base wrench in the floating FD check. To test an
+unactuated free base, construct a separate torque input with six zero base
+entries and unchanged joint entries; keep the IDSVA sample unchanged. Assert
+that constructing this input does not mutate or alias the acceleration array.
+
+Do not equate an unexpected input role with a kernel exoneration. A generalized
+base wrench is a valid mathematical input, although it does not describe an
+unactuated base. Conditioning can amplify small FP32 intermediate errors through
+FD-gradient and second-order composition; epsilon times a condition number is
+not a lower bound proving an accuracy target impossible. In the November 11
+iiwa14/rizon4/gen3 checks, zeroing the base wrench still failed the unchanged
+acceptance. Preserve both input cases and their errors, and stop for numerical
+investigation rather than adjusting the sample again, relaxing tolerances, or
+replacing FP32 acceptance with FP64 results.
+
+Final investigation: correcting acceleration alone still failed with actual
+FP32 downstream derivative arithmetic. Neither the base wrench nor acceleration
+alone explains the loss. The release restores the same opt-in diagnostic default
+for every robot and documents the lost standalone receipt coverage. Preserve
+both inputs behind the flag for algorithm-level follow-up; a mixed-precision
+private diagnostic is evidence, not an approved product implementation.

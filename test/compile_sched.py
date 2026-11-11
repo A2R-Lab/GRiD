@@ -23,9 +23,9 @@ Design constraints honored:
   also avoids two workers paying the same miss), still parallel vs everything else.
 - Workers run in their own sessions (setsid) so an interrupt can kill whole
   compiler trees; kill_all() is the SIGTERM path.
-- The ledger only records peaks for jobs the caller marks as real builds
-  (record_peak in the result is consumed by the caller) — cache-HIT invocations
-  finish in ~1s with tiny RSS and must not poison future predictions.
+- Legacy callers record only real builds. Identity-qualified jobs persist
+  max-only peaks incrementally; cold class floors prevent an initial cache-HIT
+  measurement from promising unsafe concurrency.
 
 Used by test/run_split_suite.py (parallel Phase A + cuda flagship pre-warm,
 optionally overlapped with GPU shard execution). CPU-only; no GPU use.
@@ -103,6 +103,8 @@ class Job:
     env: dict | None = None       # extra env on top of os.environ
     group: str | None = None      # jobs sharing a group run serially vs each other
     log_path: str | None = None   # worker stdout+stderr destination
+    peak_floor_kb: int | None = None  # measured-class cold floor, before margin
+    record_history: bool = False  # identity-qualified key; persist on completion
 
 
 @dataclass
@@ -320,6 +322,11 @@ class RamScheduler:
                 try:
                     self.results[name] = self._collect(job, proc, time.monotonic() - t0,
                                                        peak_holder[0])
+                    if job.record_history:
+                        result = self.results[name]
+                        # Max-only updates cannot erase an earlier cold peak.
+                        # The cold class floor still applies to a first cache hit.
+                        self.ledger.record(job.ledger_key, result.peak_kb, result.secs)
                 finally:
                     if self.admission is not None:
                         self.admission.release("compile:" + name)
@@ -337,10 +344,11 @@ class RamScheduler:
                         break
                     if job.group and job.group in busy_groups:
                         continue
-                    pred = self.ledger.predict_kb(
-                        job.ledger_key, self.default_peak_kb, self.margin
-                    )
-                    if self.strict_memory:
+                    default = job.peak_floor_kb if job.peak_floor_kb is not None else self.default_peak_kb
+                    pred = self.ledger.predict_kb(job.ledger_key, default, self.margin)
+                    if job.peak_floor_kb is not None:
+                        pred = max(pred, int(job.peak_floor_kb * self.margin))
+                    elif self.strict_memory:
                         # Shared admission may use measured cold-build peaks,
                         # still floored at the conservative 8 GiB pool allowance.
                         # Unseen jobs retain default_peak_kb (16 GiB in the

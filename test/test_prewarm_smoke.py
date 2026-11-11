@@ -15,6 +15,8 @@ S = 'test/cuda_equivalents/test_cuda_second_order_fallback.py::'
 INTEGRATOR = I + 'test_cuda_integrator_matches_python_reference[iiwa14-integrator-fixed-TIER_SHARED]'
 FEXT = I + 'test_cuda_integrator_fext_matches_python_reference'
 SO = S + 'test_floating_second_order_diagnostic_matches_python_reference[h1_2-floating]'
+FRAME = 'test/cuda_equivalents/test_cuda_frame_kinematics.py::test_cuda_frame_kinematics_matches_reference[gen3-floating]'
+FEXT_THREE = 'test/cuda_equivalents/test_cuda_fext_equivalence.py::test_cuda_fext_three_way_equivalence[iiwa14-fixed]'
 
 
 def test_smoke_plan_deduplicates_exact_supported_ids():
@@ -24,7 +26,34 @@ def test_smoke_plan_deduplicates_exact_supported_ids():
     assert jobs[nodes[SO]] == dict(family='second_order', robot='h1_2', base='floating', tier=None)
 
 
-@pytest.mark.parametrize('nid,fdsva', [(INTEGRATOR, False), (SO, False), (SO, True)])
+@pytest.mark.parametrize('nid,family', [(FRAME, 'frame'), (FEXT_THREE, 'fext')])
+def test_new_prewarm_families_use_test_builders(monkeypatch, nid, family):
+    from test.cuda_equivalents import test_cuda_frame_kinematics as frame
+    from test.cuda_equivalents import test_cuda_fext_equivalence as fext
+    jobs, nodes = pw.smoke_jobs([nid, nid + '-bad'])
+    assert list(nodes) == [nid]
+    job = jobs[nodes[nid]]
+    assert job['family'] == family
+    mod = frame if family == 'frame' else fext
+    spec = SimpleNamespace(robot_id=job['robot'])
+    if family == 'frame':
+        monkeypatch.setattr(mod, '_robot_spec', lambda *a: spec)
+    else:
+        monkeypatch.setattr(mod, 'iter_robot_cases', lambda *a, **kw: [{'spec': spec}])
+    monkeypatch.setattr(mod, 'resolve_robot_spec', lambda s: s)
+    monkeypatch.setattr(mod, 'build_project_adapter', lambda *a, **kw: 'model')
+    calls = []
+    def build(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {'key': 'same-test-builder'}
+    monkeypatch.setattr(mod, '_build_case' if family == 'frame' else '_gen_and_compile', build)
+    assert pw.run_smoke_job(job, inspect_only=True) == {'key': 'same-test-builder'}
+    args, kwargs = calls[0]
+    assert args[0] == 'model' and kwargs == {'inspect_only': True}
+    assert args[2:] == ((job['robot'], job['base']) if family == 'frame' else (False,))
+
+
+@pytest.mark.parametrize('nid,fdsva', [(INTEGRATOR, False), (SO, None), (SO, False), (SO, True)])
 def test_smoke_worker_uses_actual_builder_options(tmp_path, monkeypatch, nid, fdsva):
     from test.cuda_equivalents import test_cuda_integrator_equivalence as integ
     from test.cuda_equivalents import test_cuda_second_order_fallback as so
@@ -34,7 +63,10 @@ def test_smoke_worker_uses_actual_builder_options(tmp_path, monkeypatch, nid, fd
     monkeypatch.setattr(mod, '_robot_spec', lambda robot, base: (robot, base))
     monkeypatch.setattr(mod, 'resolve_robot_spec', lambda spec: spec)
     monkeypatch.setattr(mod, 'build_project_adapter', lambda *args, **kwargs: 'model')
-    monkeypatch.setenv('GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA', str(int(fdsva)))
+    if fdsva is None:
+        monkeypatch.delenv('GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA', raising=False)
+    else:
+        monkeypatch.setenv('GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA', str(int(fdsva)))
     calls = []
     def build(*args, **kwargs):
         calls.append((args, kwargs))
@@ -50,7 +82,7 @@ def test_smoke_worker_uses_actual_builder_options(tmp_path, monkeypatch, nid, fd
     else:
         assert args[3] == mod._second_order_target_shared_bytes()
         assert kwargs['enable_floating_second_order'] and kwargs['enable_idsva_so_body_frame']
-        assert kwargs['enable_fdsva'] is fdsva
+        assert kwargs['enable_fdsva'] is bool(fdsva)
         assert kwargs['algorithm_list'] == ('idsva_so_body_frame,fdsva_so' if fdsva else 'idsva_so_body_frame')
 
 
