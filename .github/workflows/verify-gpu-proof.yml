@@ -89,7 +89,8 @@ jobs:
           # The Pinocchio anchors of the CPU lane (test_manifold_conventions,
           # test_urdf_oracle) import pinocchio; the same load-bearing pins as
           # install/requirements-dev.txt and the RBDReference peer suite.
-          pip install "pin<4" cmeel-eigen "cmeel-urdfdom<5"
+          # cmeel-tinyxml2 11 ships libtinyxml2.so.11; pin 3.9 links .so.10.
+          pip install "pin<4" cmeel-eigen "cmeel-urdfdom<5" "cmeel-tinyxml2<11"
 
       # The BROAD CPU set (audit W00, 2026-09-19): every test/test_*.py + the
       # benchmark-spec guards + the CPU-only bindings modules. The former six-
