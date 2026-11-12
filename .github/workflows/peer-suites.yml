@@ -21,7 +21,7 @@ on:
         default: false
   pull_request:
   push:
-    branches: [main]
+    branches: [main, dev]
 
 jobs:
   rbdreference-suite:

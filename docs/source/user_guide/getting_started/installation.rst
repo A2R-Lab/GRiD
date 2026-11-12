@@ -84,6 +84,16 @@ peer submodules, wrapper template and launch profiles, so keep it in place.
 ``main`` is the branch documented here. Distribution wheels instead contain
 their own pinned resources and do not need Git or a retained checkout.
 
+Reviewed changes land on the ``dev`` branch before a maintainer verifies them
+on a GPU and merges them into ``main``. To use them early, clone ``dev``:
+
+.. code-block:: shell
+
+    git clone --recursive --branch dev https://github.com/A2R-Lab/GRiD.git
+
+``dev`` has passed the CPU tests and review. It has not passed the full GPU
+suite; ``main`` and the PyPI releases have.
+
 For developer installs (adds Pinocchio, robot-description fixtures,
 documentation tooling, and the Pinocchio second-order pybind11 extension
 used as the golden oracle in the equivalence tests):
