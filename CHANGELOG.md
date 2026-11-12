@@ -10,9 +10,7 @@ Rigid Body Dynamics with Analytical Gradients*. That implementation is preserved
 in the archival [robot-acceleration/GRiD](https://github.com/robot-acceleration/GRiD)
 repository. Everything below describes the packaged A2R-Lab releases.
 
-## [0.7.1] - 2026-11-10
-
-Publication is pending.
+## [0.7.1] — 2026-11-11
 
 Output changes from 0.7.0: mimic and spherical inverse-mass matrices no longer
 double off-diagonal entries in Python or forward-dynamics torque pullbacks;
@@ -24,8 +22,7 @@ limit, including overloaded and multitarget launches.
 
 - Repair full six-axis bias-force projection and first derivatives for a lone
   floating body. Document body-origin base wrenches and add independent
-  offset-COM discrete A/B, rotor-map and prepared-loading regressions. This does
-  not add floating fixed-chart Hessians or a consumer actuation framework.
+  offset-COM discrete A/B, rotor-map and prepared-loading regressions.
 - Initialize the entire reserved topology table before host-to-device upload,
   including floating/mimic padding. Reject misaligned caller-owned allocation
   slabs/cursors and overflowing requests without advancing the pool.
@@ -33,9 +30,9 @@ limit, including overloaded and multitarget launches.
   historical padding. Small floating mimic chains previously declared fewer
   entries than their root and followers required and failed CUDA compilation.
 - Preserve independent-slot armature in the polynomial embedding reference's
-  torque, mass and energy. This does not add follower rotor parameters or
-  floating-mimic MuJoCo twins. Permanent cross-feature tests cover supported
-  baked/runtime dynamics, frame derivatives and native/MuJoCo integration.
+  torque, mass and energy. Follower rotor parameters and floating-mimic
+  MuJoCo twins are not supported. Cross-feature tests cover the baked and
+  runtime dynamics, the frame derivatives and both integrator conventions.
 - Align pose matrix scratch inside its queried allocation to prevent optimized
   shared loads from overlapping the concurrently written matrix bank. Callers
   still need only scalar alignment; regenerate headers and use the scratch
@@ -147,8 +144,7 @@ limit, including overloaded and multitarget launches.
   function, so they also carry the moving origin (and, for the
   acceleration, the classical term), which is what a task-space constraint
   needs.
-- Closed loops by constraint embedding, first step (item E of 0.8):
-  polynomial couplings. URDFParser reads `<mimic joint="l" polycoef="c0 c1
+- Closed loops by constraint embedding, first step: polynomial couplings. URDFParser reads `<mimic joint="l" polycoef="c0 c1
   c2 c3 c4" q0="..."/>` (the MuJoCo joint equality, q = sum c_i (q_l -
   q0)^i; a degree-one polynomial is the plain mimic) and offers
   `parse(..., reduce_couplings=False)`, the full spanning tree with the
@@ -193,15 +189,16 @@ limit, including overloaded and multitarget launches.
   are byte-identical.
 - Codegen: `enable_floating_second_order=False` no longer warns that
   floating-base second order is "under development"; it is a plain opt-out.
-- Known limit: on free-floating arms at very high accelerations, standalone
-  float32 `fdsva_so` returns only two to three significant digits in the
-  investigated cases; this behaviour is unchanged from 0.7.0. The tested
-  double builds are accurate. Its standalone floating oracle diagnostic is
-  opt-in again (`GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA=1`), uniformly
-  for all eight robots, and is not part of the default receipt coverage.
-  Both original and zero-base-wrench inputs retain their unchanged tolerances
-  behind the flag. Algorithm-level FP32 accuracy work is deferred; no
-  mixed-precision implementation or expanded scratch layout is included.
+- Known limit: on a free-floating arm at very high accelerations (hundreds
+  to thousands of rad/s^2) the float32 `fdsva_so` kernel returns two to three
+  significant digits. The inertia matrix of such a model has a condition
+  number near 5e4 and the kernel applies its inverse three times. The
+  behaviour is the same as in 0.7.0, and the double build agrees with the
+  reference. The floating diagnostic that compares `fdsva_so` with the
+  reference therefore stays opt-in
+  (`GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA=1`) for every robot and is
+  outside the receipt; with the flag set, iiwa14, rizon4 and gen3 fail and
+  the five other floating robots pass.
 - Tests: one shared thread-sweep helper (`test/cuda_equivalents/
   thread_invariance.py`) replaces the per-module loops in fifteen CUDA
   equivalence modules; the split driver fingerprints `from
@@ -818,7 +815,7 @@ update on top of that, organised here by theme:
 - Closed kinematic loops are unsupported.
 - No Windows, macOS, Jetson or precompiled-robot wheels.
 
-[0.7.1]: https://github.com/A2R-Lab/GRiD/compare/v0.7.0...HEAD
+[0.7.1]: https://github.com/A2R-Lab/GRiD/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/A2R-Lab/GRiD/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/A2R-Lab/GRiD/compare/v0.5.5...v0.6.0
 [0.5.5]: https://github.com/A2R-Lab/GRiD/compare/v0.5.4...v0.5.5
