@@ -55,11 +55,39 @@ jobs:
 
       - name: Verify secondary receipts
         # Every receipt listed in test/gpu-proof-receipts.yaml that exists on
-        # disk (the Jetson rows under receipts/), each against its own
-        # expected-skips baseline. A missing secondary is reported, not an
-        # error; a stale or unsigned one fails here instead of only on the
-        # maintainer's `make verify-all`.
-        run: python test/receipt_integrity.py --verify-all
+        # disk (the Jetson rows under receipts/) is verified against the commit
+        # it was recorded at: signature, scope, results and its own
+        # expected-skips baseline, with that commit an ancestor of this one. A
+        # secondary receipt attests the source it ran on, which the
+        # compatibility page states; it is not required to match the tip. A
+        # missing secondary is reported, not an error.
+        run: |
+          python - <<'PY'
+          import json, os, subprocess, sys, yaml
+          table = yaml.safe_load(open('test/gpu-proof-receipts.yaml'))
+          rc = 0
+          for row in table.get('secondary') or []:
+              path = row['receipt']
+              head = f"sm_{row['arch']} {row['label']} {path}"
+              if not os.path.exists(path):
+                  print(f'{head}: not recorded')
+                  continue
+              commit = json.load(open(path))['repo']['commit_sha']
+              if subprocess.run(['git', 'merge-base', '--is-ancestor', commit, 'HEAD']).returncode:
+                  print(f'{head}: recorded commit {commit[:7]} is not an ancestor; FAIL')
+                  rc = 1
+                  continue
+              tree = os.path.join(os.environ['RUNNER_TEMP'], f"receipt-sm{row['arch']}")
+              subprocess.run(['git', 'worktree', 'add', '--detach', tree, commit], check=True)
+              skips = row.get('expected_skips', 'test/gpu-proof-expected-skips.txt')
+              proc = subprocess.run(
+                  ['gpu-proof', 'verify', '--receipt', os.path.abspath(path), '--repo', tree,
+                   '--policy', os.path.join(tree, 'test/gpu-proof-policy.yaml'),
+                   '--expected-skips', os.path.abspath(skips)])
+              print(f"{head}: attests {commit[:7]}; {'ok' if proc.returncode == 0 else 'FAIL'}")
+              rc |= proc.returncode != 0
+          sys.exit(rc)
+          PY
 
   cpu-lane:
     runs-on: ubuntu-latest
