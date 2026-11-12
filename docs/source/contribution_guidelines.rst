@@ -5,6 +5,28 @@ Open an issue to discuss substantial changes, then submit a focused pull
 request with the motivation, implementation and validation results.
 Be considerate and respectful in discussions and reviews.
 
+Branches and receipts
+---------------------
+
+GRiD has three stages, and each may be ahead of the next. ``dev`` collects
+reviewed pull requests. ``main`` moves when a maintainer merges ``dev`` after
+running the GPU suite on the primary GPU. PyPI moves when a maintainer tags
+``main`` with a fresh full receipt.
+
+Open pull requests against ``dev``. A pull request into ``dev`` needs the CPU
+lane, the packaging jobs and the docs build to pass. It needs no GPU and no
+receipt; the receipt job runs only for ``main``. If you have a GPU, run the
+tests that cover your change and report the GPU and the result in the pull
+request.
+
+Before ``main`` moves, a maintainer runs the stale-shard refresh, which
+re-runs the shards whose inputs changed and carries the others, and commits
+the refreshed ``gpu-proof.json``. A release is stricter: one fresh full pass
+with no carried shards. Receipts recorded on other GPU architectures live
+under ``receipts/`` and attest the commit they were recorded at; the
+compatibility page lists the latest receipt for each architecture. The release
+playbook, ``RELEASING.md``, has the details.
+
 Code and tests
 --------------
 

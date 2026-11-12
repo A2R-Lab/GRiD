@@ -1,8 +1,10 @@
 name: Automatically Add Contributors
+# Runs on `dev`: `main` only moves through pull requests, so the regenerated
+# table reaches it with the next merge of `dev`.
 on:
   push:
     branches:
-    - main
+    - dev
 permissions:
   contents: write   # pushes the regenerated README contributor table
 jobs:

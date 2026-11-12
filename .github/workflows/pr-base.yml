@@ -1,0 +1,30 @@
+name: Pull request base
+
+# `main` moves only by merging `dev` (or a hotfix or release branch) after the
+# maintainer's receipt refresh. A pull request opened against `main` from any
+# other branch is asked to retarget `dev`.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  base-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the head branch
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          if [[ "$HEAD_REPO" == "$BASE_REPO" && ( "$HEAD_REF" == "dev" || "$HEAD_REF" == hotfix/* || "$HEAD_REF" == release/* ) ]]; then
+            echo "Head branch $HEAD_REF may target main."
+            exit 0
+          fi
+          echo "::error::Pull requests target dev. Change the base branch of this pull request to dev (Edit, next to the title). main moves only when a maintainer merges dev with a refreshed receipt."
+          exit 1
