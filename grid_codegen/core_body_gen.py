@@ -41,6 +41,7 @@ FN_MEMBER = {
     "crba": "fn_crba_", "inverse_dynamics": "fn_inverse_dynamics_",
     "integrator": "fn_integrator_", "minv": "fn_minv_",
     "forward_dynamics": "fn_fd_", "aba": "fn_aba_",
+    "forward_dynamics_armature_gradient": "fn_fd_armature_",
     "inverse_dynamics_gradient": "fn_inverse_dynamics_gradient_",
     "forward_dynamics_gradient": "fn_fd_grad_",
     "idsva_so": "fn_idsva_so_", "fdsva_so": "fn_fdsva_so_",
@@ -54,6 +55,10 @@ FN_MEMBER = {
     "fk_batched": "fn_fk_batched_", "frame_jacobian": "fn_frame_jacobian_",
     "frame_jacobian_dot": "fn_frame_jacobian_dot_",
     "osc_inertia": "fn_osc_inertia_",
+    "frame_velocity": "fn_frame_velocity_",
+    "frame_acceleration": "fn_frame_acceleration_",
+    "frame_velocity_gradient": "fn_frame_velocity_gradient_",
+    "frame_acceleration_gradient": "fn_frame_acceleration_gradient_",
     "generalized_gravity": "fn_generalized_gravity_",
     "nonlinear_effects": "fn_nonlinear_effects_",
     "coriolis_matrix": "fn_coriolis_matrix_", "com": "fn_com_",
@@ -192,8 +197,10 @@ def gen_method(spec, mjx: bool) -> str:
     L.append(f"    // {name}({', '.join(p.split()[-1].rstrip(',') for p in params)}) -> (batch, {dims})")
     L.append(f"    py::array_t<CT> {name}({sig})")
     L.append("    {")
-    if mjx:
+    if mjx or key == "forward_dynamics_armature_gradient":
         guard = spec.py_twin_guard or f"{name} unavailable: floating-base .so only"
+        if not mjx:
+            guard = "armature sensitivity unavailable in this artifact; rebuild with its algorithm_list entry"
         L.append(f"        if (!{fn}) throw std::runtime_error(")
         L.append(f"            {_cxx_str(guard, '            ')});")
     if has_qd:
@@ -206,7 +213,17 @@ def gen_method(spec, mjx: bool) -> str:
         L.append(f'        py::array_t<CT> out = grid_py_out<CT>(out_opt, batch, {dims}, "{name}");')
     else:
         L.append(f"        py::array_t<CT> out({{batch, {dims}}});")
-    L.append(f"        int rc = {fn}(ctx_id_, {', '.join(call)});")
+    if key == "forward_dynamics_armature_gradient":
+        # Admission may wait for a concurrent Python setter. Capture Python
+        # buffers before releasing the GIL; keep their owners alive until return.
+        L.append("        const CT *q_ptr = q.data(), *qd_ptr = qd.data(), *u_ptr = u.data();")
+        L.append("        CT *out_ptr = out.mutable_data();")
+        native_call = [dict(zip(("q.data()", "qd.data()", "u.data()", "out.mutable_data()"),
+                               ("q_ptr", "qd_ptr", "u_ptr", "out_ptr"))).get(c, c) for c in call]
+        L.append("        int rc;")
+        L.append(f"        {{ GridNoGil nogil; rc = {fn}(ctx_id_, {', '.join(native_call)}); }}")
+    else:
+        L.append(f"        int rc = {fn}(ctx_id_, {', '.join(call)});")
     # A1 (2026-09-08): ONE throw per method through the rc_message decoder
     # (defined beside the shared validators in the hand region). rc==3 returns
     # the per-algo hint VERBATIM (the wrapper subset tests key on its "not

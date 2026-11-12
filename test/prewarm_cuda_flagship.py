@@ -78,6 +78,16 @@ def smoke_jobs(node_ids):
                 match = re.fullmatch(re.escape(test_name) + r'\[([\w]+)-' + base_name + r'\]', test)
                 if match:
                     family, robot, base = 'second_order', match[1], base_name
+        elif module in ('test/cuda_equivalents/test_cuda_frame_kinematics.py',
+                        'test/cuda_equivalents/test_cuda_fext_equivalence.py'):
+            family, name = (('frame', 'test_cuda_frame_kinematics_matches_reference')
+                           if 'frame_kinematics' in module else
+                           ('fext', 'test_cuda_fext_three_way_equivalence'))
+            match = re.fullmatch(re.escape(name) + r'\[([\w]+)-(fixed|floating)\]', test)
+            if match:
+                robot, base = match.groups()
+            else:
+                family = None
         if family:
             name = '_'.join(x for x in ('prewarm', family, robot, base, tier) if x)
             jobs[name] = dict(family=family, robot=robot, base=base, tier=tier)
@@ -90,9 +100,17 @@ def run_smoke_job(job, *, inspect_only=False):
     sys.path.insert(0, str(REPO_ROOT))
     if job['family'] == 'integrator':
         from test.cuda_equivalents import test_cuda_integrator_equivalence as mod
+    elif job['family'] == 'frame':
+        from test.cuda_equivalents import test_cuda_frame_kinematics as mod
+    elif job['family'] == 'fext':
+        from test.cuda_equivalents import test_cuda_fext_equivalence as mod
     else:
         from test.cuda_equivalents import test_cuda_second_order_fallback as mod
-    spec = mod._robot_spec(job['robot'], job['base'])
+    if job['family'] == 'fext':
+        spec = next(c['spec'] for c in mod.iter_robot_cases(mod.MANIFEST_PATH, base_mode=job['base'])
+                    if c['spec'].robot_id == job['robot'])
+    else:
+        spec = mod._robot_spec(job['robot'], job['base'])
     resolved = mod.resolve_robot_spec(spec)
     with open(os.devnull, 'w') as dn, contextlib.redirect_stdout(dn):
         model = mod.build_project_adapter(spec, resolved, base_mode=job['base'])
@@ -100,9 +118,15 @@ def run_smoke_job(job, *, inspect_only=False):
         if job['family'] == 'integrator':
             return mod._build_case(model, Path(temp), 'build', tier=job['tier'],
                                    inspect_only=inspect_only)
+        if job['family'] == 'frame':
+            return mod._build_case(model, Path(temp), job['robot'], job['base'],
+                                   inspect_only=inspect_only)
+        if job['family'] == 'fext':
+            return mod._gen_and_compile(model, Path(temp), job['base'] == 'floating',
+                                       inspect_only=inspect_only)
         kwargs = {}
         if job['base'] == 'floating':
-            fdsva = os.environ.get('GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA', '0') == '1'
+            fdsva = mod._floating_fdsva_enabled()
             kwargs.update(enable_floating_second_order=True, enable_fdsva=fdsva,
                           algorithm_list='idsva_so_body_frame,fdsva_so' if fdsva else 'idsva_so_body_frame',
                           enable_idsva_so_body_frame=True)
@@ -204,7 +228,7 @@ def run_job(plan: dict, name: str) -> int:
     import pytest  # noqa: PLC0415
 
     job = plan["jobs"][name]
-    if job.get('family') in ('integrator', 'second_order'):
+    if job.get('family') in ('integrator', 'second_order', 'frame', 'fext'):
         run_smoke_job(job)
         print(f'WARMED {name}', flush=True)
         return 0

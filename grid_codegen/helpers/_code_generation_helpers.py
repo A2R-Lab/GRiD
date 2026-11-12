@@ -54,8 +54,140 @@ def _alpha_for_jid(self, jid):
     """
     j = self.robot.get_joint_by_id(jid)
     if getattr(j, "is_mimic", False):
+        if not j.is_linear_coupling():
+            # A polynomial follower's multiplier varies with its leader: no
+            # literal exists. The sizing walks (arena layout, temp sizes, job
+            # tables) only need "owns a column" (nonzero), so they get a unit
+            # VariableAlpha; sites that EMIT arithmetic test _alpha_is_variable
+            # and read alpha(q) through _coupling_alpha_cpp. Algorithms whose
+            # emitters still bake the literal are refused in gen_all_code.
+            return VariableAlpha(1.0)
         return float(j.get_mimic_multiplier())
     return 1.0
+
+
+class VariableAlpha(float):
+    """Placeholder multiplier of a polynomial follower (value 1.0 for sizing);
+    never a valid literal to bake. Test with _alpha_is_variable."""
+    variable = True
+
+
+def _alpha_is_variable(self, jid):
+    return isinstance(self._alpha_for_jid(jid), VariableAlpha)
+
+
+def robot_has_variable_couplings(self):
+    """True if any follower joint's fold multiplier varies with its leader
+    (the polynomial coupling kind, 2026-11-03). Every emit site below this
+    gate keeps the linear (literal alpha) path byte-identical and evaluates
+    alpha(q), alpha'(q), alpha''(q) at runtime from the leader's q only when
+    this is True."""
+    return any(getattr(j, "is_mimic", False) and not j.is_linear_coupling()
+               for j in self.robot.joints)
+
+
+def _coupling_leader_qslot(self, jid):
+    j = self.robot.get_joint_by_id(jid)
+    slot = self.robot.get_joint_index_q(int(j.get_mimic_target_id()))
+    if isinstance(slot, (list, tuple)):
+        slot = slot[0]
+    return int(slot)
+
+
+def _coupling_alpha_cpp(self, jid, q_name="s_q", order=0):
+    """C expression for body jid's fold multiplier dq_jid/dq_leader (order 0)
+    or its first/second derivative against the leader coordinate (orders 1,
+    2): a literal for non-mimic and linear followers, a call of the baked
+    polynomial evaluator (gen_coupling_evaluators) for a polynomial follower."""
+    j = self.robot.get_joint_by_id(jid)
+    if not getattr(j, "is_mimic", False):
+        return "static_cast<T>(1)" if order == 0 else "static_cast<T>(0)"
+    if j.is_linear_coupling():
+        return ("static_cast<T>(" + repr(float(j.get_mimic_multiplier())) + ")") if order == 0 else "static_cast<T>(0)"
+    suffix = ("", "_d", "_dd")[order]
+    return "grid_coupling_alpha" + suffix + "_" + str(jid) + "<T>(" + q_name + ")"
+
+
+def _jd_fold_cpp(self, jid, alpha, b, fr, q_name="s_q"):
+    """C expressions (damping, friction) of body jid's joint-dynamics
+    coefficients in its reduced slot: alpha^2 b and |alpha| fr
+    (_jd_alpha_fold). A linear follower or an independent joint gets the
+    folded literal; a polynomial follower evaluates alpha(q_l) through the
+    baked evaluator, so the expressions read q_name."""
+    if not self._alpha_is_variable(jid):
+        from ._topology_helpers import _jd_alpha_fold
+        b_fold, f_fold = _jd_alpha_fold(alpha, b, fr)
+        return ("static_cast<T>(" + repr(float(b_fold)) + ")",
+                "static_cast<T>(" + repr(float(f_fold)) + ")")
+    al = self._coupling_alpha_cpp(jid, q_name)
+    return ("(" + al + " * " + al + " * static_cast<T>(" + repr(float(b)) + "))",
+            "(fabs(" + al + ") * static_cast<T>(" + repr(float(fr)) + "))")
+
+
+def _coupling_value_cpp(self, jid, q_name="s_q"):
+    """C expression for a follower's coordinate from the reduced q."""
+    j = self.robot.get_joint_by_id(jid)
+    if j.is_linear_coupling():
+        mult = float(j.get_mimic_multiplier()); off = float(j.get_mimic_offset())
+        if j.get_mimic_target_id() == -1 or mult == 0.0:
+            return "static_cast<T>(" + repr(off) + ")"
+        expr = "static_cast<T>(" + repr(mult) + ") * " + q_name + "[" + str(self._coupling_leader_qslot(jid)) + "]"
+        if off != 0.0:
+            expr += " + static_cast<T>(" + repr(off) + ")"
+        return "(" + expr + ")"
+    return "grid_coupling_value_" + str(jid) + "<T>(" + q_name + ")"
+
+
+def gen_alpha_table(self, name, jids, order=0):
+    """Per-entry fold multipliers of the joints ``jids`` (order 0: alpha, 1:
+    alpha', 2: alpha''): a baked ``static const`` table when every entry is a
+    constant (byte-identical to the legacy bake), else a shared table filled
+    at runtime from the leader coordinates in ``s_q`` (one thread, then a
+    sync) because a polynomial follower's multiplier varies with q."""
+    if not any(self._alpha_is_variable(int(j)) for j in jids):
+        vals = [float(self._alpha_for_jid(int(j))) if order == 0 else 0.0 for j in jids]
+        self.gen_bake_const_array(name, vals, "T")
+        return
+    self.gen_add_code_line("__shared__ T " + name + "[" + str(max(1, len(jids))) + "];")
+    self.gen_add_serial_ops()
+    for t, j in enumerate(jids):
+        self.gen_add_code_line(name + "[" + str(t) + "] = " + self._coupling_alpha_cpp(int(j), order=order) + ";")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+
+
+def gen_coupling_evaluators(self):
+    """Emit, once per polynomial follower, the device evaluators of its
+    coordinate q = sum_i c_i (q_l - q0)^i and of alpha = dq/dq_l, alpha' and
+    alpha'' (Horner on the baked coefficients, reading the leader's reduced q
+    slot). Emits nothing on robots without variable couplings."""
+    if not self.robot_has_variable_couplings():
+        return
+    self.gen_add_code_line("// polynomial coupling evaluators (closed loops by constraint embedding): q_f(q_l) and dq_f/dq_l with derivatives")
+    for j in self.robot.get_joints_ordered_by_id():
+        if not (getattr(j, "is_mimic", False) and not j.is_linear_coupling()):
+            continue
+        jid = int(j.get_id())
+        c = [float(v) for v in j.get_coupling_coefficients()]
+        slot = self._coupling_leader_qslot(jid)
+        q0 = float(j.get_coupling_q0())
+        d = "(s_q[" + str(slot) + "] - static_cast<T>(" + repr(q0) + "))"
+        def lit(v):
+            return "static_cast<T>(" + repr(float(v)) + ")"
+        forms = {
+            "value": lit(c[0]) + " + d * (" + lit(c[1]) + " + d * (" + lit(c[2]) + " + d * (" + lit(c[3]) + " + d * " + lit(c[4]) + ")))",
+            "alpha": lit(c[1]) + " + d * (" + lit(2 * c[2]) + " + d * (" + lit(3 * c[3]) + " + d * " + lit(4 * c[4]) + "))",
+            "alpha_d": lit(2 * c[2]) + " + d * (" + lit(6 * c[3]) + " + d * " + lit(12 * c[4]) + ")",
+            "alpha_dd": lit(6 * c[3]) + " + d * " + lit(24 * c[4]),
+        }
+        for name, expr in forms.items():
+            self.gen_add_code_line("template <typename T>")
+            self.gen_add_code_line("__device__ __forceinline__")
+            self.gen_add_code_line("T grid_coupling_" + name + "_" + str(jid) + "(const T *s_q) {", True)
+            self.gen_add_code_line("const T d = " + d + ";")
+            self.gen_add_code_line("return " + expr + ";")
+            self.gen_add_end_function()
+
 
 def _id_S_desc(self, jid):
     """Classify body ``jid``'s 1-DoF motion subspace for codegen dispatch.
@@ -171,6 +303,10 @@ ALGO_TO_FRAGMENT = {
     "dccrba": "centroidal",
     "frame_jacobian": "frame_jacobian_family",
     "frame_jacobian_dot": "frame_jacobian_family",
+    "frame_velocity": "frame_jacobian_family",
+    "frame_acceleration": "frame_jacobian_family",
+    "frame_velocity_gradient": "frame_jacobian_family",
+    "frame_acceleration_gradient": "frame_jacobian_family",
     "osc_inertia": "frame_jacobian_family",
     "end_effector_pose": "ee_kinematics",
     "end_effector_pose_gradient": "ee_kinematics",
@@ -720,6 +856,49 @@ def gen_mjx_retract(self, q_out, q_in, qd, dt_expr):
         f"{q_out}[0] = {q_in}[0] + ({dt_expr}) * {qd}[0];",
         f"{q_out}[1] = {q_in}[1] + ({dt_expr}) * {qd}[1];",
         f"{q_out}[2] = {q_in}[2] + ({dt_expr}) * {qd}[2];",
+    ])
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+
+
+def gen_mjx_integrator_output(self, x_kp1, q_name, qd_name, dt_expr, si_expr, nq):
+    """MuJoCo-convention OUTPUT of the single-stage integrators, in place on the
+    pin result ``x_kp1 = [q_{k+1} (nq); qd_{k+1,pin} (nv)]`` computed from the
+    pin-converted inputs (``q_name`` the original xyzw configuration of step k,
+    ``qd_name`` its pin velocity, both untouched by the out-of-place integrate):
+      * velocity: MuJoCo steps the world-frame velocity with the MuJoCo-frame
+        acceleration, ``qvel_{k+1} = qvel + dt qacc``, whose base-linear block is
+        ``R (a + omega x v)``; with ``qd_{k+1,pin} = v + dt a`` this is
+        ``R (qd_{k+1,pin}[0:3] + dt omega x v)`` (not ``R qd_{k+1,pin}``: the two
+        differ by ``dt R (omega x v)``);
+      * base position: the GLOBAL additive step ``q + dt W`` with ``W`` the
+        world-frame linear velocity of step k (euler, ``R v``) or of step k+1
+        (semi-implicit, the velocity just written);
+      * base quaternion xyzw -> wxyz (the inverse of the input reorder).
+    The base quaternion and the joints integrate as pin. Single thread + sync.
+    Mirrors RBDReference/tests/test_mujoco_convention._mjx_integrator_value."""
+    x, q, qd, dt = x_kp1, q_name, qd_name, "(" + dt_expr + ")"
+    o = str(nq)
+    self.gen_add_code_lines([
+        f"// mjx output: velocity step qd_{{k+1}} = qvel + dt qacc (world-linear, omega x v), base position global add, quaternion wxyz",
+        "if (threadIdx.x == 0 && threadIdx.y == 0) {", True,
+    ])
+    self.gen_add_code_lines(_gen_mjx_build_R_lines(q))
+    self.gen_add_code_lines([
+        f"T wx_ = {qd}[3], wy_ = {qd}[4], wz_ = {qd}[5];",
+        f"T vx_ = {qd}[0], vy_ = {qd}[1], vz_ = {qd}[2];",
+        f"T c0 = {x}[{o}+0] + {dt}*(wy_*vz_ - wz_*vy_);",
+        f"T c1 = {x}[{o}+1] + {dt}*(wz_*vx_ - wx_*vz_);",
+        f"T c2 = {x}[{o}+2] + {dt}*(wx_*vy_ - wy_*vx_);",
+        f"{x}[{o}+0] = R[0]*c0 + R[1]*c1 + R[2]*c2;",
+        f"{x}[{o}+1] = R[3]*c0 + R[4]*c1 + R[5]*c2;",
+        f"{x}[{o}+2] = R[6]*c0 + R[7]*c1 + R[8]*c2;",
+        f"T w0_, w1_, w2_;",
+        f"if ({si_expr}) {{ w0_ = {x}[{o}+0]; w1_ = {x}[{o}+1]; w2_ = {x}[{o}+2]; }}",
+        f"else {{ w0_ = R[0]*vx_ + R[1]*vy_ + R[2]*vz_; w1_ = R[3]*vx_ + R[4]*vy_ + R[5]*vz_; w2_ = R[6]*vx_ + R[7]*vy_ + R[8]*vz_; }}",
+        f"{x}[0] = {q}[0] + {dt}*w0_; {x}[1] = {q}[1] + {dt}*w1_; {x}[2] = {q}[2] + {dt}*w2_;",
+        f"T qw_out = {x}[6];",
+        f"{x}[6] = {x}[5]; {x}[5] = {x}[4]; {x}[4] = {x}[3]; {x}[3] = qw_out;",
     ])
     self.gen_add_end_control_flow()
     self.gen_add_sync()
@@ -1296,6 +1475,10 @@ def gen_declare_shared_arena(self, t_buffers, temp_mem_size, include_topology_he
         # it uniformly even when this robot allocates no topology helpers.
         self.gen_add_code_line("int *" + topology_name + " = nullptr;")
     self.gen_add_code_line("#ifdef GRID_CUDA_DEBUG_LAYOUT")
+    # The size authority includes trailing 16-byte padding, whereas the carve
+    # stops after the final live slot. Compare like-for-like without relaxing
+    # the equality or adding any release-mode allocation/work.
+    self.gen_add_code_line("s_arena_offset = grid_align_up(s_arena_offset, 16);")
     if tier_workspace_expr is not None and temp_size_int != 0:
         # Different t_region_count per tier: PERF includes temp; LITE+ excludes it
         self.gen_add_code_line("if constexpr (RESOURCE_TIER == TIER_SHARED) {", True)

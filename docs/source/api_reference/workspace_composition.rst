@@ -29,6 +29,19 @@ replays share a mutable spill slot. Keep the model and all input/output/workspac
 allocations alive until the asynchronous work completes. Read-only model sharing
 does not make concurrent model mutation safe.
 
+Caller-owned device pools
+-------------------------
+
+The generated ``grid_device_pool_t`` is an allocation-time slab, separate from
+the per-invocation workspaces below. Its base and allocation cursor must be
+256-byte aligned, as for the allocations it replaces. Subviews of a framework
+buffer do not necessarily satisfy this condition. The allocator refuses a
+misaligned base or cursor with ``cudaErrorInvalidValue``; a short pool or an
+overflowing size request returns ``cudaErrorMemoryAllocation``. Refusal clears
+the returned pointer and leaves the cursor unchanged. The caller owns the slab
+and must keep it alive until all contexts and asynchronous users have finished.
+Rounding allocation sizes alone cannot align a misaligned slab base.
+
 Cost menus
 ----------
 
@@ -132,3 +145,31 @@ describe only the inner's temporary pool, not its input, output, XI tables or a
 complete enclosing kernel. A fixed named target can have a smaller pool than the
 generic all-leaf call. Scratch from one entry point must not be used to size a
 differently carved wrapper.
+
+Pose scratch queries include internal 16-byte alignment headroom. The caller
+still supplies only a ``T``-aligned pointer and exactly the queried capacity;
+the inner aligns its two matrix banks within that allocation. Do not hard-code
+``32 * number_of_targets`` elements or round the supplied pointer yourself
+without accounting for the lost capacity. The same rule applies when the pose
+scratch is placed in global workspace. Regenerate consumer headers and rebuild
+their allocations together when updating GRiD.
+
+Enclosing plant helpers
+~~~~~~~~~~~~~~~~~~~~~~~
+
+``grid_plant::ee_pos``, ``ee_pos_gradient``, ``ee_pos_cost`` and
+``ee_pos_cost_gradient`` take a complete caller-owned shared arena in
+``s_scratch``, not just the inner temporary pool. Their public contract remains
+a **16-byte-aligned base**, with capacity in elements of ``T`` of at least
+``END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_COUNT`` for the value helpers or
+``END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_COUNT`` for the gradient helpers.
+Their separately supplied inputs and outputs are not included in that capacity.
+
+These helpers carve homogeneous transforms, a temporary pool and any topology
+helpers from the arena. Typed slot offsets preserve scalar alignment; they do
+not make every slot 16-byte aligned. The pose inner aligns its own matrix banks
+inside its padded temporary pool. Thus the inner's natural-scalar alignment
+rule does not relax the enclosing arena's contract, and an inner-only byte query
+must not be substituted for an enclosing helper's count. Offset stress tests
+exercise robustness beyond that enclosing contract, not additional supported
+caller alignments. The menu and Hessian arena contracts remain unchanged.

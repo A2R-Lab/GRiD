@@ -52,7 +52,7 @@ def gen_inverse_dynamics_inner_function_call(self, compute_c = False, use_qdd_in
     # build) relies on the trailing `= nullptr` default, so no other call site needs
     # editing and the byte-identity invariant holds.
     _id_rt_jd = ""
-    if compute_c and getattr(self, "runtime_joint_dynamics", False):
+    if compute_c and self._emits_model_ptr():
         _id_rt_jd = ", " + var_names.get("d_robotModel_name", "d_robotModel")
     id_code_end = var_names["s_temp_name"] + ", " + var_names["d_f_ext_name"] + ", " + var_names["gravity_name"] + _id_rt_jd + ");"
     if compute_c:
@@ -144,19 +144,44 @@ def gen_inverse_dynamics_joint_dynamics_bias(self):
             if alpha == 0.0:
                 continue  # No local input or generalized-force ownership.
             qd = "s_qd[" + str(vs) + "]"
+            # the follower's own torque projected onto its leader: alpha^2 b qd_l
+            # and |alpha| f s(qd_l) (_jd_alpha_fold); a polynomial follower reads
+            # alpha(q_l) from the baked evaluator at runtime.
+            b_cpp, f_cpp = self._jd_fold_cpp(jid, alpha, b, fr)
             terms = []
             if b != 0.0:
-                terms.append("static_cast<T>(" + repr(alpha * b) + ") * " + qd)
+                terms.append(b_cpp + " * " + qd)
             if fr != 0.0 and TANH:
-                # smooth model: alpha*f*tanh(qd/w), the width per v-slot baked.
-                terms.append("static_cast<T>(" + repr(alpha * fr) + ") * tanh(" + qd
+                # smooth model: |alpha|*f*tanh(qd/w), the width per v-slot baked.
+                terms.append(f_cpp + " * tanh(" + qd
                              + " / static_cast<T>(" + repr(float(w_vslot[vs])) + "))")
             elif fr != 0.0:
                 # exact sign matching np.sign (0 at qd==0): (qd>0) - (qd<0).
-                terms.append("static_cast<T>(" + repr(alpha * fr)
-                             + ") * static_cast<T>((" + qd + " > static_cast<T>(0)) - ("
+                terms.append(f_cpp + " * static_cast<T>((" + qd + " > static_cast<T>(0)) - ("
                              + qd + " < static_cast<T>(0)))")
             self.gen_add_code_line("s_c[" + str(vs) + "] += " + " + ".join(terms) + ";")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+
+def gen_inverse_dynamics_armature_bias(self, use_qdd_input):
+    """runtime_armature: tau += a[vs] * qdd[vs] on every single-DoF v-slot
+    (Pinocchio's rnea adds the armature term). Only the qdd-input value path
+    carries it: the c(q, qd) path used by forward dynamics has qdd = 0 and
+    the armature enters that solve through M + diag(a) instead."""
+    if not use_qdd_input:
+        return
+    slots = self._armature_vslots()
+    if not slots:
+        return
+    self.gen_add_code_line("//")
+    storage = "runtime table" if self.runtime_armature else "baked values"
+    self.gen_add_code_line("// rotor armature: s_c += a * qdd per v-slot (" + storage + ")")
+    self.gen_add_code_line("//")
+    self.gen_add_sync()
+    self.gen_add_parallel_loop("k", str(len(slots)))
+    self.gen_add_code_line("static const int armature_slots[" + str(len(slots)) + "] = {" + ", ".join(str(v) for v in slots) + "};")
+    self.gen_add_code_line("int vs = armature_slots[k];")
+    self.gen_add_code_line("s_c[vs] += " + self._armature_value_cpp("vs") + " * s_qdd[vs];")
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 
@@ -183,9 +208,9 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
     # default keeps every existing call site (id/fd/aba/gradient/so/regressor/...)
     # source-compatible without edits; only the compute_c id-call passes a real
     # pointer (below). The default keeps the signature byte-identical when off.
-    if getattr(self, "runtime_joint_dynamics", False):
+    if self._emits_model_ptr():
         func_def_end = "T *s_temp, T *d_f_ext, const T gravity, const robotModel<T> *d_robotModel = nullptr) {"
-        func_params.append("d_robotModel is the GPU model pointer (read for the mutable joint-dynamics table; nullptr when unused)")
+        func_params.append("d_robotModel is the GPU model pointer (read for the mutable joint-dynamics / armature tables; nullptr when unused)")
     else:
         func_def_end = "T *s_temp, T *d_f_ext, const T gravity) {"
     func_params.append("d_f_ext is the (optional) GLOBAL external forces, body-major 6*NUM_BODIES local-frame, or nullptr")
@@ -227,7 +252,21 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
             return self._v_slot_cpp(j)
         self.gen_add_code_line("// mimic per-body v-slot + multiplier tables (static const, off-stack §1v)")
         self.gen_bake_const_array("s_mimic_vslot", [_vslot_tbl(j) for j in range(n)], "int")
-        self.gen_bake_const_array("s_mimic_alpha", [self._alpha_for_jid(j) for j in range(n)], "T")
+        if self.robot_has_variable_couplings():
+            # A polynomial follower's multiplier is alpha(q_leader): fill the
+            # per-body alpha and alpha' tables at runtime (shared, one thread),
+            # the acceleration read adds alpha' qd_l^2 (d/dt of alpha qd_l).
+            self.gen_add_code_line("__shared__ T s_mimic_alpha[" + str(n) + "]; __shared__ T s_mimic_alphad[" + str(n) + "];")
+            self.gen_add_serial_ops()
+            for j in range(n):
+                if self.robot.floating_base and j == 0:
+                    self.gen_add_code_line("s_mimic_alpha[0] = static_cast<T>(1); s_mimic_alphad[0] = static_cast<T>(0);")
+                    continue
+                self.gen_add_code_line("s_mimic_alpha[" + str(j) + "] = " + self._coupling_alpha_cpp(j) + "; s_mimic_alphad[" + str(j) + "] = " + self._coupling_alpha_cpp(j, order=1) + ";")
+            self.gen_add_end_control_flow()
+            self.gen_add_sync()
+        else:
+            self.gen_bake_const_array("s_mimic_alpha", [self._alpha_for_jid(j) for j in range(n)], "T")
         self.gen_add_code_line("(void)s_mimic_vslot; (void)s_mimic_alpha;")
 
     HAS_SPHERICAL = self.robot.robot_has_spherical()
@@ -249,6 +288,10 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
             if isinstance(jid_expr, int) and self._alpha_for_jid(jid_expr) == 0:
                 return "static_cast<T>(0)"
             value = "s_mimic_alpha[" + str(jid_expr) + "] * " + qd_name + "[s_mimic_vslot[" + str(jid_expr) + "]]"
+            if qd_name == "s_qdd" and self.robot_has_variable_couplings():
+                # qdd_f = alpha qdd_l + alpha' qd_l^2 (time derivative of alpha(q_l) qd_l)
+                slot = "s_mimic_vslot[" + str(jid_expr) + "]"
+                value = ("(" + value + " + s_mimic_alphad[" + str(jid_expr) + "] * s_qd[" + slot + "] * s_qd[" + slot + "])")
             if not isinstance(jid_expr, int) and any(self._alpha_for_jid(j) == 0 for j in range(n)):
                 # Conditional evaluation avoids the placeholder read itself,
                 # including an empty v array and an unrelated NaN coordinate.
@@ -551,6 +594,17 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
                 self.gen_add_end_control_flow()
                 self.gen_add_sync()
                 self.gen_add_code_line(f"grid_linalg_segmented_row_strided_gemv<T,6,6,6,true>({seg}, seg_a_off_{tag}, seg_a_x_off_{tag}, seg_a_y_off_{tag}, s_XImats, s_vaf, s_vaf, static_cast<T>(1), static_cast<T>(0), seg_s_off_{tag}, S_sel_{tag}, s_temp);")
+            elif HAS_MIMIC and self.robot_has_variable_couplings():
+                # no qdd input, but a polynomial follower still accelerates by
+                # alpha' qd_l^2 (the Gdot yd term of the embedding): fuse it as
+                # the S-scalar of the segmented gemv (zero for every other body).
+                self.gen_add_serial_ops()
+                for i in range(seg):
+                    slot = "s_mimic_vslot[" + str(inds[i]) + "]"
+                    self.gen_add_code_line(f"s_temp[{i}] = s_mimic_alphad[{inds[i]}] * s_qd[{slot}] * s_qd[{slot}];")
+                self.gen_add_end_control_flow()
+                self.gen_add_sync()
+                self.gen_add_code_line(f"grid_linalg_segmented_row_strided_gemv<T,6,6,6,true>({seg}, seg_a_off_{tag}, seg_a_x_off_{tag}, seg_a_y_off_{tag}, s_XImats, s_vaf, s_vaf, static_cast<T>(1), static_cast<T>(0), seg_s_off_{tag}, S_sel_{tag}, s_temp);")
             else:
                 self.gen_add_code_line(f"grid_linalg_segmented_row_strided_gemv<T,6,6,6>({seg}, seg_a_off_{tag}, seg_a_x_off_{tag}, seg_a_y_off_{tag}, s_XImats, s_vaf, s_vaf, static_cast<T>(1), static_cast<T>(0));")
 
@@ -737,26 +791,31 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
             if self._alpha_for_jid(jid) == 0:
                 continue  # Transmit this body's force, but do not project it.
             vs = self._v_slot_cpp(jid)
+            variable = self._alpha_is_variable(jid)   # polynomial follower: runtime alpha
             if not self.robot.S_is_cardinal_by_id(jid):
                 # Reduced-coordinate projection is alpha * S^T f, including
                 # every nonzero component of a skew motion subspace.
-                alpha = float(self._alpha_for_jid(jid))
                 for row, value in enumerate(self.robot._get_flat_S_by_id(jid)):
                     if value != 0:
+                        coeff_cpp = ("s_mimic_alpha[" + str(jid) + "] * static_cast<T>(" + repr(float(value)) + ")" if variable
+                                     else "static_cast<T>(" + repr(float(self._alpha_for_jid(jid)) * float(value)) + ")")
                         self.gen_add_code_line(
-                            "s_c[" + str(vs) + "] += static_cast<T>(" + repr(alpha * float(value))
-                            + ") * s_vaf[" + str(12*n + 6*jid + row) + "];")
+                            "s_c[" + str(vs) + "] += " + coeff_cpp
+                            + " * s_vaf[" + str(12*n + 6*jid + row) + "];")
                 continue
             s_ind = self.robot.get_S_index_by_id(jid)
             s_sign = self.robot.get_S_sign_by_id(jid)
-            alpha = self._alpha_for_jid(jid)
-            coeff = float(s_sign) * float(alpha)
+            if variable:
+                coeff_cpp = "s_mimic_alpha[" + str(jid) + "] * static_cast<T>(" + repr(float(s_sign)) + ")"
+            else:
+                coeff_cpp = "static_cast<T>(" + repr(float(s_sign) * float(self._alpha_for_jid(jid))) + ")"
             self.gen_add_code_line(
-                "s_c[" + str(vs) + "] += static_cast<T>(" + repr(coeff) + ") * s_vaf["
+                "s_c[" + str(vs) + "] += " + coeff_cpp + " * s_vaf["
                 + str(12*n + 6*jid + s_ind) + "];")
         self.gen_add_end_control_flow()
         self.gen_add_sync()
         self.gen_inverse_dynamics_joint_dynamics_bias()
+        self.gen_inverse_dynamics_armature_bias(use_qdd_input)
         self.gen_add_end_function()
         return
     if compute_c and self.robot.robot_has_spherical():
@@ -787,6 +846,7 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
         self.gen_add_end_control_flow()
         self.gen_add_sync()
         self.gen_inverse_dynamics_joint_dynamics_bias()
+        self.gen_inverse_dynamics_armature_bias(use_qdd_input)
         self.gen_add_end_function()
         return
     if compute_c and self.robot.robot_has_skew_axis():
@@ -809,6 +869,7 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
         self.gen_add_end_control_flow()
         self.gen_add_sync()
         self.gen_inverse_dynamics_joint_dynamics_bias()
+        self.gen_inverse_dynamics_armature_bias(use_qdd_input)
         self.gen_add_end_function()
         return
     if compute_c:
@@ -821,7 +882,12 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
         self.gen_add_parallel_loop("dof_id",str(self.robot.get_num_vel())) # one component for each dof
         if 'jid' in S_ind_cpp: S_ind_cpp = S_ind_cpp.replace('jid', 'dof_id') 
         if 'jid' in S_sign_cpp: S_sign_cpp = S_sign_cpp.replace('jid', 'dof_id')
-        if self.robot.floating_base:
+        if self.robot.floating_base and n == 1:
+            # A lone free-flyer has no scalar joint. The topology helper's -1
+            # root sentinel is not a force-row index. Project its full motion
+            # subspace: internal [moment, force] -> public [force, moment].
+            self.gen_add_code_line("s_c[dof_id] = s_vaf[" + str(12*n) + " + (dof_id + 3) % 6];")
+        elif self.robot.floating_base:
             if '+' in S_ind_cpp: S_ind_cpp = S_ind_cpp.replace(']', ' - 5]') # offset back to the beginning of the S_inds
             if '+' in S_sign_cpp: S_sign_cpp = S_sign_cpp.replace(']', ' - 5]') # offset back to the beginning of the S_inds
             self.gen_add_code_line("int fb_offset = (dof_id > 5) * (6 * (dof_id - 5)); // First 6 DOF belong to floating base")
@@ -830,6 +896,7 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
         self.gen_add_end_control_flow()
         self.gen_add_sync()
         self.gen_inverse_dynamics_joint_dynamics_bias()
+        self.gen_inverse_dynamics_armature_bias(use_qdd_input)
     self.gen_add_end_function()
 
 

@@ -20,10 +20,12 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 LOCK_PATH = Path('/tmp/a2rlab-timing.lock')
 sys.path.insert(0, str(ROOT))
-from test.receipt_integrity import verify_header_keys
+from test.receipt_integrity import verify_header_keys, verify_manifest_scope
 
 
-def validation_env():
+def validation_env(profile='serial'):
+    if profile not in ('serial', 'bounded-overlap'):
+        raise ValueError(f'Unsupported receipt profile: {profile}')
     env = dict(os.environ)
     # Scope/numerical/cache overrides belong in a reviewed test configuration,
     # not inherited accidentally from an unrelated experiment.
@@ -32,22 +34,15 @@ def validation_env():
             env.pop(key)
     env.update(OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1',
                NUMEXPR_NUM_THREADS='1', MAX_JOBS='1',
-               GRID_SPLIT_COMPILE_JOBS='3',
-               # W1 (2026-10-10): two GPU shards side by side. Pilot 2026-10-01 ran
-               # the four CUDA shards two at a time clean (~800 MiB VRAM each,
-               # 1.1–1.3x per-shard slowdown → ~1.8x throughput); the cuda caches
-               # are per-key flock'd and python_wrappers modules run one per
-               # process (jax claims 35 % of VRAM per process). The overnight
-               # 2026-10-10 run never admitted a pool job below 38 GiB available
-               # on the 62 GB box, so a second shard's inline nvcc fits.
-               GRID_SPLIT_SHARD_JOBS='2',
-               # Multi-unit robot.so builds (2026-10-10): each compile job runs up to
-               # GRID_RBD_BUILD_JOBS nvcc units in parallel. Measured: a humanoid at
-               # the default 8 units takes ~15 GB. The pool ledger now samples the
-               # whole process tree (schema 2), but the first run after a ledger
-               # reset predicts the 8 GB default, so keep units per job capped at 4
-               # (3 jobs x 4 units x ~2.5 GB ≈ 30 GB worst case on a 62 GB box).
-               GRID_RBD_BUILD_JOBS='4')
+               # Match correctness/pilot allocation: do not reserve most of
+               # VRAM before the other backend in a shard has initialized.
+               XLA_PYTHON_CLIENT_PREALLOCATE='false',
+               # Serial drains prewarm first; bounded overlap reserves the
+               # whole shard, including inline compilers, with the pool.
+               # Both enforce admission even for the first job.
+               GRID_SPLIT_RESOURCE_PROFILE=profile,
+               GRID_SPLIT_COMPILE_JOBS='1' if profile == 'serial' else '2', GRID_SPLIT_SHARD_JOBS='1',
+               GRID_RBD_BUILD_JOBS='2')
     return env
 
 
@@ -99,6 +94,7 @@ def finalize(out):
         if file_hash(ROOT / relative) != expected:
             raise ValueError(f'Generated evidence changed: {relative}')
     receipt = json.loads((ROOT / 'gpu-proof.json').read_text())
+    verify_manifest_scope(receipt, ROOT / 'test/gpu-proof-tests.txt')
     verify_header_keys(json.loads((out / 'header-keys.before.json').read_text()),
                        json.loads((ROOT / 'test/gpu-proof-header-keys.json').read_text()),
                        receipt, Path(state['shard_dir']) / 'receipts')
@@ -108,7 +104,7 @@ def finalize(out):
     print('Receipt verified; no collection or compilation was started.')
 
 
-def run_driver(command, *, log, lock):
+def run_driver(command, *, log, lock, profile='serial'):
     """Forward cancellation to our isolated driver, keeping its lock until exit."""
     previous = signal.getsignal(signal.SIGTERM)
     def interrupt(signum, frame):
@@ -116,7 +112,7 @@ def run_driver(command, *, log, lock):
     signal.signal(signal.SIGTERM, interrupt)
     process = None
     try:
-        process = subprocess.Popen(command, cwd=ROOT, env=validation_env(),
+        process = subprocess.Popen(command, cwd=ROOT, env=validation_env(profile),
                                    stdout=log, stderr=subprocess.STDOUT,
                                    start_new_session=True, pass_fds=(lock.fileno(),))
         return subprocess.CompletedProcess(command, process.wait())
@@ -141,10 +137,13 @@ def main():
     parser.add_argument('--resume', type=Path, help='Existing split-driver directory to resume')
     parser.add_argument('--execute', action='store_true')
     parser.add_argument('--full', action='store_true', help='Fresh full release run; no carried shards')
+    parser.add_argument('--resource-profile', choices=('serial', 'bounded-overlap'), default='serial')
+    parser.add_argument('--fallback-from', type=Path,
+                        help='Prior failed/paused launcher directory; start a fresh full SERIAL run with no carries')
     parser.add_argument('--finalize', type=Path, help='Verify an existing run after committing its generated evidence; no GPU work')
     args = parser.parse_args()
     if args.finalize:
-        if args.out or args.resume or args.execute or args.full:
+        if args.out or args.resume or args.execute or args.full or args.fallback_from or args.resource_profile != 'serial':
             parser.error('--finalize is a verification-only operation; do not combine with launch options')
         with LOCK_PATH.open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -171,12 +170,32 @@ def main():
             raise SystemExit('Resume must preserve the original full/refresh mode')
         if prior_state.get('candidate') != candidate:
             raise SystemExit('Resume candidate differs from the original run; freeze and plan a new refresh.')
+        original_profile = prior_state.get('resource_profile', {}).get('GRID_SPLIT_RESOURCE_PROFILE', 'serial')
+        if original_profile != args.resource_profile:
+            raise SystemExit('Resume must preserve resource profile; use a fresh full serial fallback instead')
+    fallback = None
+    if args.fallback_from:
+        if not args.full or args.resume or args.resource_profile != 'serial':
+            raise SystemExit('Fallback requires --full, serial, and no --resume; no prior outcomes are carried')
+        fallback = json.loads((args.fallback_from.resolve() / 'state.json').read_text())
+        if (fallback.get('candidate') != candidate or not fallback.get('full')
+                or fallback.get('status') not in ('failed', 'paused', 'interrupted')):
+            raise SystemExit('Fallback source must be a stopped full run of this exact candidate')
     out.mkdir(parents=True, exist_ok=False)
     keys_path = ROOT / 'test/gpu-proof-header-keys.json'
     before = json.loads(keys_path.read_text())
     (out / 'header-keys.before.json').write_text(json.dumps(before, indent=2) + '\n')
+    env = validation_env(args.resource_profile)
     state = {'candidate': candidate, 'command': command, 'shard_dir': str(shard_dir), 'full': args.full,
+             'resource_profile': {key: env[key] for key in (
+                 'GRID_SPLIT_RESOURCE_PROFILE', 'GRID_SPLIT_COMPILE_JOBS',
+                 'GRID_SPLIT_SHARD_JOBS', 'GRID_RBD_BUILD_JOBS',
+                 'XLA_PYTHON_CLIENT_PREALLOCATE')},
              'status': 'waiting-for-lock'}
+    if fallback is not None:
+        state['fallback'] = {'from': str(args.fallback_from.resolve()),
+            'previous_profile': fallback.get('resource_profile'),
+            'strategy': 'fresh-full-no-carries'}
     def save():
         (out / 'state.json').write_text(json.dumps(state, indent=2) + '\n')
     save()
@@ -184,15 +203,25 @@ def main():
         with LOCK_PATH.open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             state['status'] = 'running'; save()
+            if args.full:
+                with (out / 'collection.log').open('x') as collection_log:
+                    subprocess.run(
+                        [sys.executable, str(ROOT / 'test/run_split_suite.py'),
+                         '--check-manifest', str(ROOT / 'test/gpu-proof-tests.txt')],
+                        cwd=ROOT, env=env, stdout=collection_log,
+                        stderr=subprocess.STDOUT, check=True)
             with (out / 'driver.log').open('x') as log:
-                result = run_driver(command, log=log, lock=lock)
+                result = run_driver(command, log=log, lock=lock, profile=args.resource_profile)
             state['driver_rc'] = result.returncode
             if result.returncode:
+                if result.returncode == 3 and (shard_dir / 'PAUSE').exists():
+                    state['status'] = 'paused'
                 raise RuntimeError(f'Driver rc={result.returncode}; evidence retained in {shard_dir}')
             if git('rev-parse', 'HEAD') != candidate:
                 raise RuntimeError('HEAD changed during recording')
             merged = shard_dir / 'gpu-proof.json'
             receipt = json.loads(merged.read_text()) if merged.exists() else json.loads((ROOT / 'gpu-proof.json').read_text())
+            verify_manifest_scope(receipt, ROOT / 'test/gpu-proof-tests.txt')
             if merged.exists():
                 verify_header_keys(before, json.loads(keys_path.read_text()), receipt, shard_dir / 'receipts')
             elif json.loads(keys_path.read_text()) != before:
@@ -215,7 +244,7 @@ def main():
                 verify_receipt(ROOT / 'gpu-proof.json', out)
                 state['status'] = 'verified'; save()
     except BaseException as exc:
-        state.update(status='failed', error=repr(exc)); save()
+        state.update(status='paused' if state['status'] == 'paused' else 'failed', error=repr(exc)); save()
         raise
 
 

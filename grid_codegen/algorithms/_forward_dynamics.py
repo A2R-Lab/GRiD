@@ -83,7 +83,7 @@ def gen_forward_dynamics_inner_function_call(self, updated_var_names = None,
     # damping/friction table. Every FD-inner caller (kernel / device / integrator
     # inner / fdsva_so kernels) already has d_robotModel in scope. Off-build relies
     # on the trailing default, keeping the emitted CUDA byte-identical.
-    _fd_rt_jd = (", " + var_names["d_robotModel_name"]) if getattr(self, "runtime_joint_dynamics", False) else ""
+    _fd_rt_jd = (", " + var_names["d_robotModel_name"]) if self._emits_model_ptr() else ""
     fd_code_start = "forward_dynamics_inner<T, " + minv_f_in_smem_expr + ">(" + var_names["s_qdd_name"] + ", " + var_names["s_q_name"] + ", " + \
                                                    var_names["s_qd_name"] + ", " + var_names["s_u_name"] + ", "
     fd_code_end = var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ", " + var_names["d_f_ext_name"] + ", " + var_names["gravity_name"] + _fd_rt_jd + ");"
@@ -109,7 +109,7 @@ def gen_forward_dynamics_inner(self):
     # d_robotModel in as a trailing defaulted (= nullptr) param and forward it to
     # the internal compute_c ID call. The default keeps the OFF build (and every
     # caller relying on the positional-to-gravity call) byte-identical.
-    if getattr(self, "runtime_joint_dynamics", False):
+    if self._emits_model_ptr():
         func_def_end = "T *s_temp, T *d_workspace, T *d_f_ext, const T gravity, const robotModel<T> *d_robotModel = nullptr) {"
     else:
         func_def_end = "T *s_temp, T *d_workspace, T *d_f_ext, const T gravity) {"
@@ -135,7 +135,7 @@ def gen_forward_dynamics_inner(self):
     updated_var_names = dict(s_c_name = "&s_temp[" + str(n*n) + "]", s_vaf_name = "&s_temp[" + str(n*n + n) + "]", s_temp_name = "&s_temp[" + str(n*n + n + 18*NJ) + "]")
     # runtime_joint_dynamics: the compute_c ID inner is the FD bias; opt it into the
     # table-reading bias by forwarding d_robotModel (now a param of this inner).
-    if getattr(self, "runtime_joint_dynamics", False):
+    if self._emits_model_ptr():
         updated_var_names["d_robotModel_name"] = "d_robotModel"
     self.gen_inverse_dynamics_inner_function_call(compute_c = True, use_qdd_input = False, updated_var_names = updated_var_names)
     

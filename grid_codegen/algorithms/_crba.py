@@ -42,6 +42,31 @@ def gen_crba_inner_temp_mem_size(self):
         return 36*NJ + 36
     return 42*NJ
 
+def _crba_inner_func_def_end(self):
+    """The inner's trailing parameters; under runtime_armature a defaulted
+    ``d_robotModel`` is appended so the diagonal epilogue can read the table."""
+    if getattr(self, "runtime_armature", False):
+        return "T *s_temp, T *d_workspace, const T gravity, const robotModel<T> *d_robotModel = nullptr) {"
+    return "T *s_temp, T *d_workspace, const T gravity) {"
+
+
+def _gen_crba_armature_epilogue(self):
+    """runtime_armature: M[vs, vs] += a[vs] on every single-DoF v-slot, after
+    the inner assembled M (every CRBA variant ends through here)."""
+    slots = self._armature_vslots()
+    if not slots:
+        return
+    nv = self.robot.get_num_vel()
+    storage = "runtime table" if self.runtime_armature else "baked values"
+    self.gen_add_code_line("// rotor armature: M += diag(a) on the single-DoF slots (" + storage + ")")
+    self.gen_add_parallel_loop("k", str(len(slots)))
+    self.gen_add_code_line("static const int armature_slots[" + str(len(slots)) + "] = {" + ", ".join(str(v) for v in slots) + "};")
+    self.gen_add_code_line("int vs = armature_slots[k];")
+    self.gen_add_code_line("s_M[vs + " + str(nv) + "*vs] += " + self._armature_value_cpp("vs") + ";")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+
+
 def gen_crba_inner_function_call(self, updated_var_names = None,
                                  temp_in_smem_expr = "true"):
     var_names = dict( \
@@ -56,7 +81,10 @@ def gen_crba_inner_function_call(self, updated_var_names = None,
         for key,value in updated_var_names.items():
             var_names[key] = value
     crba_code_start = "crba_inner<T, " + temp_in_smem_expr + ">(" + var_names["s_M_name"] + ", " +  var_names["s_q_name"] + ", " + var_names["s_qd_name"] + ", "
-    crba_code_end = var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ", " + var_names["gravity_name"] + ");"
+    # runtime_armature: forward d_robotModel (trailing defaulted param) so the
+    # epilogue can add diag(a); omitted when off.
+    _crba_rt = (", " + var_names.get("d_robotModel_name", "d_robotModel")) if getattr(self, "runtime_armature", False) else ""
+    crba_code_end = var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ", " + var_names["gravity_name"] + _crba_rt + ");"
     crba_code_middle = self.gen_insert_helpers_function_call()
     crba_code = crba_code_start + crba_code_middle + crba_code_end
     self.gen_add_code_line(crba_code)
@@ -114,6 +142,21 @@ def _gen_crba_inner_mimic_fixed(self, NB):
     # H assembly: for each body, diagonal + ancestor chain, alpha-scaled into v-slots.
     self.gen_add_code_line("T s_fh[6];")
     self.gen_add_code_line("T s_fh2[6];")
+    VARIABLE = self.robot_has_variable_couplings()
+    if VARIABLE:
+        # runtime fold multipliers of the polynomial followers (alpha(q_leader))
+        for ind in range(NB):
+            if self._alpha_is_variable(ind):
+                self.gen_add_code_line("const T cal_" + str(ind) + " = " + self._coupling_alpha_cpp(ind) + ";")
+    def _acpp(jid):
+        a = self._alpha_for_jid(jid)
+        return ("cal_" + str(jid)) if self._alpha_is_variable(jid) else ("static_cast<T>(" + repr(float(a)) + ")")
+    def _prod_cpp(i_jid, j_jid, scalar):
+        # alpha_i * alpha_j * scalar as a C expression (literal when all constant)
+        ai, aj = self._alpha_for_jid(i_jid), self._alpha_for_jid(j_jid)
+        if not (self._alpha_is_variable(i_jid) or self._alpha_is_variable(j_jid)):
+            return "static_cast<T>(" + repr(float(ai) * float(aj) * float(scalar)) + ")"
+        return "(" + _acpp(i_jid) + " * " + _acpp(j_jid) + " * static_cast<T>(" + repr(float(scalar)) + "))"
     for ind in range(NB):
         vi = self._v_slot_cpp(ind)
         alpha_i = self._alpha_for_jid(ind)
@@ -125,14 +168,13 @@ def _gen_crba_inner_mimic_fixed(self, NB):
             s_ind = self.robot.get_S_index_by_id(ind)
             s_sign = self.robot.get_S_sign_by_id(ind)
             self.gen_add_code_line("for (int r = 0; r < 6; r++) { s_fh[r] = static_cast<T>(" + repr(float(s_sign)) + ") * s_temp[" + str(36*ind + 6*s_ind) + " + r]; }")
-            diag_coeff = float(alpha_i) * float(alpha_i) * float(s_sign)
-            self.gen_add_code_line("s_M[" + str(vi + nv*vi) + "] += static_cast<T>(" + repr(diag_coeff) + ") * s_fh[" + str(s_ind) + "];")
+            self.gen_add_code_line("s_M[" + str(vi + nv*vi) + "] += " + _prod_cpp(ind, ind, s_sign) + " * s_fh[" + str(s_ind) + "];")
         else:
             motion = self.robot._get_flat_S_by_id(ind)
             terms = ["static_cast<T>(" + repr(float(v)) + ") * s_temp[" + str(36*ind + 6*r) + " + r]"
                      for r, v in enumerate(motion) if v != 0]
             self.gen_add_code_line("for (int r = 0; r < 6; r++) { s_fh[r] = " + " + ".join(terms) + "; }")
-            terms = ["static_cast<T>(" + repr(float(alpha_i)**2 * float(v)) + ") * s_fh[" + str(r) + "]"
+            terms = [_prod_cpp(ind, ind, v) + " * s_fh[" + str(r) + "]"
                      for r, v in enumerate(motion) if v != 0]
             self.gen_add_code_line("s_M[" + str(vi + nv*vi) + "] += " + " + ".join(terms) + ";")
         # walk ancestors
@@ -151,10 +193,9 @@ def _gen_crba_inner_mimic_fixed(self, NB):
             if self.robot.S_is_cardinal_by_id(j):
                 sj_ind = self.robot.get_S_index_by_id(j)
                 sj_sign = self.robot.get_S_sign_by_id(j)
-                contrib_coeff = float(alpha_i) * float(alpha_j) * float(sj_sign)
-                self.gen_add_code_line("{ T contribution = static_cast<T>(" + repr(contrib_coeff) + ") * " + nxt + "[" + str(sj_ind) + "];")
+                self.gen_add_code_line("{ T contribution = " + _prod_cpp(ind, j, sj_sign) + " * " + nxt + "[" + str(sj_ind) + "];")
             else:
-                terms = ["static_cast<T>(" + repr(float(alpha_i) * float(alpha_j) * float(v)) + ") * " + nxt + "[" + str(r) + "]"
+                terms = [_prod_cpp(ind, j, v) + " * " + nxt + "[" + str(r) + "]"
                          for r, v in enumerate(self.robot._get_flat_S_by_id(j)) if v != 0]
                 self.gen_add_code_line("{ T contribution = " + " + ".join(terms) + ";")
             self.gen_add_code_line("  s_M[" + str(vi + nv*vj) + "] += contribution; s_M[" + str(vj + nv*vi) + "] += contribution; }")
@@ -305,7 +346,7 @@ def gen_crba_inner(self):
     func_notes = ["Inner-controlled placement: TEMP_IN_SMEM selects where the scratch band lives (s_temp vs d_workspace). Decided at the top; caller sizes both arenas from CRBA_INNER_*_BYTES."]
     func_def_start = "void crba_inner("
     func_def_middle = "T *s_M, const T *s_q, const T *s_qd, "
-    func_def_end = "T *s_temp, T *d_workspace, const T gravity) {"
+    func_def_end = _crba_inner_func_def_end(self)
 
     func_def_middle, func_params = self.gen_insert_helpers_func_def_params(func_def_middle, func_params, -2)
     func_def = func_def_start + func_def_middle + func_def_end
@@ -320,11 +361,13 @@ def gen_crba_inner(self):
 
     if self.robot_has_mimic_joints():
         _gen_crba_inner_mimic_fixed(self, n)
+        _gen_crba_armature_epilogue(self)
         self.gen_add_end_function()
         return
 
     if self.robot.robot_has_spherical():
         _gen_crba_inner_spherical_fixed(self, n, n_bfs_levels)
+        _gen_crba_armature_epilogue(self)
         self.gen_add_end_function()
         return
 
@@ -408,6 +451,7 @@ def gen_crba_inner(self):
             self.gen_add_code_line("}")
         self.gen_add_end_control_flow()
         self.gen_add_sync()
+        _gen_crba_armature_epilogue(self)
         self.gen_add_end_function()
         return
 
@@ -479,6 +523,7 @@ def gen_crba_inner(self):
     self.gen_add_end_control_flow()
     self.gen_add_end_control_flow()
 
+    _gen_crba_armature_epilogue(self)
     self.gen_add_end_function()
 
 
@@ -502,7 +547,7 @@ def gen_crba_inner_floating(self):
                   "Inner-controlled placement: TEMP_IN_SMEM selects where the scratch band lives (s_temp vs d_workspace). Decided at the top; caller sizes both arenas from CRBA_INNER_*_BYTES."]
     func_def_start = "void crba_inner("
     func_def_middle = "T *s_M, const T *s_q, const T *s_qd, "
-    func_def_end = "T *s_temp, T *d_workspace, const T gravity) {"
+    func_def_end = _crba_inner_func_def_end(self)
     func_def_middle, func_params = self.gen_insert_helpers_func_def_params(func_def_middle, func_params, -2)
     func_def = func_def_start + func_def_middle + func_def_end
     self.gen_add_func_doc("Compute the Floating-Base Composite Rigid Body Algorithm", func_notes, func_params, None)
@@ -642,6 +687,7 @@ def gen_crba_inner_floating(self):
     # root<->joint cross block. The IC band above is already correct.
     if self.robot_has_mimic_joints():
         _gen_crba_mimic_floating_phase2(self, NJ)
+        _gen_crba_armature_epilogue(self)
         self.gen_add_end_function()
         return
 
@@ -720,6 +766,7 @@ def gen_crba_inner_floating(self):
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 
+    _gen_crba_armature_epilogue(self)
     self.gen_add_end_function()
 
 
@@ -748,6 +795,18 @@ def _gen_crba_mimic_floating_phase2(self, NJ):
     self.gen_add_serial_ops()
     self.gen_add_code_line("T s_fh[6];")
     self.gen_add_code_line("T s_fh2[6];")
+    if self.robot_has_variable_couplings():
+        for ind in range(1, NJ):
+            if self._alpha_is_variable(ind):
+                self.gen_add_code_line("const T cal_" + str(ind) + " = " + self._coupling_alpha_cpp(ind) + ";")
+    def _acpp(jid):
+        a = self._alpha_for_jid(jid)
+        return ("cal_" + str(jid)) if self._alpha_is_variable(jid) else ("static_cast<T>(" + repr(float(a)) + ")")
+    def _prod_cpp(i_jid, j_jid, scalar):
+        ai, aj = self._alpha_for_jid(i_jid), self._alpha_for_jid(j_jid)
+        if not (self._alpha_is_variable(i_jid) or self._alpha_is_variable(j_jid)):
+            return "static_cast<T>(" + repr(float(ai) * float(aj) * float(scalar)) + ")"
+        return "(" + _acpp(i_jid) + " * " + _acpp(j_jid) + " * static_cast<T>(" + repr(float(scalar)) + "))"
     for ind in range(1, NJ):
         vi = self._v_slot_cpp(ind)
         alpha_i = self._alpha_for_jid(ind)
@@ -759,8 +818,7 @@ def _gen_crba_mimic_floating_phase2(self, NJ):
         # fh = IC[ind] * S[ind] = S_sign * column s_ind of IC[ind] (col-major)
         self.gen_add_code_line("for (int r = 0; r < 6; r++) { s_fh[r] = static_cast<T>(" + repr(float(s_sign)) + ") * s_temp[" + str(36*ind + 6*s_ind) + " + r]; }")
         # diagonal: H[vi,vi] += alpha_i^2 * S_sign * fh[s_ind]
-        diag_coeff = float(alpha_i) * float(alpha_i) * float(s_sign)
-        self.gen_add_code_line("s_M[" + str(vi + nv*vi) + "] += static_cast<T>(" + repr(diag_coeff) + ") * s_fh[" + str(s_ind) + "];")
+        self.gen_add_code_line("s_M[" + str(vi + nv*vi) + "] += " + _prod_cpp(ind, ind, s_sign) + " * s_fh[" + str(s_ind) + "];")
         # walk ancestors (scalar joints with parent > 0)
         j = ind
         cur = "s_fh"
@@ -775,16 +833,14 @@ def _gen_crba_mimic_floating_phase2(self, NJ):
                 continue
             sj_ind = self.robot.get_S_index_by_id(j)
             sj_sign = self.robot.get_S_sign_by_id(j)
-            contrib_coeff = float(alpha_i) * float(alpha_j) * float(sj_sign)
-            self.gen_add_code_line("{ T contribution = static_cast<T>(" + repr(contrib_coeff) + ") * " + nxt + "[" + str(sj_ind) + "];")
+            self.gen_add_code_line("{ T contribution = " + _prod_cpp(ind, j, sj_sign) + " * " + nxt + "[" + str(sj_ind) + "];")
             self.gen_add_code_line("  s_M[" + str(vi + nv*vj) + "] += contribution; s_M[" + str(vj + nv*vi) + "] += contribution; }")
             cur, nxt = nxt, cur
         # root coupling: fh = X[j]^T fh once more (j is now the body whose
         # parent is the root 0), then cross[col] = alpha_i * fh_spatial[S_col].
         self.gen_add_code_line("for (int r = 0; r < 6; r++) { " + nxt + "[r] = static_cast<T>(0); for (int p = 0; p < 6; p++) { " + nxt + "[r] += s_XImats[" + str(36*j) + " + p + 6*r] * " + cur + "[p]; } }")
-        cross_coeff = float(alpha_i)
         self.gen_add_code_line("for (int col = 0; col < 6; col++) { int S_col = col < 3 ? col + 3 : col - 3;")
-        self.gen_add_code_line("  T cross = static_cast<T>(" + repr(cross_coeff) + ") * " + nxt + "[S_col];")
+        self.gen_add_code_line("  T cross = " + _acpp(ind) + " * " + nxt + "[S_col];")
         self.gen_add_code_line("  s_M[" + str(vi) + " + " + str(nv) + "*col] += cross; s_M[col + " + str(nv) + "*" + str(vi) + "] += cross; }")
     self.gen_add_end_control_flow()
     self.gen_add_sync()

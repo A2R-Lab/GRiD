@@ -1,9 +1,14 @@
-"""Fail-closed classification of the diagnosed Package 3 EE constant-slot warning.
+"""Historical classification of Package 3 EE warning logs, not an acceptance gate.
 
 Not a general racecheck suppression. Applies only to the three reviewed FP32
 fixtures with --racecheck-report all, source audit and separate numerical and
 repeatability gates. All raw logs remain evidence; disposition is KNOWN_WARNING,
 never zero-hazard PASS. Brian approved this disposition on 2026-10-30.
+
+Superseded for new builds by the November 7 widened-load investigation and
+internal pose-scratch alignment repair. Equal bytes did not establish the
+mechanism. Retained to interpret archived evidence, not to waive current
+findings: test_cuda_ee_workspace_queries requires zero sanitizer hazards.
 """
 import re
 

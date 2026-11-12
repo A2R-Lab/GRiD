@@ -64,6 +64,13 @@ def _aba_vslot(self, jid):
     return v
 
 
+def _aba_armature_term_cpp(self, dof):
+    """Armature: the ``+ a[dof]`` added to the articulated D of a
+    single-DoF joint (Pinocchio's aba solves with M + diag(armature)); ``dof``
+    is a v-slot literal or a C variable name. Empty for a zero baked vector."""
+    return self._armature_term_cpp(dof)
+
+
 def _aba_jd_bias_term_cpp(self, jid):
     """C++ subexpression for body ``jid``'s joint-local damping + Coulomb friction
     bias, or "" when there is none to apply. The friction shape is sign(qd), or
@@ -74,7 +81,7 @@ def _aba_jd_bias_term_cpp(self, jid):
     the SAME joint-local bias that gen_inverse_dynamics_joint_dynamics_bias folds
     into ``s_c``. The articulated inertia ``d``/``IA`` is left untouched (the
     explicit-value path puts damping only in the bias, exactly as the oracle does).
-    Returned string is ``alpha*(b*qd + f*sign(qd))`` (reading ``s_qd[vs]``); callers
+    Returned string is ``alpha^2*b*qd + |alpha|*f*sign(qd)`` (reading ``s_qd[vs]``); callers
     subtract it from the per-joint ``s_tau`` read at each ``u`` site.
 
     EMITTED ONLY when USE_JOINT_DYNAMICS is enabled AND the robot declares nonzero
@@ -121,16 +128,16 @@ def _aba_jd_bias_term_cpp(self, jid):
                          + "] * static_cast<T>((" + qd + " > static_cast<T>(0)) - ("
                          + qd + " < static_cast<T>(0)))")
         return " + ".join(terms)
+    b_cpp, f_cpp = self._jd_fold_cpp(jid, alpha, b, fr)
     if b != 0.0:
-        terms.append("static_cast<T>(" + repr(alpha * b) + ") * " + qd)
+        terms.append(b_cpp + " * " + qd)
     if fr != 0.0 and TANH:
-        # smooth model: alpha*f*tanh(qd/w) with the per-v-slot width baked.
-        terms.append("static_cast<T>(" + repr(alpha * fr) + ") * tanh(" + qd
+        # smooth model: |alpha|*f*tanh(qd/w) with the per-v-slot width baked.
+        terms.append(f_cpp + " * tanh(" + qd
                      + " / static_cast<T>(" + repr(float(self.get_friction_width_baked()[vs])) + "))")
     elif fr != 0.0:
         # exact sign matching np.sign (0 at qd==0): (qd>0) - (qd<0).
-        terms.append("static_cast<T>(" + repr(alpha * fr)
-                     + ") * static_cast<T>((" + qd + " > static_cast<T>(0)) - ("
+        terms.append(f_cpp + " * static_cast<T>((" + qd + " > static_cast<T>(0)) - ("
                      + qd + " < static_cast<T>(0)))")
     return " + ".join(terms)
 
@@ -169,7 +176,7 @@ def gen_aba_inner_floating(self):
     # runtime_joint_dynamics: the u-site bias reads d_robotModel->d_joint_dynamics_params,
     # so thread d_robotModel in as a trailing defaulted param ONLY under that flag
     # (byte-identical signature when off).
-    if getattr(self, "runtime_joint_dynamics", False):
+    if self._emits_model_ptr():
         func_def_end = "T *s_temp, T *d_workspace, T *d_f_ext, const T gravity, const robotModel<T> *d_robotModel = nullptr) {"
     else:
         func_def_end = "T *s_temp, T *d_workspace, T *d_f_ext, const T gravity) {"
@@ -356,7 +363,7 @@ def gen_aba_inner_floating(self):
         self.gen_add_end_control_flow()
         self.gen_add_sync()
         self.gen_add_serial_ops()
-        self.gen_add_code_line("s_temp[" + str(dOffset + jid) + "] = static_cast<T>(" + str(S_sign) + ") * s_temp[" + str(UOffset + jid6 + S_ind) + "];")
+        self.gen_add_code_line("s_temp[" + str(dOffset + jid) + "] = static_cast<T>(" + str(S_sign) + ") * s_temp[" + str(UOffset + jid6 + S_ind) + "]" + _aba_armature_term_cpp(self, dof) + ";")
         _jd_bias = _aba_jd_bias_term_cpp(self, jid)
         _jd_sub = (" - (" + _jd_bias + ")") if _jd_bias else ""
         self.gen_add_code_line("s_temp[" + str(uOffset + jid) + "] = s_tau[" + str(dof) + "]" + _jd_sub + " - static_cast<T>(" + str(S_sign) + ") * s_temp[" + str(pAOffset + jid6 + S_ind) + "] - dot_prod<T,6,1,1>(&s_temp[" + str(UOffset + jid6) + "], &s_temp[" + str(cOffset + jid6) + "]);")
@@ -525,7 +532,7 @@ def gen_aba_inner(self):
     # runtime_joint_dynamics: the u-site bias reads d_robotModel->d_joint_dynamics_params,
     # so thread d_robotModel in as a trailing defaulted param ONLY under that flag
     # (byte-identical signature when off).
-    if getattr(self, "runtime_joint_dynamics", False):
+    if self._emits_model_ptr():
         func_def_end = "T *s_temp, T *d_workspace, T *d_f_ext, const T gravity, const robotModel<T> *d_robotModel = nullptr) {"
     else:
         func_def_end = "T *s_temp, T *d_workspace, T *d_f_ext, const T gravity) {"
@@ -739,9 +746,11 @@ def gen_aba_inner(self):
                 vblk = self.robot.get_joint_index_v(jid)
                 for k in range(3):
                     self.gen_add_code_line("mx" + str(k) + "_peq_scaled<T>(&s_temp[" + str(72*n + jid6) + "], &s_va[" + str(jid6) + "], s_qd[" + str(vblk[k]) + "]);")
-            else:
+            elif self.robot.S_is_cardinal_by_id(jid):
                 s_ind = self.robot.get_S_index_by_id(jid); s_sign = self.robot.get_S_sign_by_id(jid)
                 self.gen_add_code_line("mx" + str(s_ind) + "_peq_scaled<T>(&s_temp[" + str(72*n + jid6) + "], &s_va[" + str(jid6) + "], static_cast<T>(" + str(s_sign) + ") * s_qd[" + str(_qd_idx(jid)) + "]);")
+            else:
+                self.gen_add_code_line("{ const T S_skew[6] = " + _aba_Svec_cpp(self.robot, jid) + "; mxS_general_peq_scaled<T>(&s_temp[" + str(72*n + jid6) + "], &s_va[" + str(jid6) + "], S_skew, s_qd[" + str(_qd_idx(jid)) + "]); }")
         self.gen_add_end_control_flow()
     elif HAS_SKEW:
         # Tier B: c[k] = crm(v[k]) * S[k] * qd[k] with a dense S column. Serial
@@ -916,17 +925,30 @@ def gen_aba_inner(self):
                     # cardinal single-DoF joint (possibly downstream of a spherical):
                     # scalar D path with SHIFTED tau slot. U = IA*S, d = S^T*U,
                     # u = tau - S^T*pA, Ia = IA - U U^T/d, pa = pA + Ia*c + U*u/d.
-                    s_ind = self.robot.get_S_index_by_id(jid)
-                    s_sign = self.robot.get_S_sign_by_id(jid)
+                    cardinal = self.robot.S_is_cardinal_by_id(jid)
+                    if cardinal:
+                        s_ind = self.robot.get_S_index_by_id(jid)
+                        s_sign = self.robot.get_S_sign_by_id(jid)
+                    else:
+                        self.gen_add_code_line("{ const T S_skew[6] = " + _aba_Svec_cpp(self.robot, jid) + ";")
                     _jd_bias = _aba_jd_bias_term_cpp(self, jid)
                     _jd_sub = (" - (" + _jd_bias + ")") if _jd_bias else ""
                     self.gen_add_parallel_loop("row", "6")
-                    self.gen_add_code_line("s_temp[" + str(84*n + jid6) + " + row] = (" + str(s_sign) + ") * s_temp[" + str(36*jid) + " + row + 6*" + str(s_ind) + "];")
+                    if cardinal:
+                        self.gen_add_code_line("s_temp[" + str(84*n + jid6) + " + row] = (" + str(s_sign) + ") * s_temp[" + str(36*jid) + " + row + 6*" + str(s_ind) + "];")
+                    else:
+                        self.gen_add_code_line("s_temp[" + str(84*n + jid6) + " + row] = dot_prod<T,6,6,1>(&s_temp[" + str(36*jid) + " + row], S_skew);")
                     self.gen_add_end_control_flow()
                     self.gen_add_sync()
                     self.gen_add_serial_ops()
-                    self.gen_add_code_line("s_temp[" + str(96*n + jid) + "] = (" + str(s_sign) + ") * s_temp[" + str(84*n + jid6 + s_ind) + "];")
-                    self.gen_add_code_line("s_temp[" + str(97*n + jid) + "] = s_tau[" + str(_tau_idx(jid)) + "]" + _jd_sub + " - (" + str(s_sign) + ") * s_temp[" + str(78*n + jid6 + s_ind) + "];")
+                    if cardinal:
+                        dterm = "(" + str(s_sign) + ") * s_temp[" + str(84*n + jid6 + s_ind) + "]"
+                        pterm = "(" + str(s_sign) + ") * s_temp[" + str(78*n + jid6 + s_ind) + "]"
+                    else:
+                        dterm = "dot_prod<T,6,1,1>(S_skew, &s_temp[" + str(84*n + jid6) + "])"
+                        pterm = "dot_prod<T,6,1,1>(S_skew, &s_temp[" + str(78*n + jid6) + "])"
+                    self.gen_add_code_line("s_temp[" + str(96*n + jid) + "] = " + dterm + _aba_armature_term_cpp(self, _aba_vslot(self, jid)) + ";")
+                    self.gen_add_code_line("s_temp[" + str(97*n + jid) + "] = s_tau[" + str(_tau_idx(jid)) + "]" + _jd_sub + " - " + pterm + ";")
                     self.gen_add_end_control_flow()
                     self.gen_add_sync()
                     self.gen_add_parallel_loop("ind", "36")
@@ -939,6 +961,8 @@ def gen_aba_inner(self):
                     self.gen_add_code_line("s_temp[" + str(90*n + jid6) + " + row] = s_temp[" + str(78*n + jid6) + " + row] + dot_prod<T,6,6,1>(&s_temp[" + str(36*(n+jid)) + " + row], &s_temp[" + str(72*n + jid6) + "]) + Uval;")
                     self.gen_add_end_control_flow()
                     self.gen_add_sync()
+                    if not cardinal:
+                        self.gen_add_code_line("}")
         elif level_has_skew:
             # Tier B (skew): U = IA*S_dense (full 6x6 * 6 matvec); d = S^T*U;
             # u = tau - S^T*pA. Loop over every joint in the level (branching ok);
@@ -951,7 +975,7 @@ def gen_aba_inner(self):
                 # U = IA[jid] (col-major 6x6) * S
                 self.gen_add_code_line("  for (int r = 0; r < 6; r++) { T acc = static_cast<T>(0); for (int p = 0; p < 6; p++) { acc += s_temp[36*" + str(jid) + " + r + 6*p] * S_skew[p]; } s_temp[" + str(84*n + jid6) + " + r] = acc; }")
                 # d = S^T U ; u = tau - S^T pA
-                self.gen_add_code_line("  s_temp[" + str(96*n + jid) + "] = dot_prod<T,6,1,1>(S_skew, &s_temp[" + str(84*n + jid6) + "]);")
+                self.gen_add_code_line("  s_temp[" + str(96*n + jid) + "] = dot_prod<T,6,1,1>(S_skew, &s_temp[" + str(84*n + jid6) + "])" + _aba_armature_term_cpp(self, jid) + ";")
                 _jd_bias = _aba_jd_bias_term_cpp(self, jid)
                 _jd_sub = (" - (" + _jd_bias + ")") if _jd_bias else ""
                 self.gen_add_code_line("  s_temp[" + str(97*n + jid) + "] = s_tau[" + str(jid) + "]" + _jd_sub + " - dot_prod<T,6,1,1>(S_skew, &s_temp[" + str(78*n + jid6) + "]); }")
@@ -984,7 +1008,7 @@ def gen_aba_inner(self):
                 jid = str(inds[0])
                 self.gen_add_code_line("int jid = " + jid + ";")
             self.gen_add_code_line("int jid6 = 6 * " + jid + ";")
-            self.gen_add_code_line("s_temp[96 * "+ str(n) +" + jid] = (" + S_sign_cpp + ") * s_temp[84 * " + str(n) + " + jid6 + " + S_ind_cpp + "];")
+            self.gen_add_code_line("s_temp[96 * "+ str(n) +" + jid] = (" + S_sign_cpp + ") * s_temp[84 * " + str(n) + " + jid6 + " + S_ind_cpp + "]" + _aba_armature_term_cpp(self, "jid") + ";")
 
             self.gen_add_code_line("T tempval = (" + S_sign_cpp + ") * s_temp[78 * " + str(n) + " + jid6 + " + S_ind_cpp +"];")
             self.gen_add_code_line("s_temp[97 * " + str(n) + " + jid] = s_tau[jid] - tempval;")
@@ -1202,10 +1226,12 @@ def gen_aba_inner(self):
                     fblk = self.robot.get_joint_index_f(jid)
                     for k in range(3):
                         self.gen_add_code_line("s_va[" + str(6*n + jid6 + k) + "] += s_qdd[" + str(fblk[k]) + "];")
-                else:
+                elif self.robot.S_is_cardinal_by_id(jid):
                     s_ind_val = self.robot.get_S_index_by_id(jid)
                     s_sign_val = self.robot.get_S_sign_by_id(jid)
                     self.gen_add_code_line("s_va[" + str(6*n + jid6 + s_ind_val) + "] += (" + str(s_sign_val) + ") * s_qdd[" + str(_qd_idx(jid)) + "];")
+                else:
+                    self.gen_add_code_line("{ const T S_skew[6] = " + _aba_Svec_cpp(self.robot, jid) + "; for (int r = 0; r < 6; r++) { s_va[" + str(6*n + jid6) + " + r] += S_skew[r] * s_qdd[" + str(_qd_idx(jid)) + "]; } }")
             self.gen_add_end_control_flow()
             self.gen_add_sync()
             continue
@@ -1313,7 +1339,7 @@ def gen_aba_inner_function_call(self, updated_var_names = None,
     aba_code_start = "aba_inner<T, " + temp_in_smem_expr + ", " + cold_in_smem_expr + ">(" + var_names["s_qdd_name"] + ", " + var_names["s_va_name"] + ", " + var_names["s_q_name"] + ", " + var_names["s_qd_name"] + ", " + var_names["s_tau_name"] + ", "
     # runtime_joint_dynamics: forward d_robotModel into aba_inner (trailing defaulted
     # param) so the u-site bias can read the mutable table; omitted when off.
-    _aba_rt_jd = (", " + var_names["d_robotModel_name"]) if getattr(self, "runtime_joint_dynamics", False) else ""
+    _aba_rt_jd = (", " + var_names["d_robotModel_name"]) if self._emits_model_ptr() else ""
     aba_code_end = var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ", " + var_names["d_f_ext_name"] + ", " + var_names["gravity_name"] + _aba_rt_jd + ");"
     aba_code_middle = self.gen_insert_helpers_function_call()
     aba_code = aba_code_start + aba_code_middle + aba_code_end

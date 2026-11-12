@@ -23,6 +23,8 @@ import functools
 from typing import Any, NamedTuple
 
 import numpy as np
+
+from grid_codegen.armature import validated_armature
 from ._surface_common import MujocoDerivativeViewMixin, MujocoViewBase
 
 
@@ -93,9 +95,12 @@ class SecondOrderID(NamedTuple):
 
 class SecondOrderFD(NamedTuple):
     """Second-order forward-dynamics tensors, each shape ``(B, NV, NV, NV)``:
-    ``(d2qdd_dq, d2qdd_dqd, d2qdd_cross, d2qdd_du)`` (the FD analogue of
-    :class:`SecondOrderID`; consult ``RBDReference.fdsva_so`` for the exact
-    Singh/Wensing tensor semantics)."""
+    slab order is ``(qq, vq, vv, uq)``, matching ``RBDReference.fdsva_so``.
+
+    The historical field names below are retained for compatibility: the
+    second field holds the mixed ``vq`` block, and the third holds ``vv``.
+    Do not infer FD slab order from :class:`SecondOrderID`.
+    """
     d2qdd_dq: Any
     d2qdd_dqd: Any
     d2qdd_cross: Any
@@ -890,6 +895,67 @@ class RobotHandle:
         return bool(self._meta.get("runtime_joint_dynamics", False))
 
     @property
+    def runtime_armature(self) -> bool:
+        """True if registered with runtime_armature=True (the mutable rotor-armature
+        table backing :py:meth:`set_armature`)."""
+        return bool(self._meta.get("runtime_armature", False))
+
+    @property
+    def armature(self):
+        """Read current rotor armature in reduced velocity order.
+
+        Returns a copy in reduced velocity order. This inspection operation may
+        synchronize; aliases of a context observe the same native table.
+        """
+        if self._runner is None:
+            raise RuntimeError("Cannot read armature from a closed robot handle.")
+        if not self.runtime_armature:
+            return self.initial_armature
+        return self._runner.get_armature_params()
+
+    @property
+    def initial_armature(self):
+        """Copy of the immutable artifact initializer, also used by new contexts."""
+        return np.array(self._meta["initial_armature"], dtype=self._dt)
+
+    @property
+    def armature_slots(self):
+        """Compact parameter columns, in increasing reduced velocity-slot order."""
+        return tuple(self._meta["armature_slots"])
+
+    @property
+    def armature_units(self):
+        """Units for each compact column: kg m^2 (angular) or kg (prismatic)."""
+        return tuple(self._meta["armature_units"])
+
+    @property
+    def num_armature_params(self):
+        """Number of independent scalar armature parameters."""
+        return len(self.armature_slots)
+
+    def set_armature(self, values) -> None:
+        """Install a rotor armature at runtime (no recompile): ``values`` is length nv
+        (v-slot indexed, reduced coordinates). It is added to the diagonal of the
+        joint-space inertia the way Pinocchio's ``model.armature`` is: inverse
+        dynamics gains ``a*qdd``, CRBA and Minv see ``M + diag(a)``, ABA solves with
+        it, and forward dynamics, its derivatives and the second-order forward
+        dynamics follow. All entries must be finite and nonnegative. Entries on
+        the floating root's six slots or on a spherical
+        block must be zero (the kernels never read them); a nonzero one raises. A
+        zero vector leaves the effective inertia unchanged. Only on a
+        runtime_armature build (raises otherwise)."""
+        if self._runner is None:
+            raise RuntimeError("Cannot set armature on a closed robot handle.")
+        if not self.runtime_armature:
+            raise RuntimeError(
+                "set_armature requires a robot registered with runtime_armature=True. "
+                "Re-register with register_robot(..., runtime_armature=True, force_rebuild=True).")
+        if "armature_slots" not in self._meta:
+            raise RuntimeError("Missing armature_slots metadata; rebuild this artifact.")
+        a = validated_armature(values, self.num_vel, self._meta["armature_slots"], self._dt)
+        self._runner.set_armature_params(a)
+
+    @property
     def joint_damping(self):
         """Baked per-v-slot viscous damping (length nv, alpha-folded). Mutate a copy
         and pass to :py:meth:`set_joint_dynamics`. Only on a runtime_joint_dynamics
@@ -1387,6 +1453,31 @@ class RobotHandle:
             from . import _mujoco
             acc = _mujoco.fd_qdd_pin_to_mjx(np.asarray(acc, np.float64), qd_pin, R, True).astype(self._dt)
         return acc
+
+    def armature_regressor(self, qdd):
+        """Return diag(qdd) S, shape (..., nv, num_armature_params).
+
+        Columns follow armature_slots. This block has no q or qd dependence;
+        its qdd derivative is the constant selection structure. It adds no
+        columns to the ten-parameters-per-body inertial regressor.
+        """
+        qdd = np.asarray(qdd, dtype=self._dt)
+        if qdd.ndim < 1 or qdd.shape[-1] != self.num_vel:
+            raise ValueError("qdd must have final dimension num_vel")
+        return qdd[..., :, None] * np.eye(self.num_vel, dtype=self._dt)[:, self.armature_slots]
+
+    def forward_dynamics_armature_gradient(self, q, qd, u, *, gravity=-9.81, f_ext=None):
+        """Explicit dqdd/dalpha at fixed q, qd, u; (B, nv, n_a).
+
+        Pinocchio coordinates only. One native admission computes augmented
+        Minv and actual acceleration, including known friction and loads.
+        This is not an automatic derivative through a parameter setter.
+        """
+        if self._mjx_active(None):
+            raise NotImplementedError("armature sensitivity requires pinocchio convention")
+        q, qd, u = [np.ascontiguousarray(x, dtype=self._dt) for x in (q, qd, u)]
+        return self._runner.forward_dynamics_armature_gradient(
+            q, qd, u, float(gravity), self._prep_f_ext(f_ext))
 
     def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None) -> np.ndarray:
         """Recursive forward dynamics via Articulated Body Algorithm.
@@ -2107,9 +2198,10 @@ class RobotHandle:
         return self._shape_out("coriolis_matrix", raw)
 
     def kinetic_energy_regressor(self, q, qd, *, gravity: float = -9.81, _convention=None):
-        """Kinetic-energy regressor y_KE, length ``10*num_bodies``, with
-        ``KE = y_KE · π`` (π = stacked per-link inertial parameters, body-major,
-        10 params/body). Returns ``(B, 10*num_bodies)``. Matches
+        """Link-inertia kinetic-energy regressor y_KE, length ``10*num_bodies``.
+        Total ``KE = y_KE · π + 0.5 * sum(armature * qd**2)`` (π = stacked
+        per-link inertial parameters, body-major, 10 params/body). Armature does
+        not add columns to this regressor. Returns ``(B, 10*num_bodies)``. Matches
         ``RBDReference.kinetic_energy_regressor(q, qd)`` (gravity unused).
 
         With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
@@ -2245,6 +2337,113 @@ class RobotHandle:
         self._check_nv_width(qd, "qd")
         raw = self._runner.frame_jacobian_dot(q, qd, tj, rf)  # (B, 6*NV) col-major
         return self._shape_out("frame_jacobian_dot", raw)
+
+    def frame_velocity(self, q, qd, *, target_jid=None, reference_frame=None, _convention=None):
+        """Frame twist ``v = J(q) qd`` (``[linear; angular]``) in the chosen
+        reference frame. Returns ``(B, 6)``. Matches
+        ``RBDReference.frame_velocity(q, qd, frame_name, reference_frame)`` and
+        pinocchio's ``getFrameVelocity`` in LOCAL, WORLD and LOCAL_WORLD_ALIGNED.
+
+        ``target_jid`` / ``reference_frame`` are RUNTIME parameters (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``); see :py:meth:`frame_jacobian`.
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention inputs; the twist is a frame quantity, so it is not
+        reframed."""
+        tj, rf = _frame_args(target_jid, reference_frame)
+        q = np.ascontiguousarray(q, dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
+        if self._mjx_active(_convention):
+            self._require_mjx_twin("frame_velocity")
+            raw = self._runner.frame_velocity_mujoco(q, qd, tj, rf)
+            return self._shape_out("frame_velocity", raw)
+        self._check_nv_width(qd, "qd")
+        raw = self._runner.frame_velocity(q, qd, tj, rf)
+        return self._shape_out("frame_velocity", raw)
+
+    def frame_acceleration(self, q, qd, qdd, *, target_jid=None, reference_frame=None, _convention=None):
+        """Frame acceleration ``a = J(q) qdd + Jdot(q, qd) qd`` (``[linear;
+        angular]``), the time derivative of the twist measured in the chosen
+        reference frame. Returns ``(B, 6)``. Matches
+        ``RBDReference.frame_acceleration(q, qd, qdd, frame_name, reference_frame)``:
+        pinocchio's ``getFrameAcceleration`` in LOCAL and WORLD and
+        ``getFrameClassicalAcceleration`` in LOCAL_WORLD_ALIGNED.
+
+        ``qdd`` is required (``(B, NV)``). ``target_jid`` / ``reference_frame``
+        are RUNTIME parameters (default: leaf-EE joint / ``LOCAL_WORLD_ALIGNED``);
+        see :py:meth:`frame_jacobian`.
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd``/``qdd``
+        are MuJoCo-convention inputs; the acceleration is a frame quantity, so
+        it is not reframed."""
+        if qdd is None:
+            raise ValueError("frame_acceleration: qdd is required ((B, NV))")
+        tj, rf = _frame_args(target_jid, reference_frame)
+        q = np.ascontiguousarray(q, dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
+        qdd = np.ascontiguousarray(qdd, dtype=self._dt)
+        if self._mjx_active(_convention):
+            self._require_mjx_twin("frame_acceleration")
+            raw = self._runner.frame_acceleration_mujoco(q, qd, qdd, tj, rf)
+            return self._shape_out("frame_acceleration", raw)
+        self._check_nv_width(qd, "qd")
+        self._check_nv_width(qdd, "qdd")
+        raw = self._runner.frame_acceleration(q, qd, qdd, tj, rf)
+        return self._shape_out("frame_acceleration", raw)
+
+    def frame_velocity_gradient(self, q, qd, *, target_jid=None, reference_frame=None, _convention=None):
+        """Derivatives of :py:meth:`frame_velocity`: ``[dv/dq | dv/dqd]`` as one
+        ``(B, 6, 2*NV)`` array (the second block is the frame Jacobian), in the
+        local tangent chart (floating root, spherical joints). Matches
+        ``RBDReference.frame_velocity_derivatives`` and pinocchio's
+        ``getFrameVelocityDerivatives`` in LOCAL and WORLD; in LOCAL_WORLD_ALIGNED
+        the q block also moves the frame origin (the derivative of the function).
+
+        ``target_jid`` / ``reference_frame`` are RUNTIME parameters (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``); see :py:meth:`frame_jacobian`.
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention inputs and the base-linear columns of both blocks are
+        reframed to the MuJoCo tangent."""
+        tj, rf = _frame_args(target_jid, reference_frame)
+        q = np.ascontiguousarray(q, dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
+        if self._mjx_active(_convention):
+            self._require_mjx_twin("frame_velocity_gradient")
+            raw = self._runner.frame_velocity_gradient_mujoco(q, qd, tj, rf)
+            return self._shape_out("frame_velocity_gradient", raw)
+        self._check_nv_width(qd, "qd")
+        raw = self._runner.frame_velocity_gradient(q, qd, tj, rf)
+        return self._shape_out("frame_velocity_gradient", raw)
+
+    def frame_acceleration_gradient(self, q, qd, qdd, *, target_jid=None, reference_frame=None, _convention=None):
+        """Derivatives of :py:meth:`frame_acceleration`: ``[da/dq | da/dqd | da/dqdd]``
+        as one ``(B, 6, 3*NV)`` array (the last block is the frame Jacobian), in
+        the local tangent chart. Matches ``RBDReference.frame_acceleration_derivatives``
+        and pinocchio's ``getFrameAccelerationDerivatives`` in LOCAL and WORLD; in
+        LOCAL_WORLD_ALIGNED it differentiates the classical acceleration with its
+        moving origin. ``qdd`` is required.
+
+        ``target_jid`` / ``reference_frame`` are RUNTIME parameters (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``); see :py:meth:`frame_jacobian`.
+
+        With ``output_convention="mujoco"`` (floating base) the inputs are
+        MuJoCo-convention and the base-linear columns of every block are
+        reframed to the MuJoCo tangent."""
+        if qdd is None:
+            raise ValueError("frame_acceleration_gradient: qdd is required ((B, NV))")
+        tj, rf = _frame_args(target_jid, reference_frame)
+        q = np.ascontiguousarray(q, dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
+        qdd = np.ascontiguousarray(qdd, dtype=self._dt)
+        if self._mjx_active(_convention):
+            self._require_mjx_twin("frame_acceleration_gradient")
+            raw = self._runner.frame_acceleration_gradient_mujoco(q, qd, qdd, tj, rf)
+            return self._shape_out("frame_acceleration_gradient", raw)
+        self._check_nv_width(qd, "qd")
+        self._check_nv_width(qdd, "qdd")
+        raw = self._runner.frame_acceleration_gradient(q, qd, qdd, tj, rf)
+        return self._shape_out("frame_acceleration_gradient", raw)
 
     def osc_inertia(self, q, *, _convention=None):
         """Operational-space (task) inertia Lambda = (J·M⁻¹·Jᵀ)⁻¹ (6 x 6) for
@@ -2449,16 +2648,19 @@ class RobotHandle:
 
     @property
     def model_version(self) -> int:
-        """This handle's context MODEL VERSION: starts at 1 and
-        increments on every runtime-parameter mutation — :py:meth:`set_inertia_params`,
-        :py:meth:`set_transform_params`, :py:meth:`set_joint_dynamics`, hence
+        """This handle's context model epoch, allocated from its artifact's
+        monotonically increasing counter. Runtime-parameter mutations advance it:
+        :py:meth:`set_inertia_params`, :py:meth:`set_transform_params`,
+        :py:meth:`set_joint_dynamics`, :py:meth:`set_armature`, hence
         :py:meth:`attach_tool` / :py:meth:`detach_tool`. Launch overrides
         (:py:meth:`set_threads_per_block` & co.) do not bump it. A mutation is
         ordered after every admitted call and before every later one (exclusive
         admission). The torch / JAX autograd forwards stamp the version on device at
         execution time and their backwards refuse to run against a different
         version ("model mutated between forward and backward") — recompute the
-        forward after mutating."""
+        forward after mutating. Invalid armature input is rejected before its
+        epoch changes. An attempted CUDA write conservatively invalidates prior
+        state even if the device operation subsequently fails."""
         return int(self._runner.ctx_version(self._runner.ctx_id()))
 
     @property

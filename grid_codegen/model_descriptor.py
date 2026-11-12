@@ -136,8 +136,15 @@ def validate_descriptor(d):
             qend, vend = qend+nq, vend+nv
         else:
             _check(nq == nv == 1 and j['q_start'] is j['v_start'] is None, "dependent slices")
-            _keys(m, {'leader_joint', 'multiplier', 'offset'}, "mimic")
-            _check(_number(m['multiplier']) and _number(m['offset']), "mimic coefficients")
+            if m.get('kind') == 'polynomial':
+                _keys(m, {'leader_joint', 'multiplier', 'offset', 'kind', 'polycoef', 'q0'}, "mimic")
+                _check(m['multiplier'] is None and m['offset'] is None, "polynomial mimic has no constant coefficients")
+                _check(isinstance(m['polycoef'], list) and len(m['polycoef']) == 5
+                       and all(_number(c) for c in m['polycoef']) and _number(m['q0']), "polynomial coefficients")
+                _check(m['leader_joint'] is not None, "polynomial mimic leader")
+            else:
+                _keys(m, {'leader_joint', 'multiplier', 'offset'}, "mimic")
+                _check(_number(m['multiplier']) and _number(m['offset']), "mimic coefficients")
             leader = m['leader_joint']
             if leader is None:
                 _check(m['multiplier'] == 0., "constant mimic multiplier")
@@ -217,7 +224,13 @@ def descriptor_from_robot(robot, *, runtime_transform=False):
         axis = None if nq > 1 else (motion[3:] if kind == 'prismatic' else motion[:3]).reshape(3).tolist()
         pitch = float(np.dot(motion[3:].reshape(3), axis)) if kind in ('helical', 'screw') else None
         mimic = None
-        if joint.is_mimic:
+        if joint.is_mimic and not joint.is_linear_coupling():
+            # polynomial follower (closed loops by constraint embedding): no
+            # constant multiplier; the coefficients of q = sum c_i (q_l - q0)^i.
+            mimic = dict(leader_joint=int(joint.mimic_target_id), multiplier=None, offset=None,
+                         kind='polynomial', polycoef=[float(c) for c in joint.get_coupling_coefficients()],
+                         q0=float(joint.get_coupling_q0()))
+        elif joint.is_mimic:
             mimic = dict(leader_joint=None if joint.mimic_target_id in (None, -1)
                          else int(joint.mimic_target_id), multiplier=float(joint.get_mimic_multiplier()),
                          offset=float(joint.get_mimic_offset()))

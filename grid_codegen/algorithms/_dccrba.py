@@ -85,7 +85,7 @@ def _dccrba_metadata(self):
     anc = [ancestors(i) for i in range(NB)]
     anc_self = [anc[i] | {i} for i in range(NB)]
 
-    unit_body, unit_vi, unit_ax, unit_lin, unit_alpha = [], [], [], [], []
+    unit_body, unit_vi, unit_ax, unit_lin, unit_alpha, unit_variable = [], [], [], [], [], []
     for j in range(NB):
         S = np.asarray(robot.get_S_by_id(j), dtype=np.float64)
         if S.ndim == 1:
@@ -98,11 +98,15 @@ def _dccrba_metadata(self):
         # the RBDReference oracle (_dccrba_world_sweep / _body_spatial_jacobian_world)
         # and centroidal_inner's s_J. Non-mimic alpha == 1.0 (unused, gated off).
         alpha = self._alpha_for_jid(j) if HAS_MIMIC else 1.0
+        # a polynomial follower's unit reads alpha(q) from a runtime table and
+        # owns the embedding term A_f[:, fv] alpha'(q) of the derivative
+        variable = bool(HAS_MIMIC and self._alpha_is_variable(j))
         for c in range(S.shape[1]):
             vi = vinds[c] if c < len(vinds) else vinds[-1]
             unit_body.append(j)
             unit_vi.append(vi)
             unit_alpha.append(alpha)
+            unit_variable.append(1 if variable else 0)
             unit_ax += [float(S[0, c]), float(S[1, c]), float(S[2, c])]
             unit_lin += [float(S[3, c]), float(S[4, c]), float(S[5, c])]
     n_int = len(unit_body)
@@ -129,6 +133,7 @@ def _dccrba_metadata(self):
     return {
         "NB": NB, "nv": nv, "n_int": n_int, "HAS_MIMIC": HAS_MIMIC,
         "unit_body": unit_body, "unit_vi": unit_vi, "unit_alpha": unit_alpha,
+        "unit_variable": unit_variable, "has_variable": any(unit_variable),
         "unit_ax": unit_ax, "unit_lin": unit_lin,
         "is_root_v": is_root_v,
         "unit_anc_self": unit_anc_self, "unit_anc_strict": unit_anc_strict,
@@ -209,7 +214,12 @@ def _emit_dccrba_assembly(self, out_name, contract_qd, part_name=None):
         f"static const int dc_unit_anc_self[] = {{ {_dccrba_int_array(md['unit_anc_self'])} }};",
         f"static const int dc_unit_anc_strict[] = {{ {_dccrba_int_array(md['unit_anc_strict'])} }};",
     ])
-    if HAS_MIMIC:
+    if md["has_variable"]:
+        # polynomial followers: alpha(q) and alpha'(q) per unit, filled at runtime
+        # from the leader coordinates (one thread, then a sync)
+        self.gen_alpha_table("dc_unit_alpha", md["unit_body"])
+        self.gen_alpha_table("dc_unit_alphad", md["unit_body"], order=1)
+    elif HAS_MIMIC:
         # MIMIC: per-unit mimic multiplier; folds into phi (the alpha-scaled world
         # motion column), mirroring the RBDReference _dccrba_world_sweep oracle.
         self.gen_add_code_line(
@@ -408,6 +418,49 @@ def _emit_dccrba_assembly(self, out_name, contract_qd, part_name=None):
         self.gen_add_code_line(out_name + "[3 + 6*k] = acc[3]; " + out_name + "[4 + 6*k] = acc[4]; " + out_name + "[5 + 6*k] = acc[5];")
         self.gen_add_end_control_flow()
         self.gen_add_sync()
+    if md["has_variable"]:
+        _emit_dccrba_embedding_term(self, md, out_name, contract_qd, nv, NB)
+
+
+def _emit_dccrba_embedding_term(self, md, out_name, contract_qd, nv, NB):
+    """The second term of the embedding's derivative, A_y = A_f G:
+        dA_y[:, k, i] = sum_m G[m, i] (dA_f[:, :, m] G)[:, k] + A_f[:, fv] dG[fv, k]/dy_i
+    whose first term the fan above produced through the alpha-scaled units
+    and whose second is, per polynomial follower unit u (body f, leader slot
+    l), the full tree's CMM column A_f[:, fv] times alpha'(q_l) at tensor
+    cell [:, l, l] (contracted: times alpha' qd_l into column l). The column
+    is the CoM-shifted sum over the bodies the unit moves of Iw_i phi_u with
+    the UNSCALED world motion column (alpha may vanish). Serial, after the
+    fan's sync."""
+    units = [u for u, v in enumerate(md["unit_variable"]) if v]
+    self.gen_add_code_line("// embedding term: A_f[:, fv] alpha'(q_l) of each polynomial follower into its leader's cell")
+    self.gen_add_serial_ops()
+    for u in units:
+        jb = md["unit_body"][u]; l = md["unit_vi"][u]
+        ax = md["unit_ax"][3 * u:3 * u + 3]; ln = md["unit_lin"][3 * u:3 * u + 3]
+        lit = lambda v: "static_cast<T>({:.17g})".format(float(v))
+        self.gen_add_code_line("{ const T *Xj = &dc_Xworld[" + str(16 * jb) + "];")
+        self.gen_add_code_line("T a0=" + lit(ax[0]) + ", a1=" + lit(ax[1]) + ", a2=" + lit(ax[2]) + ", l0=" + lit(ln[0]) + ", l1=" + lit(ln[1]) + ", l2=" + lit(ln[2]) + ";")
+        self.gen_add_code_line("T aw0 = Xj[0]*a0 + Xj[4]*a1 + Xj[8]*a2, aw1 = Xj[1]*a0 + Xj[5]*a1 + Xj[9]*a2, aw2 = Xj[2]*a0 + Xj[6]*a1 + Xj[10]*a2;")
+        self.gen_add_code_line("T lw0 = Xj[0]*l0 + Xj[4]*l1 + Xj[8]*l2, lw1 = Xj[1]*l0 + Xj[5]*l1 + Xj[9]*l2, lw2 = Xj[2]*l0 + Xj[6]*l1 + Xj[10]*l2;")
+        self.gen_add_code_line("T pjx = Xj[12], pjy = Xj[13], pjz = Xj[14];")
+        self.gen_add_code_line("T ph[6] = {aw0, aw1, aw2, lw0 + (pjy*aw2 - pjz*aw1), lw1 + (pjz*aw0 - pjx*aw2), lw2 + (pjx*aw1 - pjy*aw0)};")
+        self.gen_add_code_line("T col[6]; for (int r = 0; r < 6; ++r) col[r] = static_cast<T>(0);")
+        self.gen_add_code_line("for (int i = 0; i < " + str(NB) + "; ++i) { if (!dc_unit_anc_self[" + str(u * NB) + " + i]) continue; const T *Iw_i = &dc_Iw[36*i];")
+        self.gen_add_code_line("  for (int r = 0; r < 6; ++r) { T s = static_cast<T>(0); for (int c = 0; c < 6; ++c) s += Iw_i[r+6*c]*ph[c]; col[r] += s; } }")
+        # CoM shift (Xstar) + [ang;lin] -> [lin;ang] reorder, as the fan does for its cells
+        self.gen_add_code_line("T xa0 = col[0] - (dc_cy*col[5] - dc_cz*col[4]), xa1 = col[1] - (dc_cz*col[3] - dc_cx*col[5]), xa2 = col[2] - (dc_cx*col[4] - dc_cy*col[3]);")
+        self.gen_add_code_line("T xl0 = col[3], xl1 = col[4], xl2 = col[5];")
+        if contract_qd:
+            self.gen_add_code_line("T sc = dc_unit_alphad[" + str(u) + "] * s_qd[" + str(l) + "];")
+            base = out_name + "[" + str(6 * l)
+        else:
+            self.gen_add_code_line("T sc = dc_unit_alphad[" + str(u) + "];")
+            base = out_name + "[" + str(6 * l + 6 * nv * l)
+        self.gen_add_code_line(base + " + 0] += sc*xl0; " + base + " + 1] += sc*xl1; " + base + " + 2] += sc*xl2;")
+        self.gen_add_code_line(base + " + 3] += sc*xa0; " + base + " + 4] += sc*xa1; " + base + " + 5] += sc*xa2; }")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
 
 
 # ===========================================================================

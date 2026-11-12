@@ -120,6 +120,9 @@ _f_ext_gradient_dq_emitted = False
 # table (algo_registry.ALGO_DESCRIPTORS) below, so gate/bytes live in exactly
 # one place. algo_label == algo_short for every pin entry (registry invariant).
 KERNEL_OVERLOADS = {
+    "forward_dynamics_armature_gradient": [
+        ("forward_dynamics_armature_gradient_kernel<T>", "void (*)(T *, unsigned char *, const T *, int, T *, const robotModel<T> *, T, int)"),
+    ],
     "inverse_dynamics": [
         ("inverse_dynamics_kernel<T>",
          "void (*)(T *, const T *, const int, const T *, T *, const robotModel<T> *, const T, const int)"),
@@ -352,6 +355,30 @@ KERNEL_OVERLOADS = {
         ("frame_jacobian_dot_kernel<T>",
          "void (*)(T *, const T *, const int, const int, const int, const robotModel<T> *, const int)"),
         ("frame_jacobian_dot_kernel_single_timing<T>",
+         "void (*)(T *, const T *, const int, const int, const int, const robotModel<T> *, const int)"),
+    ],
+    "frame_velocity": [
+        ("frame_velocity_kernel<T>",
+         "void (*)(T *, const T *, const int, const int, const int, const robotModel<T> *, const int)"),
+        ("frame_velocity_kernel_single_timing<T>",
+         "void (*)(T *, const T *, const int, const int, const int, const robotModel<T> *, const int)"),
+    ],
+    "frame_acceleration": [
+        ("frame_acceleration_kernel<T>",
+         "void (*)(T *, const T *, const int, const int, const int, const robotModel<T> *, const int)"),
+        ("frame_acceleration_kernel_single_timing<T>",
+         "void (*)(T *, const T *, const int, const int, const int, const robotModel<T> *, const int)"),
+    ],
+    "frame_velocity_gradient": [
+        ("frame_velocity_gradient_kernel<T>",
+         "void (*)(T *, const T *, const int, const int, const int, const robotModel<T> *, const int)"),
+        ("frame_velocity_gradient_kernel_single_timing<T>",
+         "void (*)(T *, const T *, const int, const int, const int, const robotModel<T> *, const int)"),
+    ],
+    "frame_acceleration_gradient": [
+        ("frame_acceleration_gradient_kernel<T>",
+         "void (*)(T *, const T *, const int, const int, const int, const robotModel<T> *, const int)"),
+        ("frame_acceleration_gradient_kernel_single_timing<T>",
          "void (*)(T *, const T *, const int, const int, const int, const robotModel<T> *, const int)"),
     ],
     "osc_inertia": [

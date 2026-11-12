@@ -608,7 +608,7 @@ def test_native_bridge_cpu_fake_abi(tmp_path):
 def test_release_pool_runs_every_slice_once_on_persistent_threads(tmp_path):
     """The C++ pool behind the CPU baselines, compiled into a fake TU without Pinocchio."""
     source=tmp_path/"pool.cpp"
-    source.write_text('#include "release_pool.h"\n#include <atomic>\n#include <thread>\n'
+    source.write_text('#include "release_pool.h"\n#include <algorithm>\n#include <atomic>\n#include <thread>\n'
         'extern "C" int pool_probe(int helpers,int active,int rounds,int*hits,int*distinct_threads){\n'
         '  ReleasePool pool((std::size_t)helpers); std::atomic<int> bad{0};\n'
         '  std::mutex m; std::vector<std::thread::id> seen;\n'

@@ -8,6 +8,17 @@ edit that forgets to regenerate (or a hand-edit inside the markers) fails CI.
 import sys
 from pathlib import Path
 
+
+def test_armature_sensitivity_releases_gil_after_capturing_buffers():
+    from grid_codegen.abi_specs import ABI_SPECS
+    from grid_codegen.core_body_gen import gen_method
+
+    body = gen_method(ABI_SPECS["forward_dynamics_armature_gradient"], False)
+    assert body.index("out.mutable_data()") < body.index("GridNoGil nogil")
+    native = body.split("{ GridNoGil nogil;", 1)[1].split("}", 1)[0]
+    assert "fn_fd_armature_(ctx_id_, q_ptr, qd_ptr, u_ptr, out_ptr," in native
+    assert ".data()" not in native and ".mutable_data()" not in native
+
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 

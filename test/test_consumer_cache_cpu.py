@@ -62,6 +62,31 @@ def test_bad_metadata_is_repaired(consumer):
     assert json.loads((second.store_dir / "meta.json").read_text())["consumer"] == "cpu-probe"
 
 
+@pytest.mark.parametrize("runtime", [False, True])
+def test_armature_initializer_reaches_consumer_header_and_identity(consumer, monkeypatch, runtime):
+    import numpy as np
+    from grid_assets import robot_urdf
+    from grid_rbd._compile import generate_grid_cuh
+    # Real generation and content identity; only compilation is mocked here.
+    consumer.urdf.write_text(robot_urdf("iiwa14").read_text())
+    def generate(path, opts, out):
+        consumer.generated += 1
+        return generate_grid_cuh(path, opts, out)
+    monkeypatch.setattr(artifacts, "generate_grid_cuh", generate)
+    opts = dict(runtime_armature=runtime, algorithm_list=["minv"],
+                enable_mujoco_kernels=False)
+    first = consumer.build(armature=np.full(7, .25), **opts)
+    assert not consumer.build(armature=[.25] * 7, **opts).compiled
+    changed = consumer.build(armature=[.5] * 7, **opts)
+    assert changed.content_key != first.content_key
+    restored = consumer.build(armature=[.25] * 7, **opts)
+    assert restored.content_key == first.content_key and not restored.compiled
+    assert consumer.compiled == 2
+    marker = ("h_armature_params[0] = static_cast<T>(0.25)" if runtime else
+              "case 0: return static_cast<T>(0.25)")
+    assert marker in first.header.read_text()
+
+
 @pytest.mark.parametrize('damage', ['descriptor', 'rehash', 'header', 'binary', 'association'])
 def test_model_association_rejects_and_repairs_swapped_files(consumer, damage):
     from grid_codegen.model_descriptor import descriptor_id

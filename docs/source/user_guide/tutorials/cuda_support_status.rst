@@ -51,10 +51,9 @@ Fixed-base CUDA coverage includes the core dynamics and kinematics paths:
 
 Second-order fixed-base diagnostics are still developer-only. The current
 green zero-sample set includes ``iiwa14``, ``go2``, ``gen3``, ``fr3``,
-``fetch``, and ``rizon4`` (the upstream flexiv xacro emits each link's
-origin/mass/inertia triple bare, so the local
-``grid_assets/robots/rizon4.urdf`` wraps them in proper ``<inertial>``
-elements).
+``fetch``, and ``rizon4`` (the bundled ``grid_assets/robots/rizon4.urdf``
+carries the vendor's published inertial table from ``flexiv_description``,
+as ``grid_assets/robots/URDF_SOURCES.md`` records).
 
 Floating-Base Robots
 --------------------
@@ -155,7 +154,7 @@ Algorithm catalog
 - Analytical Gradients of Inverse Dynamics from `Carpentier <https://hal.archives-ouvertes.fr/hal-01790971>`__
 - Analytical Gradient of Forward Dynamics from `Carpentier <https://hal.archives-ouvertes.fr/hal-01790971>`__
 - End-effector pose, pose gradient (Jacobian), and pose Hessian
-- General-frame geometric Jacobian for an arbitrary target frame in any of the three Pinocchio reference frames (``LOCAL``, ``WORLD``, ``LOCAL_WORLD_ALIGNED``). The numpy reference also provides the Jacobian time-variation J̇ and the operational-space (OSC) inertia Λ = (J·M⁻¹·Jᵀ)⁻¹; all are validated against Pinocchio's ``getFrameJacobian``/``getJointJacobian``, ``computeJointJacobiansTimeVariation``, and ``(J·M⁻¹·Jᵀ)⁻¹``. CUDA codegen emits all three as opt-in keys, J (``frame_jacobian``), J̇ (``frame_jacobian_dot``), and Λ (``osc_inertia``), each validated on-device against the numpy reference across the three frames (Λ is self-contained: it composes M⁻¹ on-device). All three also have the full launchable surface (batched ``*_kernel`` + 3-mode host writing the ``gridData`` ``d_frame_jacobian`` / ``d_frame_jacobian_dot`` / ``d_osc_inertia`` buffers), so they are benchmarkable and bindable; the launchable surface bakes the leaf-EE target + ``LOCAL_WORLD_ALIGNED`` frame, while the ``*_device`` functions stay the arbitrary-target/-frame entry points
+- General-frame geometric Jacobian for an arbitrary target frame in any of the three Pinocchio reference frames (``LOCAL``, ``WORLD``, ``LOCAL_WORLD_ALIGNED``). The numpy reference also provides the Jacobian time-variation J̇ and the operational-space (OSC) inertia Λ = (J·M⁻¹·Jᵀ)⁻¹; all are validated against Pinocchio's ``getFrameJacobian``/``getJointJacobian``, ``computeJointJacobiansTimeVariation``, and ``(J·M⁻¹·Jᵀ)⁻¹``. CUDA codegen emits all three as opt-in keys, J (``frame_jacobian``), J̇ (``frame_jacobian_dot``), and Λ (``osc_inertia``), each validated on-device against the numpy reference across the three frames (Λ is self-contained: it composes M⁻¹ on-device). All three also have the full launchable surface (batched ``*_kernel`` + 3-mode host writing the ``gridData`` ``d_frame_jacobian`` / ``d_frame_jacobian_dot`` / ``d_osc_inertia`` buffers), so they are benchmarkable and bindable; the target joint and the reference frame are runtime arguments of the kernels and hosts (defaulting to the leaf end effector in ``LOCAL_WORLD_ALIGNED``). The frame velocity ``J q̇`` (``frame_velocity``) and the frame acceleration ``J q̈ + J̇ q̇`` (``frame_acceleration``; the spatial acceleration in ``LOCAL`` and ``WORLD``, the classical acceleration in ``LOCAL_WORLD_ALIGNED``) are emitted on the same inners, validated against Pinocchio's frame getters through the numpy reference and on-device across the three frames; their derivatives against q, q̇ and q̈ (``frame_velocity_gradient`` = ``[dv/dq | dv/dq̇]``, ``frame_acceleration_gradient`` = ``[da/dq | da/dq̇ | da/dq̈]``) are emitted on one shared inner, checked against Pinocchio's ``getFrameVelocityDerivatives`` / ``getFrameAccelerationDerivatives`` and the chart finite differences through the numpy reference, and on-device the same way
 - Second-Order Inverse Dynamics (IDSVA-SO) from `Singh, Russell, & Wensing <https://arxiv.org/abs/2302.06001>`__; the dispatcher selects body-frame for fixed-base and world-frame for floating-base models. See :doc:`../../release_measurements` for measured performance.
 - Second-Order Forward Dynamics (FDSVA-SO) from `Singh, Russell, & Wensing <https://arxiv.org/abs/2302.06001>`__ on both fixed and floating bases
 - A time-integrator family: the discrete step ``x_{k+1}`` plus its gradient ``∂x_{k+1}/∂(x,u)`` and a fused value-and-gradient variant
@@ -163,7 +162,7 @@ Algorithm catalog
 - External-force gradients: ``∂tau/∂f_ext = -Jᵀ`` and ``∂q̈/∂f_ext = M⁻¹Jᵀ``, plus the fixed-base ``∂(inverse_dynamics_gradient)/∂f_ext = -∂Jᵀ/∂q``
 - A trajectory-optimization-oriented ``grid_plant`` layer (emitted as a sibling ``grid_plant`` namespace): a ``plant_step`` integrator wrapper, quadratic state/input costs, an end-effector position cost (with Gauss-Newton Hessian), and joint position/velocity/torque log-barriers.
 - The Coriolis matrix ``C(q,q̇)`` (with ``C·q̇ + g(q) = nonlinear_effects``)
-- Inertial-parameter energy regressors: kinetic ``y_KE`` and potential ``y_PE`` (each length ``10·NB``, with ``KE = y_KE·π`` and ``PE = y_PE·π``)
+- Inertial-parameter energy regressors: kinetic ``y_KE`` and potential ``y_PE`` (each length ``10·NB``). Total kinetic energy is ``y_KE·π + 0.5*sum(armature*qd**2)``; the rotor term does not add columns. Potential energy is ``PE = y_PE·π``.
 - The centroidal derivatives: ``dccrba`` (the ∂A/∂q tensor, 6×NV×NV) and ``cmm_time_variation`` (the centroidal-momentum-matrix time variation Ȧ)
 - Runtime arbitrary multi-EE pose / pose-gradient (``end_effector_pose_runtime`` + ``_gradient``): the end-effector target joint id and a per-target offset become runtime arguments instead of codegen-baked, so one compiled robot serves any leaf/target frame.
 - Runtime-mutable inertial parameters (flag-gated): a ``set_inertia_params`` device entry mutates an on-device parameter table (sysID / domain randomization) with no recompile; the baked default path is byte-identical.

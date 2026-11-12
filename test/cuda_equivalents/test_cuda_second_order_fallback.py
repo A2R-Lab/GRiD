@@ -1,4 +1,5 @@
 import contextlib
+from dataclasses import replace
 import os
 from pathlib import Path
 
@@ -229,6 +230,20 @@ def _run_second_order_sample(executable, compile_cmd, sample, thread_count):
         "warp-order-dependent reduction"
     )
     return _parse_runner_output(stdout)
+
+
+def _unactuated_floating_fd_sample(sample):
+    # The shared runner slot means qdd for IDSVA but u for FDSVA. Use a separate
+    # input for the unactuated free-base case, without changing IDSVA's sample.
+    u = np.array(sample.qdd, copy=True)
+    u[:6] = 0
+    return replace(sample, qdd=u)
+
+
+def _floating_fdsva_enabled():
+    # One source of truth for pytest and prewarm. Known FP32 accuracy failures
+    # stay opt-in for every robot; see the November11 accuracy follow-up task.
+    return os.environ.get("GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA", "0") == "1"
 
 
 def _second_order_target_shared_bytes() -> int:
@@ -540,7 +555,10 @@ def test_floating_second_order_diagnostic_matches_python_reference(tmp_path, rob
     reference_model = _build_so_oracle(spec, resolved, "floating")
     samples = _floating_second_order_samples(project_model)
     target_shared_bytes = _second_order_target_shared_bytes()
-    enable_fdsva = os.environ.get("GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA", "0") == "1"
+    # Known FP32 accuracy failures remain opt-in, uniformly for every robot.
+    # See docs/open-tasks/fdsva_so_float32_accuracy_2026-11-11.md. Preserve both
+    # input cases and the unchanged oracle tolerances when explicitly enabled.
+    enable_fdsva = _floating_fdsva_enabled()
     algorithm_list = "idsva_so_body_frame,fdsva_so" if enable_fdsva else "idsva_so_body_frame"
 
     executable, compile_cmd = _build_second_order_case(
@@ -604,13 +622,23 @@ def test_floating_second_order_diagnostic_matches_python_reference(tmp_path, rob
             ),
         )
         if enable_fdsva and _has_invertible_project_mass_matrix(reference_model, sample.q):
-            _assert_allclose_with_optional_norm_guard(
-                actual["fdsva_so"],
-                _flatten_second_order_tensors(
-                    project_model.fdsva_so(sample.q, sample.qd, sample.qdd)
-                ),
-                rtol=2e-4,
-                atol=2e-4,
-                err_msg=f"{robot_id}-floating {sample.name} FDSVA-SO",
-                **_fdsva_so_tolerance(robot_id),
+            # Preserve the original generalized-force case, including its valid
+            # base wrench, and independently cover an unactuated free base.
+            unactuated = _unactuated_floating_fd_sample(sample)
+            unactuated_actual = _run_second_order_sample(
+                executable, compile_cmd, unactuated, thread_count,
             )
+            for input_case, fd_sample, fd_actual in (
+                ("original-wrench", sample, actual),
+                ("unactuated-base", unactuated, unactuated_actual),
+            ):
+                _assert_allclose_with_optional_norm_guard(
+                    fd_actual["fdsva_so"],
+                    _flatten_second_order_tensors(
+                        project_model.fdsva_so(fd_sample.q, fd_sample.qd, fd_sample.qdd)
+                    ),
+                    rtol=2e-4,
+                    atol=2e-4,
+                    err_msg=f"{robot_id}-floating {sample.name} {input_case} FDSVA-SO",
+                    **_fdsva_so_tolerance(robot_id),
+                )

@@ -5,6 +5,7 @@ from ._regressor_energy import *
 from ._regressor_gradient import *
 from ._minv import *
 from ._forward_dynamics import *
+from ._armature_identification import *
 from ._inverse_dynamics_gradient import *
 # `import *` skips underscore-prefixed names; export the shared BFS-level index
 # decode helper explicitly so GRiDCodeGenerator can bind it as a method.

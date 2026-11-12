@@ -381,13 +381,20 @@ def gen_centroidal_inner(self):
     self.gen_add_code_line("const T *Xw = &s_Xworld[16*jid];")
     self.gen_add_code_line("T R[9]; for (int c=0;c<3;++c) for (int r=0;r<3;++r) R[r+3*c] = Xw[r + 4*c];")
     self.gen_add_code_line("T px = Xw[12], py = Xw[13], pz = Xw[14];")
-    # body inertia (constant): Ib col-major 6x6 at d_XImats[ImatOffset + 36*jid]
-    self.gen_add_code_line("const T *Ib = &d_robotModel->d_XImats[" + str(ImatOffset) + " + 36*jid];")
-    self.gen_add_code_line("T m = Ib[5 + 6*5];")
-    # I_O (top-left 3x3, col-major): I_O[r+3c] = Ib[r + 6*c]
-    self.gen_add_code_line("T IO[9]; for (int c=0;c<3;++c) for (int r=0;r<3;++r) IO[r+3*c] = Ib[r + 6*c];")
-    # mc from top-right skew block: Ib[:3,3:6] = skew(mc) col-major -> Ib[r + 6*(3+c)]
-    self.gen_add_code_line("T mc0 = Ib[2 + 6*4]; T mc1 = Ib[0 + 6*5]; T mc2 = Ib[1 + 6*3];")
+    if getattr(self, "runtime_inertia", False):
+        # Same frozen [m,hx,hy,hz,Ixx,Ixy,Ixz,Iyy,Iyz,Izz] basis as the
+        # dynamics rebuild. Read the admitted model, not its baked initializer.
+        # The existing serial body loop and local storage remain unchanged.
+        self.gen_add_code_line("const T *pi = &d_robotModel->d_inertia_params[10*jid];")
+        self.gen_add_code_line("T m = pi[0];")
+        self.gen_add_code_line("T IO[9] = {pi[4],pi[5],pi[6],pi[5],pi[7],pi[8],pi[6],pi[8],pi[9]};")
+        self.gen_add_code_line("T mc0 = pi[1]; T mc1 = pi[2]; T mc2 = pi[3];")
+    else:
+        # Preserve baked emission exactly.
+        self.gen_add_code_line("const T *Ib = &d_robotModel->d_XImats[" + str(ImatOffset) + " + 36*jid];")
+        self.gen_add_code_line("T m = Ib[5 + 6*5];")
+        self.gen_add_code_line("T IO[9]; for (int c=0;c<3;++c) for (int r=0;r<3;++r) IO[r+3*c] = Ib[r + 6*c];")
+        self.gen_add_code_line("T mc0 = Ib[2 + 6*4]; T mc1 = Ib[0 + 6*5]; T mc2 = Ib[1 + 6*3];")
     # rotate: I_O_w = R IO R^T ; mc_w = R mc
     self.gen_add_code_line("T tmp[9];")
     self.gen_add_code_line("for (int c=0;c<3;++c) for (int r=0;r<3;++r) { T s=0; for(int k=0;k<3;++k) s += R[r+3*k]*IO[k+3*c]; tmp[r+3*c]=s; }")
@@ -477,7 +484,7 @@ def gen_centroidal_inner(self):
         self.gen_bake_const_array("cj_ang", [v for j in jobs for v in j[3]], "T")
         self.gen_bake_const_array("cj_lin", [v for j in jobs for v in j[4]], "T")
         if HAS_MIMIC:
-            self.gen_bake_const_array("cj_alpha", [j[5] for j in jobs], "T")
+            self.gen_alpha_table("cj_alpha", [j[1] for j in jobs])
         # Serial accumulation (columns within one body can repeat vi across bodies;
         # different bodies write disjoint J slabs, but to keep it simple & correct
         # we accumulate serially). Correctness-first.
@@ -633,6 +640,13 @@ def gen_ccrba_device(self):
 
 # ----- energy (KE, PE, mechanical) device -----
 
+def _gen_energy_armature(self):
+    # Both the device helper and the spill-aware kernel finalize energy here.
+    # Rotor inertia is a reduced-coordinate contribution, not a spatial inertia.
+    for vs in self._armature_vslots():
+        self.gen_add_code_line(f"ke += static_cast<T>(0.5) * {self._armature_value_cpp(vs)} * s_qd[{vs}] * s_qd[{vs}];")
+
+
 def gen_energy_device(self):
     nv = self.robot.get_num_vel()
     func_def = ("void energy_device(T *s_out, const T *s_q, const T *s_qd, const robotModel<T> *d_robotModel, const T gravity) {")
@@ -664,6 +678,7 @@ def gen_energy_device(self):
     self.gen_add_code_line("T v[6]; for (int r=0;r<6;++r){ T s=0; for(int vi=0;vi<" + str(nv) + ";++vi) s += Jb[6*vi+r]*s_qd[vi]; v[r]=s; }")
     self.gen_add_code_line("for (int r=0;r<6;++r){ T s=0; for(int k=0;k<6;++k) s += Iw[r+6*k]*v[k]; ke += static_cast<T>(0.5)*v[r]*s; }")
     self.gen_add_end_control_flow()
+    _gen_energy_armature(self)
     self.gen_add_code_line("T pe = -s_extra[0] * gravity * s_com[2]; // PE = -M*gravity*com_z (gravity=-9.81, matches RBDReference)")
     self.gen_add_code_line("s_out[0]=ke; s_out[1]=pe; s_out[2]=ke+pe;")
     self.gen_add_end_control_flow()
@@ -775,6 +790,7 @@ def _gen_kin_centroidal_kernel(self, name, out_size, has_qd, has_gravity, single
             self.gen_add_code_line("T v[6]; for (int r=0;r<6;++r){ T s=0; for(int vi=0;vi<" + str(nv) + ";++vi) s += Jb[6*vi+r]*s_qd[vi]; v[r]=s; }")
             self.gen_add_code_line("for (int r=0;r<6;++r){ T s=0; for(int k=0;k<6;++k) s += Iw[r+6*k]*v[k]; ke += static_cast<T>(0.5)*v[r]*s; }")
             self.gen_add_end_control_flow()
+            _gen_energy_armature(self)
             self.gen_add_code_line("T pe = -s_extra[0] * gravity * s_com[2]; // PE = -M*gravity*com_z (gravity=-9.81, matches RBDReference)")
             self.gen_add_code_line("s_out[0]=ke; s_out[1]=pe; s_out[2]=ke+pe;")
             self.gen_add_end_control_flow()

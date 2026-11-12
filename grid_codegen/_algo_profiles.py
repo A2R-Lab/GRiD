@@ -47,12 +47,17 @@ def normalize_codegen_algorithms(gen, codegen_profile = "all", algorithm_list = 
     # are gated on fdsva_so membership, which `all` satisfies). Requesting it
     # explicitly pulls in fdsva_so + integrator below.
     opt_in_algorithms = {"frame_jacobian", "frame_jacobian_dot", "osc_inertia",
+                         "frame_velocity", "frame_acceleration",
+                         "frame_velocity_gradient", "frame_acceleration_gradient",
                          "end_effector_pose_runtime", "end_effector_pose_gradient_runtime",
-                         "idsva_so_world_frame", "integrator_hessian"}
+                         "idsva_so_world_frame", "integrator_hessian",
+                         "forward_dynamics_armature_gradient"}
     profile_algorithms = {
         "all": all_algorithms,
         "frame-jacobian": {"end_effector_pose", "minv", "frame_jacobian",
-                           "frame_jacobian_dot", "osc_inertia"},
+                           "frame_jacobian_dot", "osc_inertia",
+                           "frame_velocity", "frame_acceleration",
+                           "frame_velocity_gradient", "frame_acceleration_gradient"},
         "dynamics": {"inverse_dynamics", "minv", "forward_dynamics", "inverse_dynamics_gradient", "forward_dynamics_gradient", "aba", "crba", "idsva_so_body_frame", "fdsva_so",
                      "integrator", "integrator_gradient", "integrator_with_gradient"},
         "dynamics-core": {"inverse_dynamics", "minv", "forward_dynamics"},
@@ -128,7 +133,11 @@ def normalize_codegen_algorithms(gen, codegen_profile = "all", algorithm_list = 
     # E2: frame_jacobian (+ its Jdot/Lambda siblings) need the world-transform
     # machinery (ee_pose) and, for OSC composition, minv. Pull them in plus the
     # base frame_jacobian emit (the siblings reuse frame_jacobian_inner).
-    if "frame_jacobian_dot" in algorithms or "osc_inertia" in algorithms:
+    # Item C: frame_acceleration composes Jdot and J; frame_velocity composes J.
+    if "frame_acceleration" in algorithms:
+        algorithms.add("frame_jacobian_dot")
+    if ("frame_jacobian_dot" in algorithms or "osc_inertia" in algorithms or "frame_velocity" in algorithms
+            or "frame_velocity_gradient" in algorithms or "frame_acceleration_gradient" in algorithms):
         algorithms.add("frame_jacobian")
     if "frame_jacobian" in algorithms:
         algorithms.update({"end_effector_pose", "minv"})
@@ -153,6 +162,8 @@ def normalize_codegen_algorithms(gen, codegen_profile = "all", algorithm_list = 
     # emitted an nvcc-rejected header (multi-TU family split, 2026-10-09).
     if "forward_dynamics_parameter_gradient" in algorithms:
         algorithms.update({"inverse_dynamics", "minv", "forward_dynamics", "inverse_dynamics_regressor"})
+    if "forward_dynamics_armature_gradient" in algorithms:
+        algorithms.update({"inverse_dynamics", "minv", "forward_dynamics"})
     if "inverse_dynamics_gradient" in algorithms:
         algorithms.add("inverse_dynamics")
     # B.0 dY/dx composes the id_du staging (calls inverse_dynamics_gradient_inner)

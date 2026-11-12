@@ -10,6 +10,7 @@ from grid_codegen.model_metadata_cpp import emit_model_metadata, JOINT_KINDS, FR
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 from test.cuda_equivalents.constant_model import constant_model
+from test.cuda_equivalents.thread_invariance import thread_sweep
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 ROOT = Path(__file__).resolve().parents[2]
@@ -65,12 +66,9 @@ def expected(d):
 def test_device_metadata_and_single_pose_composition(case,precision):
     descriptor,exe=case
     oracle=np.array(expected(descriptor),dtype=np.float64 if precision else np.float32)
-    baseline=None
-    for threads in (1,17,32,64,256):
+    def run(threads):
         result=subprocess.run([str(exe),str(threads),str(precision)],capture_output=True,text=True)
         assert result.returncode==0,result.stderr
-        actual=np.fromstring(result.stdout,sep='\n')
-        np.testing.assert_allclose(actual,oracle,atol=2e-7 if not precision else 2e-15,rtol=0)
-        if baseline is not None:
-            np.testing.assert_array_equal(actual,baseline)
-        baseline=actual
+        return np.fromstring(result.stdout,sep='\n')
+    thread_sweep((1,17,32,64,256),run,
+                 lambda actual,_:np.testing.assert_allclose(actual,oracle,atol=2e-7 if not precision else 2e-15,rtol=0))

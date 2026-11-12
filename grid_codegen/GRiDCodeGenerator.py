@@ -1,5 +1,5 @@
 import os
-import warnings
+from .armature import supported_slots, validated_armature
 
 # Codegen-time frame-selection predicate shared with the idsva_so dispatcher /
 # device wrapper. The emission gate (enable_idsva_so_world_frame) MUST agree with
@@ -56,21 +56,23 @@ class GRiDCodeGenerator:
                          gen_device_wrapper, gen_tier_dispatch, gen_spatial_algebra_helpers, \
                          gen_get_XI_size, gen_init_XImats, gen_get_inertia_params_size, gen_init_inertia_params, gen_set_inertia_params, \
                          gen_get_transform_params_size, gen_init_transform_params, gen_set_transform_params, \
-                         _joint_dynamics_folded_by_vslot, gen_get_joint_dynamics_params_size, \
+                         _joint_dynamics_folded_by_vslot, _jd_alpha_fold, gen_get_joint_dynamics_params_size, \
                          gen_init_joint_dynamics_params, gen_set_joint_dynamics_params, \
+                         gen_get_armature_params_size, gen_init_armature_params, gen_set_armature_params, \
                          gen_load_update_XImats_helpers_temp_mem_size, gen_load_update_XImats_helpers_function_call, \
                          gen_XImats_helpers_temp_shared_memory_code, gen_load_update_XImats_helpers, gen_topology_helpers_size, \
                          gen_get_Xhom_size, gen_load_update_XmatsHom_helpers, gen_load_update_XmatsHom_helpers_function_call, gen_XmatsHom_helpers_temp_shared_memory_code, gen_load_topology_helpers, \
                          gen_topology_sparsity_helpers_python, gen_init_topology_helpers, gen_topology_helpers_pointers_for_cpp, _s_inds_stride, \
                          gen_topology_S_sign_for_cpp, gen_insert_helpers_function_call, gen_insert_helpers_func_def_params, gen_init_robotModel, gen_free_robotModel, gen_joint_limits_size, gen_init_joint_limits, gen_checked_table_tail, gen_legacy_init_wrapper, gen_checked_host_alloc, _robotModel_members, \
                          gen_grid_linalg_backend_helpers, _gen_vendored_glass, _gen_linalg_wrappers, gen_invert_matrix, gen_matmul, gen_matmul_trans, gen_crm_mul, gen_crm, gen_mxS_general, custom_is_constant, \
-                         gen_mjx_input_convert, gen_mjx_quat_reorder, gen_mjx_base_rotate, gen_mjx_symmetrize_full, gen_mjx_accel_out, gen_mjx_congruence, gen_mjx_column_reframe, gen_mjx_retract, \
-                         robot_has_mimic_joints, _v_slot_cpp, _alpha_for_jid, _id_S_desc, gen_add_fragment_mark
+                         gen_mjx_input_convert, gen_mjx_quat_reorder, gen_mjx_base_rotate, gen_mjx_symmetrize_full, gen_mjx_accel_out, gen_mjx_congruence, gen_mjx_column_reframe, gen_mjx_retract, gen_mjx_integrator_output, \
+                         robot_has_mimic_joints, _v_slot_cpp, _alpha_for_jid, _id_S_desc, gen_add_fragment_mark, \
+                            robot_has_variable_couplings, _alpha_is_variable, gen_alpha_table, _coupling_leader_qslot, _coupling_alpha_cpp, _coupling_value_cpp, gen_coupling_evaluators, _jd_fold_cpp
 
     # then import all of the algorithms
     from .algorithms import gen_inverse_dynamics_inner_temp_mem_size, gen_inverse_dynamics_inner_function_call, \
                             gen_inverse_dynamics_inner, gen_inverse_dynamics_device, \
-                            gen_inverse_dynamics_joint_dynamics_bias, \
+                            gen_inverse_dynamics_joint_dynamics_bias, gen_inverse_dynamics_armature_bias, \
                             gen_inverse_dynamics_kernel, gen_inverse_dynamics_host, gen_inverse_dynamics, \
                             gen_inverse_dynamics_regressor_inner_temp_mem_size, gen_inverse_dynamics_regressor_inner_function_call, \
                             gen_inverse_dynamics_regressor_inner, \
@@ -95,7 +97,7 @@ class GRiDCodeGenerator:
                             gen_minv_device, gen_minv_kernel, gen_minv_host, gen_minv, \
                             gen_forward_dynamics_inner_temp_mem_size, gen_forward_dynamics_finish_function_call, gen_forward_dynamics_finish, \
                             gen_forward_dynamics_inner_function_call, gen_forward_dynamics_inner, gen_forward_dynamics_device, \
-                            gen_forward_dynamics_kernel, gen_forward_dynamics_host, gen_forward_dynamics, \
+                            gen_forward_dynamics_kernel, gen_forward_dynamics_host, gen_forward_dynamics, gen_armature_identification, \
                             gen_inverse_dynamics_gradient_inner_temp_mem_size, gen_inverse_dynamics_gradient_temp_layout, _emit_fb_bfs_level_indexing, \
                             \
                             gen_inverse_dynamics_gradient_inner_function_call, gen_inverse_dynamics_gradient_inner, \
@@ -155,6 +157,11 @@ class GRiDCodeGenerator:
                             gen_frame_jacobian_kernel, gen_frame_jacobian_host, gen_frame_jacobian, \
                             gen_frame_jacobian_dot_device, gen_frame_jacobian_dot_kernel, \
                             gen_frame_jacobian_dot_host, gen_frame_jacobian_dot, \
+                            gen_frame_velocity_device, gen_frame_velocity, \
+                            gen_frame_acceleration_device, gen_frame_acceleration, \
+                            frame_kin_gradient_inner_temp_mem_size, gen_frame_kinematics_gradient_inner, \
+                            gen_frame_velocity_gradient_device, gen_frame_velocity_gradient, \
+                            gen_frame_acceleration_gradient_device, gen_frame_acceleration_gradient, \
                             gen_osc_inertia_device, gen_osc_inertia_kernel, \
                             gen_osc_inertia_host, gen_osc_inertia, \
                             gen_end_effector_pose_runtime_inner, gen_end_effector_pose_runtime_device, \
@@ -208,7 +215,7 @@ class GRiDCodeGenerator:
         self._code_parts.append(text)
         self._code_cache = None
 
-    def __init__(self, robotObj, DEBUG_MODE = False, NEED_PRINT_MAT = False, FILE_NAMESPACE = "grid", USE_JOINT_DYNAMICS = False, dtype = "float", MUJOCO_OUTPUT = False, LAUNCH_CONFIG_ROBOT = None, LAUNCH_CONFIG_PROFILE = "host", runtime_joint_dynamics = False, LAUNCH_CONFIG_GPU = None, FRICTION_MODEL = "sign", FRICTION_WIDTH = 0.03):
+    def __init__(self, robotObj, DEBUG_MODE = False, NEED_PRINT_MAT = False, FILE_NAMESPACE = "grid", USE_JOINT_DYNAMICS = False, dtype = "float", MUJOCO_OUTPUT = False, LAUNCH_CONFIG_ROBOT = None, LAUNCH_CONFIG_PROFILE = "host", runtime_joint_dynamics = False, LAUNCH_CONFIG_GPU = None, FRICTION_MODEL = "sign", FRICTION_WIDTH = 0.03, runtime_armature = False, armature = None):
         self.robot = robotObj
         # runtime_joint_dynamics: when True, the id/fd/aba/*_gradient bias reads
         # the per-DOF damping/friction coefficients from a mutable device table
@@ -221,6 +228,15 @@ class GRiDCodeGenerator:
         # bias/gradient emitters (which read getattr(self,"runtime_joint_dynamics"))
         # see it; gen_all_code can override it per call.
         self.runtime_joint_dynamics = runtime_joint_dynamics
+        # runtime_armature: a runtime per-v-slot rotor armature (reflected
+        # inertia) vector on the diagonal of the joint-space inertia, following
+        # Pinocchio's model.armature: single-DoF joints only, zero on the
+        # floating root and on spherical blocks. Enters inverse dynamics
+        # (tau += a*qdd), CRBA and Minv (M + diag(a)), ABA (the articulated
+        # D), and through them forward dynamics, its derivatives and the
+        # second-order forward dynamics. Optional runtime storage starts from
+        # initial_armature; the default zero baked mode emits no added term.
+        self.runtime_armature = runtime_armature
         # Which autotune profile to bake into launch_cfg<ALGO>::{TIER,THREADS}.
         # "host" = the C++/host throughput-optimal `bases` (default; used by the
         # C++ harness + numpy/pybind). "ffi" = the jax/torch FFI batch-to-land
@@ -324,6 +340,10 @@ class GRiDCodeGenerator:
         # sets the default. ints stay 32-bit regardless (int_count term is *4 below).
         if dtype not in ("float", "double"):
             raise ValueError(f"GRiDCodeGenerator dtype must be 'float' or 'double', got {dtype!r}")
+        self.armature_dtype = "float64" if dtype == "double" else "float32"
+        self.initial_armature = validated_armature(
+            [0] * self.robot.get_num_vel() if armature is None else armature,
+            self.robot.get_num_vel(), supported_slots(self.robot), self.armature_dtype).tolist()
         _default_t_bytes = "8" if dtype == "double" else "4"
         self.cuda_shared_mem_type_size_bytes = int(os.environ.get("GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES", _default_t_bytes))
 
@@ -339,6 +359,31 @@ class GRiDCodeGenerator:
         by construction.
         """
         return self._joint_dynamics_folded_by_vslot()
+
+    def _emits_model_ptr(self):
+        """True when an inner that reuses the ID/Minv/CRBA inners must carry the
+        trailing ``const robotModel<T> *d_robotModel = nullptr`` parameter: a
+        runtime table (joint dynamics or armature) is read on the device."""
+        return bool(getattr(self, "runtime_joint_dynamics", False)
+                    or getattr(self, "runtime_armature", False))
+
+    def _armature_vslots(self):
+        """Slots needing arithmetic: all mutable slots, or nonzero baked slots."""
+        return [slot for slot in supported_slots(self.robot)
+                if self.runtime_armature or self.initial_armature[slot] != 0]
+
+    def _armature_value_cpp(self, slot):
+        """Storage selection at generation time; no runtime mode branch."""
+        if self.runtime_armature:
+            return f"d_robotModel->d_armature_params[{slot}]"
+        if isinstance(slot, int):
+            return f"static_cast<T>({self.initial_armature[slot]!r})"
+        return f"armature_baked<T>({slot})"
+
+    def _armature_term_cpp(self, slot):
+        if not self._armature_vslots():
+            return ""
+        return " + " + self._armature_value_cpp(slot)
 
     def get_friction_width_baked(self):
         """Return the per-v-slot tanh friction width (length nv) the runtime table's
@@ -400,6 +445,7 @@ class GRiDCodeGenerator:
                      enable_idsva_so_world_frame = None, enable_idsva_so_body_frame = None,
                      runtime_inertia = False, runtime_transform = False,
                      runtime_joint_dynamics = None, multi_target_batch = None, collision_spec = None,
+                     runtime_armature = None,
                      contact_frames = None, enable_contact_runtime = False, enable_mujoco_kernels = None,
                      emit_alloc_gating = False, fragments_dir = None,
                      vendor_glass = True, glass_revision = None, cost_frames = None):
@@ -498,6 +544,29 @@ class GRiDCodeGenerator:
         if (self.enable_mujoco_kernels and self.robot.floating_base
                 and ({"inverse_dynamics_gradient", "fdsva_so"} & set(algorithms))):
             algorithms = set(algorithms) | {"crba"}
+        # Variable couplings (polynomial followers, 2026-11-03): the fold sites
+        # converted to read alpha(q) at runtime cover the dynamics values below;
+        # every other algorithm still bakes a constant multiplier and is refused
+        # here rather than emitted wrong (the conversion campaign of item E).
+        if self.robot_has_variable_couplings():
+            supported = {"inverse_dynamics", "crba", "minv", "forward_dynamics", "aba",
+                         "inverse_dynamics_gradient", "forward_dynamics_gradient",
+                         "end_effector_pose", "end_effector_pose_gradient",
+                         "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
+                         "frame_velocity", "frame_acceleration",
+                         "frame_velocity_gradient", "frame_acceleration_gradient",
+                         "integrator", "integrator_gradient", "integrator_with_gradient",
+                         "inverse_dynamics_regressor", "kinetic_energy_regressor", "potential_energy_regressor",
+                         "forward_dynamics_parameter_gradient", "com", "ccrba",
+                         "generalized_gravity", "nonlinear_effects", "energy",
+                         "end_effector_pose_runtime", "end_effector_pose_gradient_runtime",
+                         "coriolis_matrix", "dccrba", "cmm_time_variation",
+                         "f_ext_gradient", "f_ext_gradient_dq"}
+            unsupported = sorted(set(algorithms) - supported)
+            if unsupported:
+                raise NotImplementedError(
+                    "polynomial couplings: these algorithms still bake a constant mimic multiplier and "
+                    "are not generated yet: " + ", ".join(unsupported) + " (supported: " + ", ".join(sorted(supported)) + ")")
         # SPHERICAL (Tier-C) slices: inverse_dynamics + crba + minv + forward_dynamics
         # (dynamics) plus end_effector_pose + frame_jacobian (kinematics) are ported.
         # forward_dynamics routes through minv (= inv(CRBA(q))) + the compute_c RNEA,
@@ -512,7 +581,7 @@ class GRiDCodeGenerator:
                              "end_effector_pose", "frame_jacobian", "integrator",
                              "inverse_dynamics_gradient", "forward_dynamics_gradient",
                              "aba", "idsva_so_body_frame", "idsva_so_world_frame",
-                             "fdsva_so",
+                             "fdsva_so", "forward_dynamics_armature_gradient",
                              # integrator gradient slice (2026-07-30): per-joint SO(3)
                              # dIntegrate blocks; single-stage IT only (multi-stage RK
                              # static_asserts in the device — follow-on slice).
@@ -535,7 +604,7 @@ class GRiDCodeGenerator:
                     f"end_effector_pose + its gradient/hessian + frame_jacobian + integrator + "
                     f"integrator_gradient/with_gradient (single-stage IT) + "
                     f"inverse_dynamics_gradient + forward_dynamics_gradient + aba + "
-                    f"idsva_so + fdsva_so; requested unsupported algorithm(s) "
+                    f"idsva_so + fdsva_so + forward_dynamics_armature_gradient; requested unsupported algorithm(s) "
                     f"{_unported}. Remaining algorithms are follow-on slices "
                     "(see docs/open-tasks/archive/joint_types_plan.md)."
                 )
@@ -596,6 +665,9 @@ class GRiDCodeGenerator:
         # the gen_all_code arg compose); pass True/False to override per call.
         if runtime_joint_dynamics is not None:
             self.runtime_joint_dynamics = runtime_joint_dynamics
+        # runtime_armature composes the same way (None keeps the ctor value).
+        if runtime_armature is not None:
+            self.runtime_armature = runtime_armature
         self.generated_algorithms = algorithms
         # MIMIC GRADIENTS — fully supported, no refusal. All first/second-order mimic
         # gradients emit correctly for BOTH bases via the alpha-weighted reduced-v-slot
@@ -652,10 +724,11 @@ class GRiDCodeGenerator:
                      enable_idsva_so_world_frame = None, enable_idsva_so_body_frame = None,
                      runtime_inertia = False, runtime_transform = False,
                      runtime_joint_dynamics = None, multi_target_batch = None, collision_spec = None,
+                     runtime_armature = None,
                      contact_frames = None, enable_contact_runtime = False, enable_mujoco_kernels = None,
                      emit_alloc_gating = False, fragments_dir = None,
                      vendor_glass = True, glass_revision = None, cost_frames = None, emit_plant = None):
-        algorithms, include_any_kinematics, include_homogenous_transforms = self._resolve_emission_plan(include_base_inertia=include_base_inertia, include_homogenous_transforms=include_homogenous_transforms, fixed_target_name=fixed_target_name, output_path=output_path, codegen_profile=codegen_profile, algorithm_list=algorithm_list, enable_floating_second_order=enable_floating_second_order, enable_idsva_so_world_frame=enable_idsva_so_world_frame, enable_idsva_so_body_frame=enable_idsva_so_body_frame, runtime_inertia=runtime_inertia, runtime_transform=runtime_transform, runtime_joint_dynamics=runtime_joint_dynamics, multi_target_batch=multi_target_batch, collision_spec=collision_spec, contact_frames=contact_frames, enable_contact_runtime=enable_contact_runtime, enable_mujoco_kernels=enable_mujoco_kernels, emit_alloc_gating=emit_alloc_gating, fragments_dir=fragments_dir, vendor_glass=vendor_glass, glass_revision=glass_revision, cost_frames=cost_frames)
+        algorithms, include_any_kinematics, include_homogenous_transforms = self._resolve_emission_plan(include_base_inertia=include_base_inertia, include_homogenous_transforms=include_homogenous_transforms, fixed_target_name=fixed_target_name, output_path=output_path, codegen_profile=codegen_profile, algorithm_list=algorithm_list, enable_floating_second_order=enable_floating_second_order, enable_idsva_so_world_frame=enable_idsva_so_world_frame, enable_idsva_so_body_frame=enable_idsva_so_body_frame, runtime_inertia=runtime_inertia, runtime_transform=runtime_transform, runtime_joint_dynamics=runtime_joint_dynamics, runtime_armature=runtime_armature, multi_target_batch=multi_target_batch, collision_spec=collision_spec, contact_frames=contact_frames, enable_contact_runtime=enable_contact_runtime, enable_mujoco_kernels=enable_mujoco_kernels, emit_alloc_gating=emit_alloc_gating, fragments_dir=fragments_dir, vendor_glass=vendor_glass, glass_revision=glass_revision, cost_frames=cost_frames)
         file_notes = [ "Interface is:", \
             "    __host__   robotModel<T> *d_robotModel = init_robotModel<T>()", \
             "    __host__   cudaStream_t streams = init_grid<T>()", \
@@ -759,6 +832,7 @@ class GRiDCodeGenerator:
         self.gen_grid_linalg_backend_helpers()
         # then the spatial algebra related helpers
         self.gen_spatial_algebra_helpers()
+        self.gen_coupling_evaluators()
         self.gen_crm()
         self.gen_crm_mul()
         # Tier-B (skew/general axis) helper: additive, emitted ONLY when the
@@ -791,6 +865,19 @@ class GRiDCodeGenerator:
         if getattr(self, "runtime_joint_dynamics", False):
             self.gen_init_joint_dynamics_params()
             self.gen_set_joint_dynamics_params()
+        # Baked lookup is constexpr and never allocates a model table.
+        if not self.runtime_armature and self._armature_vslots():
+            self.gen_add_code_line("template <typename T> __host__ __device__ constexpr T armature_baked(int slot) {", True)
+            self.gen_add_code_line("switch (slot) {", True)
+            for slot in self._armature_vslots():
+                self.gen_add_code_line(f"case {slot}: return static_cast<T>({self.initial_armature[slot]!r});")
+            self.gen_add_code_line("default: return T(0);")
+            self.gen_add_end_control_flow()
+            self.gen_add_end_function()
+        # Runtime tables start from the same immutable artifact initializer.
+        if getattr(self, "runtime_armature", False):
+            self.gen_init_armature_params()
+            self.gen_set_armature_params()
         self.gen_init_robotModel()
         self.gen_free_robotModel()
         # W1b.3 (Inc4b): emit the multi_target CONSTANTS *before* gen_init_gridData so its
@@ -926,8 +1013,9 @@ class GRiDCodeGenerator:
                     self.gen_multi_target_position(_cc_batch, suffix=_t["suffix"])
                     if _t["suffix"] == "":  # finest / public tier -> the differentiable path
                         self.gen_multi_target_position_gradient(_cc_batch, suffix="")
-        if self.robot.floating_base and not enable_floating_second_order:
-            warnings.warn('floating-base second order dynamics are still under development')
+        # enable_floating_second_order=False is a plain opt-out of the second-order
+        # emission on a floating base (the kernels are receipt-validated); it used
+        # to warn "still under development" here, which stopped being true.
         self.gen_add_fragment_mark("inverse_dynamics")
         # then generate the dynamics algorithms
         if "inverse_dynamics" in algorithms:
@@ -950,6 +1038,9 @@ class GRiDCodeGenerator:
         self.gen_add_fragment_mark("forward_dynamics")
         if "forward_dynamics" in algorithms:
             self.gen_forward_dynamics()
+        if "forward_dynamics_armature_gradient" in algorithms:
+            self.gen_add_fragment_mark("forward_dynamics_armature_gradient")
+            self.gen_armature_identification()
         self.gen_add_fragment_mark("forward_dynamics_parameter_gradient")
         # FD parameter gradient dqdd/dpi = -Minv . Y. Additive; composes the
         # regressor (Y), minv (Minv) and inverse_dynamics/forward_dynamics
@@ -1074,6 +1165,44 @@ class GRiDCodeGenerator:
                 if self.robot.floating_base:
                     self.gen_lie_group_helpers()
                 self.gen_frame_jacobian_dot()
+            # Item C (2026-11-03): frame velocity J qd and frame acceleration
+            # J qdd + Jdot qd on the same inners. The velocity device owns the
+            # frame_jacobian arena plus a 6*NV J buffer; the acceleration device
+            # runs the Jdot wrapper (its arena is the larger) then the J wrapper,
+            # both into static shared buffers.
+            if "frame_velocity" in algorithms:
+                fv_t_count = Xhom_size_fj + (16 * NJ_fj) + (6 * nv_fj)
+                self.gen_add_code_line(
+                    "template <typename T> __host__ __device__ constexpr size_t FRAME_VELOCITY_DYNAMIC_SHARED_MEM_BYTES() "
+                    "{ return grid_shared_arena_bytes<T>(" + str(fv_t_count) + ", TOPOLOGY_HELPERS_COUNT); }")
+                self.gen_add_code_line("#define GRID_HAS_FRAME_VELOCITY 1")
+                self.gen_frame_velocity()
+            if "frame_acceleration" in algorithms:
+                self.gen_add_code_line(
+                    "template <typename T> __host__ __device__ constexpr size_t FRAME_ACCELERATION_DYNAMIC_SHARED_MEM_BYTES() "
+                    "{ return FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES<T>(); }")
+                self.gen_add_code_line("#define GRID_HAS_FRAME_ACCELERATION 1")
+                self.gen_frame_acceleration()
+            # Item C derivatives: one shared inner (world-origin Plucker sweep, one
+            # thread per velocity slot), two devices. The arena = XmatsHom + the
+            # inner's s_Xworld / columns / twists; the acceleration device adds a
+            # 6*NV dv/dq scratch the LWA classical rows read.
+            if "frame_velocity_gradient" in algorithms or "frame_acceleration_gradient" in algorithms:
+                self.gen_frame_kinematics_gradient_inner()
+            if "frame_velocity_gradient" in algorithms:
+                fvg_t_count = Xhom_size_fj + self.frame_kin_gradient_inner_temp_mem_size()
+                self.gen_add_code_line(
+                    "template <typename T> __host__ __device__ constexpr size_t FRAME_VELOCITY_GRADIENT_DYNAMIC_SHARED_MEM_BYTES() "
+                    "{ return grid_shared_arena_bytes<T>(" + str(fvg_t_count) + ", TOPOLOGY_HELPERS_COUNT); }")
+                self.gen_add_code_line("#define GRID_HAS_FRAME_VELOCITY_GRADIENT 1")
+                self.gen_frame_velocity_gradient()
+            if "frame_acceleration_gradient" in algorithms:
+                fag_t_count = Xhom_size_fj + self.frame_kin_gradient_inner_temp_mem_size() + (6 * nv_fj)
+                self.gen_add_code_line(
+                    "template <typename T> __host__ __device__ constexpr size_t FRAME_ACCELERATION_GRADIENT_DYNAMIC_SHARED_MEM_BYTES() "
+                    "{ return grid_shared_arena_bytes<T>(" + str(fag_t_count) + ", TOPOLOGY_HELPERS_COUNT); }")
+                self.gen_add_code_line("#define GRID_HAS_FRAME_ACCELERATION_GRADIENT 1")
+                self.gen_frame_acceleration_gradient()
             # Lambda (osc_inertia) is emitted for mimic robots too. It composes
             # Minv on device via minv_inner, whose mimic path routes
             # through crba_inner -> invert_matrix (== RBDReference.minv's mimic

@@ -10,6 +10,7 @@ from grid_codegen import GRiDCodeGenerator
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from test.cuda_equivalents.constant_model import constant_model
 from test.cuda_equivalents.executable_cache import cached_nvcc_executable
+from test.cuda_equivalents.thread_invariance import thread_sweep
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
@@ -51,17 +52,17 @@ def test_constant_derivatives(derivative_probe, mode):
         args = (q,) if mode == 1 else (q, v)
         expected = method(*args, 'constant', reference_frame='LOCAL_WORLD_ALIGNED').ravel(order='F')
     tol = 3e-5 if precision == 'float' else 1e-11
-    baseline = None
-    for threads in (1, 17, 32, 64, 256):
+    def run(threads):
         result = subprocess.run([str(exe), str(threads), str(mode)], capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
-        actual = np.fromstring(result.stdout, sep=' ')
+        return np.fromstring(result.stdout, sep=' ')
+
+    def check(actual, _):
         assert actual.size == expected.size + 2
         np.testing.assert_array_equal(actual[[0, -1]], [123, 456])
         np.testing.assert_allclose(actual[1:-1], expected, atol=tol, rtol=tol)
-        if baseline is not None:
-            np.testing.assert_array_equal(actual, baseline)
-        baseline = actual
+
+    thread_sweep((1, 17, 32, 64, 256), run, check)
     if layout == 'branch':
         for threads in (1, 17, 32, 64, 256):
             # Internal gradient bands of a different, constant root branch must

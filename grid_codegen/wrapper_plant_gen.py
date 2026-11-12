@@ -199,7 +199,7 @@ def _jax_step_block(key: str) -> list[str]:
             "    if constexpr (MUJOCO) {",
             f"        GRID_RBD_IT_DISPATCH_FFI_MJX_SS((int)it, launch_{name}_jax, true, stream, batch, gravity, dt);",
             "    } else {",
-            f"        GRID_RBD_IT_DISPATCH_FFI_MJX((int)it, launch_{name}_jax, false, stream, batch, gravity, dt);",
+            f"        GRID_RBD_IT_DISPATCH_FFI_MJX{'_GRAD' if 'gradient' in name else ''}((int)it, launch_{name}_jax, false, stream, batch, gravity, dt);",
             "    }",
         ]
     else:
@@ -428,7 +428,7 @@ def _torch_step_block(key: str) -> list[str]:
             "    if constexpr (MUJOCO) {",
             f"        GRID_RBD_IT_DISPATCH_TORCH_MJX_SS((int)it, torch_launch_{name}, true, stream, batch, gravity, dt);",
             "    } else {",
-            f"        GRID_RBD_IT_DISPATCH_TORCH_MJX((int)it, torch_launch_{name}, false, stream, batch, gravity, dt);",
+            f"        GRID_RBD_IT_DISPATCH_TORCH_MJX{'_GRAD' if 'gradient' in name else ''}((int)it, torch_launch_{name}, false, stream, batch, gravity, dt);",
             "    }",
         ]
     else:

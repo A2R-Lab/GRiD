@@ -272,7 +272,9 @@ def generate_header(
             algorithm_list=(
                 [a.strip() for a in os.environ["GRID_BENCH_ALGORITHM_LIST"].split(",") if a.strip()]
                 if os.environ.get("GRID_BENCH_ALGORITHM_LIST")
-                else ["all", "frame_jacobian", "frame_jacobian_dot", "osc_inertia"]
+                else ["all", "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
+                      "frame_velocity", "frame_acceleration",
+                      "frame_velocity_gradient", "frame_acceleration_gradient"]
             ),
             enable_idsva_so_world_frame=True,
             enable_floating_second_order=True,
@@ -436,6 +438,16 @@ PER_ALGO_SPECS: dict[str, dict] = {
     # `d_dqdd_dpi` is now part of gridData (hd_data->d_dqdd_dpi), so the bench no
     # longer allocates a TU-static buffer. It takes the gravity arg. See
     # _regressor_fd_parameter_gradient.py:gen_forward_dynamics_parameter_gradient_host.
+    "forward_dynamics_armature_gradient": {
+        # Opt-in compact sensitivity: ordinary batch launches, including N=1.
+        # No in-kernel repeated-single timing twin is emitted for this API.
+        "single_call": "throw std::runtime_error(\"armature sensitivity: use the batch benchmark with N=1\")",
+        "batch_with_mem": "grid::forward_dynamics_armature_gradient<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::forward_dynamics_armature_gradient_kernel<float><<<dim3(std::min(N,d->workspace_timestep_slots)),dimms,grid::FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<float>()>>>(d->d_dqdd_da,d->d_workspace,d->d_q_qd_u,3*grid::NUM_JOINTS,d->d_f_ext,m,GRAVITY,N); gpuErrchkKernel()",
+        "batch_label": "FORWARD_DYNAMICS_ARMATURE_GRADIENT",
+        "gate": "GRID_HAS_FORWARD_DYNAMICS_ARMATURE_GRADIENT",
+        "shared_mem_skip": "FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES",
+    },
     "forward_dynamics_parameter_gradient": {
         "single_call":        "grid::forward_dynamics_parameter_gradient_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
         "batch_with_mem":     "grid::forward_dynamics_parameter_gradient<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
@@ -499,6 +511,38 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_label": "FRAME_JACOBIAN_DOT",
         "gate": "GRID_HAS_FRAME_JACOBIAN_DOT",
         "shared_mem_skip": "FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "frame_velocity": {
+        "single_call":        "grid::frame_velocity_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::frame_velocity<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::frame_velocity_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "FRAME_VELOCITY",
+        "gate": "GRID_HAS_FRAME_VELOCITY",
+        "shared_mem_skip": "FRAME_VELOCITY_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "frame_acceleration": {
+        "single_call":        "grid::frame_acceleration_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::frame_acceleration<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::frame_acceleration_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "FRAME_ACCELERATION",
+        "gate": "GRID_HAS_FRAME_ACCELERATION",
+        "shared_mem_skip": "FRAME_ACCELERATION_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "frame_velocity_gradient": {
+        "single_call":        "grid::frame_velocity_gradient_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::frame_velocity_gradient<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::frame_velocity_gradient_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "FRAME_VELOCITY_GRADIENT",
+        "gate": "GRID_HAS_FRAME_VELOCITY_GRADIENT",
+        "shared_mem_skip": "FRAME_VELOCITY_GRADIENT_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "frame_acceleration_gradient": {
+        "single_call":        "grid::frame_acceleration_gradient_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::frame_acceleration_gradient<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::frame_acceleration_gradient_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "FRAME_ACCELERATION_GRADIENT",
+        "gate": "GRID_HAS_FRAME_ACCELERATION_GRADIENT",
+        "shared_mem_skip": "FRAME_ACCELERATION_GRADIENT_DYNAMIC_SHARED_MEM_BYTES",
     },
     "osc_inertia": {
         "single_call":        "grid::osc_inertia_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",

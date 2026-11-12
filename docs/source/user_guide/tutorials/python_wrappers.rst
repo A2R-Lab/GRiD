@@ -145,6 +145,18 @@ pass the same value to both for cross-validation.
      - ``(B, 6, NV)`` / ``(B, 6, NV)`` / ``(B, 6, 6)``
      - General-frame J / J̇ (runtime ``target_jid`` + ``reference_frame``) and
        operational-space inertia Λ.
+   * - ``frame_velocity(q, qd)`` / ``frame_acceleration(q, qd, qdd)``
+     - ``(B, 6)`` / ``(B, 6)``
+     - Frame twist ``J q̇`` and frame acceleration ``J q̈ + J̇ q̇`` (runtime
+       ``target_jid`` + ``reference_frame``): pinocchio's ``getFrameVelocity``
+       and ``getFrameAcceleration`` in LOCAL and WORLD, the classical
+       acceleration in LOCAL_WORLD_ALIGNED.
+   * - ``frame_velocity_gradient(q, qd)`` / ``frame_acceleration_gradient(q, qd, qdd)``
+     - ``(B, 6, 2*NV)`` / ``(B, 6, 3*NV)``
+     - ``[dv/dq | dv/dq̇]`` and ``[da/dq | da/dq̇ | da/dq̈]`` of the two above
+       in the local tangent chart (pinocchio's ``getFrameVelocityDerivatives``
+       / ``getFrameAccelerationDerivatives`` in LOCAL and WORLD; in
+       LOCAL_WORLD_ALIGNED the q block also moves the frame origin).
    * - ``end_effector_pose_runtime(q, ee_joint_names=None, ee_offsets=None)``
      - ``(B, 6*NUM_EES)``
      - Runtime arbitrary multi-EE pose (runtime target joints + per-target
@@ -174,10 +186,12 @@ pass the same value to both for cross-validation.
        joint-local ``f_ext``; needs a ``register_robot(contact_frames=[...])``
        build.
    * - ``set_inertia_params(t)`` / ``set_transform_params(t)`` /
-       ``set_joint_dynamics(damping=, friction=, friction_width=)``
+       ``set_joint_dynamics(damping=, friction=, friction_width=)`` /
+       ``set_armature(a)``
      - none
      - Runtime-mutable model tables (flag-gated builds; no recompile).
-       ``friction_width`` is accepted on a ``friction_model="tanh"`` build.
+       ``friction_width`` is accepted on a ``friction_model="tanh"`` build;
+       ``set_armature`` on a ``runtime_armature`` build.
    * - ``fk_batched(q)``
      - ``(B, 7)``
      - Large-batch forward kinematics for the leaf EE frame
@@ -409,10 +423,14 @@ else is forward-only on every backend.
        forward-only.
    * - ``integrator``
      - ``q``, ``qd``, ``u``
-     - fixed-base only (the SE(3)-chart VJP is not implemented); through
-       the baked ``integrator_with_gradient`` kernel (the same fused step +
-       Jacobian that ``integrator_gradient`` / ``plant_step_gradient`` return);
-       ``dt``/steps are static.
+     - through the baked ``integrator_with_gradient`` kernel (the same fused
+       step + Jacobian that ``integrator_gradient`` / ``plant_step_gradient``
+       return); ``dt``/steps are static. On a floating base or a spherical
+       joint the state cotangent of ``x_{k+1}`` is pulled onto the kernel's
+       tangent rows at ``q_{k+1}`` by the chart's output map (``R(q_{k+1})``
+       on the pin linear block, ``0.5 q (x) (delta, 0)`` on each quaternion
+       block), then the ``q`` cotangent is pulled back to the input
+       quaternion as for every other op.
    * - ``inverse_dynamics_wrt_params``
      - ``params``, ``q``, ``qd``
      - local parameter sensitivity (``∂τ/∂π`` via the regressor at
@@ -444,7 +462,9 @@ offer a functional parameterized forward.
 
 Joint damping and friction are opt-in. ``register_robot(use_joint_dynamics=True)``
 applies the URDF ``<dynamics damping= friction=>`` values as the joint-local
-bias ``damping*qd + friction*s(qd)`` in ``inverse_dynamics``,
+bias ``damping*qd + friction*s(qd)`` (a mimic follower's folds into its
+leader's slot as ``alpha^2*damping`` and ``|alpha|*friction``, see
+:doc:`/user_guide/concepts/closed_loops`) in ``inverse_dynamics``,
 ``forward_dynamics`` and ``aba``, and carries its derivative through the
 gradients. The shape ``s`` is ``friction_model``: ``"sign"`` (the default)
 applies ``sign(qd)``, whose derivative is zero almost everywhere, so a
@@ -461,8 +481,147 @@ third row of the mutable table, so ``set_joint_dynamics(friction_width=)``
 changes it without a recompile; the handle reports ``friction_model`` and
 ``joint_friction_width``.
 
+Rotor armature
+~~~~~~~~~~~~~~
+
+Pass ``armature=a`` to ``register_robot``, ``load_robot``, ``warm_robot`` or
+``build_artifact`` to bake reflected rotor inertia. The vector has shape
+``(nv,)`` in native reduced velocity order. Values must be finite and
+nonnegative; floating-root and spherical slots must be zero. Omitting the
+vector means zero armature. Baked execution adds no mutable table.
+Positive values below the selected precision's smallest normal number are
+rejected, including values that would round to zero. This keeps host readback
+consistent with kernels compiled with flush-to-zero arithmetic.
+
+``handle.armature_slots`` gives the independent scalar slots in compact column
+order. ``handle.num_armature_params`` is their count and ``handle.armature_units``
+gives kg m^2 for angular slots and kg for prismatic slots. Mimic followers do
+not own additional columns. A mimic coordinate's value is effective reduced
+inertia, not an automatically inferred motor inertia for every follower.
+For a constant-ratio transmission a caller may supply the effective inertia
+on its independent slot. This hand fold does not apply to a polynomial
+follower: its configuration-dependent ratio would add both variable inertia
+and velocity terms. Follower rotor identification is not supported.
+
+Add ``runtime_armature=True`` only when explicit updates are needed. Each new
+context starts from the artifact's supplied vector. ``set_armature(a)`` changes
+that context without compiling; aliases observe the same table. Another
+``context()`` starts from the initializer, not the parent's current values.
+``handle.initial_armature`` returns a copy of that immutable initializer and
+``handle.armature`` returns a copy of current values in either storage mode.
+Runtime readback may synchronize and belongs outside the inner loop.
+
+Construction values and the runtime flag enter artifact identity. Changing a
+construction vector may compile another artifact. Re-registering the same
+artifact does not reset its live table. A fresh-process prepared load needs
+neither URDF parsing nor nvcc and restores the compiled initializer. Deploy
+fitted values by baking them, or save them separately and call the setter after
+loading a runtime artifact. A prepared artifact does not save live mutations.
+
+Armature adds ``diag(a)`` to the effective mass matrix and ``a*qdd`` to inverse
+dynamics. Total kinetic energy includes ``0.5*sum(a*qd**2)``. The existing
+ten-per-body inertial regressor retains its columns; rotor terms are separate.
+This is a reduced-coordinate inertia model, not explicit rotor-body dynamics.
+
+For generated C++ consumers, pass ``armature=a`` to the generator constructor.
+Runtime builds provide ``validate_armature_params``,
+``set_armature_params_checked`` and ``get_armature_params_checked`` with a
+buffer length and CUDA error return. Callers own synchronization around their
+model. Python contexts serialize mutation with admitted calls and invalidate
+deferred state-autograd work; invalid input changes neither values nor epoch.
+A failed device copy does not promise rollback.
+
+Armature identification
+~~~~~~~~~~~~~~~~~~~~~~~
+
+``handle.armature_regressor(qdd)`` returns the compact block
+``diag(qdd) S``, where column ``c`` of ``S`` selects
+``handle.armature_slots[c]``. Its shape is ``(..., nv, num_armature_params)``;
+it depends on acceleration, not on the current armature values. NumPy, JAX and
+PyTorch evaluate this small selection directly; JAX and PyTorch can differentiate
+it with respect to acceleration. Floating-root and spherical coordinates own no
+columns. A model with no supported scalar coordinates has an empty column block.
+
+Request ``"forward_dynamics_armature_gradient"`` in ``algorithm_list`` for
+``handle.forward_dynamics_armature_gradient(q, qd, u, f_ext=...)``. It returns
+``-Minv[:, armature_slots] * qdd[armature_slots]`` in the same compact column
+order. Here ``qdd`` is the actual forward acceleration at the supplied torque,
+gravity and external loads, using the installed inertia, joint-dynamics and
+armature parameters. The derivative holds those inputs and other parameters
+fixed. Baked and runtime armature use the same formula. This API currently uses
+native/Pinocchio coordinates; it refuses a floating MuJoCo view. It provides
+explicit first parameter derivatives, not automatic higher derivatives.
+
+The sensitivity executes one forward-dynamics operation, consuming its retained
+inverse before scratch reuse. One context admission spans the calculation, so a
+setter cannot change the model between acceleration and inverse evaluation. It
+does not compose separately admitted Python ``forward_dynamics`` and ``minv``
+calls. The NumPy sensitivity releases the Python GIL during its admitted native
+call. Keep input buffers unchanged until return. This mutation-ordering contract
+does not permit simultaneous compute submissions into the same context's staging
+buffers; use separate contexts for concurrent pipelines.
+Ordinary builds allocate no additional identification output; opt-in
+builds add ``nv * num_armature_params`` output elements per batch entry but no
+new dynamics workspace.
+
+For generated CUDA, ``armature_regressor_device(out, qdd)`` is a collective
+block-stride write; keep its output disjoint from its acceleration input and
+synchronize before consuming its result.
+``forward_dynamics_armature_gradient_device`` is a shared-tier collective that
+returns synchronized output. Reserve
+``FORWARD_DYNAMICS_ARMATURE_GRADIENT_DEVICE_SHARED_MEM_BYTES<T>()`` and keep its
+inputs and output disjoint from that dynamic arena. The kernel and host surfaces
+support the existing forward-dynamics workspace-backed tiers. Native consumers
+own the model's lifetime and synchronization; the device helper cannot serialize
+external setters. Both outputs are row-major ``nv`` by the compact column count.
+The helper's size is unspilled even if a kernel tier chooses a workspace-backed
+layout. Check that it and the caller's static storage fit the device's shared
+memory limit before launching; use the kernel surface when they do not.
+
+The ten-per-body regressor is unchanged. To fit link inertia and armature
+together, concatenate ``[Y_inertia, Y_armature]`` and subtract known friction and
+external-load contributions from measured torque. This equation does not imply
+that those contributions are part of the inertial or armature columns. For
+batched states and accelerations in the native coordinate convention, a NumPy
+stacking recipe is:
+
+.. code-block:: python
+
+   # Request "inverse_dynamics_regressor" when registering handle.
+   Y_inertia = handle.inverse_dynamics_regressor(q, qd, qdd)
+   Y_armature = handle.armature_regressor(qdd)
+   Y = np.concatenate((Y_inertia, Y_armature), axis=-1)
+   # theta = [ten-per-body inertial parameters in the regressor's order,
+   #          armature[handle.armature_slots]], not the full nv-slot table.
+   design = Y.reshape(-1, Y.shape[-1])
+   target = (measured_torque - known_bias).reshape(-1)
+   theta, residuals, rank, singular_values = np.linalg.lstsq(
+       design, target, rcond=None)
+
+Here ``known_bias`` contains independently known friction and external-load
+torques with their inverse-dynamics signs, at the same states as the samples.
+Do not subtract gravity: its inertial contribution is already in
+``Y_inertia``. This unconstrained least-squares recipe does not enforce physical
+inertias or nonnegative armature, and does not imply
+full identifiability: excitation and parameter dependencies can make the joint
+design rank deficient. The example ``examples/armature_identification.py`` keeps
+link inertias known, reports singular values and held-out torque error, and
+rejects an unexcited negative control. It uses synthetic, noise-free state and
+torque measurements. It is not a general system-identification solver.
+The example is distributed in the source repository, not the wheel. With GRiD
+installed, run ``python examples/armature_identification.py /path/to/robot.urdf``
+from a source checkout; add ``--floating-base`` for a floating model.
+
+Thread overrides are requests, not permission to exceed a compiled kernel's
+resource limit. Native, JAX and PyTorch launches clamp to that kernel's
+``maxThreadsPerBlock``. The requested value is not evidence of the executed
+thread count; inspect ``kernel_max_threads`` for algorithms that expose it.
+
+Runtime geometry limits
+~~~~~~~~~~~~~~~~~~~~~~~
+
 Runtime tables reach dynamics, not baked kinematics. ``runtime_inertia``,
-``runtime_transform`` and ``runtime_joint_dynamics`` rebuild the dynamics
+``runtime_transform``, ``runtime_joint_dynamics`` and ``runtime_armature`` rebuild the dynamics
 tables from a mutable device table once per launch, so ``inverse_dynamics``,
 ``forward_dynamics``, their gradients and the second-order kernels follow
 ``set_*_params`` with no recompile. The homogeneous-transform path used by
@@ -471,6 +630,9 @@ tables from a mutable device table once per launch, so ``inverse_dynamics``,
 ``set_transform_params`` the kinematics still report the URDF geometry. This
 is a documented partial capability that cannot be worked around from Python;
 consistent kinematic updates are a separate feature (register item).
+Runtime inertia updates do reach energy, CoM, centroidal momentum and their
+centroidal derivatives; those quantities use the live body inertia table while
+retaining the baked joint geometry.
 
 End-effector target selection
 -----------------------------
@@ -617,7 +779,8 @@ the plain wrapper's tuple-of-four convention), with autograd-aware
 centroidal / kinematics value ops (``generalized_gravity``,
 ``nonlinear_effects``, ``energy``, ``com``, ``ccrba``, ``dccrba``,
 ``cmm_time_variation``, ``coriolis_matrix``, ``frame_jacobian`` /
-``frame_jacobian_dot``, ``osc_inertia``, and the KE/PE regressors) are
+``frame_jacobian_dot``, ``frame_velocity`` / ``frame_acceleration`` and
+their gradients, ``osc_inertia``, and the KE/PE regressors) are
 exposed on the jax and torch surfaces too (forward-only, no autograd).
 
 PyTorch backend (``backend="torch"``)

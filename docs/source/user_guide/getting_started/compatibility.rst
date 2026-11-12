@@ -10,7 +10,7 @@ Platforms and toolchain
   different architecture is refused at context creation with a clear error.
   The model, the API and the generated code carry over between machines; the
   binary does not.
-* The primary GPU test receipt and the release timing ran on Linux x86-64
+* The 0.7.0 primary GPU test receipt and the release timing ran on Linux x86-64
   with CUDA toolkit 13.2 and one RTX 5090 (sm_120). A secondary receipt of the
   same 2056 tests at the same commit ran on a Jetson AGX Orin (sm_87, aarch64,
   CUDA toolkit 13.2); the table below lists both environments. CUDA 12
@@ -32,7 +32,7 @@ Platforms and toolchain
 What we ran
 -----------
 
-The RTX 5090 produced the primary evidence in this release: the full test
+The RTX 5090 produced the primary evidence for 0.7.0: the full test
 receipt (``gpu-proof.json``, verified by CI), the release timing on the
 :doc:`release measurements <../../release_measurements>` page, and the
 installed-wheel check of the release playbook. The Jetson AGX Orin recorded
@@ -41,6 +41,15 @@ at the same commit, which ``make verify-all`` checks against its own
 expected-skips baseline. Everything validated ran in
 fp32, the default compute precision; the fp64 tier (``dtype="float64"``) is
 an alpha feature outside the receipt.
+
+The table below records that historical qualification, not a qualification of
+changed 0.7.1 code. The 0.7.1 candidate has additional local correctness and
+installed-artifact gates; its fresh full primary receipt is a separate release
+gate. The Orin receipt remains tied to the 0.7.0 source and does not attest the
+new armature, allocation or free-body repairs. No new Orin qualification is
+claimed. Strict verification of a historical receipt against changed inputs
+may fail; preserve that evidence and verify it at its recorded source revision,
+rather than weakening policy or relabeling it as current.
 
 .. list-table::
    :header-rows: 1
@@ -211,7 +220,12 @@ Sanitizer diagnostics with JAX
   for a standalone JAX reduction, a selective device-code recompilation notice.
   Both come from JAX 0.11 and the CUDA 13 toolchain and reproduce in a process
   that imports no GRiD; the numerical results are correct and the NumPy and
-  PyTorch surfaces pass the same sanitizer with zero errors. We record this as
+  PyTorch surfaces pass the same sanitizer with zero errors. The first is the
+  driver's own behaviour: ``cuDeviceGetAttribute`` reports fabric-handle
+  support on a machine that has no IMEX channel node (the driver creates one
+  only with ``NVreg_CreateImexChannel0``), so XLA's allocator probe takes the
+  fabric path and the API call it makes is refused; the allocator then falls
+  back and runs correctly. Nothing in GRiD selects a handle type. We record this as
   an accepted limitation of the combined sanitizer invocation rather than a
   defect of the wrapper: the sanitizer exit code of a JAX-initialized process is
   nonzero, and the release checks state it so instead of suppressing the

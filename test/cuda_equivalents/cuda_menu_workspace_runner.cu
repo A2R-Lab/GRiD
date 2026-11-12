@@ -36,6 +36,11 @@ __global__ void probe(T *out,int *bad,const T *data,const grid::robotModel<T>*mo
     A a{}; a.s_frame=reinterpret_cast<T*>(raw);
     if(A::bind(raw+65,A::bytes(),a) || A::bind(raw+64,A::bytes()-1,a) ||
        A::bind(nullptr,A::bytes(),a) || a.s_frame!=reinterpret_cast<T*>(raw)) {if(tid==0) atomicAdd(bad,1);return;}
+    for(size_t residue=1;residue<A::alignment();++residue) {
+        if(A::bind(raw+64+residue,A::bytes(),a) || a.s_frame!=reinterpret_cast<T*>(raw)) {
+            if(tid==0) atomicAdd(bad,1);return;
+        }
+    }
     if(!A::bind(raw+64,A::bytes(),a)) {if(tid==0) atomicAdd(bad,1);return;}
     const A unchecked=A::carve(raw+64);
     if(a.s_frame!=unchecked.s_frame || a.s_scratch!=unchecked.s_scratch) {if(tid==0) atomicAdd(bad,1);return;}
@@ -77,6 +82,8 @@ template<int MX,int MU> int run(const char*input,const char*output,int threads) 
     printf("menu=%zu scratch=%zu offset=%zu static=%zu registers=%d local=%zu\n",A::bytes(),A::scratch_bytes(),A::scratch_offset(),attr.sharedSizeBytes,attr.numRegs,attr.localSizeBytes);
     alignas(16) unsigned char dummy[16]; A view{};view.s_frame=reinterpret_cast<T*>(dummy);
     if(A::bind(dummy+1,A::bytes(),view) || A::bind(dummy,A::bytes()-1,view) || A::bind(nullptr,A::bytes(),view) || view.s_frame!=reinterpret_cast<T*>(dummy)) return 5;
+    for(size_t residue=1;residue<A::alignment();++residue)
+        if(A::bind(dummy+residue,A::bytes(),view) || view.s_frame!=reinterpret_cast<T*>(dummy)) return 5;
     for(int repeat=0;repeat<3;repeat++) {
         CK(cudaMemset(out,0xff,result.size()*sizeof(T)));CK(cudaMemset(bad,0,sizeof(int)));
         probe<MX,MU><<<B,threads,bytes>>>(out,bad,d,model,repeat!=0);CK(cudaGetLastError());CK(cudaDeviceSynchronize());

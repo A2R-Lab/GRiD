@@ -1,6 +1,7 @@
 """Full-shared plant allocation must not borrow a spilled integrator sizer."""
 import json
 import subprocess
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -12,6 +13,43 @@ from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
+
+
+@pytest.mark.parametrize('name,floating', [('go2', True), ('fr3', False)])
+def test_exact_gradient_with_topology(tmp_path, name, floating):
+    from RBDReference import RBDReference
+    robot = URDFParser().parse(str(robot_urdf(name)), floating_base=floating)
+    GRiDCodeGenerator(robot).gen_all_code(
+        algorithm_list=['integrator_gradient'], emit_plant=True,
+        enable_mujoco_kernels=False, output_path=str(tmp_path / 'grid.cuh'))
+    exe, _ = cached_nvcc_executable(
+        [Path(__file__).with_name('cuda_plant_gradient_arena_runner.cu')],
+        ['-std=c++17', '-O2', '-lineinfo', f'-arch=sm_{_detect_cuda_arch()}'],
+        exe_name='exact_gradient', fallback_dir=tmp_path, include_dirs=[tmp_path],
+        what='standalone exact gradient arena')
+    rng = np.random.default_rng(723)
+    nq, nv = robot.get_num_pos(), robot.get_num_vel()
+    q = rng.uniform(-.2, .2, (2, nq)).astype(np.float32)
+    if floating:
+        q[:, 3:7] /= np.linalg.norm(q[:, 3:7], axis=1, keepdims=True)
+    v, u = [rng.uniform(-.2, .2, (2, nv)).astype(np.float32) for _ in range(2)]
+    np.concatenate([q, v, u], axis=1).tofile(tmp_path / 'input.bin')
+    ref = RBDReference(robot)
+    expected = np.stack([ref.plant_step_gradient(
+        qr.astype(float), vr.astype(float), ur.astype(float), float(np.float32(.01)),
+        'euler').ravel(order='F') for qr, vr, ur in zip(q, v, u)])
+    baseline = None
+    for threads in (1, 17, 32, 128):
+        output = tmp_path / f'out-{threads}.bin'
+        ran = subprocess.run([str(exe), str(tmp_path / 'input.bin'), str(output), str(threads)],
+                             capture_output=True, text=True)
+        (tmp_path / f'run-{threads}.log').write_text(ran.stdout + ran.stderr)
+        assert ran.returncode == 0, ran.stdout + ran.stderr
+        actual = np.fromfile(output, np.float32).reshape(expected.shape)
+        np.testing.assert_allclose(actual, expected, rtol=2e-3, atol=2e-5)
+        if baseline is not None:
+            np.testing.assert_array_equal(actual, baseline)
+        baseline = actual
 
 
 @pytest.mark.parametrize('name,floating,dtype,runtime', [

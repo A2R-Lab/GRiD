@@ -12,6 +12,7 @@ def launch(tmp_path, monkeypatch):
     root = tmp_path / 'repo'
     (root / 'test').mkdir(parents=True)
     original = {'tests': [{'node_id': 'required'}],
+                'session': {'node_ids': ['required']},
                 'shards': [{'name': 'fresh'}], 'identity': 'original'}
     before = {'shards': {'fresh': [{'content_sha256': 'old'}]}}
     (root / 'gpu-proof.json').write_text(json.dumps(original))
@@ -32,6 +33,11 @@ def launch(tmp_path, monkeypatch):
                 raise KeyboardInterrupt
             if state.outcome == 'driver-fail':
                 return SimpleNamespace(returncode=3)
+            if state.outcome == 'resource-pause':
+                shards = launcher.Path(command[-1])
+                shards.mkdir(parents=True)
+                (shards / 'PAUSE').touch()
+                return SimpleNamespace(returncode=3)
             if state.outcome == 'noop':
                 return SimpleNamespace(returncode=0)
             shards = launcher.Path(command[-1])
@@ -44,6 +50,10 @@ def launch(tmp_path, monkeypatch):
             receipt = dict(original, identity='new')
             if state.outcome == 'missing-scope':
                 receipt['tests'] = []
+            if state.outcome == 'extra-scope':
+                receipt['tests'] = original['tests'] + [{'node_id': 'extra'}]
+            if state.outcome == 'duplicate-scope':
+                receipt['session'] = {'node_ids': ['required', 'required']}
             if state.outcome == 'bad-headers':
                 (shards / 'receipts/fresh.header_keys.jsonl').unlink()
             if state.outcome == 'head-moved':
@@ -71,6 +81,47 @@ def test_dry_launcher_has_no_output_or_lock_side_effects(launch):
     launch.invoke()
     assert not launch.calls and not launch.out.exists()
     assert not launcher.LOCK_PATH.exists()
+
+
+def test_bounded_profile_is_explicit_and_persisted(launch):
+    launch.invoke('--execute', '--full', '--resource-profile', 'bounded-overlap')
+    assert launch.status()['resource_profile'] == {
+        'GRID_SPLIT_RESOURCE_PROFILE': 'bounded-overlap', 'GRID_SPLIT_COMPILE_JOBS': '2',
+        'GRID_SPLIT_SHARD_JOBS': '1', 'GRID_RBD_BUILD_JOBS': '2',
+        'XLA_PYTHON_CLIENT_PREALLOCATE': 'false'}
+
+
+def test_resume_cannot_silently_switch_resource_profiles(launch):
+    launch.out.mkdir()
+    shards = launch.out / 'shards'
+    shards.mkdir()
+    (launch.out / 'state.json').write_text(json.dumps(dict(candidate='candidate',
+        full=True, resource_profile={'GRID_SPLIT_RESOURCE_PROFILE': 'bounded-overlap'})))
+    with pytest.raises(SystemExit, match='profile'):
+        launch.invoke('--execute', '--full', '--resume', str(shards))
+    assert not launch.calls
+
+
+def test_serial_fallback_is_fresh_and_does_not_carry_results(launch, tmp_path):
+    prior = tmp_path / 'prior'
+    prior.mkdir()
+    (prior / 'state.json').write_text(json.dumps(dict(candidate='candidate', full=True,
+        status='paused', resource_profile={'GRID_SPLIT_RESOURCE_PROFILE': 'bounded-overlap'})))
+    launch.invoke('--execute', '--full', '--fallback-from', str(prior))
+    assert launch.status()['fallback']['strategy'] == 'fresh-full-no-carries'
+    command = launch.status()['command']
+    assert '--resume' not in command and '--refresh-from' not in command
+    assert launch.status()['shard_dir'] == str(launch.out / 'shards')
+
+
+@pytest.mark.parametrize('status', ['running', 'verified', 'awaiting-evidence-commit'])
+def test_fallback_refuses_active_or_completed_source(launch, tmp_path, status):
+    prior = tmp_path / 'prior'
+    prior.mkdir()
+    (prior / 'state.json').write_text(json.dumps(dict(candidate='candidate', full=True, status=status)))
+    with pytest.raises(SystemExit, match='stopped full run'):
+        launch.invoke('--execute', '--full', '--fallback-from', str(prior))
+    assert not launch.out.exists()
 
 
 def test_real_sigterm_forwards_to_owned_driver_and_waits(tmp_path):
@@ -122,6 +173,7 @@ def test_recording_preserves_fresh_headers_and_awaits_evidence_commit(launch):
 
 @pytest.mark.parametrize('outcome', [
     'driver-fail', 'interrupt', 'bad-headers', 'head-moved',
+    'missing-scope', 'extra-scope', 'duplicate-scope',
 ])
 def test_failure_retains_evidence_without_promoting_receipt(launch, outcome):
     launch.outcome = outcome
@@ -138,6 +190,18 @@ def test_noop_refresh_verifies_existing_receipt(launch):
     launch.invoke('--execute')
     assert launch.status()['status'] == 'verified'
     assert launch.receipt()['identity'] == 'original'
+
+
+def test_resource_pause_is_not_failed_or_promoted_evidence(launch):
+    launch.outcome = 'resource-pause'
+    with pytest.raises(RuntimeError, match='Driver rc=3'):
+        launch.invoke('--execute')
+    assert launch.status()['status'] == 'paused'
+    assert launch.receipt()['identity'] == 'original'
+    assert launch.status()['resource_profile'] == {
+        'GRID_SPLIT_RESOURCE_PROFILE': 'serial', 'GRID_SPLIT_COMPILE_JOBS': '1',
+        'GRID_SPLIT_SHARD_JOBS': '1', 'GRID_RBD_BUILD_JOBS': '2',
+        'XLA_PYTHON_CLIENT_PREALLOCATE': 'false'}
 
 
 def test_busy_lock_never_starts_driver(launch):
@@ -174,7 +238,7 @@ def test_full_command_never_carries():
 
 
 def test_finalize_real_git_evidence_transition(tmp_path, monkeypatch):
-    """Real clean/dirty Git states; only GPU driver and signature CLI are stubbed."""
+    """Real Git states; collection, GPU driver and signature CLI are stubbed."""
     import subprocess
     root = tmp_path / 'repo'
     (root / 'test').mkdir(parents=True)
@@ -187,7 +251,12 @@ def test_finalize_real_git_evidence_transition(tmp_path, monkeypatch):
     (root / 'gpu-proof.json').write_text('{}')
     (root / 'test/gpu-proof-header-keys.json').write_text('{"shards": {}}')
     (root / 'test/gpu-proof-tests.txt').write_text('required\n')
-    git('add', 'source.py', 'gpu-proof.json', 'test/gpu-proof-header-keys.json', 'test/gpu-proof-tests.txt')
+    (root / 'test/run_split_suite.py').write_text(
+        'import pathlib, sys\n'
+        'assert sys.argv[1] == "--check-manifest"\n'
+        'assert pathlib.Path(sys.argv[2]).read_text() == "required\\n"\n')
+    git('add', 'source.py', 'gpu-proof.json', 'test/gpu-proof-header-keys.json',
+        'test/gpu-proof-tests.txt', 'test/run_split_suite.py')
     git('commit', '-qm', 'Candidate')
     out = tmp_path / 'run'
     monkeypatch.setattr(launcher, 'ROOT', root)
@@ -198,7 +267,8 @@ def test_finalize_real_git_evidence_transition(tmp_path, monkeypatch):
         assert '--refresh-from' not in command
         shards = out / 'shards'
         (shards / 'receipts').mkdir(parents=True)
-        receipt = {'tests': [{'node_id': 'required'}], 'shards': [{'name': 'fresh'}]}
+        receipt = {'tests': [{'node_id': 'required'}], 'shards': [{'name': 'fresh'}],
+                   'session': {'node_ids': ['required']}}
         row = {'content_sha256': 'new'}
         (shards / 'receipts/fresh.header_keys.jsonl').write_text(json.dumps(row) + '\n')
         (root / 'test/gpu-proof-header-keys.json').write_text(json.dumps({'shards': {'fresh': [row]}}))
@@ -237,17 +307,21 @@ def test_finalize_real_git_evidence_transition(tmp_path, monkeypatch):
 
 def test_validation_env_strips_overrides_and_sets_receipt_knobs(monkeypatch):
     """The launcher owns the driver's env: stray GRID_*/SPLIT*/pytest overrides
-    are dropped; the receipt knobs (compile pool 3, two GPU shards side by
-    side — W1 2026-10-10 — and 4 nvcc units per bindings build) are set here,
+    are dropped; the serial receipt profile (one pool worker, one GPU shard,
+    no prewarm/inline overlap and two nvcc units per build) is set here,
     not inherited."""
     monkeypatch.setenv('GRID_SPLIT_SHARD_JOBS', '9')
     monkeypatch.setenv('GRID_RBD_BUILD_JOBS', '99')
+    monkeypatch.setenv('GRID_SPLIT_RESOURCE_PROFILE', 'overlap')
     monkeypatch.setenv('GRID_CUDA_KIN_THREADS', '1')
     monkeypatch.setenv('PYTEST_ADDOPTS', '-x')
+    monkeypatch.setenv('XLA_PYTHON_CLIENT_PREALLOCATE', 'true')
     env = launcher.validation_env()
-    assert env['GRID_SPLIT_SHARD_JOBS'] == '2'
-    assert env['GRID_SPLIT_COMPILE_JOBS'] == '3'
-    assert env['GRID_RBD_BUILD_JOBS'] == '4'
+    assert env['GRID_SPLIT_RESOURCE_PROFILE'] == 'serial'
+    assert env['GRID_SPLIT_SHARD_JOBS'] == '1'
+    assert env['GRID_SPLIT_COMPILE_JOBS'] == '1'
+    assert env['GRID_RBD_BUILD_JOBS'] == '2'
+    assert env['XLA_PYTHON_CLIENT_PREALLOCATE'] == 'false'
     assert 'GRID_CUDA_KIN_THREADS' not in env and 'PYTEST_ADDOPTS' not in env
 
 

@@ -90,6 +90,12 @@ process at a time when the box is shared.
 3. Run again in a new process with `--gpu --reload` and the same work directory.
    Generation and compilation are forbidden, so a cache miss fails the gate.
    `release-check` runs this step.
+   The GPU pair also checks the optional armature identification API against the
+   bundled double-precision oracle on NumPy, JAX and PyTorch, including the
+   regressor's acceleration derivative. The first process mutates the live
+   armature and hides the original URDF. The second forbids parsing and compiler
+   lookup and must restore the construction initializer, not the last mutation.
+   Keep both logs. Running only the construction half does not close this gate.
 4. For a wheel overlay on an existing framework environment, use
    `--package-root /absolute/unpacked-wheel-directory`. All GRiD/peer imports
    are checked to originate there. This complements, not replaces, the clean
@@ -131,6 +137,88 @@ signature, complete scope and release policy on the clean descendant. No carried
 shards, policy bypass or tolerance relaxation: a release receipt is one fresh full
 pass at the release tip, verified under `test/gpu-proof-policy-release.yaml`.
 
+Before that freeze commit, plan the manifest from authoritative collection:
+
+```bash
+.venv/bin/python test/run_split_suite.py --plan-manifest test/gpu-proof-tests.txt
+```
+
+This does not compile, execute tests or record evidence. It uses the split
+driver's wrapper modules and CUDA partition, with the same `gpu_proof` marker
+selection as the recording. Review additions and removals, then commit the
+manifest with the correctness inputs. The full launcher checks canonical
+collection equality before starting builds; any partial or duplicate collection
+is an error. The empty expected-skips baseline stays empty. FP64 alpha tests
+remain in their separate lane, not as skips in the receipt. This one-pass
+protocol supersedes the October 26 two-pass manifest procedure; the receipt
+writer and collection writer produce identical manifest bytes for identical IDs.
+The old receipt is stale during this transition. CPU pre-freeze tests exercise
+exact-scope rejection with controlled missing, extra and duplicate outcomes;
+the launcher applies that same check to the completed receipt before promotion
+and again at finalization. Both external verification policies still require
+the current manifest. No old receipt is accepted for the expanded scope.
+
+### Primary receipt resource profile
+
+The tracked launcher defaults to `GRID_SPLIT_RESOURCE_PROFILE=serial`: one prewarm
+worker, then one GPU shard at a time, with two compiler units per wrapper build.
+The complete prewarm phase drains before any shard starts. A cap on prewarm
+workers alone does not bound memory: tests can compile additional wrappers and
+temporary executables inline. Serial phases prevent that overlap without
+omitting tests, changing numerical thresholds or changing compiled algorithms.
+Serialization is between workers and shards, not inside a test: the consumer
+artifact concurrency regression deliberately starts two builds. The whole-shard
+allowance includes descendants; the compiler-unit cap applies per build, not
+globally across those descendants.
+
+Every prewarm admission, including the first, requires its predicted process-tree
+peak plus a 14 GiB host reserve to fit the live `MemAvailable` and pool budget.
+The peak allowance is at least 16 GiB before a 1.3 margin; larger recorded peaks
+still apply. Each test shard separately requires that base allowance and reserve
+(34.8 GiB total) before starting because it may compile inline. These are
+planning allowances, not enforced process RSS limits: monitor actual peaks and
+other workloads, and do not assume an unmeasured model is bounded by the default.
+The primary launcher's profile overrides inherited concurrency settings.
+Direct split-driver runs retain the older overlap profile unless explicitly
+configured; the secondary/Jetson recipe below is separate.
+
+Both tracked profiles disable JAX GPU preallocation and record that setting,
+matching the correctness gates and pilot when JAX and PyTorch share a shard.
+The optional tracked `--resource-profile bounded-overlap` selects ceilings of
+two pool builds, one GPU shard and two compiler units per build. One atomic
+admission authority reserves memory for both the pool and the entire shard,
+including inline compilers. Only the unspent part of a reservation is deducted
+from live available memory: resident pages have already reduced that value.
+Unknown pool jobs retain the 16 GiB allowance before margin; measured jobs have
+an 8 GiB floor before margin and retain larger recorded peaks. Shards retain
+the full 16 GiB allowance. The 14 GiB host reserve is unchanged. Sampled
+process-tree peaks and headroom are logged in `memory-admission.jsonl`; short
+peaks between samples can still be missed. Admission is not a hard RSS limit.
+Pressure stops new work and drains owned compilers rather than killing peers.
+
+Select bounded overlap only after a cold-build, inline-cache-miss pilot on the
+same scope as serial demonstrates safe, useful throughput. This is validation
+throughput, not runtime performance evidence. A small pilot cannot certify the
+largest receipt models; those must still fit admission or stop. The resource
+profile does not change collection, numerical checks or expected skips.
+Resume requires the recorded profile. To fall back, let the old run exit and
+use a new output directory with `--full --resource-profile serial
+--fallback-from <old-launcher-directory>`. This records the transition and runs
+the full scope without carrying outcomes; the source must still match exactly.
+Never edit a frozen harness to obtain fallback.
+
+Insufficient admission writes `resource-blocked.json` and `PAUSE` in the split
+run directory and returns nonzero without merging receipts. Completed shard
+results remain intact. After inspecting memory pressure, remove that run's
+`PAUSE` marker and resume at the same clean commit with the same full/refresh
+mode. A manual PAUSE during prewarm stops queued builds and lets the current
+build finish before returning; resume reuses its content cache. A paused or
+unattempted shard is never reported as passing. Estimate both cold and warm
+passes from the intended cache and worker configuration, not a past run's
+elapsed time. Receipt recording still requires its separate approval.
+
+### Architecture receipts
+
 One receipt per architecture. The primary receipt, `gpu-proof.json`, is recorded
 on the RTX 5090 (sm_120); it gates CI, defines the collection manifest and is the
 only receipt the release workflow verifies. Secondary receipts document other
@@ -142,15 +230,17 @@ Jetson and run `SPLIT=1 test/run_gpu_proof.sh` on a clean checkout of the releas
 tip; the driver detects the architecture, writes that row's path and never
 touches `gpu-proof.json`. Commit the receipt with its header-key ledger.
 The signing key stays on the desktop, so a Jetson records with
-`PYTEST_ARGS="--gpu-proof-signing-backend none"`; the driver's final merge then
-refuses the unsigned shards (rc=1 after a clean shard board) and writes neither
-the receipt nor the ledger. Copy the run directory's `receipts/` to the desktop,
-branch from the release tip, merge and sign there with
-`gpu-proof merge --out receipts/gpu-proof-sm87.json --repo . <shard receipts>`,
-build the ledger from the shard sidecars with the driver's
-`aggregate_header_keys` pointed at `receipts/gpu-proof-sm87-header-keys.json`,
-commit both, then run `make verify-all`: the policy refuses a dirty
-verification tree, and the receipt itself counts as dirt until it is committed.
+`PYTEST_ARGS="--gpu-proof-signing-backend none"`. The driver merges the unsigned
+shards into an unsigned run-directory receipt, verifies it under the everyday
+policy with `--allow-unsigned` (scope, expected skips, fingerprint, ancestry),
+writes the durations and the header-key ledger at the row's path, and the
+launcher refuses to publish the unsigned receipt. Copy the run directory's
+`receipts/` and the ledger to the desktop, branch from the release tip, merge and
+sign there with `gpu-proof merge --out receipts/gpu-proof-sm87.json --repo .
+<shard receipts>`, commit the receipt with the ledger, then run `make
+verify-all`: the policy refuses a dirty verification tree, and the receipt
+itself counts as dirt until it is committed. CI's verify job runs the same
+`--verify-all` over every committed secondary receipt.
 `make verify-all` verifies every receipt on disk, one line per architecture, and
 `test/receipt_integrity.py --table` prints their rows for the compatibility page.
 A release does not wait for secondary receipts; they are documentation of the

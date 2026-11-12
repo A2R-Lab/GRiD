@@ -36,6 +36,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <climits>
+#include <limits>
 #include <cstdlib>
 #include <utility>
 #include <tuple>
@@ -135,12 +136,15 @@ struct CAbi {
     using fn_q_qd_out_t     = int (*)(long long, const CT*, const CT*, CT*, int);
     using fn_frame_jac_t    = int (*)(long long, const CT*, CT*, int, int, int);
     using fn_frame_jac_dot_t = int (*)(long long, const CT*, const CT*, CT*, int, int, int);
+    using fn_frame_acc_t    = int (*)(long long, const CT*, const CT*, const CT*, CT*, int, int, int);
     using fn_ee_runtime_t   = int (*)(long long, const CT*, CT*, int, int, const CT*);
     using fn_tool_fext_t    = int (*)(long long, const CT*, const CT*, int, const CT*, CT*, int);  // grid_rbd_tool_fext
     using fn_contact_fext_t = int (*)(long long, const CT*, const CT*, CT*, int);                   // grid_rbd_contact_fext
     using fn_q_qd_out_grav_t = int (*)(long long, const CT*, const CT*, CT*, int, CT);
     using fn_q_out_grav_t   = int (*)(long long, const CT*, CT*, int, CT);
     using fn_set_params_t   = int (*)(long long, const CT*);   // set_{inertia,transform,joint_dynamics}_params
+    using fn_get_params_t   = int (*)(long long, CT*);
+    using fn_validate_params_t = int (*)(const long double*, int);
     // W04-B B1 runtime contexts: id-taking launch-override setters + the context API
     using fn_ctx_int_v_t    = int (*)(long long);                    // threads_per_block(ctx)
     using fn_ctx_int_i_t    = int (*)(long long, int);               // set_threads_per_block(ctx, n)
@@ -184,12 +188,15 @@ class RunnerT {
     using fn_q_qd_out_t = typename CAbi<CT>::fn_q_qd_out_t;
     using fn_frame_jac_t = typename CAbi<CT>::fn_frame_jac_t;
     using fn_frame_jac_dot_t = typename CAbi<CT>::fn_frame_jac_dot_t;
+    using fn_frame_acc_t = typename CAbi<CT>::fn_frame_acc_t;
     using fn_ee_runtime_t = typename CAbi<CT>::fn_ee_runtime_t;
     using fn_tool_fext_t = typename CAbi<CT>::fn_tool_fext_t;
     using fn_contact_fext_t = typename CAbi<CT>::fn_contact_fext_t;
     using fn_q_qd_out_grav_t = typename CAbi<CT>::fn_q_qd_out_grav_t;
     using fn_q_out_grav_t = typename CAbi<CT>::fn_q_out_grav_t;
     using fn_set_params_t = typename CAbi<CT>::fn_set_params_t;
+    using fn_get_params_t = typename CAbi<CT>::fn_get_params_t;
+    using fn_validate_params_t = typename CAbi<CT>::fn_validate_params_t;
     using fn_ctx_int_v_t = typename CAbi<CT>::fn_ctx_int_v_t;
     using fn_ctx_int_i_t = typename CAbi<CT>::fn_ctx_int_i_t;
     using fn_ctx_int_ii_t = typename CAbi<CT>::fn_ctx_int_ii_t;
@@ -251,6 +258,9 @@ public:
         fn_inverse_dynamics_mujoco_      = reinterpret_cast<fn_dyn_t>(opt_sym("grid_rbd_inverse_dynamics_mujoco"));
         fn_minv_             = reinterpret_cast<fn_q_out_t>(require_sym("grid_rbd_minv"));
         fn_fd_               = reinterpret_cast<fn_dyn_t>  (require_sym("grid_rbd_forward_dynamics"));
+        fn_fd_armature_       = reinterpret_cast<fn_dyn_t>(opt_sym("grid_rbd_forward_dynamics_armature_gradient"));
+        auto armature_count = reinterpret_cast<fn_int_v_t>(opt_sym("grid_rbd_num_armature_params"));
+        num_armature_params_ = armature_count ? armature_count() : 0;
         fn_aba_              = reinterpret_cast<fn_dyn_t>  (require_sym("grid_rbd_aba"));
         fn_crba_             = reinterpret_cast<fn_q_out_grav_t>(require_sym("grid_rbd_crba"));
         fn_crba_mujoco_      = reinterpret_cast<fn_q_out_grav_t>(opt_sym("grid_rbd_crba_mujoco"));  // floating only
@@ -260,6 +270,10 @@ public:
         fn_coriolis_matrix_mujoco_ = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_coriolis_matrix_mujoco"));
         fn_frame_jacobian_mujoco_  = reinterpret_cast<fn_frame_jac_t>(opt_sym("grid_rbd_frame_jacobian_mujoco"));
         fn_frame_jacobian_dot_mujoco_ = reinterpret_cast<fn_frame_jac_dot_t>(opt_sym("grid_rbd_frame_jacobian_dot_mujoco"));
+        fn_frame_velocity_mujoco_     = reinterpret_cast<fn_frame_jac_dot_t>(opt_sym("grid_rbd_frame_velocity_mujoco"));
+        fn_frame_acceleration_mujoco_ = reinterpret_cast<fn_frame_acc_t>(opt_sym("grid_rbd_frame_acceleration_mujoco"));
+        fn_frame_velocity_gradient_mujoco_     = reinterpret_cast<fn_frame_jac_dot_t>(opt_sym("grid_rbd_frame_velocity_gradient_mujoco"));
+        fn_frame_acceleration_gradient_mujoco_ = reinterpret_cast<fn_frame_acc_t>(opt_sym("grid_rbd_frame_acceleration_gradient_mujoco"));
         fn_osc_inertia_mujoco_     = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_osc_inertia_mujoco"));
         // floating-base mjx value kernels (optional; present only on a floating .so)
         fn_minv_mujoco_      = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_minv_mujoco"));
@@ -334,6 +348,10 @@ public:
         fn_nonlinear_effects_mujoco_ = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_nonlinear_effects_mujoco"));  // floating only
         fn_frame_jacobian_     = reinterpret_cast<fn_frame_jac_t>(require_sym("grid_rbd_frame_jacobian"));
         fn_frame_jacobian_dot_ = reinterpret_cast<fn_frame_jac_dot_t>(require_sym("grid_rbd_frame_jacobian_dot"));
+        fn_frame_velocity_     = reinterpret_cast<fn_frame_jac_dot_t>(require_sym("grid_rbd_frame_velocity"));
+        fn_frame_acceleration_ = reinterpret_cast<fn_frame_acc_t>(require_sym("grid_rbd_frame_acceleration"));
+        fn_frame_velocity_gradient_     = reinterpret_cast<fn_frame_jac_dot_t>(require_sym("grid_rbd_frame_velocity_gradient"));
+        fn_frame_acceleration_gradient_ = reinterpret_cast<fn_frame_acc_t>(require_sym("grid_rbd_frame_acceleration_gradient"));
         fn_osc_inertia_        = reinterpret_cast<fn_q_out_t>(require_sym("grid_rbd_osc_inertia"));
         fn_ee_pose_runtime_      = reinterpret_cast<fn_ee_runtime_t>(require_sym("grid_rbd_end_effector_pose_runtime"));
         fn_ee_pose_grad_runtime_ = reinterpret_cast<fn_ee_runtime_t>(require_sym("grid_rbd_end_effector_pose_gradient_runtime"));
@@ -375,6 +393,13 @@ public:
         // The table length (2*nv, or 3*nv under the tanh friction model) is exported
         // next to the setter; it sizes the params check below.
         fn_jd_params_size_ = reinterpret_cast<fn_int_v_t>(opt_sym("grid_rbd_joint_dynamics_params_size"));
+
+        // runtime_armature — OPTIONAL: present only in a .so built with
+        // runtime_armature=True (-DGRID_RBD_RUNTIME_ARMATURE). set_armature_params()
+        // raises a clear error if this symbol is null.
+        fn_set_armature_params_ = reinterpret_cast<fn_set_params_t>(opt_sym("grid_rbd_set_armature_params"));
+        fn_get_armature_params_ = reinterpret_cast<fn_get_params_t>(opt_sym("grid_rbd_get_armature_params"));
+        fn_validate_armature_params_ = reinterpret_cast<fn_validate_params_t>(opt_sym("grid_rbd_validate_armature_params"));
 
         // Cache constants (avoid the indirect-function-call cost on every read).
         num_joints_ = fn_num_joints_();
@@ -818,6 +843,26 @@ public:
         int rc = fn_fd_mujoco_(ctx_id_, q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "forward_dynamics_mujoco",
             nullptr));
+        return out;
+    }
+
+    // forward_dynamics_armature_gradient(q, qd, u, gravity, f_ext_opt) -> (batch, num_vel_, num_armature_params_)
+    py::array_t<CT> forward_dynamics_armature_gradient(arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt)
+    {
+        if (!fn_fd_armature_) throw std::runtime_error(
+            "armature sensitivity unavailable in this artifact; rebuild with "
+            "its algorithm_list entry");
+        int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
+        check_array_2d(u, batch, num_vel_, "u");
+        arr_t fe_hold;
+        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+        py::array_t<CT> out({batch, num_vel_, num_armature_params_});
+        const CT *q_ptr = q.data(), *qd_ptr = qd.data(), *u_ptr = u.data();
+        CT *out_ptr = out.mutable_data();
+        int rc;
+        { GridNoGil nogil; rc = fn_fd_armature_(ctx_id_, q_ptr, qd_ptr, u_ptr, out_ptr, batch, gravity, fe_ptr); }
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "forward_dynamics_armature_gradient",
+            "forward_dynamics_armature_gradient requires its algorithm_list entry"));
         return out;
     }
 
@@ -1307,6 +1352,141 @@ public:
         py::array_t<CT> out({batch, 36});
         int rc = fn_osc_inertia_mujoco_(ctx_id_, q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "osc_inertia_mujoco",
+            nullptr));
+        return out;
+    }
+
+    // frame_velocity(q, qd, target_jid, reference_frame) -> (batch, 6)
+    py::array_t<CT> frame_velocity(arr_t q, arr_t qd, int target_jid, int reference_frame)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
+        py::array_t<CT> out({batch, 6});
+        int rc = fn_frame_velocity_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_velocity",
+            "frame_velocity not built into this robot .so — add "
+            "'frame_velocity' to algorithm_list in register_robot() and rebuild"));
+        return out;
+    }
+
+    bool has_frame_velocity_mujoco() const { return fn_frame_velocity_mujoco_ != nullptr; }
+    // frame_velocity_mujoco(q, qd, target_jid, reference_frame) -> (batch, 6)
+    py::array_t<CT> frame_velocity_mujoco(arr_t q, arr_t qd, int target_jid, int reference_frame)
+    {
+        if (!fn_frame_velocity_mujoco_) throw std::runtime_error(
+            "frame_velocity_mujoco unavailable: floating-base .so with "
+            "frame_jacobian only");
+        int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
+        py::array_t<CT> out({batch, 6});
+        int rc = fn_frame_velocity_mujoco_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_velocity_mujoco",
+            nullptr));
+        return out;
+    }
+
+    // frame_acceleration(q, qd, qdd_opt, target_jid, reference_frame) -> (batch, 6)
+    py::array_t<CT> frame_acceleration(arr_t q, arr_t qd, py::object qdd_opt, int target_jid, int reference_frame)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
+        const CT* qdd_ptr = nullptr;
+        if (!qdd_opt.is_none()) {
+            auto qdd = qdd_opt.cast<arr_t>();
+            check_array_2d(qdd, batch, num_vel_, "qdd");
+            qdd_ptr = qdd.data();
+        }
+        py::array_t<CT> out({batch, 6});
+        int rc = fn_frame_acceleration_(ctx_id_, q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, target_jid, reference_frame);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_acceleration",
+            "frame_acceleration not built into this robot .so — add "
+            "'frame_acceleration' to algorithm_list in register_robot() and "
+            "rebuild"));
+        return out;
+    }
+
+    bool has_frame_acceleration_mujoco() const { return fn_frame_acceleration_mujoco_ != nullptr; }
+    // frame_acceleration_mujoco(q, qd, qdd_opt, target_jid, reference_frame) -> (batch, 6)
+    py::array_t<CT> frame_acceleration_mujoco(arr_t q, arr_t qd, py::object qdd_opt, int target_jid, int reference_frame)
+    {
+        if (!fn_frame_acceleration_mujoco_) throw std::runtime_error(
+            "frame_acceleration_mujoco unavailable: floating-base .so with "
+            "frame_jacobian only");
+        int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
+        const CT* qdd_ptr = nullptr;
+        if (!qdd_opt.is_none()) {
+            auto qdd = qdd_opt.cast<arr_t>();
+            check_array_2d(qdd, batch, num_vel_, "qdd");
+            qdd_ptr = qdd.data();
+        }
+        py::array_t<CT> out({batch, 6});
+        int rc = fn_frame_acceleration_mujoco_(ctx_id_, q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, target_jid, reference_frame);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_acceleration_mujoco",
+            nullptr));
+        return out;
+    }
+
+    // frame_velocity_gradient(q, qd, target_jid, reference_frame) -> (batch, 12 * num_vel_)
+    py::array_t<CT> frame_velocity_gradient(arr_t q, arr_t qd, int target_jid, int reference_frame)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
+        py::array_t<CT> out({batch, 12 * num_vel_});
+        int rc = fn_frame_velocity_gradient_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_velocity_gradient",
+            "frame_velocity_gradient not built into this robot .so — add "
+            "'frame_velocity_gradient' to algorithm_list in register_robot() "
+            "and rebuild"));
+        return out;
+    }
+
+    bool has_frame_velocity_gradient_mujoco() const { return fn_frame_velocity_gradient_mujoco_ != nullptr; }
+    // frame_velocity_gradient_mujoco(q, qd, target_jid, reference_frame) -> (batch, 12 * num_vel_)
+    py::array_t<CT> frame_velocity_gradient_mujoco(arr_t q, arr_t qd, int target_jid, int reference_frame)
+    {
+        if (!fn_frame_velocity_gradient_mujoco_) throw std::runtime_error(
+            "frame_velocity_gradient_mujoco unavailable: floating-base .so with "
+            "frame_jacobian only");
+        int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
+        py::array_t<CT> out({batch, 12 * num_vel_});
+        int rc = fn_frame_velocity_gradient_mujoco_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_velocity_gradient_mujoco",
+            nullptr));
+        return out;
+    }
+
+    // frame_acceleration_gradient(q, qd, qdd_opt, target_jid, reference_frame) -> (batch, 18 * num_vel_)
+    py::array_t<CT> frame_acceleration_gradient(arr_t q, arr_t qd, py::object qdd_opt, int target_jid, int reference_frame)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
+        const CT* qdd_ptr = nullptr;
+        if (!qdd_opt.is_none()) {
+            auto qdd = qdd_opt.cast<arr_t>();
+            check_array_2d(qdd, batch, num_vel_, "qdd");
+            qdd_ptr = qdd.data();
+        }
+        py::array_t<CT> out({batch, 18 * num_vel_});
+        int rc = fn_frame_acceleration_gradient_(ctx_id_, q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, target_jid, reference_frame);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_acceleration_gradient",
+            "frame_acceleration_gradient not built into this robot .so — add "
+            "'frame_acceleration_gradient' to algorithm_list in "
+            "register_robot() and rebuild"));
+        return out;
+    }
+
+    bool has_frame_acceleration_gradient_mujoco() const { return fn_frame_acceleration_gradient_mujoco_ != nullptr; }
+    // frame_acceleration_gradient_mujoco(q, qd, qdd_opt, target_jid, reference_frame) -> (batch, 18 * num_vel_)
+    py::array_t<CT> frame_acceleration_gradient_mujoco(arr_t q, arr_t qd, py::object qdd_opt, int target_jid, int reference_frame)
+    {
+        if (!fn_frame_acceleration_gradient_mujoco_) throw std::runtime_error(
+            "frame_acceleration_gradient_mujoco unavailable: floating-base .so "
+            "with frame_jacobian only");
+        int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);
+        const CT* qdd_ptr = nullptr;
+        if (!qdd_opt.is_none()) {
+            auto qdd = qdd_opt.cast<arr_t>();
+            check_array_2d(qdd, batch, num_vel_, "qdd");
+            qdd_ptr = qdd.data();
+        }
+        py::array_t<CT> out({batch, 18 * num_vel_});
+        int rc = fn_frame_acceleration_gradient_mujoco_(ctx_id_, q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, target_jid, reference_frame);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_acceleration_gradient_mujoco",
             nullptr));
         return out;
     }
@@ -2034,6 +2214,50 @@ public:
         if (rc != 0) throw std::runtime_error(rc_message(rc, "set_transform_params", nullptr));
     }
 
+    // set_armature_params(params) — runtime-mutable rotor armature. params is a flat
+    // (num_vel,) array in the reduced coordinates (v-slot indexed); the floating
+    // root's six slots and spherical blocks must be zero. Copies it into the device
+    // d_armature_params table; id (with qdd), crba, minv, aba, fd and everything built
+    // on them read it (no recompile). Only available on a .so built with runtime_armature=True.
+    void set_armature_params(py::array input) {
+        if (!fn_set_armature_params_ || !fn_validate_armature_params_) throw std::runtime_error(
+            "set_armature_params not available in this .so: register the robot with "
+            "runtime_armature=True (and force_rebuild=True) to enable the mutable armature table.");
+        if (input.ndim() != 1 || input.shape(0) != num_vel_) {
+            throw std::runtime_error(
+                "set_armature_params: params must be a flat (" + std::to_string(num_vel_) +
+                ",) array (one entry per v-slot); got ndim=" + std::to_string(input.ndim()) +
+                ", size=" + std::to_string(input.size()));
+        }
+        if (std::string("biuf").find(input.dtype().kind()) == std::string::npos)
+            throw py::value_error("armature must contain real numbers");
+        auto wide = py::array_t<long double, py::array::c_style | py::array::forcecast>::ensure(input);
+        if (!wide || fn_validate_armature_params_(wide.data(), num_vel_) != 0)
+            throw py::value_error("armature must be finite, nonnegative and zero on unsupported slots");
+        for (int i = 0; i < num_vel_; ++i) {
+            if (wide.data()[i] > static_cast<long double>(std::numeric_limits<CT>::max()))
+                throw py::value_error("armature must remain finite in the kernel precision");
+            if (wide.data()[i] > 0 &&
+                wide.data()[i] < static_cast<long double>(std::numeric_limits<CT>::min()))
+                throw py::value_error("armature is too small to preserve in the kernel precision");
+        }
+        auto params = arr_t::ensure(input);
+        if (!params) throw py::value_error("armature cannot be converted to the kernel precision");
+        const CT *pdata = params.data();
+        int rc; { GridNoGil nogil; rc = fn_set_armature_params_(ctx_id_, pdata); }
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "set_armature_params", nullptr));
+    }
+
+    arr_t get_armature_params() {
+        if (!fn_get_armature_params_) throw std::runtime_error(
+            "get_armature_params not available: rebuild with runtime_armature=True");
+        arr_t result({num_vel_});
+        CT *data = result.mutable_data();
+        int rc; { GridNoGil nogil; rc = fn_get_armature_params_(ctx_id_, data); }
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "get_armature_params", nullptr));
+        return result;
+    }
+
     // set_joint_dynamics_params(params) — runtime-mutable damping/friction (C5).
     // params is a flat (2*num_vel,) array = [damping(nv) || friction(nv)], v-slot
     // indexed and alpha-folded (matching init_joint_dynamics_params); a tanh friction
@@ -2180,6 +2404,7 @@ private:
     fn_dyn_t  fn_inverse_dynamics_mujoco_    = nullptr;  // floating-base mjx ID (optional)
     fn_q_out_t  fn_minv_           = nullptr;
     fn_dyn_t    fn_fd_             = nullptr;
+    fn_dyn_t    fn_fd_armature_    = nullptr;
     fn_dyn_t    fn_aba_            = nullptr;
     fn_q_out_grav_t  fn_crba_           = nullptr;
     fn_q_out_grav_t  fn_crba_mujoco_    = nullptr;  // floating-base mjx CRBA (optional)
@@ -2189,6 +2414,10 @@ private:
     fn_q_qd_out_grav_t fn_coriolis_matrix_mujoco_ = nullptr;
     fn_frame_jac_t     fn_frame_jacobian_mujoco_  = nullptr;
     fn_frame_jac_dot_t fn_frame_jacobian_dot_mujoco_ = nullptr;
+    fn_frame_jac_dot_t fn_frame_velocity_mujoco_     = nullptr;
+    fn_frame_acc_t     fn_frame_acceleration_mujoco_ = nullptr;
+    fn_frame_jac_dot_t fn_frame_velocity_gradient_mujoco_     = nullptr;
+    fn_frame_acc_t     fn_frame_acceleration_gradient_mujoco_ = nullptr;
     fn_q_out_t         fn_osc_inertia_mujoco_     = nullptr;
     fn_q_out_t          fn_minv_mujoco_            = nullptr;
     fn_q_out_t         fn_com_mujoco_             = nullptr;
@@ -2252,6 +2481,10 @@ private:
     fn_q_qd_out_grav_t fn_nonlinear_effects_mujoco_ = nullptr;  // floating mjx (optional)
     fn_frame_jac_t     fn_frame_jacobian_      = nullptr;
     fn_frame_jac_dot_t fn_frame_jacobian_dot_  = nullptr;
+    fn_frame_jac_dot_t fn_frame_velocity_      = nullptr;
+    fn_frame_acc_t     fn_frame_acceleration_  = nullptr;
+    fn_frame_jac_dot_t fn_frame_velocity_gradient_     = nullptr;
+    fn_frame_acc_t     fn_frame_acceleration_gradient_ = nullptr;
     fn_q_out_t         fn_osc_inertia_         = nullptr;
     fn_ee_runtime_t    fn_ee_pose_runtime_      = nullptr;
     fn_ee_runtime_t    fn_ee_pose_grad_runtime_ = nullptr;
@@ -2273,11 +2506,15 @@ private:
     fn_set_params_t fn_set_transform_params_        = nullptr;
     fn_set_params_t        fn_set_jd_params_               = nullptr;
     fn_int_v_t             fn_jd_params_size_              = nullptr;  // table length (2*nv or 3*nv)
+    fn_set_params_t        fn_set_armature_params_         = nullptr;  // runtime_armature (optional)
+    fn_get_params_t        fn_get_armature_params_         = nullptr;
+    fn_validate_params_t   fn_validate_armature_params_    = nullptr;
 
     int num_joints_ = 0;
     int num_vel_    = 0;
     int num_ees_    = 0;
     int num_bodies_ = 0;
+    int num_armature_params_ = 0;
     int max_batch_  = 0;
 };
 
@@ -2409,6 +2646,20 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def_property_readonly("has_frame_jacobian_dot_mujoco", &R::has_frame_jacobian_dot_mujoco)
         .def("frame_jacobian_dot_mujoco", &R::frame_jacobian_dot_mujoco,
              py::arg("q"), py::arg("qd"), py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
+        .def_property_readonly("has_frame_velocity_mujoco", &R::has_frame_velocity_mujoco)
+        .def("frame_velocity_mujoco", &R::frame_velocity_mujoco,
+             py::arg("q"), py::arg("qd"), py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
+        .def_property_readonly("has_frame_acceleration_mujoco", &R::has_frame_acceleration_mujoco)
+        .def("frame_acceleration_mujoco", &R::frame_acceleration_mujoco,
+             py::arg("q"), py::arg("qd"), py::arg("qdd"),
+             py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
+        .def_property_readonly("has_frame_velocity_gradient_mujoco", &R::has_frame_velocity_gradient_mujoco)
+        .def("frame_velocity_gradient_mujoco", &R::frame_velocity_gradient_mujoco,
+             py::arg("q"), py::arg("qd"), py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
+        .def_property_readonly("has_frame_acceleration_gradient_mujoco", &R::has_frame_acceleration_gradient_mujoco)
+        .def("frame_acceleration_gradient_mujoco", &R::frame_acceleration_gradient_mujoco,
+             py::arg("q"), py::arg("qd"), py::arg("qdd"),
+             py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
         .def_property_readonly("has_osc_inertia_mujoco", &R::has_osc_inertia_mujoco)
         .def("osc_inertia_mujoco", &R::osc_inertia_mujoco, py::arg("q"))
         .def_property_readonly("has_minv_mujoco", &R::has_minv_mujoco,
@@ -2478,6 +2729,9 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def("inverse_dynamics_regressor", &R::inverse_dynamics_regressor,
              py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
              py::arg("gravity") = -9.81f)
+        .def("forward_dynamics_armature_gradient", &R::forward_dynamics_armature_gradient,
+             py::arg("q"), py::arg("qd"), py::arg("u"),
+             py::arg("gravity") = -9.81f, py::arg("f_ext") = py::none())
         .def_property_readonly("has_inverse_dynamics_regressor_mujoco", &R::has_inverse_dynamics_regressor_mujoco)
         .def("inverse_dynamics_regressor_mujoco", &R::inverse_dynamics_regressor_mujoco,
              py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
@@ -2577,6 +2831,18 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def("frame_jacobian_dot", &R::frame_jacobian_dot,
              py::arg("q"), py::arg("qd"),
              py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
+        .def("frame_velocity", &R::frame_velocity,
+             py::arg("q"), py::arg("qd"),
+             py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
+        .def("frame_acceleration", &R::frame_acceleration,
+             py::arg("q"), py::arg("qd"), py::arg("qdd"),
+             py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
+        .def("frame_velocity_gradient", &R::frame_velocity_gradient,
+             py::arg("q"), py::arg("qd"),
+             py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
+        .def("frame_acceleration_gradient", &R::frame_acceleration_gradient,
+             py::arg("q"), py::arg("qd"), py::arg("qdd"),
+             py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
         .def("osc_inertia", &R::osc_inertia, py::arg("q"))
         .def("end_effector_pose_runtime", &R::end_effector_pose_runtime,
              py::arg("q"), py::arg("target_jid") = -1,
@@ -2631,7 +2897,15 @@ static void register_runner(py::module_& m, const char* cls_name) {
              "runtime_joint_dynamics). params is a flat (2*num_vel,) array = "
              "[damping(nv) || friction(nv)], v-slot indexed (alpha-folded), or "
              "(3*num_vel,) with a trailing friction_width(nv) row on a tanh friction build. "
-             "Only available on a .so built with runtime_joint_dynamics=True; raises otherwise.");
+             "Only available on a .so built with runtime_joint_dynamics=True; raises otherwise.")
+        .def("get_armature_params", &R::get_armature_params,
+             "Read a copy of the current context's native armature table.")
+        .def("set_armature_params", &R::set_armature_params,
+             py::arg("params"),
+             "Update the device-resident mutable rotor-armature table (runtime_armature). "
+             "params is a flat (num_vel,) array in the reduced coordinates; the floating "
+             "root's six slots and spherical blocks must be zero. Only available on a .so "
+             "built with runtime_armature=True; raises otherwise.");
 }
 
 

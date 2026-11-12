@@ -473,6 +473,32 @@ static inline int grid_kernel_ceiling(const void* fp) {
     }
 #define GRID_RBD_IT_DISPATCH_HESSIAN GRID_RBD_IT_DISPATCH_SS
 
+// Integrator-GRADIENT dispatch (integrator_gradient, plant_step_gradient, pin path).
+// A model whose gradient kernels support the single-stage schemes only (spherical
+// joints: EULER / SEMI_IMPLICIT_EULER / CONSTANT_ACCELERATION; the multi-stage
+// instantiations static_assert, grid.cuh sets GRID_INTEGRATOR_GRADIENT_SINGLE_STAGE_ONLY)
+// names only those cases, so the build compiles and the multi-stage codes return
+// rc=3 at call time. Every other model gets the full switch.
+#if GRID_INTEGRATOR_GRADIENT_SINGLE_STAGE_ONLY
+#define GRID_RBD_IT_DISPATCH_GRAD(it_code, FN, ...)                              \
+    switch (it_code) {                                                           \
+        case 0: FN<grid::IntegratorType::EULER>(g_ctx, __VA_ARGS__); break;             \
+        case 1: FN<grid::IntegratorType::SEMI_IMPLICIT_EULER>(g_ctx, __VA_ARGS__); break;\
+        case 5: FN<grid::IntegratorType::CONSTANT_ACCELERATION>(g_ctx, __VA_ARGS__); break; \
+        default: return 3;                                                       \
+    }
+#define GRID_RBD_IT_SWITCH_MJX_GRAD(it_code, FN, MUJOCO_FLAG, ERR_STMT, ...)                    \
+    switch (it_code) {                                                                          \
+        case 0: FN<grid::IntegratorType::EULER, MUJOCO_FLAG>(g_ctx, __VA_ARGS__); break;               \
+        case 1: FN<grid::IntegratorType::SEMI_IMPLICIT_EULER, MUJOCO_FLAG>(g_ctx, __VA_ARGS__); break; \
+        case 5: FN<grid::IntegratorType::CONSTANT_ACCELERATION, MUJOCO_FLAG>(g_ctx, __VA_ARGS__); break; \
+        default: ERR_STMT;                                                                      \
+    }
+#else
+#define GRID_RBD_IT_DISPATCH_GRAD GRID_RBD_IT_DISPATCH
+#define GRID_RBD_IT_SWITCH_MJX_GRAD GRID_RBD_IT_SWITCH_MJX
+#endif
+
 // Shared (IT, MUJOCO_FLAG) two-template-arg switch cores for the jax-FFI /
 // torch dispatchers below (which differ only in their bad-code statement).
 // ERR_STMT is the whole surface-specific statement (ffi::Error return vs

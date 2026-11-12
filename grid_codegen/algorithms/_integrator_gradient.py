@@ -526,6 +526,7 @@ def _emit_integrator_gradient_mjx_output(self, integrator_type, s_mjx_scratch="s
         "T ulin[3] = {s_u[0],  s_u[1],  s_u[2]};",
         "// qd_{k+1,pin}[lin] = (qd + dt*qdd)[lin] (for the g_dot velocity-output term)",
         "T qk1lin[3] = {s_qd[0] + dt*s_qdd[0], s_qd[1] + dt*s_qdd[1], s_qd[2] + dt*s_qdd[2]};",
+        "T wlin[3] = {s_qd[3], s_qd[4], s_qd[5]};",
     ]
     # ---- Phase 1: per (half, column) column reframe -> G rows -> g_dot. ----
     # Reads s_dAB (read-only), writes the disjoint column slice of s_mjx -> fully
@@ -573,6 +574,28 @@ def _emit_integrator_gradient_mjx_output(self, integrator_type, s_mjx_scratch="s
         "  inner[1] += R[3]*sk[0] + R[4]*sk[1] + R[5]*sk[2];",
         "  inner[2] += R[6]*sk[0] + R[7]*sk[1] + R[8]*sk[2];",
         "}",
+        '// MuJoCo velocity step: qd_{k+1} = qvel + dt qacc_mjx. The omega x v term of the',
+        '// MuJoCo-frame acceleration adds, on the base-linear rows of the bottom half,',
+        '// dt R((e_a x omega) x v) on the q-block rotation cols, dt R(omega x R^T e_a) on',
+        '// the qd-block linear cols and dt R(e_a x v) on the qd-block rotation cols.',
+        'if (half == 1 && cblk == 0 && c >= 3 && c < 6) {',
+        '  int a = c - 3;',
+        '  T ea[3] = {static_cast<T>(a==0), static_cast<T>(a==1), static_cast<T>(a==2)};',
+        '  T ew[3] = {ea[1]*wlin[2]-ea[2]*wlin[1], ea[2]*wlin[0]-ea[0]*wlin[2], ea[0]*wlin[1]-ea[1]*wlin[0]};',
+        '  T t[3] = {ew[1]*vlin[2]-ew[2]*vlin[1], ew[2]*vlin[0]-ew[0]*vlin[2], ew[0]*vlin[1]-ew[1]*vlin[0]};',
+        '  inner[0] += dt*(R[0]*t[0] + R[1]*t[1] + R[2]*t[2]); inner[1] += dt*(R[3]*t[0] + R[4]*t[1] + R[5]*t[2]); inner[2] += dt*(R[6]*t[0] + R[7]*t[1] + R[8]*t[2]);',
+        '}',
+        'if (half == 1 && cblk == 1 && cl < 3) {',
+        '  T rt[3] = {R[3*cl], R[3*cl+1], R[3*cl+2]};',   # R^T e_cl is ROW cl of R
+        '  T t[3] = {wlin[1]*rt[2]-wlin[2]*rt[1], wlin[2]*rt[0]-wlin[0]*rt[2], wlin[0]*rt[1]-wlin[1]*rt[0]};',
+        '  inner[0] += dt*(R[0]*t[0] + R[1]*t[1] + R[2]*t[2]); inner[1] += dt*(R[3]*t[0] + R[4]*t[1] + R[5]*t[2]); inner[2] += dt*(R[6]*t[0] + R[7]*t[1] + R[8]*t[2]);',
+        '}',
+        'if (half == 1 && cblk == 1 && cl >= 3 && cl < 6) {',
+        '  int a = cl - 3;',
+        '  T ea[3] = {static_cast<T>(a==0), static_cast<T>(a==1), static_cast<T>(a==2)};',
+        '  T t[3] = {ea[1]*vlin[2]-ea[2]*vlin[1], ea[2]*vlin[0]-ea[0]*vlin[2], ea[0]*vlin[1]-ea[1]*vlin[0]};',
+        '  inner[0] += dt*(R[0]*t[0] + R[1]*t[1] + R[2]*t[2]); inner[1] += dt*(R[3]*t[0] + R[4]*t[1] + R[5]*t[2]); inner[2] += dt*(R[6]*t[0] + R[7]*t[1] + R[8]*t[2]);',
+        '}',
         "for (int r = 0; r < " + str(n) + "; ++r) s_mjx[c*" + str(twoN) + "+(base+r)] = inner[r];",
     ]:
         self.gen_add_code_line(line)
@@ -1028,24 +1051,10 @@ def gen_integrator_gradient_inner_python(self, compute_x_kp1=False,
         self.gen_add_code_line("if constexpr (" + mujoco_output_expr + ") {", True)
         _emit_integrator_gradient_mjx_output(self, integrator_type, s_mjx_scratch="s_temp")
         if compute_x_kp1:
-            # x_kp1 = [q (nq); qd (nv)]: base-position GLOBAL add (mjx retract), qd
-            # output reframe by G, base quaternion xyzw->wxyz. s_q still holds the
-            # ORIGINAL base position (integrate wrote OUT-of-place into s_x_kp1);
-            # s_qd[0:3] is the raw mjx global base-linear velocity used for the step.
-            self.gen_mjx_retract(s_x_kp1_name, "s_q", "s_qd", "dt")
-            # qd_{k+1,mjx} = G qd_{k+1,pin}: rotate the base-linear velocity rows by R.
-            # Parenthesize the qd-block base so the helper's [i] indexing binds to the
-            # offset pointer (s_x_kp1 + NQ), not to the literal (operator precedence).
-            self.gen_mjx_base_rotate("(" + s_x_kp1_name + " + " + str(self.robot.get_num_pos()) + ")", q_name="s_q")
-            self.gen_add_code_lines([
-                "// mjx x_kp1: base quaternion xyzw->wxyz (inverse of input reorder)",
-                "if (threadIdx.x == 0 && threadIdx.y == 0) {", True,
-                "T qw_out = " + s_x_kp1_name + "[6];",
-                s_x_kp1_name + "[6] = " + s_x_kp1_name + "[5]; " + s_x_kp1_name + "[5] = " + s_x_kp1_name + "[4]; "
-                    + s_x_kp1_name + "[4] = " + s_x_kp1_name + "[3]; " + s_x_kp1_name + "[3] = qw_out;",
-            ])
-            self.gen_add_end_control_flow()
-            self.gen_add_sync()
+            # x_kp1 = [q (nq); qd (nv)]: the MuJoCo velocity step, the GLOBAL-add
+            # base position and the quaternion xyzw->wxyz (the same epilogue as the
+            # integrator kernel). s_q / s_qd still hold step k (out-of-place integrate).
+            self.gen_mjx_integrator_output(s_x_kp1_name, "s_q", "s_qd", "dt", "si_mjx", self.robot.get_num_pos())
         self.gen_add_end_control_flow()
 
 
@@ -1841,6 +1850,7 @@ def _emit_integrator_hessian_mjx_perk(self, n):
         # recovered fd gradient: Bottom = [dt*J_qq | I+dt*J_qv | dt*Minv].
         # We read the pin dAB bottom blocks directly (col-major) when contracting.
         "T v_lin[3] = {s_qd[0], s_qd[1], s_qd[2]};",
+        "T w_lin[3] = {s_qd[3], s_qd[4], s_qd[5]};",
         "T u_lin[3] = {s_u[0],  s_u[1],  s_u[2]};",
         "T qdd_v[3] = {s_qdd[0], s_qdd[1], s_qdd[2]};",
     ])
@@ -1989,6 +1999,31 @@ def _emit_integrator_hessian_mjx_fwd(self, n):
                 "  " + dbq + "[(3+a)*" + N + "+0] += Rd[0]*sk0 + Rd[1]*sk1 + Rd[2]*sk2 + R[0]*sd0 + R[1]*sd1 + R[2]*sd2;",
                 "  " + dbq + "[(3+a)*" + N + "+1] += Rd[3]*sk0 + Rd[4]*sk1 + Rd[5]*sk2 + R[3]*sd0 + R[4]*sd1 + R[5]*sd2;",
                 "  " + dbq + "[(3+a)*" + N + "+2] += Rd[6]*sk0 + Rd[7]*sk1 + Rd[8]*sk2 + R[6]*sd0 + R[7]*sd1 + R[8]*sd2;",
+                "}",
+            ])
+            self.gen_add_code_lines([
+                "// MuJoCo velocity step corrections (the omega x v term of qacc_mjx): value and dot along axis k",
+                "{",
+                "  T vd[3] = {jvk[0], jvk[1], jvk[2]}; T wd[3] = {jvk[3], jvk[4], jvk[5]};",
+                "  for (int a = 0; a < 3; a++) {",
+                "    T ea[3] = {static_cast<T>(a==0), static_cast<T>(a==1), static_cast<T>(a==2)};",
+                "    T ew[3] = {ea[1]*w_lin[2]-ea[2]*w_lin[1], ea[2]*w_lin[0]-ea[0]*w_lin[2], ea[0]*w_lin[1]-ea[1]*w_lin[0]}; T ewd[3] = {ea[1]*wd[2]-ea[2]*wd[1], ea[2]*wd[0]-ea[0]*wd[2], ea[0]*wd[1]-ea[1]*wd[0]};",
+                "    T t[3] = {ew[1]*v_lin[2]-ew[2]*v_lin[1], ew[2]*v_lin[0]-ew[0]*v_lin[2], ew[0]*v_lin[1]-ew[1]*v_lin[0]}; T t1[3] = {ewd[1]*v_lin[2]-ewd[2]*v_lin[1], ewd[2]*v_lin[0]-ewd[0]*v_lin[2], ewd[0]*v_lin[1]-ewd[1]*v_lin[0]}; T t2[3] = {ew[1]*vd[2]-ew[2]*vd[1], ew[2]*vd[0]-ew[0]*vd[2], ew[0]*vd[1]-ew[1]*vd[0]};",
+                "    T td[3] = {t1[0]+t2[0], t1[1]+t2[1], t1[2]+t2[2]};",
+                "    botq[(3+a)*" + N + "+0] += dt*(R[0]*t[0] + R[1]*t[1] + R[2]*t[2]); dbotq[(3+a)*" + N + "+0] += dt*((Rd[0]*t[0] + Rd[1]*t[1] + Rd[2]*t[2]) + (R[0]*td[0] + R[1]*td[1] + R[2]*td[2]));",
+                "    botq[(3+a)*" + N + "+1] += dt*(R[3]*t[0] + R[4]*t[1] + R[5]*t[2]); dbotq[(3+a)*" + N + "+1] += dt*((Rd[3]*t[0] + Rd[4]*t[1] + Rd[5]*t[2]) + (R[3]*td[0] + R[4]*td[1] + R[5]*td[2]));",
+                "    botq[(3+a)*" + N + "+2] += dt*(R[6]*t[0] + R[7]*t[1] + R[8]*t[2]); dbotq[(3+a)*" + N + "+2] += dt*((Rd[6]*t[0] + Rd[7]*t[1] + Rd[8]*t[2]) + (R[6]*td[0] + R[7]*td[1] + R[8]*td[2]));",
+                "    T rt[3] = {R[3*a], R[3*a+1], R[3*a+2]}; T rtd[3] = {Rd[3*a], Rd[3*a+1], Rd[3*a+2]};",   # R^T e_a is ROW a
+                "    t[0] = w_lin[1]*rt[2]-w_lin[2]*rt[1]; t[1] = w_lin[2]*rt[0]-w_lin[0]*rt[2]; t[2] = w_lin[0]*rt[1]-w_lin[1]*rt[0]; t1[0] = wd[1]*rt[2]-wd[2]*rt[1]; t1[1] = wd[2]*rt[0]-wd[0]*rt[2]; t1[2] = wd[0]*rt[1]-wd[1]*rt[0]; t2[0] = w_lin[1]*rtd[2]-w_lin[2]*rtd[1]; t2[1] = w_lin[2]*rtd[0]-w_lin[0]*rtd[2]; t2[2] = w_lin[0]*rtd[1]-w_lin[1]*rtd[0];",
+                "    td[0] = t1[0]+t2[0]; td[1] = t1[1]+t2[1]; td[2] = t1[2]+t2[2];",
+                "    botv[a*" + N + "+0] += dt*(R[0]*t[0] + R[1]*t[1] + R[2]*t[2]); dbotv[a*" + N + "+0] += dt*((Rd[0]*t[0] + Rd[1]*t[1] + Rd[2]*t[2]) + (R[0]*td[0] + R[1]*td[1] + R[2]*td[2]));",
+                "    botv[a*" + N + "+1] += dt*(R[3]*t[0] + R[4]*t[1] + R[5]*t[2]); dbotv[a*" + N + "+1] += dt*((Rd[3]*t[0] + Rd[4]*t[1] + Rd[5]*t[2]) + (R[3]*td[0] + R[4]*td[1] + R[5]*td[2]));",
+                "    botv[a*" + N + "+2] += dt*(R[6]*t[0] + R[7]*t[1] + R[8]*t[2]); dbotv[a*" + N + "+2] += dt*((Rd[6]*t[0] + Rd[7]*t[1] + Rd[8]*t[2]) + (R[6]*td[0] + R[7]*td[1] + R[8]*td[2]));",
+                "    t[0] = ea[1]*v_lin[2]-ea[2]*v_lin[1]; t[1] = ea[2]*v_lin[0]-ea[0]*v_lin[2]; t[2] = ea[0]*v_lin[1]-ea[1]*v_lin[0]; td[0] = ea[1]*vd[2]-ea[2]*vd[1]; td[1] = ea[2]*vd[0]-ea[0]*vd[2]; td[2] = ea[0]*vd[1]-ea[1]*vd[0];",
+                "    botv[(3+a)*" + N + "+0] += dt*(R[0]*t[0] + R[1]*t[1] + R[2]*t[2]); dbotv[(3+a)*" + N + "+0] += dt*((Rd[0]*t[0] + Rd[1]*t[1] + Rd[2]*t[2]) + (R[0]*td[0] + R[1]*td[1] + R[2]*td[2]));",
+                "    botv[(3+a)*" + N + "+1] += dt*(R[3]*t[0] + R[4]*t[1] + R[5]*t[2]); dbotv[(3+a)*" + N + "+1] += dt*((Rd[3]*t[0] + Rd[4]*t[1] + Rd[5]*t[2]) + (R[3]*td[0] + R[4]*td[1] + R[5]*td[2]));",
+                "    botv[(3+a)*" + N + "+2] += dt*(R[6]*t[0] + R[7]*t[1] + R[8]*t[2]); dbotv[(3+a)*" + N + "+2] += dt*((Rd[6]*t[0] + Rd[7]*t[1] + Rd[8]*t[2]) + (R[6]*td[0] + R[7]*td[1] + R[8]*td[2]));",
+                "  }",
                 "}",
             ])
         self.gen_add_code_line("}")

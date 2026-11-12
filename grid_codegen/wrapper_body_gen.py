@@ -54,11 +54,14 @@ VJP_FORWARD_KEYS, VJP_GRAD_KEYS = _vjp_roles()
 # Increment-1 scope: the tight-style family (no sig-fork, no qdd fork, no
 # IT dispatch, no body_override).
 GENERATED_KEYS: tuple[str, ...] = (
+    "forward_dynamics_armature_gradient",
     # increment 1: tight style
     "nonlinear_effects", "generalized_gravity", "coriolis_matrix",
     "energy", "com", "ccrba", "dccrba", "cmm_time_variation",
     "kinetic_energy_regressor", "potential_energy_regressor",
     "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
+    "frame_velocity", "frame_acceleration",
+    "frame_velocity_gradient", "frame_acceleration_gradient",
     # increment 2a: expanded style (sig-fork; std5/so4 template shapes).
     # Canonicalized vs the hand originals: no nj/nv locals (grid:: names
     # inline) and a uniform (size_t)batch cast — both meaning-preserving,
@@ -141,6 +144,10 @@ CEIL_ROWS: tuple[tuple[str, str], ...] = (
     ("frame_jacobian", "frame_jacobian"),
     ("frame_jacobian_dot", "frame_jacobian_dot"),
     ("osc_inertia", "osc_inertia"),
+    ("frame_velocity", "frame_velocity"),
+    ("frame_acceleration", "frame_acceleration"),
+    ("frame_velocity_gradient", "frame_velocity_gradient"),
+    ("frame_acceleration_gradient", "frame_acceleration_gradient"),
     ("generalized_gravity", "generalized_gravity"),
     ("nonlinear_effects", "nonlinear_effects"),
     ("energy", "energy"),
@@ -281,6 +288,18 @@ BODY_COMMENTS: dict[str, str] = {
     "frame_jacobian_dot": (
         "    // -1 per arg => \"use default\" (leaf-EE / LWA); the host resolves each\n"
         "    // INDEPENDENTLY, so a default target with an explicit frame is honored."),
+    "frame_velocity": (
+        "    // -1 per arg => \"use default\" (leaf-EE / LWA); the host resolves each\n"
+        "    // INDEPENDENTLY, so a default target with an explicit frame is honored."),
+    "frame_acceleration": (
+        "    // -1 per arg => \"use default\" (leaf-EE / LWA); the host resolves each\n"
+        "    // INDEPENDENTLY, so a default target with an explicit frame is honored."),
+    "frame_velocity_gradient": (
+        "    // -1 per arg => \"use default\" (leaf-EE / LWA); the host resolves each\n"
+        "    // INDEPENDENTLY, so a default target with an explicit frame is honored."),
+    "frame_acceleration_gradient": (
+        "    // -1 per arg => \"use default\" (leaf-EE / LWA); the host resolves each\n"
+        "    // INDEPENDENTLY, so a default target with an explicit frame is honored."),
 }
 
 _PACK = {
@@ -301,6 +320,19 @@ _STUB_MSG = {
 def _paren(expr: str) -> str:
     e = expr.strip()
     return e if (e.startswith("(") and e.endswith(")")) or ("+" not in e and "-" not in e) else f"({e})"
+
+
+def _clamp_target(key, ksym, targs):
+    """Select overloaded kernels explicitly when taking their attribute address."""
+    target = f"grid::{ksym}<{targs}>"
+    signatures = {
+        "inverse_dynamics": "T*, const T*, int, const T*, T*, const grid::robotModel<T>*, T, int",
+        "inverse_dynamics_gradient": "T*, unsigned char*, const T*, int, const T*, T*, const grid::robotModel<T>*, T, int",
+        "forward_dynamics_gradient": "T*, unsigned char*, const T*, int, T*, const grid::robotModel<T>*, T, int",
+    }
+    if key in signatures:
+        target = f"static_cast<void(*)({signatures[key]})>({target})"
+    return target
 
 
 def gen_body(spec: AbiSpec) -> str:
@@ -334,7 +366,10 @@ def gen_body(spec: AbiSpec) -> str:
     if spec.key in BODY_COMMENTS:
         L.append(BODY_COMMENTS[spec.key])
     if spec.it_dispatch:
-        L.append(f"    GRID_RBD_IT_DISPATCH(it, {IT_LAUNCHER[spec.key]}, batch, gravity, dt);")
+        # the gradient names only the single-stage cases on a model whose gradient
+        # kernels support no multi-stage scheme (GRID_RBD_IT_DISPATCH_GRAD)
+        macro = "GRID_RBD_IT_DISPATCH_GRAD" if spec.key == "integrator_gradient" else "GRID_RBD_IT_DISPATCH"
+        L.append(f"    {macro}(it, {IT_LAUNCHER[spec.key]}, batch, gravity, dt);")
     else:
         grav = "gravity, " if spec.takes_gravity else ""
         trail = "".join(", " + a for a in spec.trailing_runtime_args)
@@ -447,11 +482,11 @@ def _gen_expanded(spec: AbiSpec, L: list[str]) -> str:
     grav = "gravity, " if spec.takes_gravity else ""
 
     def launch_lines(qdd_flag=None, indent="    "):
-        out = [f"#if defined({spec.sig_mjx_macro})",
+        out = ([f"#if defined({spec.sig_mjx_macro})",
                f"{indent}{sym}<T, {mid(qdd_flag)}, /*MUJOCO_OUTPUT=*/false, {tier}>(",
-               "#else",
+               "#else"] if spec.sig_mjx_macro else []) + [
                f"{indent}{sym}<T, {mid(qdd_flag)}, {tier}>(",
-               "#endif",
+               ] + (["#endif"] if spec.sig_mjx_macro else []) + [
                f"{indent}    g_data, g_robot, {grav}batch, dim3((unsigned)batch, 1, 1), "
                f"grid_rbd_launch_threads_n<grid::{launch}>(g_ctx, batch), g_streams);"]
         return out
@@ -685,6 +720,7 @@ TORCH_OPS_END = "// ── END GENERATED TORCH OP TABLE ──"
 # op they preceded). jax additionally emits id/id_grad (substitution there,
 # bespoke qdd-fork bodies on torch).
 TORCH_SURFACE_KEYS: tuple[str, ...] = (
+    "forward_dynamics_armature_gradient",
     "minv", "forward_dynamics", "aba", "crba", "end_effector_pose",
     "end_effector_pose_gradient", "end_effector_pose_hessian",
     "forward_dynamics_gradient", "fdsva_so", "inverse_dynamics_regressor",
@@ -692,8 +728,10 @@ TORCH_SURFACE_KEYS: tuple[str, ...] = (
     "nonlinear_effects", "coriolis_matrix", "kinetic_energy_regressor",
     "potential_energy_regressor", "energy", "com", "ccrba",
     "cmm_time_variation", "dccrba", "frame_jacobian", "frame_jacobian_dot",
-    "osc_inertia")
+    "osc_inertia", "frame_velocity", "frame_acceleration",
+    "frame_velocity_gradient", "frame_acceleration_gradient")
 JAX_SURFACE_KEYS: tuple[str, ...] = (
+    "forward_dynamics_armature_gradient",
     "inverse_dynamics", "minv", "forward_dynamics", "aba", "crba",
     "end_effector_pose", "end_effector_pose_gradient",
     "end_effector_pose_hessian", "inverse_dynamics_gradient",
@@ -702,7 +740,8 @@ JAX_SURFACE_KEYS: tuple[str, ...] = (
     "nonlinear_effects", "coriolis_matrix", "kinetic_energy_regressor",
     "potential_energy_regressor", "energy", "com", "ccrba",
     "cmm_time_variation", "dccrba", "frame_jacobian", "frame_jacobian_dot",
-    "osc_inertia")
+    "osc_inertia", "frame_velocity", "frame_acceleration",
+    "frame_velocity_gradient", "frame_acceleration_gradient")
 _TORCH_REGION_BANNERS = {"inverse_dynamics_regressor": "torch_sysid",
                          "generalized_gravity": "torch_ptier1"}
 _JAX_REGION_BANNERS = {"inverse_dynamics_regressor": "jax_regressor",
@@ -824,7 +863,7 @@ def emit_torch_body(key: str) -> str:
     L += [f"    auto out = grid_torch_empty(batch, {alloc_size}, q);",
           "    constexpr int stride = 3 * grid::NUM_JOINTS;",
           f"    grid::{ksym}<{targs}><<<grid_rbd_grid_for(g_ctx, batch), "
-          f"grid_rbd_launch_threads_n<grid::{algo}>(g_ctx, batch), {smem_bytes_call(spec)}, stream>>>(",
+          f"grid_clamp_threads_for({_clamp_target(key, ksym, targs)}, grid_rbd_launch_threads_n<grid::{algo}>(g_ctx, batch)), {smem_bytes_call(spec)}, stream>>>(",
           f"        {kargs});",
           f'    grid_torch_check_launch("{ksym}");']
     batch_sz = "(size_t)batch" if spec.hoist_out_size else "batch"
@@ -936,8 +975,9 @@ def emit_jax_handler(key: str) -> str:
     targs = (f"T, grid::launch_cfg<grid::{algo}>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO"
              if templated else "T")
     kargs = ", ".join(kernel_launch_args(spec, "jax"))
+    clamp_target = _clamp_target(key, ksym, targs)
     L.append(f"    grid::{ksym}<{targs}><<<")
-    L.append(f"        grid_rbd_grid_for(g_ctx, batch), grid_rbd_launch_threads_n<grid::{algo}>(g_ctx, batch), {smem_bytes_call(spec)}, stream>>>(")
+    L.append(f"        grid_rbd_grid_for(g_ctx, batch), grid_clamp_threads_for({clamp_target}, grid_rbd_launch_threads_n<grid::{algo}>(g_ctx, batch)), {smem_bytes_call(spec)}, stream>>>(")
     L.append(f"            {kargs});")
     L.append(f'    GRID_RBD_FFI_CHECK_LAUNCH("{ksym}");')
     out_arg = kernel_launch_args(spec, "jax")[0]
@@ -1084,8 +1124,9 @@ TORCH_TABLE_ORDER: tuple[str, ...] = (
     "generalized_gravity", "nonlinear_effects", "coriolis_matrix",
     "kinetic_energy_regressor", "potential_energy_regressor", "energy",
     "com", "ccrba", "cmm_time_variation", "dccrba", "frame_jacobian",
-    "frame_jacobian_dot", "osc_inertia", "end_effector_pose_runtime",
-    "end_effector_pose_gradient_runtime",
+    "frame_jacobian_dot", "osc_inertia", "frame_velocity", "frame_acceleration",
+    "frame_velocity_gradient", "frame_acceleration_gradient",
+    "end_effector_pose_runtime", "end_effector_pose_gradient_runtime",
     # Wave D 2026-09-12: the plant cost quartet are REAL spec rows now (the
     # old COST side table dissolved); their table names de-prefix in
     # _torch_table_row (historical torch op naming).
@@ -1195,7 +1236,9 @@ def _torch_table_name(key: str) -> str:
 
 # pin-only stragglers (non-template impls, no mjx twin): (def schema, impl symbol, gate macro or None)
 _TORCH_STRAGGLERS: dict[str, list[tuple[str, str, str | None]]] = {
-    "regressors": [('"forward_dynamics_parameter_gradient(Tensor q, Tensor qd, Tensor u, float gravity, int ctx_id=0, Tensor? stamp_expect=None) -> Tensor"',
+    "regressors": [('"forward_dynamics_armature_gradient(Tensor q, Tensor qd, Tensor u, float gravity, Tensor? f_ext=None, int ctx_id=0) -> Tensor"',
+                    "torch_forward_dynamics_armature_gradient", "GRID_HAS_FORWARD_DYNAMICS_ARMATURE_GRADIENT"),
+                   ('"forward_dynamics_parameter_gradient(Tensor q, Tensor qd, Tensor u, float gravity, int ctx_id=0, Tensor? stamp_expect=None) -> Tensor"',
                     "torch_forward_dynamics_parameter_gradient", "GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT")],
     "plant_costs": [('"quadratic_input_cost(Tensor u, Tensor u_des, Tensor R, int ctx_id=0) -> Tensor[]"', "torch_quadratic_input_cost", None),
                     ('"joint_position_barrier(Tensor var, Tensor lower, Tensor upper, float mu, int ctx_id=0) -> Tensor[]"', "torch_joint_position_barrier", None),

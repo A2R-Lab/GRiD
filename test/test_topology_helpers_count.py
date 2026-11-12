@@ -1,7 +1,8 @@
 """Topology helpers: the count rule, the T-element footprint and the debug assert.
 
-`TOPOLOGY_HELPERS_COUNT` is `(not serial) * (5n + 1) + (not identical S) * n`
-with `n = max(NUM_POS, NUM_JOINTS)`; `TOPOLOGY_HELPERS_T_COUNT<T>()` is the
+`TOPOLOGY_HELPERS_COUNT` reserves the topology sections plus the actual S-index
+section, retaining historical padding with `n = max(NUM_POS, NUM_JOINTS)`;
+`TOPOLOGY_HELPERS_T_COUNT<T>()` is the
 block's footprint in T elements, exact for 4-byte T and a ceiling for 8-byte T
 against the arena byte sizer; a DEBUG_MODE header asserts the helper pointer is
 not null at the top of every helper-reading `_inner`, and a release header
@@ -40,7 +41,7 @@ def _expected_count(robot):
     n = max(robot.get_num_pos(), robot.get_num_joints())
     count = 0 if robot.is_serial_chain() else 5 * n + 1
     if not robot.are_Ss_identical(list(range(robot.get_num_joints()))):
-        count += n
+        count += max(n, len(robot.get_S_inds(robot.get_num_joints())))
     return count
 
 
@@ -85,3 +86,39 @@ def test_debug_header_asserts_only_when_helpers_exist(tmp_path):
     assert m, "inverse_dynamics_inner lacks the assert as its first line"
     _, iiwa = _gen(tmp_path, "iiwa14", False, debug=True)
     assert _ASSERT not in iiwa
+
+
+@pytest.mark.parametrize('name,floating', [('rizon4', False), ('go2', True),
+                                         ('fr3', True), ('free_body', True)])
+def test_uploaded_topology_capacity_is_initialized(name, floating):
+    from test.cuda_equivalents.free_body_contract import URDF
+    path = URDF if name == 'free_body' else robot_urdf(name)
+    gen = GRiDCodeGenerator(URDFParser().parse(str(path), floating_base=floating))
+    gen.gen_init_topology_helpers()
+    source = gen.code_str
+    match = re.search(r'int h_topology_helpers\[(\d+)\] = \{(.*?)\};', source, re.S)
+    assert match, 'host extent must include the entire device upload'
+    capacity = gen.gen_topology_helpers_size()
+    assert int(match.group(1)) == capacity
+    initializer = re.sub(r'//[^\n]*', '', match.group(2))
+    entries = [int(x.strip()) for x in initializer.split(',') if x.strip()]
+    assert len(entries) <= capacity
+    assert f'{capacity} * sizeof(int)' in source or f'{capacity}*sizeof(int)' in source
+    if name == 'free_body':
+        assert entries == [4, 5, 6, 1, 2, 3] and capacity == 7
+
+
+@pytest.mark.parametrize('kind', ['linear', 'polynomial'])
+@pytest.mark.parametrize('branched', [False, True])
+def test_floating_followers_do_not_underallocate_s_indices(tmp_path, kind, branched):
+    from test.cuda_equivalents.polynomial_coupling_model import write_polynomial_chain
+    path = write_polynomial_chain(tmp_path, kind=kind, branched=branched)
+    robot = URDFParser().parse(str(path), floating_base=True)
+    gen = GRiDCodeGenerator(robot)
+    gen.gen_init_topology_helpers()
+    match = re.search(r'int h_topology_helpers\[(\d+)\] = \{(.*?)\};', gen.code_str, re.S)
+    entries = [int(x.strip()) for x in re.sub(r'//[^\n]*', '', match.group(2)).split(',') if x.strip()]
+    assert len(entries) <= int(match.group(1)) == gen.gen_topology_helpers_size()
+    if not branched:
+        # Six root directions + all four physical scalar joints, though nv=8.
+        assert len(entries) == 10 and int(match.group(1)) == 10

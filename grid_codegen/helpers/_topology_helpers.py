@@ -371,9 +371,13 @@ def _joint_dynamics_folded_by_vslot(self):
     Reuses the EXACT jid->v-slot fold the baked bias emitters use
     (gen_inverse_dynamics_joint_dynamics_bias / _idg_damping_diag_cpp): iterate
     joints, skip the floating root, map jid->v-slot via _v_slot_cpp /
-    get_joint_index_v, and ACCUMULATE alpha*b / alpha*fr into the shared slot so
-    several mimic joints feeding one reduced coordinate fold to a single fused
-    coefficient. Returning the folded vectors here (rather than re-deriving the
+    get_joint_index_v, and ACCUMULATE alpha^2*b / |alpha|*fr into the shared
+    slot (the congruence G^T B G of the follower's own damping, and the
+    follower's Coulomb torque alpha*f*sign(alpha*qd_l); user ruling 2026-11-03)
+    so several mimic joints feeding one reduced coordinate fold to a single
+    fused coefficient. A polynomial follower has no constant fold, so a robot
+    with a damped or frictional polynomial follower refuses the runtime table
+    (its baked bias evaluates alpha(q) in the kernel instead). Returning the folded vectors here (rather than re-deriving the
     fold in init_joint_dynamics_params, _compile meta, and the bias read) keeps
     the device-table init, the persisted meta, and the bias reads agreeing BY
     CONSTRUCTION — the bit-identity invariant in C5 plan §3.4.
@@ -397,14 +401,33 @@ def _joint_dynamics_folded_by_vslot(self):
         if b == 0.0 and fr == 0.0:
             continue
         if HAS_MIMIC:
+            if self._alpha_is_variable(jid):
+                raise NotImplementedError(
+                    "runtime_joint_dynamics: joint " + str(self.robot.get_joint_by_id(jid).get_name())
+                    + " is a polynomial follower with damping or friction; its fold multiplier varies "
+                    "with the leader, so no per-slot table entry exists (bake the joint dynamics instead)")
             vs = self._v_slot_cpp(jid)
             alpha = float(self._alpha_for_jid(jid))
         else:
             vs = self.robot.get_joint_index_v(jid)
             alpha = 1.0
-        b_vslot[vs] += alpha * b
-        f_vslot[vs] += alpha * fr
+        b_fold, f_fold = _jd_alpha_fold(alpha, b, fr)
+        b_vslot[vs] += b_fold
+        f_vslot[vs] += f_fold
     return b_vslot, f_vslot
+
+
+def _jd_alpha_fold(alpha, b, fr):
+    """The reduced-coordinate coefficients of a joint's damping b and Coulomb
+    friction fr when the joint's velocity is alpha times the reduced slot's:
+    (alpha^2 b, |alpha| fr). The follower's torque b*qd_f + fr*sign(qd_f) with
+    qd_f = alpha qd_l projects onto the leader through alpha, which gives
+    alpha^2 b qd_l + |alpha| fr sign(qd_l) (the sign of alpha cancels in the
+    Coulomb term). Under the tanh model the smoothing width belongs to the
+    reduced slot, so the shape stays tanh(qd_l / w). Dissipation is then
+    non-negative for every sign of alpha (user ruling 2026-11-03; the earlier
+    single-alpha fold injected energy on a negative ratio)."""
+    return alpha * alpha * b, abs(alpha) * fr
 
 def gen_get_joint_dynamics_params_size(self):
     # runtime_joint_dynamics: nv damping + nv friction = 2*nv scalars, v-slot
@@ -451,6 +474,78 @@ def gen_init_joint_dynamics_params(self):
             self.gen_add_code_line("h_joint_dynamics_params[" + str(2 * nv + vs) + "] = static_cast<T>(" + repr(float(w)) + ");")
     self.gen_checked_table_tail("h_joint_dynamics_params", "d_joint_dynamics_params", str(size), "T")
     self.gen_legacy_init_wrapper("init_joint_dynamics_params", "T")
+
+def gen_get_armature_params_size(self):
+    # runtime_armature: one scalar per v-slot (the floating root's and spherical
+    # blocks' entries exist for indexing and stay zero).
+    return self.robot.get_num_vel()
+
+def gen_init_armature_params(self):
+    # Every new model uses the immutable artifact initializer, never live state.
+    initial = "artifact initializer" if any(self.initial_armature) else "all zero"
+    self.gen_add_func_doc("Initializes the mutable rotor-armature table in GPU memory (" + initial + ")",
+            ["Memory order is armature[0..nv-1], v-slot indexed (reduced coordinates); floating-root and spherical slots stay zero"],
+            [], "A pointer to the armature-params memory in the GPU")
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__host__")
+    self.gen_add_code_line("cudaError_t init_armature_params_checked(T **out, const char **failed_op = nullptr) {", True)
+    size = self.gen_get_armature_params_size()
+    self.gen_checked_host_alloc("h_armature_params", str(size), "T")
+    for slot, value in enumerate(self.initial_armature):
+        if value != 0:
+            self.gen_add_code_line(f"h_armature_params[{slot}] = static_cast<T>({value!r});")
+    self.gen_checked_table_tail("h_armature_params", "d_armature_params", str(size), "T")
+    self.gen_legacy_init_wrapper("init_armature_params", "T")
+
+def gen_set_armature_params(self):
+    # Native consumers and Python use the same validation and checked copies.
+    # Consumers own stream synchronization; the Python C ABI adds admission.
+    size = self.gen_get_armature_params_size()
+    allowed = " || ".join(f"i == {slot}" for slot in self._armature_vslots()) or "false"
+    self.gen_add_code_line("// Host-only validation. Reject before changing device bytes or model epochs.")
+    self.gen_add_code_line("template <typename T> __host__")
+    self.gen_add_code_line("cudaError_t validate_armature_params(const T *h_params, size_t count) {", True)
+    self.gen_add_code_lines([
+        f"if (count != {size} || (count && !h_params)) return cudaErrorInvalidValue;",
+        "for (size_t i = 0; i < count; ++i) {",
+        "    if (!isfinite(h_params[i]) || h_params[i] < T(0)) return cudaErrorInvalidValue;",
+        "    if (h_params[i] != T(0) && !std::isnormal(h_params[i])) return cudaErrorInvalidValue;",
+        f"    if (!({allowed}) && h_params[i] != T(0)) return cudaErrorInvalidValue;",
+        "}",
+        "return cudaSuccess;",
+    ])
+    self.gen_add_end_function()
+    self.gen_add_code_line("template <typename T> __host__")
+    self.gen_add_code_line("cudaError_t set_armature_params_checked(robotModel<T> *d_robotModel, const T *h_params, size_t count) {", True)
+    self.gen_add_code_lines([
+        "cudaError_t err = validate_armature_params(h_params, count);",
+        "if (err != cudaSuccess) return err;",
+        "if (!d_robotModel) return cudaErrorInvalidValue;",
+        "if (!count) return cudaSuccess;",
+        "robotModel<T> h_robotModel;",
+        "err = cudaMemcpy(&h_robotModel, d_robotModel, sizeof(robotModel<T>), cudaMemcpyDeviceToHost);",
+        "if (err != cudaSuccess) return err;",
+        "return cudaMemcpy(h_robotModel.d_armature_params, h_params, count*sizeof(T), cudaMemcpyHostToDevice);",
+    ])
+    self.gen_add_end_function()
+    self.gen_add_code_line("template <typename T> __host__")
+    self.gen_add_code_line("cudaError_t get_armature_params_checked(const robotModel<T> *d_robotModel, T *h_params, size_t count) {", True)
+    self.gen_add_code_lines([
+        f"if (count != {size} || !d_robotModel || (count && !h_params)) return cudaErrorInvalidValue;",
+        "if (!count) return cudaSuccess;",
+        "robotModel<T> h_robotModel;",
+        "cudaError_t err = cudaMemcpy(&h_robotModel, d_robotModel, sizeof(robotModel<T>), cudaMemcpyDeviceToHost);",
+        "if (err != cudaSuccess) return err;",
+        "return cudaMemcpy(h_params, h_robotModel.d_armature_params, count*sizeof(T), cudaMemcpyDeviceToHost);",
+    ])
+    self.gen_add_end_function()
+    # Keep the existing pointer-only convenience API for C++ callers. Callers
+    # with dynamic buffer lengths should use the checked API above.
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__host__")
+    self.gen_add_code_line("void set_armature_params(robotModel<T> *d_robotModel, const T *h_params) {", True)
+    self.gen_add_code_line(f"gpuErrchk(set_armature_params_checked(d_robotModel, h_params, {size}));")
+    self.gen_add_end_function()
 
 def gen_set_joint_dynamics_params(self):
     # runtime_joint_dynamics (mirror of gen_set_inertia_params): public mutator.
@@ -764,7 +859,9 @@ def _emit_mimic_q_fold(self):
                 continue
             qslot = qslot[0]
         j = self.robot.get_joint_by_id(ind)
-        if getattr(j, "is_mimic", False):
+        if getattr(j, "is_mimic", False) and not j.is_linear_coupling():
+            self.gen_add_code_line("s_temp[" + str(ind) + "] = " + self._coupling_value_cpp(ind) + ";")
+        elif getattr(j, "is_mimic", False):
             mult = j.get_mimic_multiplier()
             off = j.get_mimic_offset()
             if j.get_mimic_target_id() == -1 or mult == 0.0:
@@ -1408,7 +1505,10 @@ def gen_topology_helpers_size(self):
     # stays n.
     query_count = self.robot.get_num_joints()
     if not self.robot.are_Ss_identical(list(range(query_count))):
-        size += n
+        # A floating root emits six signed indices, not one. With multiple
+        # followers even max(nq, NJ) may be smaller than this actual section.
+        # Preserve historical padding while covering every emitted entry.
+        size += max(n, len(self.robot.get_S_inds(query_count)))
     return size
 
 def gen_topology_sparsity_helpers_python(self, INIT_MODE = False):
@@ -1467,12 +1567,16 @@ def gen_init_topology_helpers(self):
     self.gen_add_code_line("cudaError_t init_topology_helpers_checked(int **out, const char **failed_op = nullptr) {", True)
     # add the helpers needed
     code = []
+    # The upload copies the full capacity, including floating/mimic padding.
+    # An explicit extent zero-initializes that padding instead of over-reading
+    # an inferred-size host array.
+    capacity = self.gen_topology_helpers_size()
     if not self.robot.is_serial_chain():
         parent_inds = [str(self.robot.get_parent_id(jid)) for jid in range(n)]
         # generate sparsity helpers
         num_ancestors, num_subtree, running_sum_num_ancestors, running_sum_num_subtree = self.gen_topology_sparsity_helpers_python(True)
         _, _, running_sum_dva_cols_per_jid, _, _, running_sum_df_cols_per_jid, _ = self.gen_topology_sparsity_helpers_python()
-        code.extend(["int h_topology_helpers[] = {" + ",".join(parent_inds) + ", // parent_inds",
+        code.extend([f"int h_topology_helpers[{capacity}] = {{" + ",".join(parent_inds) + ", // parent_inds",
                      "                            " + ",".join(num_ancestors) + ", // num_ancestors",
                      "                            " + ",".join(num_subtree) + ", // num_subtree",
                      "                            " + ",".join(running_sum_num_ancestors) + ", // running_sum_num_ancestors",
@@ -1482,7 +1586,7 @@ def gen_init_topology_helpers(self):
             code.insert(-4,"                            " + ",".join(S_inds) + ", // S_inds")
     elif not self.robot.are_Ss_identical(list(range(n))):
             S_inds = self.robot.get_S_inds(n)
-            code.append("int h_topology_helpers[] = {" + ",".join(S_inds) + "}; // S_inds")
+            code.append(f"int h_topology_helpers[{capacity}] = {{" + ",".join(S_inds) + "}; // S_inds")
     self.gen_add_code_lines(code)
     
     # allocate and transfer data to the GPU and return the pointer to the memory
@@ -1708,6 +1812,8 @@ def _robotModel_members(self):
         members.append(("d_transform_params", "init_transform_params_checked<T>", "T"))
     if getattr(self, "runtime_joint_dynamics", False):
         members.append(("d_joint_dynamics_params", "init_joint_dynamics_params_checked<T>", "T"))
+    if getattr(self, "runtime_armature", False):
+        members.append(("d_armature_params", "init_armature_params_checked<T>", "T"))
     return members
 
 def gen_init_robotModel(self):

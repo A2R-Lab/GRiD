@@ -45,6 +45,8 @@ jobs:
         run: |
           pip install -r external/RBDReference/requirements-dev.txt
           pip install -r external/URDFParser/requirements.txt
+          # cmeel-tinyxml2 11 ships libtinyxml2.so.11; pin 3.9 links .so.10.
+          pip install "cmeel-tinyxml2<11"
 
       - name: Run RBDReference equivalence suite
         env:
@@ -66,7 +68,10 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -r external/URDFParser/requirements-dev.txt
+        run: |
+          pip install -r external/URDFParser/requirements-dev.txt
+          # cmeel-tinyxml2 11 ships libtinyxml2.so.11; pin 3.9 links .so.10.
+          pip install "cmeel-tinyxml2<11"
 
       - name: Run URDFParser tests
         run: python -m pytest external/URDFParser/tests -q

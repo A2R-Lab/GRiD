@@ -52,8 +52,9 @@ class VjpSpec:
     - u_via_minv:     extra ∂out/∂u = M⁻¹ contraction for the "u" input.
     - param_grad_op:  extra ∂out/∂π op (regressor / -M⁻¹Y) for "params".
     - nondiff:   inputs whose cotangent is None.
-    - fixed_base_only: the recipe is undefined on a floating base (integrator:
-                 the SE(3)-chart VJP is unimplemented — shells must raise)."""
+    - fixed_base_only: the recipe is undefined on a floating base (no recipe
+                 sets it since 2026-11-03; the integrator's state cotangent is
+                 pulled onto its tangent rows by the surfaces)."""
     residuals: tuple[str, ...]
     grad_op: str
     wrt: tuple[str, ...]
@@ -323,6 +324,22 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_layout="flat",
         py_rc3_msg="forward_dynamics not built into this robot .so — add 'forward_dynamics' to algorithm_list in register_robot() and rebuild",
         py_twin_guard='forward_dynamics_mujoco unavailable: floating-base .so only',
+    ),
+
+    "forward_dynamics_armature_gradient": AbiSpec(
+        "forward_dynamics_armature_gradient",
+        inputs=(("q", "const T*"), ("qd", "const T*"), ("u", "const T*"),
+                ("out", "T*"), ("batch", "int"), ("gravity", "T"),
+                ("f_ext", "const T*")),
+        pack_mode="q_qd_u", f_ext_mode="optional", takes_gravity=True,
+        launch_algo="GRID_ALGO_COUNT", template_shape="so4",
+        out_buffer="h_dqdd_da", out_copy="memcpy_h",
+        out_size_expr="grid::NUM_VEL * grid::NUM_ARMATURE_PARAMS",
+        py_out_dims=('num_vel_', 'num_armature_params_'),
+        out_layout=("reshape", ("num_vel_", "num_armature_params_")),
+        kernel_args=("OUT", "WS", "QQDU", "STRIDE", "FEXT", "ROBOT", "GRAV", "BATCH"),
+        jax_buffer_inputs=("q", "qd", "u", "f_ext"),
+        py_rc3_msg="forward_dynamics_armature_gradient requires its algorithm_list entry",
     ),
 
     "aba": AbiSpec(
@@ -645,6 +662,77 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_layout=("reshape", ("6", "6")),
         py_rc3_msg="osc_inertia not built into this robot .so — add 'osc_inertia' to algorithm_list in register_robot() and rebuild",
         py_twin_guard='osc_inertia_mujoco unavailable: floating-base .so with frame_jacobian only',
+    ),
+    # Item C (2026-11-03): frame twist J qd and frame acceleration J qdd + Jdot qd
+    # on the frame_jacobian inners; 6 entries per item ([linear; angular]) in the
+    # runtime reference frame. The acceleration packs qdd into the u slot.
+    "frame_velocity": AbiSpec(
+        "frame_velocity",
+        gate_form="ifdef",                                     # #ifdef GRID_HAS_FRAME_VELOCITY
+        not_built_msg="bare",
+        inputs=(("q", "const T*"), ("qd", "const T*"), ("out", "T*"),
+                ("batch", "int"), ("target_jid", "int"), ("reference_frame", "int")),
+        pack_mode="q_qd_null",
+        trailing_runtime_args=("target_jid", "reference_frame"),
+        out_buffer="h_frame_velocity", out_copy="memcpy_h",
+        out_size_expr="6",
+        has_mjx_twin=True, mjx_omits_tier=True,  # [D6] inner #ifdef in FJ twin block
+        py_out_dims=('6',),
+        out_layout="flat",
+        py_rc3_msg="frame_velocity not built into this robot .so — add 'frame_velocity' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='frame_velocity_mujoco unavailable: floating-base .so with frame_jacobian only',
+    ),
+    "frame_acceleration": AbiSpec(
+        "frame_acceleration",
+        gate_form="ifdef",                                     # #ifdef GRID_HAS_FRAME_ACCELERATION
+        not_built_msg="bare",
+        inputs=(("q", "const T*"), ("qd", "const T*"), ("qdd", "const T*"), ("out", "T*"),
+                ("batch", "int"), ("target_jid", "int"), ("reference_frame", "int")),
+        pack_mode="qdd_u_slot",   # qdd rides the u slot (like inverse_dynamics_regressor)
+        qdd_route="u_slot",
+        trailing_runtime_args=("target_jid", "reference_frame"),
+        out_buffer="h_frame_acceleration", out_copy="memcpy_h",
+        out_size_expr="6",
+        has_mjx_twin=True, mjx_omits_tier=True,
+        py_out_dims=('6',),
+        out_layout="flat",
+        py_rc3_msg="frame_acceleration not built into this robot .so — add 'frame_acceleration' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='frame_acceleration_mujoco unavailable: floating-base .so with frame_jacobian only',
+    ),
+    # Item C derivatives: [dv/dq | dv/dqd] (6 x 2 NV) and [da/dq | da/dqd | da/dqdd]
+    # (6 x 3 NV), column-major, in the runtime reference frame.
+    "frame_velocity_gradient": AbiSpec(
+        "frame_velocity_gradient",
+        gate_form="ifdef",                                     # #ifdef GRID_HAS_FRAME_VELOCITY_GRADIENT
+        not_built_msg="bare",
+        inputs=(("q", "const T*"), ("qd", "const T*"), ("out", "T*"),
+                ("batch", "int"), ("target_jid", "int"), ("reference_frame", "int")),
+        pack_mode="q_qd_null",
+        trailing_runtime_args=("target_jid", "reference_frame"),
+        out_buffer="h_frame_velocity_gradient", out_copy="memcpy_h",
+        out_size_expr="12*grid::NUM_VEL",
+        has_mjx_twin=True, mjx_omits_tier=True,
+        py_out_dims=('12 * num_vel_',),
+        out_layout=("colmajor", ("6", "2*num_vel_")),
+        py_rc3_msg="frame_velocity_gradient not built into this robot .so — add 'frame_velocity_gradient' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='frame_velocity_gradient_mujoco unavailable: floating-base .so with frame_jacobian only',
+    ),
+    "frame_acceleration_gradient": AbiSpec(
+        "frame_acceleration_gradient",
+        gate_form="ifdef",                                     # #ifdef GRID_HAS_FRAME_ACCELERATION_GRADIENT
+        not_built_msg="bare",
+        inputs=(("q", "const T*"), ("qd", "const T*"), ("qdd", "const T*"), ("out", "T*"),
+                ("batch", "int"), ("target_jid", "int"), ("reference_frame", "int")),
+        pack_mode="qdd_u_slot",
+        qdd_route="u_slot",
+        trailing_runtime_args=("target_jid", "reference_frame"),
+        out_buffer="h_frame_acceleration_gradient", out_copy="memcpy_h",
+        out_size_expr="18*grid::NUM_VEL",
+        has_mjx_twin=True, mjx_omits_tier=True,
+        py_out_dims=('18 * num_vel_',),
+        out_layout=("colmajor", ("6", "3*num_vel_")),
+        py_rc3_msg="frame_acceleration_gradient not built into this robot .so — add 'frame_acceleration_gradient' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='frame_acceleration_gradient_mujoco unavailable: floating-base .so with frame_jacobian only',
     ),
 
     # ── RNEA-derived centroidal/bias quantities ───────────────────────────────
@@ -1032,23 +1120,24 @@ MJX_F_EXT_REFUSAL = (
     "convention.")
 
 
-def py_dim_tokens(nq: int, nv: int, nee: int, nb: int) -> dict[str, int]:
+def py_dim_tokens(nq: int, nv: int, nee: int, nb: int, na: int | None = None) -> dict[str, int]:
     """The substitution table for expanding an AbiSpec.py_out_dims entry."""
     return {
         "num_joints_": nq,
         "num_vel_": nv,
         "num_ees_": nee,
         "num_bodies_": nb,
+        "num_armature_params_": na,
         "second_order_tensor_size": 4 * nv ** 3,
     }
 
 
-def expand_py_out_dims(spec: "AbiSpec", nq: int, nv: int, nee: int, nb: int):
+def expand_py_out_dims(spec: "AbiSpec", nq: int, nv: int, nee: int, nb: int, na: int | None = None):
     """Expand spec.py_out_dims to concrete ints, or None when dims are absent
     or reference an unavailable token value (e.g. nb unknown on an old .so)."""
     if not spec.py_out_dims:
         return None
-    toks = py_dim_tokens(nq, nv, nee, nb)
+    toks = py_dim_tokens(nq, nv, nee, nb, na)
     out = []
     for d in spec.py_out_dims:
         expr = d
@@ -1093,8 +1182,8 @@ _VJPS = {
     "integrator": VjpSpec(
         residuals=("q", "qd", "u"),
         grad_op="integrator_gradient",     # (2NV, 3NV) dAB → thirds (gq, gqd, gu)
-        wrt=("q", "qd", "u"),
-        fixed_base_only=True,              # SE(3)-chart VJP unimplemented
+        wrt=("q", "qd", "u"),              # the state cotangent is pulled onto the
+                                           # tangent rows first (integrator_state_cotangent)
     ),
 }
 for _k, _v in _VJPS.items():
@@ -1165,6 +1254,10 @@ _KERNEL_ARGS = {
     "frame_jacobian": ("OUT", "QQDU", "STRIDE", "JID", "FRAME", "ROBOT", "BATCH"),
     "frame_jacobian_dot": ("OUT", "QQDU", "STRIDE", "JID", "FRAME", "ROBOT", "BATCH"),
     "osc_inertia":  ("OUT", "WS", "QQDU", "STRIDE", "ROBOT", "BATCH"),
+    "frame_velocity": ("OUT", "QQDU", "STRIDE", "JID", "FRAME", "ROBOT", "BATCH"),
+    "frame_acceleration": ("OUT", "QQDU", "STRIDE", "JID", "FRAME", "ROBOT", "BATCH"),
+    "frame_velocity_gradient": ("OUT", "QQDU", "STRIDE", "JID", "FRAME", "ROBOT", "BATCH"),
+    "frame_acceleration_gradient": ("OUT", "QQDU", "STRIDE", "JID", "FRAME", "ROBOT", "BATCH"),
 }
 
 # id has qdd as 3rd kernel arg and no workspace (the torch fork's qdd branch);
@@ -1198,6 +1291,10 @@ _JAX_BUFFER_INPUTS = {
 _GATE_REQUIRES = {
     "frame_jacobian_dot": ("GRID_HAS_FRAME_JACOBIAN",),
     "osc_inertia": ("GRID_HAS_FRAME_JACOBIAN",),
+    "frame_velocity": ("GRID_HAS_FRAME_JACOBIAN",),
+    "frame_acceleration": ("GRID_HAS_FRAME_JACOBIAN", "GRID_HAS_FRAME_JACOBIAN_DOT"),
+    "frame_velocity_gradient": ("GRID_HAS_FRAME_JACOBIAN",),
+    "frame_acceleration_gradient": ("GRID_HAS_FRAME_JACOBIAN",),
 }
 
 _HOIST_OUT_SIZE = ("inverse_dynamics_regressor",
@@ -1311,10 +1408,12 @@ FAMILY_ATTR_SHORTS: dict[str, tuple[str, ...]] = {
                    "generalized_gravity", "nonlinear_effects", "coriolis_matrix", "energy"),
     "dyn_gradients": ("inverse_dynamics_gradient", "forward_dynamics_gradient",
                       "f_ext_gradient", "f_ext_gradient_dq"),
-    "regressors": ("inverse_dynamics_regressor", "forward_dynamics_parameter_gradient",
+    "regressors": ("inverse_dynamics_regressor", "forward_dynamics_parameter_gradient", "forward_dynamics_armature_gradient",
                    "kinetic_energy_regressor", "potential_energy_regressor"),
     "kinematics": ("end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian",
                    "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
+                   "frame_velocity", "frame_acceleration",
+                   "frame_velocity_gradient", "frame_acceleration_gradient",
                    "end_effector_pose_runtime", "end_effector_pose_gradient_runtime"),
     "centroidal": ("com", "ccrba", "dccrba", "cmm_time_variation"),
     "plant_costs": (),
@@ -1327,6 +1426,8 @@ NOT_LAUNCHED_BY_BINDINGS: frozenset[str] = frozenset(
 # inside the opt-in algorithm's own block) rather than always defined to 1/0.
 OPT_IN_GATE_SHORTS: frozenset[str] = frozenset(
     {"frame_jacobian", "frame_jacobian_dot", "osc_inertia",
+     "frame_velocity", "frame_acceleration",
+     "frame_velocity_gradient", "frame_acceleration_gradient",
      "end_effector_pose_runtime", "end_effector_pose_gradient_runtime"})
 # Build family of every ABI key (multi-TU arc). `python_only` rows have no
 # wrapper body and no family. Hand-written owners (tool/contact fext kernels,
@@ -1338,10 +1439,12 @@ FAMILY_OF: dict[str, str] = {
                                  "generalized_gravity", "nonlinear_effects", "coriolis_matrix", "energy")},
     **{k: "dyn_gradients" for k in ("inverse_dynamics_gradient", "forward_dynamics_gradient",
                                     "f_ext_gradient", "f_ext_gradient_dq", "f_ext_contact")},
-    **{k: "regressors" for k in ("inverse_dynamics_regressor", "forward_dynamics_parameter_gradient",
+    **{k: "regressors" for k in ("inverse_dynamics_regressor", "forward_dynamics_parameter_gradient", "forward_dynamics_armature_gradient",
                                  "kinetic_energy_regressor", "potential_energy_regressor")},
     **{k: "kinematics" for k in ("end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian",
                                  "fk_batched", "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
+                                 "frame_velocity", "frame_acceleration",
+                                 "frame_velocity_gradient", "frame_acceleration_gradient",
                                  "end_effector_pose_runtime", "end_effector_pose_gradient_runtime")},
     **{k: "centroidal" for k in ("com", "ccrba", "dccrba", "cmm_time_variation")},
     "integrator": "integrator",

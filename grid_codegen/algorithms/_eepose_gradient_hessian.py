@@ -12,7 +12,11 @@ from grid_codegen.helpers._code_generation_helpers import host_q_compressed_inpu
 
 def gen_end_effector_pose_inner_temp_mem_size(self, fixed_target_name = ""):
     num_ees = self.robot.get_total_leaf_nodes() if fixed_target_name == "" else 1
-    return 2*16*num_ees
+    # Caller scratch is only T-aligned. Reserve up to three T elements so the
+    # inner can align its ping-pong matrices to 16 bytes (FP32 and FP64). This
+    # keeps compiler-widened shared loads inside their read-only matrix half.
+    # All native arenas, spill sizes and public scratch queries use this count.
+    return 2*16*num_ees + 3
 
 def gen_end_effector_pose_inner_function_call(self, updated_var_names = None, fixed_target_name = "",
                                               temp_in_smem_expr = "true"):
@@ -68,6 +72,10 @@ def gen_end_effector_pose_inner(self, fixed_target_name = ""):
     # workspace moves to d_workspace when !TEMP_IN_SMEM. Reassigning s_temp at the
     # top keeps every s_temp[...] reference below unchanged.
     self.gen_add_code_line("if constexpr (!TEMP_IN_SMEM) { s_temp = d_workspace; } else { (void)d_workspace; }")
+    self.gen_add_code_line("// The scratch query includes alignment headroom; callers need only alignof(T).")
+    self.gen_add_code_line("// Keep widened matrix loads out of the concurrently written ping-pong half.")
+    self.gen_add_code_line("// Add padding to the original pointer so CUDA retains its address space.")
+    self.gen_add_code_line("s_temp += ((size_t(0) - reinterpret_cast<size_t>(s_temp)) & size_t(15)) / sizeof(T);")
     #
     # Initial Debug Prints if Requested
     #
@@ -587,7 +595,11 @@ def group_jacobian_jobs(self, fill_jobs, anchors):
         # The disjoint-column fast path writes an unscaled axis. A lone mimic
         # contribution still needs its multiplier, even after constant jobs
         # have been removed from this column.
-        if len(grp) == 1 and (not has_mimic or self._alpha_for_jid(grp[0][2]["j"]) == 1.0):
+        # (A polynomial follower's placeholder multiplier reads as one, so it is
+        # tested by kind: alone on a chain whose anchor its leader does not reach,
+        # it still scales by alpha(q) through the serial path.)
+        if len(grp) == 1 and (not has_mimic or (self._alpha_for_jid(grp[0][2]["j"]) == 1.0
+                                                and not self._alpha_is_variable(grp[0][2]["j"]))):
             single_jobs.append(grp[0])
         else:
             multi_groups.append(grp)
@@ -676,6 +688,10 @@ def emit_geometric_jacobian_jvjw(self, nv, num_ees, single_jobs, multi_groups, h
                 self.gen_add_code_line("  T axw_1 = s_Xworld[16*" + str(j) + " + 1]*ax0 + s_Xworld[16*" + str(j) + " + 5]*ax1 + s_Xworld[16*" + str(j) + " + 9]*ax2;")
                 self.gen_add_code_line("  T axw_2 = s_Xworld[16*" + str(j) + " + 2]*ax0 + s_Xworld[16*" + str(j) + " + 6]*ax1 + s_Xworld[16*" + str(j) + " + 10]*ax2;")
                 a = repr(float(alpha))
+                if self._alpha_is_variable(j):
+                    # polynomial follower: the fold multiplier alpha(q_l) at runtime
+                    self.gen_add_code_line("  const T al_v = " + self._coupling_alpha_cpp(j) + ";")
+                    a = "al_v"
                 if job["revolute"]:
                     self.gen_add_code_line("  s_Jw[" + str(col_base) + " + 0] += static_cast<T>(" + a + ") * axw_0; s_Jw[" + str(col_base) + " + 1] += static_cast<T>(" + a + ") * axw_1; s_Jw[" + str(col_base) + " + 2] += static_cast<T>(" + a + ") * axw_2;")
                     self.gen_add_code_line("  T dx = s_Xworld[16*" + str(ee_anchor) + " + 12] - s_Xworld[16*" + str(j) + " + 12];")
@@ -2715,6 +2731,8 @@ def _ee_pose_inner_angle_expr(self, jid):
     lets the standalone (d_robotModel-free) FK inner support mimic robots without
     the general load_update path's s_q_eff scratch."""
     joint = self.robot.get_joint_by_id(jid)
+    if joint is not None and joint.is_mimic_joint() and not joint.is_linear_coupling():
+        return self._coupling_value_cpp(jid)
     if joint is not None and joint.is_mimic_joint():
         src = int(joint.get_mimic_target_id())
         mult = float(joint.get_mimic_multiplier())

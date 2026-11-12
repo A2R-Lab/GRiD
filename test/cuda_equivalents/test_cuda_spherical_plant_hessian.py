@@ -11,6 +11,7 @@ import xml.etree.ElementTree as ET
 from test.cuda_equivalents.manifold_oracle import reference, state, derivative
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from test.cuda_equivalents.executable_cache import cached_nvcc_executable
+from test.cuda_equivalents.thread_invariance import thread_sweep
 
 pytestmark=[pytest.mark.cuda_equivalence,pytest.mark.robot_smoke]
 
@@ -52,10 +53,10 @@ def test_spherical_plant_hessian(tmp_path,name,precision,scheme,tier):
     fd=derivative(lambda d: ref.plant_step_gradient(ref.integrate(q,d[:nv]),
         v+d[nv:2*nv],u+d[2*nv:],dt,integrator_type=scheme),3*nv).transpose(0,2,1)
     np.testing.assert_allclose(oracle,fd,atol=2e-7,rtol=2e-7)
-    baseline=None
+    tol=3e-4 if precision=='float' else 1e-9
     # Test the stock shared-tier admission, plus the minimal tier's larger
     # supported blocks. An inadmissible request must refuse before launch.
-    for threads in (1,17,32,64,128,256):
+    def run(threads):
         prefix=tmp_path/f'out-{threads}-'
         ran=subprocess.run([str(exe),str(tmp_path/'input.bin'),str(prefix),str(threads)],capture_output=True,text=True)
         (tmp_path/f'run-{threads}.log').write_text(ran.stdout+ran.stderr)
@@ -64,11 +65,11 @@ def test_spherical_plant_hessian(tmp_path,name,precision,scheme,tier):
             # The n=3 single-spherical stock shared kernel admits one warp;
             # larger tested models admit two. Minimal tier exercises all sizes.
             assert 32<=int(ran.stdout.split('=')[1])<threads
-            continue
+            return None
         assert ran.returncode==0,ran.stdout+ran.stderr
-        for repeat in (0,1):
-            actual=np.fromfile(str(prefix)+str(repeat),dtype=dtype).reshape(oracle.shape)
-            tol=3e-4 if precision=='float' else 1e-9
-            np.testing.assert_allclose(actual,oracle,atol=tol,rtol=tol)
-            if baseline is not None: np.testing.assert_array_equal(actual,baseline)
-            baseline=actual
+        # Two launches in one process: both repeats must agree bit for bit.
+        return np.stack([np.fromfile(str(prefix)+str(repeat),dtype=dtype).reshape(oracle.shape) for repeat in (0,1)])
+    def check(actual,_):
+        np.testing.assert_allclose(actual[0],oracle,atol=tol,rtol=tol)
+        np.testing.assert_array_equal(actual[1],actual[0])
+    thread_sweep((1,17,32,64,128,256),run,check,select=lambda actual,_:actual[0])

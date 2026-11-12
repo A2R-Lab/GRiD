@@ -65,6 +65,45 @@ Hold D_2 fixed within that linearization. If the normalized covector is mu,
 the original-residual covector is ``solve(D_2.T,mu)``. A solver owns this choice,
 including warm starts, conditioning and higher-order terms.
 
+Full base-force inputs
+-----------------------
+
+On the Pinocchio-convention torque plant, ``u`` contains ``nv`` generalized
+forces. A free-flyer occupies rows ``0:6``: body-local force ``[Fx,Fy,Fz]``
+in newtons followed by body-local moment ``[Mx,My,Mz]`` in newton-metres,
+about the floating body-frame origin, not necessarily its centre of mass.
+Positive components act along the corresponding positive body axes. Remaining
+rows follow independent joint tangent coordinates. A pure free body therefore
+has six force inputs despite having no actuated scalar joints.
+
+This applies to the generated ``grid_plant::plant_step_kernel`` and
+``plant_step_gradient_kernel`` and the Python handle's ``plant_step`` and
+``plant_step_gradient`` methods, including prepared loading. State storage is
+``[position_world, quaternion_xyzw, velocity_body_linear, velocity_body_angular]``
+for the pure free body; the tangent and output charts are those defined above.
+The bounded free-body acceptance covers Euler and semi-implicit Euler in both
+precisions. It does not establish MuJoCo-coordinate equivalence or additional
+integrator support.
+
+A force f applied at body-fixed position r relative to the body origin contributes
+``[f, cross(r,f) + reaction_moment]``. If the COM is c, the equivalent moment
+about the COM is ``moment_origin - cross(c,f)``. Do not discard this lever arm
+or append these forces to the world-aligned contact-force tail.
+
+For fixed rotor geometry, collect these columns into a constant matrix G and
+use ``u_base=G*command``. Then ``B_command=B_u[:,0:6]*G``; there is no extra
+actuation-map term in A when G is truly constant in this body frame. The
+dynamics, gravity and manifold maps remain state-dependent. State-dependent
+actuation requires its own chain rule. This contract does not supply rotor
+states, bounds, controller logic or an actuation-provider interface.
+
+The permanent ``free_body_contract.urdf`` fixture and independent Newton--Euler
+oracle under ``test/cuda_equivalents`` include an offset COM, tilted attitude,
+nonzero rates, each wrench axis and a four-column rotor map. They check complete
+discrete A/B in the same chart, not merely acceleration derivatives. Consumer
+adapters must preserve nonzero base rows; upstream tests do not attest adapters
+that zero those rows.
+
 What plant_step_hessian means
 ------------------------------------
 
@@ -178,9 +217,10 @@ derivatives with respect to a parameter.
      - Operation-specific signatures govern exposure; hold buffers through use.
        A consumer may compile dt/gravity into its artifact.
    * - Enabled mutable tables
-     - Inertia, joint dynamics, spatial transforms
-     - Loaded-module state shared by backend views. Quiesce and order readers
-       before mutation; separate handles do not isolate tables.
+     - Inertia, armature, joint dynamics, spatial transforms
+     - Native-context model state shared by views of that context. Distinct
+       explicit contexts isolate tables; another handle to the default context
+       is an alias, not a new model. Quiesce and order readers before mutation.
    * - Execution configuration
      - Stream, threads, launch resources, caller workspace
      - Caller owns admission, ordering, publication and lifetime.

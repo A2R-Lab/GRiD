@@ -106,10 +106,18 @@ int main(){
         size_t k_smem_min = grid::MULTI_TARGET_POSITION_DYNAMIC_SHARED_MEM_BYTES<T, grid::TIER_MINIMAL>();
         cudaFuncSetAttribute(grid::multi_target_position_kernel<T, grid::TIER_SHARED>,  cudaFuncAttributeMaxDynamicSharedMemorySize,(int)k_smem_sh);
         cudaFuncSetAttribute(grid::multi_target_position_kernel<T, grid::TIER_MINIMAL>,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)k_smem_min);
-        grid::multi_target_position_kernel<T, grid::TIER_SHARED><<<NTS,128,k_smem_sh>>>(d_out4,d_wsk,d_q4,NQ,d_m,NTS);
+        // the production kernel carries __launch_bounds__(tier_max_threads<TIER>()), a cap the
+        // generator sizes from the topology (96 on a four-joint branched chain): a launch above
+        // it is rejected with cudaErrorInvalidValue, which only cudaGetLastError reports, so the
+        // thread count is clamped to the bound and the launch itself is checked (2026-11-03).
+        const int thr_sh = std::min(128, grid::tier_max_threads<grid::TIER_SHARED>());
+        grid::multi_target_position_kernel<T, grid::TIER_SHARED><<<NTS,thr_sh,k_smem_sh>>>(d_out4,d_wsk,d_q4,NQ,d_m,NTS);
+        CK(cudaGetLastError());
         CK(cudaDeviceSynchronize());
         CK(cudaMemcpy(out_sh.data(),d_out4,3*NT*NTS*sizeof(T),cudaMemcpyDeviceToHost));
-        grid::multi_target_position_kernel<T, grid::TIER_MINIMAL><<<NTS,128,k_smem_min>>>(d_out4,d_wsk,d_q4,NQ,d_m,NTS);
+        const int thr_min = std::min(128, grid::tier_max_threads<grid::TIER_MINIMAL>());
+        grid::multi_target_position_kernel<T, grid::TIER_MINIMAL><<<NTS,thr_min,k_smem_min>>>(d_out4,d_wsk,d_q4,NQ,d_m,NTS);
+        CK(cudaGetLastError());
         CK(cudaDeviceSynchronize());
         CK(cudaMemcpy(out_min.data(),d_out4,3*NT*NTS*sizeof(T),cudaMemcpyDeviceToHost));
         for(size_t i=0;i<out_sh.size();++i) kdiff=std::max(kdiff,fabs(out_sh[i]-out_min[i]));

@@ -289,6 +289,41 @@ class BaseDelegateMixin:
         return self._base.joint_damping
 
     @property
+    def armature(self):
+        """Read a copy of this context's current armature (length nv,
+        reduced coordinates). Runtime-table inspection may synchronize."""
+        return self._base.armature
+
+    @property
+    def initial_armature(self):
+        return self._base.initial_armature
+
+    @property
+    def armature_slots(self):
+        return self._base.armature_slots
+
+    @property
+    def armature_units(self):
+        return self._base.armature_units
+
+    @property
+    def num_armature_params(self):
+        return self._base.num_armature_params
+
+    @property
+    def runtime_armature(self) -> bool:
+        """True if registered with ``runtime_armature=True`` (mutable rotor-armature
+        table + :py:meth:`set_armature`). The backend kernels read the same
+        device-resident table, so a poke through any surface is seen here."""
+        return self._base.runtime_armature
+
+    def set_armature(self, values) -> None:
+        """Install a rotor armature at runtime (no recompile): finite, nonnegative,
+        length nv, reduced coordinates, zero on floating-root and spherical slots. Only on a
+        ``runtime_armature`` build."""
+        self._base.set_armature(values)
+
+    @property
     def joint_friction(self):
         """Baked per-v-slot Coulomb friction (length nv). Only on a
         ``runtime_joint_dynamics`` build."""

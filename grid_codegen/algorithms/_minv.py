@@ -32,6 +32,11 @@ def gen_minv_inner_temp_mem_size(self):
     (at offset 0) and s_temp (at offset 6*NV*NV) to minv_inner."""
     return self.gen_minv_inner_F_size() + self.gen_minv_inner_no_F_size()
 
+def _minv_armature_term_cpp(self, dof):
+    """Armature: ``+ a[dof]`` on the articulated D before its inverse
+    (Minv = inv(M + diag(a))); ``dof`` is a v-slot literal or a C expression."""
+    return self._armature_term_cpp(dof)
+
 def gen_minv_inner_function_call(self, updated_var_names = None,
                                         f_in_smem_expr = "true"):
     var_names = dict( \
@@ -49,7 +54,8 @@ def gen_minv_inner_function_call(self, updated_var_names = None,
     # passes both arenas + the placement; sizes come from
     # MINV_INNER_{SMEM,WORKSPACE}_BYTES<T, F_IN_SMEM>().
     minv_code_start = "minv_inner<T, " + f_in_smem_expr + ">(" + var_names["s_Minv_name"] + ", " + var_names["s_q_name"] + ", "
-    minv_code_end = var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + ");"
+    _minv_rt = (", " + var_names.get("d_robotModel_name", "d_robotModel")) if getattr(self, "runtime_armature", False) else ""
+    minv_code_end = var_names["s_temp_name"] + ", " + var_names["d_workspace_name"] + _minv_rt + ");"
     minv_code_middle = self.gen_insert_helpers_function_call()
     minv_code = minv_code_start + minv_code_middle + minv_code_end
     self.gen_add_code_line(minv_code)
@@ -73,8 +79,10 @@ def _gen_minv_inner_via_crba(self, n, label):
     mimic CRBA band is <= 42*NB; the spherical CRBA band is 36*NB+36 — both <=
     no_F = 36*NV + 6*NV + d_inv + 36*2*max_bfs_width for these robots; verified
     in the equivalence test). invert_matrix writes the FULL dense symmetric
-    inverse into s_Minv; forward_dynamics_finish / gen_minv_apply read only its
-    upper triangle (SYMMETRIC_UPPER), which is correct for a dense symmetric M^-1.
+    inverse into s_Minv. Clear the lower triangle to satisfy the same
+    SYMMETRIC_UPPER storage contract as the recursive path. Python surfaces
+    reconstruct the dense matrix from this buffer; leaving both triangles set
+    doubles off-diagonal entries there and in control-input autograd.
     """
     self.gen_add_code_line("// " + label + " Minv = inv(CRBA(q))")
     # M lives in s_F[0..NV*NV); the rest of s_F (6*NV*NV total) is invert scratch.
@@ -86,10 +94,14 @@ def _gen_minv_inner_via_crba(self, n, label):
     # Signature: crba_inner(s_M, s_q, s_qd, [s_XImats, s_topology_helpers], s_temp, d_workspace, gravity)
     self.gen_add_code_line(
         "crba_inner<T, true>(s_M_reduced, s_q, s_q, " + helpers
-        + "s_temp, nullptr, static_cast<T>(0));")
+        + "s_temp, nullptr, static_cast<T>(0)" + (", d_robotModel" if getattr(self, "runtime_armature", False) else "") + ");")
     self.gen_add_sync()
     # Invert the reduced NV x NV mass matrix into s_Minv (dense, block-cooperative).
     self.gen_add_code_line("invert_matrix(" + str(n) + ", s_M_reduced, s_Minv, s_invert_temp);")
+    self.gen_add_sync()
+    self.gen_add_parallel_loop("ind", str(n*n))
+    self.gen_add_code_line(f"if (ind % {n} > ind / {n}) s_Minv[ind] = static_cast<T>(0);")
+    self.gen_add_end_control_flow()
     self.gen_add_sync()
     self.gen_add_end_function()
 
@@ -124,7 +136,12 @@ def gen_minv_inner(self):
                   "the MINV_INNER_*_BYTES constants and hands both pointers in. Codegen maps each", \
                   "RESOURCE_TIER to an F_IN_SMEM value per robot (MINV_F_IN_SMEM<TIER>())."]
     func_def_start = "void minv_inner(T *s_Minv, const T *s_q, "
-    func_def_end = "T *s_temp, T *d_workspace) {"
+    # runtime_armature: the D sites (and the inv(CRBA) paths) read diag(a) through
+    # a trailing defaulted d_robotModel; byte-identical signature when off.
+    if getattr(self, "runtime_armature", False):
+        func_def_end = "T *s_temp, T *d_workspace, const robotModel<T> *d_robotModel = nullptr) {"
+    else:
+        func_def_end = "T *s_temp, T *d_workspace) {"
     func_def_start, func_params = self.gen_insert_helpers_func_def_params(func_def_start, func_params, -1)
     func_def = func_def_start + func_def_end
     self.gen_add_func_doc("Compute the inverse of the mass matrix",\
@@ -253,7 +270,7 @@ def gen_minv_inner(self):
                 Svec = _minv_Svec_cpp(self.robot, jid)
                 self.gen_add_code_line("{ const T S_skew[6] = " + Svec + ";")
                 self.gen_add_code_line("  for (int r = 0; r < 6; r++) { T acc = static_cast<T>(0); for (int p = 0; p < 6; p++) { acc += s_temp[" + str(IAOffset) + " + 6*" + str(jid6) + " + r + 6*p] * S_skew[p]; } s_temp[" + str(UOffset) + " + " + str(jid6) + " + r] = acc; }")
-                self.gen_add_code_line("  s_temp[" + str(DinvOffset) + " + " + str(jid) + "] = static_cast<T>(1)/dot_prod<T,6,1,1>(S_skew, &s_temp[" + str(UOffset) + " + " + str(jid6) + "]);")
+                self.gen_add_code_line("  s_temp[" + str(DinvOffset) + " + " + str(jid) + "] = static_cast<T>(1)/(dot_prod<T,6,1,1>(S_skew, &s_temp[" + str(UOffset) + " + " + str(jid6) + "])" + _minv_armature_term_cpp(self, dof_diag) + ");")
                 self.gen_add_code_line("  s_Minv[" + str(n + 1) + " * " + str(dof_diag) + "] = s_temp[" + str(DinvOffset) + " + " + str(jid) + "]; }")
             self.gen_add_end_control_flow()
             self.gen_add_sync()
@@ -274,7 +291,7 @@ def gen_minv_inner(self):
                 self.gen_add_parallel_loop("row",str(6))
             self.gen_add_code_line("s_temp[" + str(UOffset) + " + " + jid6 + " + row] = (" + S_sign_cpp + ") * s_temp[" + str(IAOffset) + " + 6*" + jid6 + " + 6*" + S_ind_cpp + " + row];")
             self.gen_add_code_line("if(row == " + S_ind_cpp + "){", True)
-            self.gen_add_code_line("s_temp[" + str(DinvOffset) + " + " + jid + "] = static_cast<T>(1)/((" + S_sign_cpp + ") * s_temp[" + str(UOffset) + " + " + jid6 + " + " + S_ind_cpp + "]);")
+            self.gen_add_code_line("s_temp[" + str(DinvOffset) + " + " + jid + "] = static_cast<T>(1)/((" + S_sign_cpp + ") * s_temp[" + str(UOffset) + " + " + jid6 + " + " + S_ind_cpp + "]" + _minv_armature_term_cpp(self, ("(" + jid + " + 5)") if self.robot.floating_base else jid) + ");")
             # need offset due to floating base matrix in upper left
             if self.robot.floating_base: self.gen_add_code_line(f's_Minv[{str(n + 1)} * ({jid} + 5)]' + " = s_temp[" + str(DinvOffset) + " + " + jid + "];")
             else: self.gen_add_code_line("s_Minv[" + str(n + 1) + " * " + jid + "] = s_temp[" + str(DinvOffset) + " + " + jid + "];")

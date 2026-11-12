@@ -26,7 +26,7 @@ emitting CUDA C++ from URDFs; numpy/pinocchio reference oracle lives in `RBDRefe
 | "out of memory" on a nearly-empty GPU (big robot) | §1y (int overflow in size arithmetic), §1v (stack `const T[]`) |
 | Kernel got SLOWER after adding per-thread arrays | §1u (register-array spill — block-share it) |
 | Spill tier still over budget after "reducing" | §1t (reduction must apply inside the max()) |
-| Sanitizer (racecheck/initcheck) findings | §1r (two known non-bugs) FIRST |
+| Sanitizer (racecheck/initcheck) findings | §1r (widened loads and timing-only reads) FIRST |
 | Fixed-target EE chain silently wrong/dead | §1s (fixed jid has no link) |
 | Spherical fixed-base buffer too small | §1ab (`n+fb` is not a position-space width) |
 | Equivalence test flakes / stale results after codegen edit | §0 (cache discipline), §7 (test-infra gotchas) |
@@ -176,7 +176,7 @@ humanoids) launched with `cudaErrorInvalidValue` ("invalid argument") while thei
   manifest-parity test over relying on a GPU run to surface it.
 
 ### 1g. In-kernel mjx OUTPUT-BAND scratch must be spill-aware (aliases spilled buffers → state-dependent garbage)
-**Found in fdsva_so mjx (2026-06-09, still open).** An mjx epilogue that writes a large output band into
+**Found in fdsva_so mjx (2026-06-09; closed 2026-06-10 by 6b96d3e2, the epilogue recomputes into a disjoint `d_mjx_scratch` band, unguarded in 8c0fbb46 and validated against the oracle on go2; this entry stayed marked open until 2026-11-03).** An mjx epilogue that writes a large output band into
 "dead" scratch (`s_temp`) is WRONG on robots where the algorithm SPILLS: `s_temp`==`d_workspace`, and the
 spilled live buffers (`s_df_du`, `s_Minv`) ALSO live in `d_workspace` → the band overlaps them →
 state-dependent garbage (the result depends on the PREVIOUS kernel call's `d_workspace` contents; jax≠torch
@@ -185,8 +185,9 @@ in an interleaved test but deterministic in isolation — the tell-tale signatur
   after a different op (changes? → reads cross-call global state = a spilled-buffer alias).
 - **Rule:** an in-kernel scratch band must be provably DEAD *and* DISJOINT in BOTH the smem and the spilled
   layouts. A buffer that's disjoint in smem can alias in `d_workspace`. (Reusing `s_idsva_so` made fdsva_so
-  deterministic but still wrong — `s_df_du`/`s_Minv` are likely clobbered before the epilogue reads them, a
-  second liveness bug. Open.) This is the general **mjx-vs-tier-spill** hazard: the spill classifier never saw
+  deterministic but still wrong — `s_df_du`/`s_Minv` were clobbered before the epilogue read them, the
+  second liveness bug; the fix recomputes Minv, qdd and the first-order gradients fresh into their own
+  spill-disjoint band.) This is the general **mjx-vs-tier-spill** hazard: the spill classifier never saw
   the mjx epilogue's scratch usage.
 
 ### 1h. Templating a wrapper on a flag that only ONE kernel overload carries
@@ -413,29 +414,56 @@ under the §1p 0xFF sweep — the slots ARE written, only their *summation order
   converted). Same family as §1b (a shared-reduce fix has fleet-wide blast radius — prefer the narrowest
   per-fold change, Gate-A byte-identical on fixed-base).
 
-### 1r. Two sanitizer findings that are NOT bugs — do not "fix" them (2026-07-11)
+### 1r. Sanitizer triage: widened loads and timing-only reads (updated 2026-11-07)
 
-Both were investigated to the bottom during Inc4b (multi_target bench registration) and cost real time.
-**Triage them with the tests below before touching any code** — the "fix" in both cases would perturb
-oracle-validated codegen (and break header byte-identity) for zero correctness gain.
+Classify distinct sites from source ownership AND optimized machine accesses.
+WARN severity, equal current/incoming bytes and repeatable numerical answers
+are not general proofs of safety. Preserve the raw report and exact compiler.
 
 **(a) `racecheck` "Potential WAR hazard (Warp Level Programming)" in `end_effector_pose_kernel`.**
-Reported as **3 hazards / 0 errors / 3 WARNINGS** (racecheck classifies genuine races as *errors*;
-"Potential ..." is advisory). It is a FALSE POSITIVE on a **structurally-constant** shared slot:
-`s_XmatsHom` is re-written each timestep from the FIXED `d_XImats` model data, and a homogeneous
-transform's `[3][3]` element is **always exactly 1.0** (products of homogeneous transforms preserve the
-bottom row `[0,0,0,1]`). So iteration *k*'s read and iteration *k+1*'s rewrite touch a slot whose value
-never changes.
-  * **The tell:** racecheck prints `Current Value : X, Incoming Value : X` — *identical* — on every
-    flagged access. A WAR can only corrupt anything if the write changes what the reader observes; when
-    incoming == current, no execution order can produce a different result. **If Current == Incoming on
-    every access, stop — it is benign.**
-  * Source check confirms it: every access pair is separated by `__syncthreads()` (`load_update_XmatsHom`
-    ends with one; every serial-chain ping-pong level ends with one), and within a level the reads/writes
-    hit **disjoint halves** of `s_temp` (`[0..15]` vs `[16..31]`).
-  * Empirical confirmation (do this, it's cheap): ee_pose is **bit-identical across 8 runs** and agrees
-    with the INDEPENDENT `multi_target_position` FK path to float32 eps — plus it already passes CUDA
-    equivalence vs the numpy oracle across the robot matrix.
+The earlier constant-slot/between-timestep explanation was incorrect. A single
+TIAGo evaluation reproduces three sites on CUDA 13.2/sm_120. Source-level reads
+and writes use disjoint ping-pong halves with barriers between products, but a
+float-aligned scratch pointer can be 4 mod 16. The compiler then emits an
+`LDS.128` starting one word before the requested column, plus a scalar last-word
+load. The first register from the wide load is unused by the arithmetic; its
+physical read overlaps the last word of the concurrently written other half.
+Racecheck sees that overlap correctly. A standalone generic-matrix reproducer
+also reports it when the current/incoming bytes DIFFER, without GRiD or GLASS.
+
+The narrow repair reserves three extra T elements in the pose scratch count
+and aligns the live matrix banks inside that allocation. Every bank and column
+then starts at a 16-byte boundary. The caller still needs only `alignof(T)`;
+native arenas, global workspace and public queries must all include the same
+headroom. No new barriers, volatile arithmetic, optimizer switches or warning
+suppression. Rebuild consumers with the new queries; hard-coded old sizes are
+not sufficient.
+
+Preserve the original pointer when aligning: compute the low-bit padding, then
+add that many T elements. Rounding an integer address and converting it back
+lost shared-address-space information in CUDA 13.2/sm_120: the iiwa pose kernel
+used generic LD/ST instructions instead of LDS/STS and measured about 5–6%
+slower. Pointer-preserving padding restores shared-specific accesses without
+requiring a stronger caller alignment. Alignment assumptions alone do not move
+the pointer and cannot replace the padding. A reported local stack allocation
+is not automatically a register spill: inspect ptxas spill counts and the
+executed paths (the initial variant's stack belonged to large-angle trig code).
+
+Permanent coverage: `test_cuda_ee_workspace_queries.py` uses optimized code,
+exact-size canary allocations at every T-aligned residue, independent numerical
+oracles, thread-count checks and strict zero-hazard racecheck/memcheck/synccheck.
+`test_cuda_transform_scratch.py` stresses related gradient, Hessian, frame and
+energy-regressor world-transform paths without preemptively changing their
+layouts. Keep those tests optimized: debug and ptxas -O0 hid the original issue.
+Inspect SASS access width, address and register use when source ownership looks
+correct; don't generalize this specific diagnosis to uninspected solver reports.
+
+The same audit caught a debug-only accounting error: arena carves ended at the
+last live slot, but `grid_shared_arena_bytes` rounds the capacity to 16 bytes.
+`GRID_CUDA_DEBUG_LAYOUT` now rounds the final offset before its exact equality
+check. This is not a relaxed bound or extra release-mode work. Exercise this
+guard in the optimized public-pose regression; a Go2 control reproduced the
+old assertion failure with a correctly sized allocation.
 
 **(b) `initcheck` "Uninitialized __global__ memory read" in EVERY `*_kernel_single_timing`.**
 This is the **anti-LICM feedback by design**, and it is FLEET-WIDE, not specific to any one algo.
@@ -3645,12 +3673,11 @@ finite-output, poison/reuse and exact thread/storage checks are unchanged.
 Negative controls reject nonfinite results, zero/nonzero differences and an
 above-bound perturbation. Preserve the original diagnostic failures.
 
-The exact EE scratch tests also reproduce section 1r's homogeneous constant-slot
-WAR warning in FP32, not FP64. Keep detailed raw reports and the known-warning
-disposition distinct from clean sanitizer passes. The narrow classifier in
-test/ee_constant_slot_warnings.py requires the reviewed call sites, counts and
-equal constant bytes; malformed reports, other hazards or errors fail closed.
-Do not generalize that classifier into permission to ignore racecheck warnings.
+Historical Package 3 EE scratch evidence retained a known-warning disposition,
+not clean sanitizer passes. The November 7 investigation in §1r supersedes the
+constant-slot explanation. `test/ee_constant_slot_warnings.py` remains only for
+interpreting those archived reports; new scratch acceptance requires zero
+hazards and must not call that classifier to waive a finding.
 
 ### 7.z78 Fixed base does not mean affine coordinates
 
@@ -3818,3 +3845,431 @@ dataclasses fail to resolve). Commit the receipt and the ledger together before
 untracked receipt is dirt, so the verify fails on both architectures until the
 commit exists. The primary ledger `test/gpu-proof-header-keys.json` must stay
 untouched by the secondary landing; check `git diff --stat` on it.
+
+Fixed 2026-11-03: `shard_receipts_unsigned` and `merge_command` in the driver
+merge an all-unsigned shard set with `--unsigned`, verify it with
+`--allow-unsigned`, and still write the durations and the ledger; a mixed set
+is refused before the merge; `run_gpu_proof.sh` never publishes an unsigned
+receipt and prints the desktop re-sign command; CI verifies every committed
+secondary receipt with `receipt_integrity.py --verify-all`.
+
+### 7.z84 A convention twin's gradient must be checked against its own value, block by block (2026-11-03, mjx integrator_gradient)
+
+The MuJoCo-convention twin of `integrator_gradient` had only ever been checked for
+packing against the numpy surface. The first ambient finite-difference test of a
+loss through it (the floating integrator VJP work) failed on the quaternion slots,
+and the guess "the chart map is wrong" was wrong: probing the twin block by block
+showed its configuration rows exact in the world-linear, local-angular chart
+(8e-11) and its velocity rows off (angular columns of d qd_{k+1}/dq by 7e-2, the
+qd block by 1e-2). Rules: when a new VJP disagrees with finite differences, split
+the chain and test each piece against finite differences of the kernel's own
+value in its own chart before touching the maps; a twin that passes a packing
+test and a tier-invariance test has not been validated numerically. Both
+surfaces now refuse the floating-base mjx integrator backward until the twin's
+velocity block is fixed.
+
+Resolution (2026-11-03, evening): two defects, one semantic. (1) The integrator
+and plant_step VALUE kernels reordered only the quaternion and fed the raw
+world-frame base velocity and force into the pin dynamics as local quantities,
+while the gradient kernel converted its inputs: the twins computed different
+functions, so no gradient could match the value. (2) The gradient transform
+applied the plain G reframe to the velocity rows ("a velocity output, no omega x v
+term"), but MuJoCo's step is `qvel += dt * qacc` with the MuJoCo-frame acceleration,
+whose base-linear block is `R (a + omega x v)`; the two differ by `dt R (omega x v)`,
+first order in dt, and its derivatives are exactly the measured residuals
+(`dt R ((e_a x omega) x v)` on the rotation columns, `dt R (omega x R^T e_a)` and
+`dt R (e_a x v)` on the velocity columns). The bottom rows are now `[dt Fq | I + dt Fv
+| dt Fu]` with F the validated fd gradient transform, which also fixed the numpy
+Hessian for free (complex step through the gradient). Lesson: a convention twin
+needs its semantics written down as the reference library's own step
+(`mj_Euler`), not derived from "what kind of quantity the output is"; and a value
+kernel that converts only part of its inputs is wrong even when its packing test
+passes, because the joints-match-pin check at 2e-3 never looked at the base rows.
+
+### 7.z85 Pinocchio's LOCAL_WORLD_ALIGNED frame derivatives hold the frame origin fixed (2026-11-03, frame velocity and acceleration derivatives)
+
+The reference's `frame_velocity_derivatives` / `frame_acceleration_derivatives`
+(world-origin Plücker form, `dA_k/dq_j = A_j x A_k` for every column at or
+below j) matched chart finite differences of the reference's own
+`frame_velocity` / `frame_acceleration` to 1e-9 on every robot of the
+manifest, mimic and floating included, and matched Pinocchio's
+`getFrameVelocityDerivatives` / `getFrameAccelerationDerivatives` to 1e-15 in
+LOCAL and WORLD, yet disagreed with Pinocchio in LOCAL_WORLD_ALIGNED by O(1)
+whenever qd was nonzero. The hypothesis "Pinocchio differentiates with the
+frame origin held fixed" was testable in one line: `pin + [w x dp_f/dq; 0]`
+(and `[wdot x dp_f/dq; 0]` for the acceleration) reproduced the reference to
+1e-13. Pinocchio's LWA q-derivatives are the WORLD derivatives shifted to the
+current origin; the derivative of the function `q -> v_lwa(q, qd)` also moves
+the origin. GRiD keeps the derivative of the function (it is what a task-space
+constraint Jacobian needs and what finite differences through the chart give)
+and the Pinocchio backend converts before the comparison. Rules: when an
+oracle matches its own chart finite differences but not the external library
+in one frame only, suspect a definitional difference in that frame before a
+bug, and write the suspected correction as a numerical test; and never make
+the external library's convention the oracle's by default when the project's
+own finite differences disagree with it.
+
+### 7.z86 A ratio of one hides the power of alpha (2026-11-03, joint dynamics on mimic followers)
+
+The damping and friction fold of a mimic follower carried a single power of alpha
+(`tau_l += alpha*b*qd_l`) for a year, with the reference, the generator, their tests
+and a docstring agreeing that this was intentional. Every test ran on fr3, whose
+finger follower has a multiplier of exactly one, where `alpha` and `alpha^2`
+coincide; the tests were also built from the same formula they checked. The physical
+fold is `alpha^2 b qd_l + |alpha| f sign(qd_l)` (the follower's own torque, projected
+through alpha; the congruence `G^T B G`), and the single-alpha version injects energy
+on a negative ratio. Lessons: (1) a convention test needs a parameter value at which
+the candidate conventions differ, here a ratio other than one and a negative one;
+(2) an expected value built from the implementation's own formula is a regression
+lock, not an oracle, so prefer a witness that involves no reduced-coordinate
+convention at all (the projection of a full spanning tree that carries the quantity
+itself) plus an invariant (dissipated power non-negative); (3) Pinocchio ignores
+`model.damping` in rnea and aba, so joint dynamics has no external oracle and must be
+pinned this way. Witness: `RBDReference/tests/test_joint_dynamics_coupling_fold.py`,
+`test/cuda_equivalents/test_cuda_polynomial_coupling.py::test_coupled_joint_dynamics_match_reference`.
+
+### 7.z87 A smoke runner's hardcoded thread count can exceed a production kernel's launch bound, and only cudaGetLastError says so (2026-11-03, multitarget runners)
+
+The multitarget runners launched the production `*_kernel<T, TIER_SHARED>` with 128
+threads. The generator sizes `MAX_PERF_LEVEL_THREADS` from the topology, and
+`__launch_bounds__(tier_max_threads<TIER>())` makes it a hard cap: a four-joint branched
+chain gets 96, the launch fails with cudaErrorInvalidValue, the output buffer keeps its
+zeros, and `cudaDeviceSynchronize` reports nothing because a launch-configuration error
+is not a sticky device error. The runner's tier self-check then blamed the kernel
+("tier non-bit-identical 2.4e-1"). The production host never hits this (it clamps
+through grid_host_clamp_threads), and the shipped robots all cap above 128, so only the
+tiny synthetic chains of the coupling tests exposed it. Rules: a runner that launches a
+generated kernel clamps its thread count to `grid::tier_max_threads<TIER>()` (or the
+host clamp) and checks `cudaGetLastError()` right after the launch; a "tier mismatch"
+where one tier is all zeros is a failed launch until proven otherwise.
+
+Found on the way: a polynomial follower whose leader is not on the anchor's chain (the
+cross-finger coupling of a gripper) is a lone Jacobian job, and `group_jacobian_jobs`
+took it for an unscaled single job because the placeholder multiplier compares equal to
+one. Test the kind (`_alpha_is_variable`), never the placeholder's value. The branched
+chain of `polynomial_coupling_model.py` (`branched=True`) is the witness.
+
+### 7.z88 Runtime parameter readback follows model ownership, not registration names (2026-11-05, armature audit)
+
+The initial runtime-armature implementation cached reported values in a Python
+dictionary keyed by registration name. That is not the owner of the device table:
+two contexts of one artifact have independent tables under the same name, while
+different aliases may share an artifact's default context. CPU diagnostics using
+the actual RobotHandle methods with fake runners reproduced both mismatches and
+readback after close. The repair reads through the admitted native context.
+Fixed and floating iiwa GPU regressions cover independent contexts, NumPy/JAX/
+PyTorch aliases, re-registration, direct native updates, rejected-update epochs,
+close and independent Minv results. Memcheck and synccheck pass on those cases.
+The later baked/runtime regressions also cover different-artifact rebinding,
+backend views keyed by the loaded artifact rather than the rebound name,
+runtime mutation between PyTorch forward/backward, and fresh-process prepared
+initialization with compilation forbidden. The narrower ownership tests alone
+do not establish these properties.
+
+Use owner-backed native readback, or a state object whose identity and lifetime
+exactly match the native owner. A name, a metadata dictionary and a raw reusable
+context address are not sufficient identities. Cover independent contexts,
+aliases, different artifacts, native updates and close/recreate. Validate shape,
+finite/nonnegative values and supported slots at the native boundary as well as
+the Python boundary; the initial reference setter accepted nonfinite values and
+the Python setter accepted negative armature. Rejected input must not install
+data or advance the model epoch. A device write failure after validation is a
+different case and must retain conservative autograd invalidation. Validate
+before converting to the kernel precision as well: a negative or unsupported
+tiny value can otherwise become zero, while a large finite value can overflow.
+
+The full CPU lane also caught a missing option in both backend registration
+signatures. The root API forwarded `runtime_armature`, but JAX and PyTorch
+rejected it before reaching the common registration path. Exercise construction
+through every advertised entry point, not only backend lookup of a NumPy-built
+artifact. The existing forwarding referee caught this omission without a GPU.
+
+### 7.z89 A diagonal dynamics addition must reach energy and coordinate ownership (2026-11-05, armature audit)
+
+Adding armature to CRBA changes the reference kinetic energy automatically,
+because it computes `0.5 * qd.T * M * qd`. The generated energy routine instead
+sums body spatial energies and initially omitted the rotor term. Fixed iiwa and
+floating Go2 GPU regressions reproduced a zero energy increment after installing
+nonzero armature. Fixing only `energy_device` did not repair the public kernel:
+its spill-aware epilogue computes energy separately. Both now call one rotor-term
+emitter. A CPU regression checks the device, ordinary kernel and single-timestep
+kernel bodies. GPU checks on iiwa, floating Go2 and mimic fr3 at 1, 32 and 128
+threads agree with the reference and reconstruct kinetic energy from the inertial
+regressor plus `0.5 * sum(a * qd**2)`. The regressor itself stays unchanged.
+Those nine cases also pass memcheck and synccheck without reported errors.
+Test total kinetic energy with nonzero armature, not only ID, FD and Minv; audit
+each public execution path rather than assuming it delegates to a device helper.
+
+Similarly, a body's velocity placeholder is not evidence that it owns an armature
+parameter. A parsed zero-DoF constant-mimic fixture produced armature slot `[0]`
+despite `nv=0`. Derive supported slots from independent coordinate owners,
+excluding constant bodies, floating-root and spherical blocks. Include empty
+coordinate and floating constant-body controls; an ordinary one-joint fixture
+can hide a bad placeholder by aliasing its valid slot zero.
+
+### 7.z90 Dense fallback output is not symmetric-upper storage (2026-11-05, armature acceptance)
+
+The mimic/spherical Minv fallback inverts CRBA into a full dense matrix. Ordinary
+Minv recursion returns only the upper triangle, with a zero lower triangle.
+The Python output adapter reconstructs a symmetric matrix by adding the buffer
+to its transpose and subtracting its diagonal. A full fallback buffer therefore
+doubles every off-diagonal entry. Nonzero-armature FR3 acceptance reproduced
+this at 1, 32 and 128 threads; baked and runtime modes agreed with each other
+but disagreed with the independent reference. The defect is not specific to
+armature. Control-input autograd also consumes the adapted Minv.
+
+Normalize the fallback to the documented storage contract immediately after
+inversion: a block-stride loop clears the lower triangle, followed by the
+existing block synchronization pattern. No new scratch, allocation, backend
+branch or inversion algorithm is needed. The scalar recursion is unchanged.
+The numerical matrix is unchanged in its authoritative upper triangle.
+
+Test the raw native buffer as well as the public matrix, compare with an
+independent inverse, and assert M times Minv is identity on mimic and spherical
+models. Comparing backends to the same adapted NumPy output would accept the
+bug. Likewise, checking the control-input gradient against that same faulty
+public Minv is circular; use the independent CRBA inverse. Keep these tests
+separate from armature mode parity and include zero-armature builds.
+
+During the combined branch merge, the incoming polynomial CUDA test still
+expected the old dense fallback buffer. Preserve its independent dense oracle,
+but first assert the raw lower triangle is zero and reconstruct symmetry once.
+Do not restore dense kernel storage merely to satisfy a stale test, or drop the
+storage assertion while adapting it. The cold resource pilot exposed this test
+mismatch; a failed correctness leg is not usable throughput evidence.
+
+Choose thread counts from the compiled kernel ceiling, not the hardware's
+1024-thread maximum. This spherical fixture reports 96 for Minv: the native
+host wrapper clamps a request for 128, but the direct JAX FFI launch honors
+the request and CUDA rejects it. The regression exercises 1, 32 and the
+reported ceiling (capped at 128), rather than counting a clamped host call as
+128-thread evidence. The host/direct-launch policy asymmetry is a separate
+follow-up; this repair does not change admission or raise a resource limit.
+
+Construction/cache acceptance also needs a stable source snapshot: changing
+even code comments during a live run can invalidate its input-cache identity.
+A test that forbids rebuilding then correctly fails. Preserve that diagnostic
+and rerun against fixed inputs; do not remove the no-compilation assertion.
+
+### 7.z91 Parameter sensitivities must use one admitted model (2026-11-06)
+
+The armature sensitivity is `-Minv[:, slots] * qdd[slots]`. Its short formula
+does not make two separately admitted wrapper calls safe: a setter between
+forward dynamics and Minv would mix two physical models. Reuse the FD inner's
+inverse scratch in one kernel under one context admission, with a barrier before
+reading it. Test against parameter finite differences with nonzero loads, not
+only another implementation of this formula. Include floating mimic coordinates,
+independent contexts and runtime inertia composition. Identification remains
+opt-in; do not enlarge ordinary dynamics workspace to hold a dense regressor.
+
+The thread-override follow-up in 7.z90 now uses the existing kernel-specific
+clamp on direct Torch/JAX launch sites too. A 1024-thread request must execute
+correctly at the lower compiled ceiling. This is launch normalization, not a
+raised resource limit or a performance measurement. Keep generated launch edits
+in `wrapper_body_gen.py`; the remaining hand-written launches use the same helper.
+
+### 7.z92 Runtime inertia must reach centroidal consumers (2026-11-06)
+
+The armature composition audit scaled the installed link inertias and compared
+energy with independently updated reference inertias. FD and its sensitivity followed the
+updated table; energy did not. `centroidal_inner` read the immutable inertia
+region of `d_XImats`, bypassing the runtime table used by dynamics. Both energy
+surfaces and CoM/momentum share this inner. Runtime builds now read its mass,
+first moment and angular-inertia entries from the existing ten-parameter table;
+baked emission, scratch layout and serial/per-body parallelism are unchanged.
+Nonuniform body scaling distinguishes a real CoM update from a uniform mass
+rescaling that would leave CoM unchanged. Test energy, momentum, CoM and its
+derivatives against independently updated reference body inertias.
+
+### 7.z93 A kernel tier is not an inline-helper arena (2026-11-06)
+
+The new armature helper initially documented the FD kernel's shared-memory size
+as its allocation requirement. Source audit found that even `TIER_SHARED` can
+choose a surgical Minv-F spill on a larger model, while this collective helper
+keeps its complete inner scratch in shared memory. Those arenas are not
+interchangeable. The helper now exposes its own exact unspilled byte count,
+including its qdd staging, using the existing aligned arena-size calculation.
+Callers must admit that requirement plus their static storage; the separate
+kernel/host API supports workspace-backed execution. Keep a forced-spill CPU
+size regression, a numerical workspace-backed kernel test and native-helper
+checks using the exact published allocation, not an oversized arena that masks
+an accounting error.
+Opt-in allocation gates must also include a new kernel in the workspace-user
+list, not just allocate its output; otherwise a gated consumer can receive a
+null spill workspace even though an ordinary wrapper build passes.
+
+### 7.z94 Release the GIL around admitted parameter sensitivities (2026-11-07)
+
+The barrier-coordinated armature setter/sensitivity test passed normally but
+stalled under memcheck with one Python thread in each native call. The identical
+C ABI called through ctypes, which releases the GIL, passed the same assertions.
+The generated pybind sensitivity now uses the existing GridNoGil guard. Capture
+input and output pointers before releasing the GIL, retain their Python owners
+until return, and perform error conversion after reacquiring it. Do not access
+Python array methods inside the released scope. A CPU emitter regression pins
+that boundary; the unmodified numerical interleaving test must also pass both
+memcheck and synccheck. Preserve the failed diagnostic rather than treating a
+normal unsanitized pass as sufficient. This does not make shared staging buffers
+safe for simultaneous compute submissions: concurrent pipelines use separate
+contexts, while mutation is serialized by the existing exclusive admission.
+
+### 7.z95 Rounded allocation sizes do not align a caller-owned slab (2026-11-08)
+
+The generated device pool rounded each allocation to 256 bytes but accepted an
+arbitrary base and cursor. Every subsequent allocation inherited a misaligned
+base. The generated-allocator regression now rejects all 255 nonzero residues
+of either base or cursor, checks exact-capacity allocation and verifies refusal
+leaves the cursor unchanged and clears the result pointer. Size rounding and
+capacity addition also need overflow-safe checks before pointer arithmetic.
+Keep these checks at allocation time, not in numerical kernels. Do not pad every
+shared slot: typed arenas promise natural alignment, while a stronger inner
+contract must establish its own alignment and reserve the required headroom.
+
+### 7.z96 A root-only free-flyer is not a one-coordinate robot (2026-11-08)
+
+The single-body floating fixture has one body, seven stored positions and six
+velocity coordinates. Its body-level S helper returns a root sentinel, not a
+valid scalar spatial-axis index. Inverse-dynamics force projection and the
+initial gradient cross-product pass used that sentinel in dof loops, producing
+wrong bias forces and A even though mass matrices and B looked plausible.
+Those two root-only paths now use the six explicit linear-then-angular axes.
+Permanent tests compare full values and discrete A/B to independent offset-COM
+Newton--Euler/SE(3) equations, with each force axis, nonzero rates, two timesteps,
+both precisions, thread variation, repeats and strict sanitizers. A/B must use
+the same fixed nominal output chart; an acceleration-only check is insufficient.
+
+The same fixture exposed a host topology upload that copied the reserved count
+(seven ints) from an inferred-size six-int initializer. Explicit array capacity
+now zero-initializes any reserved tail. CPU regression checks copied capacity
+against the host extent on scalar, floating, mimic and root-only models. Device
+memcheck alone cannot establish that a host source extent was valid. Keep body,
+position, velocity and reserved-capacity counts distinct in both code and tests.
+
+### 7.z97 A compile-pool limit does not limit inline compilers (2026-11-08)
+
+The primary receipt could run three prewarm jobs and two test shards together.
+Each shard could start its own multi-unit wrapper build outside the RAM-aware
+pool. Reducing only the pool's worker count left that overlap intact; a quiet
+GPU was not evidence of enough host RAM. The candidate also had no local peak
+ledger, and its private correctness caches were not the receipt's defaults.
+
+The primary launcher now selects serial resource phases: one prewarm worker,
+then one test shard, with two wrapper compiler units. Strict admission checks
+the first job too, retaining the legacy progress exception only for other
+profiles. A resource refusal preserves results and leaves PAUSE for explicit
+resume, never a passing row or reduced collection. CPU regressions cover exact
+admission boundaries, memory pressure between shards, prewarm drain, pause and
+resume. Measure the whole worker session/process tree, not just GNU time's
+largest descendant. Estimates plus a host reserve reduce risk; they cannot
+guarantee against a larger unmeasured build or later external memory pressure.
+Do not confuse shard serialization with internal test serialization: the
+consumer artifact race regression intentionally starts two builders. Preserve
+that coverage and account for all descendants in the whole-shard allowance.
+The fresh-checkout live probe also caught a missing parent directory when
+persisting the first measured peak. Ledger writes now create that directory;
+a CPU regression starts from an absent nested path and verifies reload and
+the retained peak after a cheaper build. GPU test success alone does not prove
+the reporting/ledger phase completed successfully.
+
+### 7.z98 Parameter narrowing and flush-to-zero must agree with readback (2026-11-10)
+
+A positive armature value can be finite before conversion yet disappear in a
+float kernel, either during narrowing or under flush-to-zero compilation.
+Validate the original input against the selected precision's smallest normal
+value before changing the model epoch or device table. The Python constructor,
+Python setter and native Runner must agree. Typed native table setters also
+reject subnormal entries. Test zero, the smallest normal value, a subnormal and
+a value that rounds to zero, including unchanged readback and epoch on rejection.
+Rebuild the native extension before exercising a changed C++ validator: an
+editable Python checkout does not rebuild the already loaded extension.
+
+### 7.z99 Mixed joint families must compose their motion subspaces (2026-11-10)
+
+The fixed-base ABA dispatch chooses the spherical path for the entire robot,
+not only the ball joint's level. Its scalar-joint branches assumed a cardinal
+axis, so a downstream skew joint raised in generation. The skew-only branch
+was not reached; changing that branch's armature index alone would not repair
+the mixed model. Use the existing dense S projection in the spherical path's
+bias, articulated-inertia and acceleration stages, retaining the parser's
+velocity slots. Keep cardinal emission unchanged. Permanent CPU and CUDA tests
+combine revolute, spherical and skew joints, with baked and runtime armature,
+and compare standalone ABA against the reference mass-matrix solve at several
+thread counts.
+
+### 7.z100 Host launch clamps must select overloaded kernels (2026-11-10)
+
+Taking the address of a kernel with qdd and no-qdd overloads is ambiguous.
+Leaving those launches unclamped made the native host path reject oversized
+blocks while the backend launchers clamped them. Select the unique emitted
+parameter signature for the launch's arity and cast its kernel pointer before
+querying the limit. Reject ambiguous signatures instead of silently omitting
+the clamp. Count nested call arguments correctly. An else branch that selects
+a different overload needs its declaration inside the branch, not between if
+and else. Generation tests inspect both branches; the full floating default
+registration test compiles them and compares oversized NumPy/JAX/PyTorch
+launches against a legal thread count. Keep that deliberate all-default build
+in the compile-hygiene exception list with its reason rather than reducing its
+algorithm coverage.
+
+### 7.z101 Topology capacity must cover emitted sections (2026-11-10)
+
+A small floating mimic chain emitted ten S-index entries into a nine-entry
+table. A floating root contributes six entries while scalar followers still
+contribute body entries; neither the reduced coordinate count nor the body
+count alone bounds their sum. Size the S-index section from its actual emitted
+length, retaining historical padding when it is larger. Keep offsets and slot
+semantics unchanged. CPU tests count initializer entries on serial and branched
+linear and polynomial followers; a floating wrapper regression compiles and
+checks values, frame derivatives and integrator backward. Larger robots can
+hide this under-allocation because their unrelated padding is sufficient.
+
+### 7.z102 Reduced references need independent parameter additions (2026-11-10)
+
+The polynomial embedding reference delegates dynamics to a full spanning tree.
+That delegation bypassed the reduced model's installed armature: a correct CUDA
+implementation then disagreed with its oracle. Add the independent-coordinate
+rotor torque, diagonal mass and kinetic energy at the reduced boundary. Derive
+forward dynamics and its sensitivity from that augmented mass matrix. Do not
+put a follower rotor into the independent table: a variable coupling would
+require configuration-dependent reflected inertia and velocity terms. Test the
+reference independently on fixed and floating embeddings before using it as a
+GPU oracle. A floating mimic model still has no MuJoCo twin; test that refusal
+and use a supported ordinary floating model for MuJoCo composition.
+
+### 7.z103 One-pass planning separates source gates from evidence gates (2026-11-10)
+
+Planning the larger manifest made a CPU test compare new scope with the previous
+release's receipt. That creates a circular pre-freeze gate: the fresh recording
+cannot exist until the new manifest is frozen. Keep exact equality, but enforce
+it on the completed receipt before promotion and at finalization. Check both
+the declared collection and actual outcome IDs, including duplicates. Permanent
+CPU cases reject missing, extra and duplicate rows and exercise non-promotion
+through the launcher. Both external policies continue to require the current
+manifest, so verification of old evidence remains red. Do not fabricate a new
+receipt, change the skip baseline or waive scope to resolve this transition.
+
+### 7.z104 Shared sample slots can conflate acceleration and torque (2026-11-11)
+
+The second-order smoke runner reads its third slot as acceleration for IDSVA
+and generalized force for FDSVA. Reusing one sample therefore applies its six
+base acceleration values as a base wrench in the floating FD check. To test an
+unactuated free base, construct a separate torque input with six zero base
+entries and unchanged joint entries; keep the IDSVA sample unchanged. Assert
+that constructing this input does not mutate or alias the acceleration array.
+
+Do not equate an unexpected input role with a kernel exoneration. A generalized
+base wrench is a valid mathematical input, although it does not describe an
+unactuated base. Conditioning can amplify small FP32 intermediate errors through
+FD-gradient and second-order composition; epsilon times a condition number is
+not a lower bound proving an accuracy target impossible. In the November 11
+iiwa14/rizon4/gen3 checks, zeroing the base wrench still failed the unchanged
+acceptance. Preserve both input cases and their errors, and stop for numerical
+investigation rather than adjusting the sample again, relaxing tolerances, or
+replacing FP32 acceptance with FP64 results.
+
+Final investigation: correcting acceleration alone still failed with actual
+FP32 downstream derivative arithmetic. Neither the base wrench nor acceleration
+alone explains the loss. The release restores the same opt-in diagnostic default
+for every robot and documents the lost standalone receipt coverage. Preserve
+both inputs behind the flag for algorithm-level follow-up; a mixed-precision
+private diagnostic is evidence, not an approved product implementation.

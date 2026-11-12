@@ -44,7 +44,7 @@ def _emit_idsva_so_joint_dynamics_diag(self, out_name):
         else:
             vs = self.robot.get_joint_index_v(jid)
             alpha = 1.0
-        fdiag[vs] = fdiag.get(vs, 0.0) + alpha * fr
+        fdiag[vs] = fdiag.get(vs, 0.0) + abs(alpha) * fr   # |alpha| f: _jd_alpha_fold
     if not fdiag:
         return
     RUNTIME = getattr(self, "runtime_joint_dynamics", False)
@@ -219,7 +219,7 @@ def _idsva_so_floating_velocity_metadata(robot):
             )
         joint = robot.get_joint_by_id(body_id)
         is_mimic_body = getattr(joint, "is_mimic", False)
-        alpha = float(joint.get_mimic_multiplier()) if is_mimic_body else 1.0
+        alpha = (float(joint.get_mimic_multiplier()) if joint.is_linear_coupling() else 1.0) if is_mimic_body else 1.0  # sizing placeholder for polynomial followers (idsva_so is refused for them)
         for local_col, vel_index in enumerate(v_inds):
             body_v_index.append(vel_index)
             s_index, s_sign = _idsva_so_unit_axis(S_cols[local_col])
@@ -487,7 +487,7 @@ def _floating_gravity_lie_metadata(robot):
             S_cols = [S[:, col] for col in range(S.shape[1])]
         joint = robot.get_joint_by_id(body_id)
         is_mimic_body = getattr(joint, "is_mimic", False)
-        alpha = float(joint.get_mimic_multiplier()) if is_mimic_body else 1.0
+        alpha = (float(joint.get_mimic_multiplier()) if joint.is_linear_coupling() else 1.0) if is_mimic_body else 1.0  # sizing placeholder for polynomial followers (idsva_so is refused for them)
         for local_col, vel_index in enumerate(v_inds):
             row_idx, sign = _idsva_so_unit_axis(S_cols[local_col])
             flip = 1 if (body_id != 0 or local_col < 3) else 0

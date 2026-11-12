@@ -9,6 +9,7 @@ from grid_codegen import GRiDCodeGenerator
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 from test.cuda_equivalents.constant_model import constant_model
+from test.cuda_equivalents.thread_invariance import thread_sweep
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
@@ -44,14 +45,14 @@ def test_constant_second_order(second_probe, mode):
         locked = RBDReference(constant_model(path, locked=True))
         np.testing.assert_allclose(parts, getattr(locked, method)(*args), atol=1e-11, rtol=1e-10)
     tol = 5e-5 if precision == 'float' else 1e-10
-    baseline = None
-    for threads in (1, 17, 32, 64, 256):
+    def run(threads):
         result = subprocess.run([str(exe), str(threads), str(mode)], capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
-        actual = np.fromstring(result.stdout, sep=' ')
+        return np.fromstring(result.stdout, sep=' ')
+
+    def check(actual, _):
         assert actual.size == expected.size+2
         np.testing.assert_array_equal(actual[[0, -1]], [123, 456])
         np.testing.assert_allclose(actual[1:-1], expected, atol=tol, rtol=tol)
-        if baseline is not None:
-            np.testing.assert_array_equal(actual, baseline)
-        baseline = actual
+
+    thread_sweep((1, 17, 32, 64, 256), run, check)

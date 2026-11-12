@@ -7,6 +7,7 @@ from grid_codegen import GRiDCodeGenerator
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from test.cuda_equivalents.executable_cache import cached_nvcc_executable
 from test.cuda_equivalents.constant_model import constant_model
+from test.cuda_equivalents.thread_invariance import thread_sweep
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
 
@@ -63,13 +64,12 @@ int main(int argc,char **argv) {
         dJv = ((ref.frame_jacobian(q+h, 'constant', reference_frame='LOCAL_WORLD_ALIGNED')
                 - ref.frame_jacobian(q-h, 'constant', reference_frame='LOCAL_WORLD_ALIGNED')) @ v / (2*h)).reshape(6, 1)
     expected = np.r_[J @ v, J.ravel(order='F'), dJv.ravel(order='F')]
-    baseline = None
-    for threads in (1, 17, 32, 64, 256):
+    tol = 3e-5 if precision == 'float' else 1e-9
+
+    def run(threads):
         ran = subprocess.run([str(exe), str(threads)], capture_output=True, text=True)
         assert ran.returncode == 0, ran.stderr
-        actual = np.fromstring(ran.stdout, sep=' ')
-        tol = 3e-5 if precision == 'float' else 1e-9
-        np.testing.assert_allclose(actual, expected, atol=tol, rtol=tol)
-        if baseline is not None:
-            np.testing.assert_array_equal(actual, baseline)
-        baseline = actual
+        return np.fromstring(ran.stdout, sep=' ')
+
+    thread_sweep((1, 17, 32, 64, 256), run,
+                 lambda actual, _: np.testing.assert_allclose(actual, expected, atol=tol, rtol=tol))

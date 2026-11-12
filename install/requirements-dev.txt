@@ -7,6 +7,7 @@ nbval            # execute example notebooks as smoke tests (pytest --nbval-lax 
 pin<4
 cmeel-eigen
 cmeel-urdfdom<5
+cmeel-tinyxml2<11
 pyyaml            # gpu-proof verify with a .yaml policy; test_gpu_proof_scope
 matplotlib        # test/benchmarks/test_release_collection (CI installed these by hand before 10-14)
 robot_descriptions>=1.23.0

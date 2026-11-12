@@ -66,6 +66,9 @@ CORE_HAS_MACROS = {
 
 
 def emit_feature_macros(gen, algorithms):
+    # Opt-in only: do not change headers or ordinary dynamics allocations.
+    if "forward_dynamics_armature_gradient" in algorithms:
+        gen.gen_add_code_line("#define GRID_HAS_FORWARD_DYNAMICS_ARMATURE_GRADIENT 1")
     # File-scope preprocessor mirrors of the second-order codegen gates.
     # We also emit `const int GRID_GENERATES_*_SO` inside `namespace grid`
     # below (for C++ runtime / test consumers), but `#if X` requires a
@@ -112,6 +115,13 @@ def emit_feature_macros(gen, algorithms):
         "#define GRID_HAS_INTEGRATOR " + str(int("integrator" in algorithms)))
     gen.gen_add_code_line(
         "#define GRID_HAS_INTEGRATOR_GRADIENT " + str(int("integrator_gradient" in algorithms)))
+    # A spherical-joint model's integrator gradient supports the single-stage
+    # schemes only (EULER / SEMI_IMPLICIT_EULER / CONSTANT_ACCELERATION; the
+    # multi-stage instantiations static_assert). The wrapper's gradient
+    # dispatch reads this flag and names only those cases, so the build
+    # compiles and the other integrator codes return rc=3 at call time.
+    gen.gen_add_code_line(
+        "#define GRID_INTEGRATOR_GRADIENT_SINGLE_STAGE_ONLY " + str(int(gen.robot.robot_has_spherical())))
     # Subset-build (rc=3 model): per-CORE-algo availability macros. These gate the
     # binding wrapper's currently-UNGATED `extern "C"` core bodies so a reduced
     # codegen profile (subset algorithm_list) ships a clean rc=3 stub for the

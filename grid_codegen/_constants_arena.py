@@ -53,6 +53,10 @@ def _tier_ternary_line(name, ret_type, vals):
 
 
 def gen_add_constants_helpers(self, include_base_inertia = False, include_homogenous_transforms = False):
+    armature_identification = "forward_dynamics_armature_gradient" in getattr(self, "generated_algorithms", ())
+    if armature_identification:
+        from .armature import supported_slots
+        self.gen_add_code_line(f"constexpr int NUM_ARMATURE_PARAMS = {len(supported_slots(self.robot))};")
     # first add constants
     n = self.robot.get_num_pos()
     nv = self.robot.get_num_vel()
@@ -1000,6 +1004,9 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              "// runtime_joint_dynamics: length of the mutable [damping || friction (|| friction_width)] table, v-slot indexed",
                              "const int JOINT_DYNAMICS_PARAMS_COUNT = " + str(self.gen_get_joint_dynamics_params_size()) + ";",
                              ] if getattr(self, "runtime_joint_dynamics", False) else []) + ([
+                             "// runtime_armature: length of the mutable per-v-slot rotor-armature table",
+                             "const int ARMATURE_PARAMS_COUNT = " + str(self.gen_get_armature_params_size()) + ";",
+                             ] if getattr(self, "runtime_armature", False) else []) + ([
                              "// USE_JOINT_DYNAMICS with FRICTION_MODEL=\"tanh\": the Coulomb term is f*tanh(qd/w) with derivatives in the gradient and second-order kernels",
                              "const int JOINT_FRICTION_MODEL_TANH = 1;",
                              ] if self._jd_tanh_active() else []) + [ \
@@ -1472,8 +1479,16 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
         # Emitted ONLY under runtime_joint_dynamics so the baked struct stays
         # byte-identical.
         struct_lines.append("    T *d_joint_dynamics_params;")
+    if getattr(self, "runtime_armature", False):
+        # runtime_armature: flag-gated mutable per-v-slot rotor-armature table
+        # (nv scalars, initialized from the artifact). Emitted ONLY under runtime_armature.
+        struct_lines.append("    T *d_armature_params;")
     struct_lines.append("};")
     self.gen_add_code_lines(struct_lines)
+    if armature_identification:
+        # The collective helper is unspilled even when the FD kernel's shared
+        # tier chooses a surgical F spill. Include its private qdd staging.
+        self.gen_add_code_line("template <typename T> __host__ __device__ constexpr size_t FORWARD_DYNAMICS_ARMATURE_GRADIENT_DEVICE_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(fd_device_t_count + nv) + ", TOPOLOGY_HELPERS_COUNT); }")
     self.gen_add_code_lines(["struct grid_device_pool_t;  // defined with the allocator below", \
                              "template <typename T, gridDataKind KIND = GRID_DATA_ALL>", \
                              "struct gridData {", \
@@ -1521,6 +1536,10 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              # 6 x NUM_VEL each; osc_inertia: 6 x 6 task inertia Lambda)
                              "    T *d_frame_jacobian;       // frame_jacobian (6 x NUM_VEL)", \
                              "    T *d_frame_jacobian_dot;   // frame_jacobian_dot (6 x NUM_VEL)", \
+                             "    T *d_frame_velocity;       // frame_velocity (6)", \
+                             "    T *d_frame_acceleration;   // frame_acceleration (6)", \
+                             "    T *d_frame_velocity_gradient;      // frame_velocity_gradient (6 x 2*NUM_VEL)", \
+                             "    T *d_frame_acceleration_gradient;  // frame_acceleration_gradient (6 x 3*NUM_VEL)", \
                              "    T *d_osc_inertia;          // osc_inertia Lambda (6 x 6)", \
                              # runtime-target pose/pose-gradient (additive, opt-in). The 3-vector
                              # runtime tool/tip transform is a single device buffer, host-init to identity.
@@ -1582,6 +1601,10 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              # E2/S1: general-frame Jacobian host buffers
                              "    T *h_frame_jacobian;", \
                              "    T *h_frame_jacobian_dot;", \
+                             "    T *h_frame_velocity;", \
+                             "    T *h_frame_acceleration;", \
+                             "    T *h_frame_velocity_gradient;", \
+                             "    T *h_frame_acceleration_gradient;", \
                              "    T *h_osc_inertia;", \
                              "    T *h_eePose;", \
                              "    T *h_eePoseGrad;"] \
@@ -1601,8 +1624,9 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              # G2 centroidal quick-wins outputs
                              "    T *h_com;", \
                              "    T *h_ccrba;", \
-                             "    T *h_energy;", \
-                             "};"])
+                             "    T *h_energy;"]
+                             + (["    T *d_dqdd_da;", "    T *h_dqdd_da;"] if armature_identification else [])
+                             + ["};"])
 
 def _derive_device_bytes_lines(code_lines):
     """Derive the body of gridData_device_bytes from THE SAME init_gridData
@@ -1798,6 +1822,8 @@ def gen_init_gridData(self):
                 "end_effector_pose_gradient", "end_effector_pose_hessian",
                 "idsva_so", "idsva_so_body_frame", "idsva_so_world_frame",
                 "idsva_so_world_frame_mjx", "fdsva_so", "fdsva_so_mjx")
+    if "forward_dynamics_armature_gradient" in getattr(self, "generated_algorithms", ()):
+        _ws_keys += ("forward_dynamics_armature_gradient",)
     code_lines = (["gridData<T, KIND> *hd_data = (gridData<T, KIND> *)calloc(1, sizeof(gridData<T, KIND>));",
                   "const bool needs_dynamics = KIND == GRID_DATA_ALL || KIND == GRID_DATA_DYNAMICS;",
                   "const bool needs_kinematics = KIND == GRID_DATA_ALL || KIND == GRID_DATA_KINEMATICS;",
@@ -1913,9 +1939,17 @@ def gen_init_gridData(self):
                   # E2/S1: general-frame Jacobian outputs (J / Jdot: 6*NV each ; Lambda: 36)
                   "    gpuErrchk(cudaMalloc((void**)&hd_data->d_frame_jacobian, 6*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));", \
                   "    gpuErrchk(cudaMalloc((void**)&hd_data->d_frame_jacobian_dot, 6*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));", \
+                  "    gpuErrchk(cudaMalloc((void**)&hd_data->d_frame_velocity, 6*NUM_TIMESTEPS*sizeof(T)));", \
+                  "    gpuErrchk(cudaMalloc((void**)&hd_data->d_frame_acceleration, 6*NUM_TIMESTEPS*sizeof(T)));", \
+                  "    gpuErrchk(cudaMalloc((void**)&hd_data->d_frame_velocity_gradient, 12*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));", \
+                  "    gpuErrchk(cudaMalloc((void**)&hd_data->d_frame_acceleration_gradient, 18*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));", \
                   "    gpuErrchk(cudaMalloc((void**)&hd_data->d_osc_inertia, 36*NUM_TIMESTEPS*sizeof(T)));", \
                   "    hd_data->h_frame_jacobian = grid_host_alloc<T>(6*NUM_VEL*NUM_TIMESTEPS*sizeof(T));", \
                   "    hd_data->h_frame_jacobian_dot = grid_host_alloc<T>(6*NUM_VEL*NUM_TIMESTEPS*sizeof(T));", \
+                  "    hd_data->h_frame_velocity = grid_host_alloc<T>(6*NUM_TIMESTEPS*sizeof(T));", \
+                  "    hd_data->h_frame_acceleration = grid_host_alloc<T>(6*NUM_TIMESTEPS*sizeof(T));", \
+                  "    hd_data->h_frame_velocity_gradient = grid_host_alloc<T>(12*NUM_VEL*NUM_TIMESTEPS*sizeof(T));", \
+                  "    hd_data->h_frame_acceleration_gradient = grid_host_alloc<T>(18*NUM_VEL*NUM_TIMESTEPS*sizeof(T));", \
                   "    hd_data->h_osc_inertia = grid_host_alloc<T>(36*NUM_TIMESTEPS*sizeof(T));", \
                   # runtime-target pose / pose-gradient (additive, opt-in). The runtime
                   # 3-vector offset is a single device buffer init to {0,0,0} (frame origin);
@@ -2023,6 +2057,13 @@ def gen_init_gridData(self):
                   "    }"]
                   + ag_close() + [
                   "return hd_data;"])
+    if "forward_dynamics_armature_gradient" in getattr(self, "generated_algorithms", ()):
+        code_lines[-1:-1] = [
+            "#if !defined(GRID_ALLOC_GATE) || GRID_ALLOC_FORWARD_DYNAMICS_ARMATURE_GRADIENT",
+            "gpuErrchk(cudaMalloc((void**)&hd_data->d_dqdd_da, sizeof(T)*(NUM_ARMATURE_PARAMS ? NUM_VEL*NUM_ARMATURE_PARAMS*NUM_TIMESTEPS : 1)));",
+            "hd_data->h_dqdd_da = grid_host_alloc<T>(sizeof(T)*(NUM_ARMATURE_PARAMS ? NUM_VEL*NUM_ARMATURE_PARAMS*NUM_TIMESTEPS : 1));",
+            "#endif",
+        ]
     # Pinned host staging: page-locked pages let the DMA engine run at full
     # PCIe rate (measured 13.3 GB/s pageable vs ~50 GB/s pinned on gen5) and
     # are a prerequisite for async D2H overlap. cudaMallocHost can exhaust the
@@ -2082,8 +2123,10 @@ def gen_init_gridData(self):
         "// historical one-liners (HJCD/GATO consumers) on the default pool — same caller API.",
         "__host__ inline cudaError_t grid_device_alloc(grid_device_pool_t *pool, void **p, size_t bytes) {",
         "    if (pool != nullptr && pool->base != nullptr) {",
+        "        if ((reinterpret_cast<size_t>(pool->base) | pool->used) & size_t(255)) { *p = nullptr; return cudaErrorInvalidValue; }",
+        "        if (bytes > size_t(-1) - size_t(255)) { *p = nullptr; return cudaErrorMemoryAllocation; }",
         "        const size_t need = grid_pool_align(bytes);",
-        "        if (pool->used + need > pool->bytes) { *p = nullptr; return cudaErrorMemoryAllocation; }",
+        "        if (pool->used > pool->bytes || need > pool->bytes - pool->used) { *p = nullptr; return cudaErrorMemoryAllocation; }",
         "        *p = (void *)((char *)pool->base + pool->used);",
         "        pool->used += need;",
         "        return cudaSuccess;",

@@ -26,7 +26,7 @@ _SRC = _WRAPPER.read_text()
 # grid_rbd_* extern "C" without an ABI_SPECS row fails the coverage test, so a
 # new algorithm surface cannot land untranscribed.
 _INFRA = {
-    "init", "close", "num_joints", "num_vel", "num_ees", "num_bodies",
+    "init", "close", "num_joints", "num_vel", "num_ees", "num_bodies", "num_armature_params",
     "max_batch", "max_perf_level_threads", "threads_per_block",
     "set_threads_per_block", "algo_count", "set_threads_for",
     "set_threads_for_n", "get_batch_switch", "kernel_max_threads",
@@ -42,6 +42,8 @@ _INFRA = {
     "device_pool_bytes", "set_device_pool", "device_pool_used",
     "ctx_create", "ctx_close", "ctx_default_id", "ctx_profile", "ctx_count",  # W04-B B1 runtime contexts
     "ctx_version",  # W04-B B2 model version
+    # Context-owned parameter I/O, not batched dynamics algorithms.
+    "set_armature_params", "get_armature_params", "validate_armature_params", "armature_params_size",
     "graph_begin", "graph_end",  # codex R5 replay admission
     # Multi-contact f_ext (2026-09-17): `grid_rbd_contact_fext` + `grid_rbd_num_contact_frames`
     # are HAND-WRITTEN in wrapper_template.cu under GRID_HAS_CONTACT_FRAMES (they call the
@@ -443,7 +445,7 @@ def test_substitution_partitions():
     """The substitution sets derive from kernel_args[_jax] presence and must
     partition the surface inventory: every torch_<x>/jax impl body that is
     NOT substitution-emitted is on the known-bespoke list (or plant/infra)."""
-    assert len(_TORCH_SUB) == 24 and len(_JAX_SUB) == 26
+    assert len(_TORCH_SUB) == 29 and len(_JAX_SUB) == 31
     assert set(_JAX_SUB) - set(_TORCH_SUB) == {
         "inverse_dynamics", "inverse_dynamics_gradient"}
     torch_fns = set(re.findall(r"torch::Tensor torch_([a-z0-9_]+)\(", _SRC))

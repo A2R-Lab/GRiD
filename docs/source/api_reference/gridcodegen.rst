@@ -18,12 +18,15 @@ call ``gen_all_code(...)``. Common options are:
   name or by profile; the profile names are tabulated on the
   :doc:`generation tutorial <../user_guide/tutorials/codegen>`.
 * ``enable_mujoco_kernels``: include or omit MuJoCo-convention twins.
-* ``runtime_inertia``, ``runtime_transform`` and ``runtime_joint_dynamics``:
-  enable the corresponding runtime model updates.
+* ``runtime_inertia``, ``runtime_transform``, ``runtime_joint_dynamics`` and
+  ``runtime_armature``: enable the corresponding runtime model updates (the
+  armature is a per-velocity-slot reflected inertia on the diagonal of the
+  joint-space inertia).
 * ``collision_spec``: provide collision geometry and tier configuration.
 * ``vendor_glass``: embed GLASS (default) or include an external copy.
 
 The constructor also accepts ``dtype`` (``"float"`` by default),
+``armature`` (a finite, nonnegative vector of length ``nv``, zero by default),
 ``FILE_NAMESPACE`` (``"grid"`` by default), ``USE_JOINT_DYNAMICS`` (apply the
 URDF damping and friction in the dynamics and their derivatives, off by
 default), ``FRICTION_MODEL`` (``"sign"`` by default, or ``"tanh"`` for the
