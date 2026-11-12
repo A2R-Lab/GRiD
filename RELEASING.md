@@ -126,6 +126,26 @@ passing-after regression, and refresh the source receipt; do not label a release
 ready because its minimal smoke passed. Neither malformed-input checks nor
 sanitizers replace numerical comparisons.
 
+## Branch stages
+
+`dev` collects reviewed pull requests and requires the CPU lane, the packaging
+jobs and the docs build. `main` moves only when a maintainer merges `dev`
+(or a `hotfix/` or `release/` branch) with a merge commit, after the
+stale-shard refresh on the primary GPU; the everyday policy applies and
+carried shards are allowed. PyPI moves from a tag on `main` under the release
+policy below. `dev` may be ahead of `main`, and `main` ahead of PyPI.
+
+To promote `dev`: check out `dev`, run `make receipt-refresh`, commit the
+refreshed `gpu-proof.json` and its header-key ledger on `dev`, open the pull
+request from `dev` into `main`, and merge it with a merge commit once the
+receipt job is green. A hotfix branches from `main`, receives the same
+refresh, merges into `main` and is then merged into `dev`.
+
+A secondary receipt under `receipts/` attests the commit it was recorded at.
+CI verifies it against that commit and does not require it to match the tip;
+the compatibility page states which source each architecture's latest receipt
+covers.
+
 ## Freeze and publish
 
 Set the agreed version in `pyproject.toml` before freezing. Run the CPU/docs/artifact
