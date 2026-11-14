@@ -33,9 +33,7 @@ jobs:
           python-version: '3.12'
       - run: pip install "$(grep -o '^pytest-gpu-proof==[0-9.]*' install/requirements-dev.txt)" pyyaml
       - run: |
-          gpu-proof verify --receipt gpu-proof.json --repo . \
-            --policy test/gpu-proof-policy-release.yaml \
-            --expected-skips test/gpu-proof-expected-skips.txt
+          python test/receipt_integrity.py --release "${GITHUB_REF_NAME#v}"
   build:
     needs: receipt
     if: ${{ !cancelled() && (needs.receipt.result == 'success' || needs.receipt.result == 'skipped') }}

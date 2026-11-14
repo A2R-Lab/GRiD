@@ -26,15 +26,18 @@
 # page. The pytest-gpu-proof verifier never reads this file.
 
 primary:
+  tier: primary
   arch: 120
   label: RTX 5090
   receipt: gpu-proof.json
 
 secondary:
   - arch: 87
+    tier: minor
     label: Jetson Orin
     receipt: receipts/gpu-proof-sm87.json
     expected_skips: test/gpu-proof-expected-skips-sm87.txt
   - arch: 72
+    tier: major
     label: Jetson Xavier
     receipt: receipts/gpu-proof-sm72.json
