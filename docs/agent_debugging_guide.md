@@ -4299,3 +4299,24 @@ linear-algebra namespace alone would alias multiple problems in one block.
 An emitter AST inventory does not resolve generated C++ calls or dynamic Python
 registration. Missing graph edges and unmeasured build context prohibit narrowed
 reuse; a report-only key match is not evidence that a test or compile may be omitted.
+
+### CPU Hessian attribution and generated dependency evidence (2026-11-14)
+
+Compare frame formulations at identical rounded spatial inputs, not just the
+same nominal q. Different quaternion normalization precision can confound a
+float32 arithmetic experiment. Check the float64 algebraic identity before
+studying roundoff; preserve the ordered Lie-tangent root Hessian rather than
+symmetrizing it. In the 64-capture CPU follow-up, a local RNEA q-Hessian passed
+the unchanged composed gates in two summation orders. Reassociating the existing
+world-frame expressions moved failures between samples. Neither result is
+device evidence: bias/gradient substitutions and transplanted tensor error
+still require an end-to-end referee. Error amplified by the inverse is not
+necessarily cancellation in the final contraction; inspect signed entrywise
+contributions before assigning the cause.
+
+Generated entry-body equality is weaker than object-input equality. The bounded
+ID regeneration experiment changed an out-of-line helper, a robot mass and a
+runtime-inertia option; all changed the complete header while both ID root
+definitions remained byte-identical. Keep broad invalidation until transitive
+helper/table/configuration/header edges have independent coverage. A successful
+mutation set is a bounded check, not a compiler-closure proof or reuse permission.
