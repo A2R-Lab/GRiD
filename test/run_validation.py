@@ -137,11 +137,18 @@ def main():
     parser.add_argument('--resume', type=Path, help='Existing split-driver directory to resume')
     parser.add_argument('--execute', action='store_true')
     parser.add_argument('--full', action='store_true', help='Fresh full release run; no carried shards')
+    parser.add_argument('--provisional', action='store_true', help='Separate bounded contributor evidence, never a full receipt')
+    parser.add_argument('--github-user', help='Contributor signer (their own GitHub account)')
+    parser.add_argument('--budget-minutes', type=int, default=30)
     parser.add_argument('--resource-profile', choices=('serial', 'bounded-overlap'), default='serial')
     parser.add_argument('--fallback-from', type=Path,
                         help='Prior failed/paused launcher directory; start a fresh full SERIAL run with no carries')
     parser.add_argument('--finalize', type=Path, help='Verify an existing run after committing its generated evidence; no GPU work')
     args = parser.parse_args()
+    if args.provisional and (args.full or args.resume or args.finalize or args.fallback_from or
+                             args.resource_profile != 'serial' or not args.github_user or
+                             not 30 <= args.budget_minutes <= 60):
+        parser.error('provisional requires --github-user, 30–60 minutes, serial, and a new run')
     if args.finalize:
         if args.out or args.resume or args.execute or args.full or args.fallback_from or args.resource_profile != 'serial':
             parser.error('--finalize is a verification-only operation; do not combine with launch options')
@@ -154,6 +161,10 @@ def main():
     out = args.out.resolve()
     shard_dir = args.resume.resolve() if args.resume else out / 'shards'
     command = validation_command(shard_dir, resume=bool(args.resume), full=args.full)
+    if args.provisional:
+        command = [sys.executable, '-u', str(ROOT / 'test/provisional_receipt.py'),
+                   '--record', str(shard_dir), '--minutes', str(args.budget_minutes),
+                   '--author', args.github_user]
     print(' '.join(command), flush=True)
     if not args.execute:
         print('Dry plan only. No collection, compiles, locks or GPU calls started.')
@@ -219,6 +230,15 @@ def main():
                 raise RuntimeError(f'Driver rc={result.returncode}; evidence retained in {shard_dir}')
             if git('rev-parse', 'HEAD') != candidate:
                 raise RuntimeError('HEAD changed during recording')
+            if args.provisional:
+                if git('status', '--porcelain'):
+                    raise RuntimeError('Checkout changed during provisional recording')
+                state.update(status='provisional-complete',
+                             provisional_receipt=str(shard_dir / 'provisional.json'))
+                save()
+                print(f'Provisional recording complete: {shard_dir / "provisional.json"}. '
+                      'No primary receipt or header ledger was modified.')
+                return
             merged = shard_dir / 'gpu-proof.json'
             receipt = json.loads(merged.read_text()) if merged.exists() else json.loads((ROOT / 'gpu-proof.json').read_text())
             verify_manifest_scope(receipt, ROOT / 'test/gpu-proof-tests.txt')

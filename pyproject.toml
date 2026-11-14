@@ -154,6 +154,8 @@ fingerprint_paths = [
     "test/gpu-proof-expected-skips.txt",
     # 2026-10-15: the driver reads the receipts-by-architecture table.
     "test/gpu-proof-receipts.yaml",
+    "test/provisional_receipt.py", "test/gpu-proof-policy-provisional.yaml",
+    "test/gpu-proof-provisional-smoke.txt", "test/gpu-proof-provisional-skips.txt",
 ]
 # Documentation that lives inside fingerprinted directories must not stale evidence
 # (docs are outside the receipt by design); keep this list == the release policy's.

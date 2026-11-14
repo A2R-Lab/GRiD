@@ -146,6 +146,57 @@ CI verifies it against that commit and does not require it to match the tip;
 the compatibility page states which source each architecture's latest receipt
 covers.
 
+### Hardware receipt tiers
+
+`test/gpu-proof-receipts.yaml` is the policy inventory. `make verify-all`
+checks each existing receipt at its recorded ancestor, including signatures,
+scope, skips and clean-source fingerprints. Historical age is evaluated at
+recording; history is not fresh evidence for changed source.
+
+Before a stable X.Y.Z release, run
+`.venv/bin/python test/receipt_integrity.py --release X.Y.Z`. Publication runs
+this same check. Primary evidence must be fresh and full for every release;
+minor-tier evidence for X.Y.0; major-tier evidence for X.0.0. Freshness uses
+the current release policy with no carried shards. A missing required receipt
+fails. The current rows are RTX 5090 (primary), Orin (minor), and Xavier
+(major, not yet recorded).
+
+A reviewed secondary waiver is an explicit `waivers` entry with `version`
+and a nonempty `reason`; it applies only to that version. Primary waivers are
+forbidden. A waiver does not excuse invalid evidence already on disk.
+Retirement requires `tier: retired`, `retired_in: X.Y.0` and a changelog entry;
+retain the receipt as history. Never use retirement retroactively.
+
+Regenerate the compatibility policy inventory with
+`test/receipt_integrity.py --tier-table` after changing rows or receipts.
+The generated source version is read from the recorded commit, not inferred
+from the latest release tag. These checks do not approve a hardware campaign.
+
+### Smaller validation units
+
+Native shards no longer combine test modules. Integrator, FD-gradient output
+spill and kinematics-invariance modules also partition by robot/base, keeping
+their compilation groups and thread/batch variants together. Scope and
+tolerances are unchanged. Refreshes shadow all stale shard names and may add
+new names; carried names are never overwritten. An indivisible expensive
+test remains expensive: partitioning improves stale-run granularity and
+failure recovery, not the algorithm's runtime or the total work by itself.
+The default target is 30 estimated minutes, not a hard deadline. A fresh clone
+seeds scheduling durations from the committed receipt; valid local rolling
+measurements override them. These costs authorize neither evidence reuse nor
+lower memory admission. Indivisible compilation atoms can exceed the target.
+
+### Trusted contributor evidence CI
+
+`contributor-evidence.yml` uses `pull_request_target` only to read receipts:
+it executes verifier code, dependencies and policies from the PR base and
+never installs or imports the candidate. Both checkouts have credentials
+disabled; permissions are read-only. The base authorizes the fixed smoke,
+optional small-robot groups and fingerprint paths. Stage the verifier and
+policy on `dev` before relying on this new base-owned workflow; a workflow
+introduced only in a PR cannot attest its own implementation. Changes to
+branch protection or GitHub settings require a separate maintainer action.
+
 ## Freeze and publish
 
 Set the agreed version in `pyproject.toml` before freezing. Run the CPU/docs/artifact
@@ -193,9 +244,13 @@ globally across those descendants.
 
 Every prewarm admission, including the first, requires its predicted process-tree
 peak plus a 14 GiB host reserve to fit the live `MemAvailable` and pool budget.
-The peak allowance is at least 16 GiB before a 1.3 margin; larger recorded peaks
-still apply. Each test shard separately requires that base allowance and reserve
-(34.8 GiB total) before starting because it may compile inline. These are
+The allowance is the larger of identity-qualified measured peaks and the
+class floor in `test/resource_history.py`, before a 1.3 margin. With at most
+two compiler units, measured native classes have a 6 GiB floor, ordinary
+wrappers 8 GiB, and full floating/MJX wrappers 12 GiB. Unknown recipes,
+unpiloted robots, humanoid wrappers and wider compiler builds retain 16 GiB.
+Whole shards reserve 8 GiB, 12 GiB for default armature registration, or
+16 GiB for the unpiloted large-model classes because they may compile inline. These are
 planning allowances, not enforced process RSS limits: monitor actual peaks and
 other workloads, and do not assume an unmeasured model is bounded by the default.
 The primary launcher's profile overrides inherited concurrency settings.
@@ -209,9 +264,10 @@ two pool builds, one GPU shard and two compiler units per build. One atomic
 admission authority reserves memory for both the pool and the entire shard,
 including inline compilers. Only the unspent part of a reservation is deducted
 from live available memory: resident pages have already reduced that value.
-Unknown pool jobs retain the 16 GiB allowance before margin; measured jobs have
-an 8 GiB floor before margin and retain larger recorded peaks. Shards retain
-the full 16 GiB allowance. The 14 GiB host reserve is unchanged. Sampled
+Both profiles use those same class floors and retain larger matching measured
+peaks. Resource history is keyed by source bytes, recipe, toolchain,
+architecture and build options; cache-hit samples cannot lower a cold floor.
+It predicts resources only, never reuses test outcomes. The 14 GiB host reserve is unchanged. Sampled
 process-tree peaks and headroom are logged in `memory-admission.jsonl`; short
 peaks between samples can still be missed. Admission is not a hard RSS limit.
 Pressure stops new work and drains owned compilers rather than killing peers.
