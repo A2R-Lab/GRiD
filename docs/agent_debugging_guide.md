@@ -4273,3 +4273,21 @@ alone explains the loss. The release restores the same opt-in diagnostic default
 for every robot and documents the lost standalone receipt coverage. Preserve
 both inputs behind the flag for algorithm-level follow-up; a mixed-precision
 private diagnostic is evidence, not an approved product implementation.
+
+### Receipt tiers and numerical attribution (2026-11-14)
+
+Historical receipt validity and current release freshness are separate gates.
+Verify historical source identity at the recorded ancestor with trusted policy;
+never make an old receipt current by relaxing the release policy. Contributor
+scope, signer and policy come from the PR base and event identity, not its code.
+An optional time budget can decline another complete unit, not hide a failed one.
+When splitting an old refresh shard, keep its name covered by a fresh replacement;
+additional pieces need collision-free names and exact aggregate node ownership.
+
+Large raw tensor error does not identify the dominant final-output error. In the
+64-capture CPU study, replacing only dM/dq removed seven of nine counterfactual
+failures, including all four gen3 failures; replacing the largest-looking tensor
+block did not do so. Preserve entrywise gate results, per-block substitutions and
+captured-input identity. CPU local-frame CRBA differentiation is a candidate
+algorithm, not a device-accuracy claim: reduction order, generated transforms
+and candidate-dependent tensor errors still need end-to-end validation.
