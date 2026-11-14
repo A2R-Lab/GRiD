@@ -4291,3 +4291,11 @@ block did not do so. Preserve entrywise gate results, per-block substitutions an
 captured-input identity. CPU local-frame CRBA differentiation is a candidate
 algorithm, not a device-accuracy claim: reduction order, generated transforms
 and candidate-dependent tensor errors still need end-to-end validation.
+
+For future warp/thread ports, audit mutable function-local shared arrays as
+well as barriers and GLASS calls. ID's polynomial-coupling alpha/alpha-prime
+tables are block-shared even when a caller supplies an arena; changing the
+linear-algebra namespace alone would alias multiple problems in one block.
+An emitter AST inventory does not resolve generated C++ calls or dynamic Python
+registration. Missing graph edges and unmeasured build context prohibit narrowed
+reuse; a report-only key match is not evidence that a test or compile may be omitted.
