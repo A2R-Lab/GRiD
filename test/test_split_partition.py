@@ -311,8 +311,9 @@ def test_binpack_uses_measured_durations():
     ids = _synthetic_ids()
     fast = {i: 1.0 for i in ids}  # everything measured trivially fast
     shards = rss.pack_cuda_shards(ids, fast, 120 * 60.0)
-    assert len(shards) == 1  # collapses to one shard once calibrated
-    assert sorted(shards[0].targets) == sorted(ids)
+    assert sorted(n for shard in shards for n in shard.targets) == sorted(ids)
+    # Module boundaries remain validation boundaries even with a warm cache.
+    assert all(len({n.split('::')[0] for n in s.targets}) == 1 for s in shards)
 
 
 def test_ledger_roundtrip_and_resume_filter(tmp_path):
