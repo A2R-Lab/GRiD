@@ -35,7 +35,11 @@ def main():
     parser.add_argument('--captures', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--cases', nargs='*')
+    parser.add_argument('--additional-random', type=int, default=0,
+                        help='new random configurations per robot, each with free-base and generalized-wrench inputs')
     args = parser.parse_args()
+    if args.additional_random < 0 or args.additional_random > 32 or (args.additional_random and args.cases):
+        raise ValueError('additional random sweep must be 0..32 on the full saved robot set')
     os.environ['CUDA_VISIBLE_DEVICES'] = ''
     from test.cuda_equivalents import test_cuda_second_order_fallback as t
     from tools import cpu_local_chain, cpu_qq_study
@@ -46,6 +50,24 @@ def main():
         if {p.stem for p in paths} != selected: raise ValueError('missing requested inputs')
     if not paths: raise ValueError('no input cases')
     args.out.mkdir(parents=True, exist_ok=False)
+    models = {}
+    if args.additional_random:
+        inputs = args.out / 'additional-inputs'; inputs.mkdir()
+        for robot in sorted({p.stem.split('-', 1)[0] for p in paths}):
+            spec = t._robot_spec(robot, 'floating')
+            model = t.build_project_adapter(spec, t.resolve_robot_spec(spec), base_mode='floating')
+            models[robot] = model
+            samples = t._build_cuda_samples(model, random_count=args.additional_random+2)
+            for sample in samples:
+                if not sample.name.startswith('cuda_random_') or int(sample.name.rsplit('_',1)[1]) < 2:
+                    continue
+                for physical in (False, True):
+                    u = np.asarray(sample.qdd, dtype=np.float32).copy()
+                    if physical: u[:6] = 0
+                    path = inputs / f'{robot}-{sample.name}_{"freebase" if physical else "wrench"}.npz'
+                    np.savez(path, q=np.asarray(sample.q,dtype=np.float32),
+                             qd=np.asarray(sample.qd,dtype=np.float32), u=u)
+                    paths.append(path)
     def git(*cmd): return subprocess.check_output(['git', *cmd], text=True).strip()
     provenance = dict(source_head=git('rev-parse', 'HEAD'), source_status=git('status', '--short'),
                       numpy=np.__version__,
@@ -58,7 +80,7 @@ def main():
                       limitations=['CPU float32 operation order and libm, not CUDA FMA order',
                                    'finite input set, not a support envelope'])
     (args.out / 'provenance.json').write_text(json.dumps(provenance, indent=2)+'\n')
-    models = {}; failures = []
+    failures = []
     for path in paths:
         robot, sample = path.stem.split('-', 1)
         if robot not in models:

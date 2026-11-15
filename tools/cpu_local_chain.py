@@ -234,6 +234,8 @@ def contract(solve, grad, tensors, dtype=np.float32):
 
 def chain(model, q, qd, u, dtype=np.float32, order='forward'):
     """Entire candidate path; reference used only for constant armature data."""
+    if getattr(model.reference, 'use_joint_dynamics', False):
+        raise ValueError('joint-dynamics bias is outside this CPU study')
     data = tree_data(model, q, dtype)
     n = model.nv
     armature = np.asarray(model.reference.armature, dtype=dtype)
