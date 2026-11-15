@@ -11,11 +11,17 @@ local first and second ID derivatives at that acceleration, and stable solves
 for gradients and second-order composition. It consumes only quantized q/qd/u
 and parsed model constants. There are no oracle intermediates or transplanted
 device errors. Separate float64 identities establish the convention before
-float32 gates. The initial 64-case sweep passes in both accumulation orders.
+float32 gates. The corrected sweep passes all 192 cases in both accumulation
+orders. Earlier CPU outputs used `np.linalg.solve` for a six-dimensional
+gravity transform: NumPy internally promoted that solve to double despite
+returning float32. Those outputs are retained with this limitation. The final
+`codex-local-chain-pure-fp32-20261115` run replaces it with explicit R-transpose
+gravity in the selected dtype, as the CUDA probe already did. SciPy Cholesky
+dispatch is checked to use single-precision LAPACK for float32 inputs.
 
 Scope is a quaternion floating root, scalar child joints, constant reduced
 mimic folds, constant armature and no external forces or joint-dynamics bias.
-This finite study does not establish broader support or CUDA accuracy.
+This finite study does not establish a broader support envelope.
 The expanded CPU sweep also passes all 192 cases in both orders. The 128 added
 cases pair zero-base-wrench and generalized-wrench inputs at eight additional
 deterministic random configurations per robot.
@@ -73,6 +79,18 @@ integration; an increase in a public workspace contract still requires Brian.
 The probe keeps ID and FD output tensors in separate output allocations within
 one host-owned output buffer, not in an added global scratch arena.
 
+A possible integration layout reuses the existing caller-owned `s_Minv`
+(NV squared), `s_df_du` (2 NV squared) and `s_qdd` (NV) buffers instead of
+duplicating them in the private shared allocation. That leaves
+`180 NB + NQ + 96 + NV^2 + 2 NV` scratch floats. For g1 (NB=30, NV=35,
+NQ=36), the arithmetic estimate is 27,308 bytes, below the unsplit world inner's
+29,088 bytes. This is a promising storage calculation, not an implemented or
+validated alias plan. The surgical cold tier subtracts an 84 NB-float band,
+and whole-pool/global and FD-gradient-spill tiers have different live regions.
+Check those actual arena maxima and disjoint caller-buffer offsets before
+claiming that all existing tiers fit. Preserve public matrix/gradient storage
+ordering when reusing these buffers; the probe currently uses row-major slabs.
+
 1. Complete CPU identity and unchanged float32 gates on the 64 saved cases.
 2. GPU ID-tensor probe at the candidate CPU acceleration. Compose these tensors
    with the CPU candidate matrix, gradient and solve. Check original full
@@ -80,8 +98,8 @@ one host-owned output buffer, not in an added global scratch arena.
    determinism and sanitizer results. Stop expansion on a numerical failure.
 3. Broaden CPU and device inputs. Preserve all failing probes. No per-robot
    algorithm switches or changed tolerances.
-4. Port the remaining transform/CRBA/solve/bias/gradient/contraction stages only
-   after the tensor result and a complete live-buffer plan pass review. Reuse
+4. Integrate the remaining transform/mass/solve/bias/gradient/contraction stages
+   from the private probe only after a complete live-buffer plan passes review. Reuse
    existing output/temporary lifetimes where proven. A required public scratch
    expansion or changed signature stops for Brian.
 5. Integrate through the existing placement-aware inner/device/kernel surfaces;
@@ -104,3 +122,25 @@ Thread/warp interfaces remain a separate design. They must isolate mutable
 model/coupling state and define ownership of scratch, barriers and reductions.
 Device-global memory is not pinned host memory. A block prototype fitting
 shared memory does not establish that independent warps can safely share it.
+
+## Recorded correctness result and precision terminology
+
+The end-to-end device sweep passes all 64 saved inputs and 128 additional
+inputs across eight robots. Every input is launched at 1, 32 and 128 threads,
+then repeated at 32: 768 acceptance checks, with bit-identical output across
+these launches. These are single-problem kernels, not batched product consumers.
+Persistent outputs are `codex-full-gpu-saved-20261115` and
+`codex-full-gpu-expanded-20261115` under the repository's ignored float32-study
+task folder. No production generated header or receipt is replaced.
+
+Here float32 means the candidate dynamics operands, arrays, accumulation and
+solve, with standard float CUDA math APIs. It does NOT mean FP64-free machine
+code: SASS inspection found DMUL instructions. A compile-only attribution probe
+containing just `sinf(float)` or `cosf(float)` also emits a DMUL; equivalent
+division, square root and square-power probes do not. The source introduces no
+double dynamics solve, tensor arithmetic, buffer or mixed-precision refinement.
+Do not silently replace standard math with fast approximations to remove those
+library instructions. If zero FP64 instructions is a requirement, it is an
+additional math-library/design question, not a property established here.
+No claim is made about whether these library paths execute on the tested inputs
+or about their runtime cost; neither tracing nor timing was performed.

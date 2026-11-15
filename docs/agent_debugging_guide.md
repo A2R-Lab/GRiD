@@ -4320,3 +4320,35 @@ runtime-inertia option; all changed the complete header while both ID root
 definitions remained byte-identical. Keep broad invalidation until transitive
 helper/table/configuration/header edges have independent coverage. A successful
 mutation set is a bounded check, not a compiler-closure proof or reuse permission.
+
+### Precision audit and standalone GPU scratch (2026-11-15)
+
+A float32 output dtype does not prove float32 arithmetic inside a library.
+This NumPy version's `linalg.solve` chooses its double LAPACK loop and casts
+back to float32. The CPU local-frame study initially used it for root gravity.
+Use the analytic rotation when available; otherwise inspect the selected
+backend routine. The corrected chain uses explicit float32 root rotation and
+SciPy's single-precision Cholesky routines, with regressions against silently
+reintroducing the NumPy solve. Preserve preliminary evidence and label the
+limitation rather than retroactively calling it pure float32.
+
+For a GPU numerical candidate, separate supplied intermediates from values
+computed on device. A tensor-only probe composed with CPU solves is an
+intermediate gate; the end-to-end probe must upload only model constants and
+q/qd/u before establishing a device accuracy result. Poison output storage,
+check all CUDA errors, compare raw bytes across launch shapes and repeats,
+and retain sanitizer results separately from numerical acceptance.
+
+A standalone kernel fitting 48 KiB is not proof that it fits a product inner's
+scratch contract. Include gradients, factors, transforms and simultaneously
+live outputs in the placement/lifetime proof across every spill tier. The
+private local-frame probe deliberately repeats directional work; neither its
+smaller tensor scratch nor passing tests establishes runtime speed.
+
+The reciprocal caveat applies to disassembly: seeing DMUL in a float kernel is
+not by itself evidence of a double dynamics algorithm. Compile-only CUDA 13.2
+sentinels for `sinf(float)` and `cosf(float)` also contain a DMUL, unlike the
+division/sqrt/square-power sentinels. Keep source precision, library internals
+and executed instruction paths distinct; static inspection is not a dynamic
+instruction count. Never replace math APIs with fast approximations merely to
+make an instruction grep empty.
