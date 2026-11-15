@@ -97,3 +97,28 @@ def test_transform_typed_intermediates_and_rejection():
         fn(np.float64(.7))
     with pytest.raises(ValueError, match='unsupported'):
         typed_transform(_unsupported, np.float32)
+
+
+def test_root_gravity_uses_float32_rotation_without_numpy_solve(monkeypatch):
+    from scipy.linalg import expm
+    m = model(); n = m.nv
+    data = data_for(m, np.zeros(n), np.float32)
+    rotation = expm(cross(np.array([.3, -.4, .2, 0., 0., 0.]))[:3, :3]).astype(np.float32)
+    data[0]['x'][:3, :3] = rotation
+    data[0]['x'][3:, 3:] = rotation
+    def forbidden(*args, **kwargs):
+        raise AssertionError('NumPy solve silently promotes float32')
+    monkeypatch.setattr(np.linalg, 'solve', forbidden)
+    tau, gradient, tensors = rnea_jets(data, np.zeros(n), np.zeros(n), np.zeros(n))
+    assert all(v.dtype == np.float32 for v in (tau, gradient, *tensors))
+    # Whole-tree gravity force in the floating root equals total mass times
+    # the rotated gravity; child translations change torque, not net force.
+    total_mass = sum(float(d['inertia'][3, 3]) for d in data)
+    np.testing.assert_allclose(tau[3:6], total_mass * 9.81 * rotation[2], rtol=2e-6)
+
+
+def test_scipy_factorization_dispatches_single_precision():
+    from scipy.linalg import get_lapack_funcs
+    matrix = np.eye(3, dtype=np.float32)
+    for name in ('potrf', 'potrs'):
+        assert get_lapack_funcs(name, (matrix,)).typecode == 's'

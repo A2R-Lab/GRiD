@@ -176,8 +176,13 @@ def rnea_jets(data, qd, qdd, armature, dtype=np.float32, order='forward'):
         aj = constant(s @ (alpha * qdd[vi]))
         p = d['parent']
         if p < 0:
-            gravity = np.zeros(6, dtype=dtype); gravity[5] = dtype(9.81)
-            g = constant(np.linalg.solve(d['x'], gravity))
+            # X^-1 [0; g] = [0; R^T g]. Translation drops out because
+            # gravity has no angular component. Do not use np.linalg.solve:
+            # NumPy promotes its internal LAPACK solve to double even when
+            # the returned array is float32. This matches the GPU formula.
+            gravity = np.zeros(6, dtype=dtype)
+            gravity[3:] = dtype(9.81) * d['x'][2, :3]
+            g = constant(gravity)
             generators = [dtype(-1 if j < 3 else 1) * cross(s[:, j]) for j in range(6)]
             for j, slot in enumerate(vi):
                 g[1][slot] = -generators[j] @ g[0]
