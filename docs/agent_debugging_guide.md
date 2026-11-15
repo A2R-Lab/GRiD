@@ -4352,3 +4352,10 @@ division/sqrt/square-power sentinels. Keep source precision, library internals
 and executed instruction paths distinct; static inspection is not a dynamic
 instruction count. Never replace math APIs with fast approximations merely to
 make an instruction grep empty.
+
+The existing correctness launcher takes a shared reservation against timing,
+not an exclusive correctness-queue slot. Two correctness invocations may both
+enter. Enforce the one-owned-GPU-job ceiling by observing completion before
+launching the next job, or by a fail-closed prerequisite tied to the exact run.
+Do not assume that invoking the coordinator queues work behind another
+correctness process, and never inspect or manipulate the timing lock directly.

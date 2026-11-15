@@ -42,6 +42,8 @@ tiers substitutes for primary or release evidence.
 4. Select profiles from live available RAM and explicit user choice, not just
    installed capacity. CPU-only mode must not initialize CUDA. Distinguish host
    RAM from VRAM; discrete and unified-memory GPUs need different accounting.
+   Effective headroom must also respect an active process/container memory
+   limit; host-wide available RAM alone must not admit work beyond that limit.
 5. Validate on an actual constrained host or approved memory-limited execution,
    including background memory pressure, refusal before the first job, a
    failed optional job, and clean shutdown. Synthetic accounting tests alone
