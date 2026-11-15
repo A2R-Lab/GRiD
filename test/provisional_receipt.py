@@ -108,6 +108,32 @@ def optional_units(ids, smoke):
     return list(groups.values())
 
 
+def unit_peak_kb(unit, smoke, optional):
+    """Class allowance, not a measured peak for this exact contributor session.
+
+    The full driver's small-native class uses an 8 GiB cold floor, above its
+    sampled ordinary-shard peaks (5.13 GiB). Restrict that class to the exact
+    reviewed smoke and small flagship groups. A future/unknown smoke entry
+    must not inherit the smaller allowance just by joining the manifest.
+    """
+    from test.resource_history import GIB_KB
+    prefix = 'test/cuda_equivalents/'
+    known_smoke = {
+        prefix + 'test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[fr3-fixed-inverse_dynamics-threads32]',
+        prefix + 'test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics-threads32]',
+        prefix + 'test_cuda_executable_equivalence.py::test_floating_base_generated_cuda_matches_python_reference[go2-floating-forward_dynamics-threads32]',
+        prefix + 'test_cuda_polynomial_coupling.py::test_polynomial_coupling_dynamics_match_projection[baked-fixed]',
+    }
+    ids = set(unit)
+    small = ids == known_smoke == set(smoke)
+    if any(ids == set(group) for group in optional):
+        small = bool(ids) and all(
+            n.startswith(prefix + 'test_cuda_executable_equivalence.py::')
+            and any(f'[{robot}-' in n for robot in ('iiwa14', 'go2', 'fr3'))
+            for n in ids)
+    return int((8 if small else 16) * 1.3 * GIB_KB)
+
+
 def record(out, minutes, author):
     """Serial execution; mandatory smoke completes even if it exceeds budget.
 
@@ -144,12 +170,17 @@ def record(out, minutes, author):
         estimate = max(600, 1.3 * sum(costs.get(n, 600) for n in unit))
         if index and time.monotonic() - started + estimate > minutes * 60:
             break
-        # Conservative unknown whole-shard allowance + 14 GiB reserve.
-        # Never starts if memory is unavailable; never kills a peer.
+        # Use the same conservative small-native class as the full driver.
+        # Unknown scopes keep the historical 16 GiB allowance. The reserve
+        # is unchanged; a lower-memory evidence lane needs its own profile.
         token = f'provisional-{index:03d}'
-        if not admission.reserve(token, int(16 * 1.3 * 1024 * 1024)):
+        predicted = unit_peak_kb(unit, smoke, units[1:])
+        print(f'{token}: allowance={predicted / 1024**2:.1f} GiB; '
+              'host reserve=14.0 GiB; includes inline compilation', flush=True)
+        if not admission.reserve(token, predicted):
             if not index:
-                raise RuntimeError('insufficient memory for mandatory smoke')
+                raise RuntimeError('insufficient memory for mandatory smoke: '
+                                   f'{getattr(admission, "refusal", "admission refused")}')
             break
         receipt = out / f'unit-{index:03d}.json'
         command = [sys.executable, '-m', 'pytest', '-q', '-m', 'gpu_proof',
@@ -157,7 +188,8 @@ def record(out, minutes, author):
                    f'--gpu-proof-github-user={author}',
                    f'--gpu-proof-shard=provisional-{index:03d}', *unit]
         with (out / f'unit-{index:03d}.log').open('x') as log:
-            process = subprocess.Popen(command, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
+            process = subprocess.Popen(command, cwd=ROOT, env=env, stdout=log,
+                                       stderr=subprocess.STDOUT, start_new_session=True)
             admission.attach(token, process.pid)
             while process.poll() is None:
                 admission.pressure()  # latch; drain owned unit, never kill peers

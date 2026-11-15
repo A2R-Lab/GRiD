@@ -29,6 +29,26 @@ def test_unknown_arch_valid_scope_is_not_full_receipt():
     p.check_scope(receipt(), {'smoke'}, {'smoke', 'extra', 'unused'})
 
 
+def test_small_native_class_allowance_and_unknown_fallback():
+    from test.resource_admission import MemoryAdmission
+    gib = 1024**2
+    smoke = p.manifest(p.ROOT / 'test/gpu-proof-provisional-smoke.txt')
+    full = p.manifest(p.ROOT / 'test/gpu-proof-tests.txt')
+    optional = p.optional_units(full, smoke)
+    allowance = p.unit_peak_kb(smoke, smoke, optional)
+    assert allowance == int(8 * 1.3 * gib)
+    for group in optional:
+        assert p.unit_peak_kb(group, smoke, optional) == allowance
+    for group in (set(), smoke | {'unreviewed'}, {'test/new.py::unknown'}):
+        assert p.unit_peak_kb(group, group, []) == int(16 * 1.3 * gib)
+    # Admission depends on available memory, not installed capacity. The
+    # current contributor profile does NOT yet claim the proposed 8 GiB lane.
+    for available, expected in ((28, True), (24, False), (8, False)):
+        admission = MemoryAdmission(floor_kb=14*gib,
+                                    available=lambda: available*gib, rss=lambda pid: 0)
+        assert admission.reserve('smoke', allowance) is expected
+
+
 @pytest.mark.parametrize('kind', ['missing', 'extra', 'duplicate', 'unfinished', 'failed',
                                   'skipped', 'carried', 'no_gpu'])
 def test_scope_fails_closed(kind):
@@ -111,6 +131,7 @@ def test_record_budget_and_failures_never_hide_outcomes(tmp_path, monkeypatch, m
     class Process:
         pid = 123
         def __init__(self, command, **kw):
+            assert kw['start_new_session'] is True
             node = command[-1]; launched.append(node)
             self.returncode = 1 if node == 'extra' and mode == 'failed_optional' else 0
             self.polls = 0

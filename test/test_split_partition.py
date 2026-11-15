@@ -571,7 +571,7 @@ def _plan(old, digest_fn):
                        "node_count": len(sh.get("node_ids") or [])})
     return {"receipt": rec, "shards": shards}
 
-def test_plan_refresh_stale_detection_and_repack(monkeypatch):
+def test_plan_refresh_stale_detection_and_repack(monkeypatch, capsys):
     import codegen_neutrality
     monkeypatch.setattr(codegen_neutrality, "cuda_carry_soundness",
                         lambda r: (True, "stubbed neutral"))
@@ -603,6 +603,20 @@ def test_plan_refresh_stale_detection_and_repack(monkeypatch):
     # (carry_forward has no "superseded" state — an unshadowed stale name
     # would be refused at merge time; the 2026-08-21 first-run lesson)
     assert {s.name for s in cuda_fresh} == {"cuda_01_stale"}
+    assert 'merge identity, not a scope label' in capsys.readouterr().out
+
+
+def test_refresh_fewer_shards_explains_required_identity_fallback(capsys):
+    ids = [_fid('iiwa14', 'fixed', cell, 32) for cell in ('crba', 'aba')]
+    old = {'shards': [_mk_shard(f'old_{i}', [nid], ['test.py'], 'old')
+                      for i, nid in enumerate(ids)]}
+    assert len(rss.pack_cuda_shards(ids, {}, 1e9)) == 1
+    _, carried, _, fresh = rss.plan_refresh(old, ids, [], {}, 1e9,
+                                           _plan(old, lambda paths: 'changed'))
+    assert not carried
+    assert {s.name for s in fresh} == {'old_0', 'old_1'}
+    assert sorted(n for s in fresh for n in s.targets) == sorted(ids)
+    assert 'refresh partition fallback' in capsys.readouterr().out
 
 
 def test_plan_refresh_edge_cases(monkeypatch):

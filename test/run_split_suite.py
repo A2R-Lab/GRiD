@@ -784,7 +784,16 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
                         name += '_r'
                     taken.add(name)
                 renamed.append(_dc_replace(spec, name=name))
+                print(f"  refresh shard identity: {name} replaces planned "
+                      f"{spec.name}; {len(spec.targets)} tests; "
+                      f"{spec.est_secs / 60:.1f} estimated minutes. "
+                      "The recycled name is a merge identity, not a scope label.")
             cuda_fresh = renamed
+        else:
+            print(f"  refresh partition fallback: proposed {len(smaller)} shards "
+                  f"but must shadow {n_groups} stale names; retaining the "
+                  "name-count-constrained partition. Use a fresh full run to "
+                  "adopt fewer shard identities.")
     elif fresh_ids:
         # Wholly-new tests with no stale name to recycle: new shards, names
         # de-conflicted from carried names (a same-named fresh shard would

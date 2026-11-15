@@ -152,6 +152,10 @@ covers.
 checks each existing receipt at its recorded ancestor, including signatures,
 scope, skips and clean-source fingerprints. Historical age is evaluated at
 recording; history is not fresh evidence for changed source.
+Historical verification uses the current everyday policy against the recorded
+source, not a snapshot of that policy from the recording date. Future policy
+changes can therefore reject historical receipts. Review this effect explicitly
+when changing the everyday policy; do not silently reinterpret past evidence.
 
 Before a stable X.Y.Z release, run
 `.venv/bin/python test/receipt_integrity.py --release X.Y.Z`. Publication runs
@@ -185,6 +189,12 @@ The default target is 30 estimated minutes, not a hard deadline. A fresh clone
 seeds scheduling durations from the committed receipt; valid local rolling
 measurements override them. These costs authorize neither evidence reuse nor
 lower memory admission. Indivisible compilation atoms can exceed the target.
+The 30-minute target is provisional until a refresh measures the overhead of
+the extra sessions. Recycled stale shard names are merge identities, not current
+scope descriptions. The planner logs their mapping to the proposed partitions;
+the explicit node IDs remain authoritative. When the new plan has fewer shards
+than stale names, it reports the name-count-constrained fallback. A fresh full
+run is needed to adopt fewer identities under the current merge contract.
 
 ### Trusted contributor evidence CI
 
@@ -196,6 +206,15 @@ optional small-robot groups and fingerprint paths. Stage the verifier and
 policy on `dev` before relying on this new base-owned workflow; a workflow
 introduced only in a PR cannot attest its own implementation. Changes to
 branch protection or GitHub settings require a separate maintainer action.
+
+Contributor recording uses an 8 GiB class allowance with a 1.3 margin for the
+reviewed small-native smoke and optional groups, plus the unchanged 14 GiB host
+reserve (24.4 GiB available before admission). Unknown groups retain 16 GiB
+before margin. This is a conservative class estimate, not an exact-smoke peak
+measurement or a guarantee for 32 GiB machines. The whole pytest process tree
+is sampled, including inline compilers. Pressure drains the current unit and
+prevents further admission; it is not a hard RSS limit. A planned low-memory
+lane targeting about 8 GiB available has not been enabled.
 
 ## Freeze and publish
 
