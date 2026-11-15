@@ -144,3 +144,10 @@ library instructions. If zero FP64 instructions is a requirement, it is an
 additional math-library/design question, not a property established here.
 No claim is made about whether these library paths execute on the tested inputs
 or about their runtime cost; neither tracing nor timing was performed.
+
+The full-GPU binaries also passed memcheck, racecheck and synccheck for iiwa14
+high-velocity, g1 random-1 and gen3 conservative at 32 threads: nine checks,
+zero reported errors or race hazards/warnings. Sanitized output matched the
+unsanitized output byte-for-byte. Logs and binary/input hashes are retained in
+`codex-full-gpu-sanitizers-20261115`. This is sentinel coverage, not a claim that
+every robot, launch shape or future consumer has been sanitized.

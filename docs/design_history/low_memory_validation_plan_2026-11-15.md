@@ -61,3 +61,24 @@ resume behavior explicit, with no recording fingerprint changes during a run.
 No 16 GiB or 8 GiB-available compatibility claim is made by this document.
 Hardware campaigns, hard resource limits and changes to the required evidence
 sets need their own validation before enabling the low-memory profile.
+
+## First exact-smoke measurement
+
+On November 15, the four mandatory IDs were run together, without signing a
+receipt, on the 64 GiB / RTX 5090 development host with CUDA 13.2. Build,
+driver and pytest directories were new and private; no shared cache was purged.
+The run used one compiler unit. All four tests passed with no skips or errors.
+
+Across 319 samples at approximately 100 ms intervals, the largest observed
+pytest-plus-descendant RSS was 0.374 GiB (rounded upward). The admission
+sampler separately observed 0.371 GiB; minimum host MemAvailable was 45.18 GiB.
+This is sampled process-tree RSS, not a hard peak bound, total system memory
+cost or VRAM measurement. OS file caches were not made cold. Other toolchains,
+GPU drivers and optional groups remain unmeasured by this four-test experiment.
+
+Evidence: `docs/open-tasks/codex_contributor_cold_smoke_20261115/` in the root
+checkout, including exact IDs, command/toolchain identity, JUnit results,
+private build manifests and resource samples. Recorded source: `2d2ccdf7`.
+This supports pursuing a lower-memory smoke profile; it does not enable it or
+change the current 14 GiB reserve. The next validation must include an actually
+constrained execution environment and conservative allowance/fallback tests.
