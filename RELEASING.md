@@ -207,14 +207,30 @@ policy on `dev` before relying on this new base-owned workflow; a workflow
 introduced only in a PR cannot attest its own implementation. Changes to
 branch protection or GitHub settings require a separate maintainer action.
 
-Contributor recording uses an 8 GiB class allowance with a 1.3 margin for the
-reviewed small-native smoke and optional groups, plus the unchanged 14 GiB host
-reserve (24.4 GiB available before admission). Unknown groups retain 16 GiB
-before margin. This is a conservative class estimate, not an exact-smoke peak
-measurement or a guarantee for 32 GiB machines. The whole pytest process tree
+Contributor recording reserves 1 GiB for the exact four mandatory smoke IDs:
+twice the rounded-up 0.39 GiB cold sampled process-tree peak, plus 0.22 GiB
+absolute headroom. The measurement used a 64 GiB host, RTX 5090, CUDA 13.2 and
+one compiler unit on November 15; see
+`docs/design_history/low_memory_validation_plan_2026-11-15.md` for provenance.
+The unchanged 14 GiB host reserve makes smoke admission require 15 GiB
+available. Unmeasured optional small-native groups retain 8 GiB times 1.3
+(24.4 GiB total); unknown groups retain 16 GiB times 1.3 (34.8 GiB total).
+Changing the exact mandatory ID set does not inherit the measured allowance.
+These are estimates, not memory caps or promises for every compiler/GPU. A
+smaller machine does not inherently increase a process's RAM consumption;
+live available RAM determines admission. The whole pytest process tree
 is sampled, including inline compilers. Pressure drains the current unit and
 prevents further admission; it is not a hard RSS limit. A planned low-memory
 lane targeting about 8 GiB available has not been enabled.
+
+The optional-evidence verifier loads its trusted sibling directly, without
+importing the robotics test package or recording driver. It needs only the
+standard library, PyYAML and gpu-proof in the base checkout, with no submodules.
+Symlink receipts (including dangling links) fail closed. Local isolated tests
+exercise trusted dispatch, not cryptographic acceptance of a signed fixture.
+Claude's November 15 scratch-repository test exercised same-repository PRs,
+not forks; after the import repair, rerun the full-as-provisional and symlink
+cases plus a genuine signed provisional receipt before relying on this lane.
 
 ## Freeze and publish
 

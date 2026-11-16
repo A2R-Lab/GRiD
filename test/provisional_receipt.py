@@ -7,6 +7,7 @@ base, with --repo pointing at the untrusted candidate checkout.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -17,8 +18,16 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-from test.receipt_integrity import node_ids, receipt_arch, _gpu_proof_bin
+# Load exactly the trusted sibling, not test/__init__.py (which imports the
+# robotics stack). Keep candidate/cwd/PYTHONPATH out of isolated CI imports.
+_spec = importlib.util.spec_from_file_location(
+    '_grid_trusted_receipt_integrity', Path(__file__).with_name('receipt_integrity.py'))
+_integrity = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = _integrity  # dataclass annotation resolution
+_spec.loader.exec_module(_integrity)
+node_ids = _integrity.node_ids
+receipt_arch = _integrity.receipt_arch
+_gpu_proof_bin = _integrity._gpu_proof_bin
 
 
 def manifest(path):
@@ -53,7 +62,10 @@ def verify(path, *, root=ROOT, trusted=ROOT, author, head):
     actual_head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
     if actual_head != head:
         raise ValueError('verification checkout is not the PR head')
-    path = Path(path).resolve()
+    path = Path(path)
+    if path.is_symlink():
+        raise ValueError('provisional receipt must not be a symlink')
+    path = path.resolve()
     if path != (root / 'receipts/provisional.json').resolve():
         raise ValueError('CI only accepts receipts/provisional.json')
     path.relative_to(root.resolve())
@@ -97,20 +109,29 @@ def optional_units(ids, smoke):
     No dependency-closure claim. Already-run smoke IDs are removed, while the
     remaining thread variants stay grouped. Exact full manifest bounds scope.
     """
-    from test.run_split_suite import _atom_key
     groups = {}
     for node in sorted(ids - smoke):
         if '/test_cuda_executable_equivalence.py::' not in node:
             continue
-        key = _atom_key(node)
+        # Only this module is eligible: robot/base/algorithm are its compile
+        # identity. A regression test checks parity with the driver's atoms.
+        # Do not import the recording driver in trusted minimal CI.
+        if '[' not in node:
+            continue
+        key = ('test_cuda_executable_equivalence',
+               *node.split('[', 1)[1].rstrip(']').split('-')[:3])
         if len(key) > 1 and key[1] in {'iiwa14', 'go2', 'fr3'}:
             groups.setdefault(key, []).append(node)
     return list(groups.values())
 
 
 def unit_peak_kb(unit, smoke, optional):
-    """Class allowance, not a measured peak for this exact contributor session.
+    """Measured smoke allowance; conservative floors for unmeasured groups.
 
+    The exact four-test cold process-tree measurement was <0.39 GiB on the
+    64 GiB RTX 5090 / CUDA 13.2 host (2026-11-15, one compiler unit). Reserve
+    1 GiB: twice 0.39 plus 0.22 GiB absolute headroom. This is an estimate,
+    not a hard limit or a claim about every toolchain/VRAM/host size.
     The full driver's small-native class uses an 8 GiB cold floor, above its
     sampled ordinary-shard peaks (5.13 GiB). Restrict that class to the exact
     reviewed smoke and small flagship groups. A future/unknown smoke entry
@@ -125,7 +146,9 @@ def unit_peak_kb(unit, smoke, optional):
         prefix + 'test_cuda_polynomial_coupling.py::test_polynomial_coupling_dynamics_match_projection[baked-fixed]',
     }
     ids = set(unit)
-    small = ids == known_smoke == set(smoke)
+    if ids == known_smoke == set(smoke):
+        return GIB_KB
+    small = False
     if any(ids == set(group) for group in optional):
         small = bool(ids) and all(
             n.startswith(prefix + 'test_cuda_executable_equivalence.py::')
@@ -140,6 +163,8 @@ def record(out, minutes, author):
     Budget is an admission bound, not an interrupt deadline. Once a unit
     starts, retain all its outcomes. Any failed unit prevents publication.
     """
+    # Only the explicitly invoked recording path needs the local robotics tree.
+    sys.path.insert(0, str(ROOT))
     from test.run_validation import validation_env
     from test.compile_sched import mem_available_kb
     from test.compile_sched import session_tree_rss_kb
@@ -162,6 +187,7 @@ def record(out, minutes, author):
     receipts = []
     env = validation_env()
     env['GRID_ENABLE_MUJOCO_KERNELS'] = '0'
+    env['GRID_RBD_BUILD_JOBS'] = '1'  # match the measured contributor recipe
     baseline = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     prior = json.loads((ROOT / 'gpu-proof.json').read_text())
     costs = {t['node_id']: t.get('duration_s', 0) for t in prior['tests']}
@@ -170,9 +196,8 @@ def record(out, minutes, author):
         estimate = max(600, 1.3 * sum(costs.get(n, 600) for n in unit))
         if index and time.monotonic() - started + estimate > minutes * 60:
             break
-        # Use the same conservative small-native class as the full driver.
-        # Unknown scopes keep the historical 16 GiB allowance. The reserve
-        # is unchanged; a lower-memory evidence lane needs its own profile.
+        # Measured exact smoke, conservative optional/unknown classes. The
+        # reserve is unchanged; a lower-memory lane needs its own profile.
         token = f'provisional-{index:03d}'
         predicted = unit_peak_kb(unit, smoke, units[1:])
         print(f'{token}: allowance={predicted / 1024**2:.1f} GiB; '

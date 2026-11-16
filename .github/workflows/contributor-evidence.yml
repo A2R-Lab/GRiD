@@ -43,7 +43,7 @@ jobs:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          if [ ! -e candidate/receipts/provisional.json ]; then
+          if [ ! -e candidate/receipts/provisional.json ] && [ ! -L candidate/receipts/provisional.json ]; then
             echo 'No provisional receipt: neutral (GPU evidence is optional on dev).' >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi

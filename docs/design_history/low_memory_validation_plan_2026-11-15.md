@@ -23,8 +23,10 @@ tiers substitutes for primary or release evidence.
   estimate. This permits a predicted peak at most about 4.6 GiB. These numbers
   are design targets, not enabled defaults or measured guarantees.
 - Standard contributor: the reviewed mandatory smoke plus complete optional
-  groups. Current implementation leaves 14 GiB available and applies an 8 GiB
-  small-native class estimate before a 1.3 margin; unknown groups retain 16 GiB.
+  groups. Current implementation leaves 14 GiB available and reserves 1 GiB
+  for the exact four measured smoke IDs (15 GiB available for admission).
+  Unmeasured optional small-native groups retain 8 GiB before a 1.3 margin;
+  unknown groups retain 16 GiB before margin.
 - Full validation/release: exact required scope. Memory may serialize or pause
   work, never remove tests, change tolerances or turn failures into skips.
 
@@ -79,6 +81,15 @@ GPU drivers and optional groups remain unmeasured by this four-test experiment.
 Evidence: `docs/open-tasks/codex_contributor_cold_smoke_20261115/` in the root
 checkout, including exact IDs, command/toolchain identity, JUnit results,
 private build manifests and resource samples. Recorded source: `2d2ccdf7`.
-This supports pursuing a lower-memory smoke profile; it does not enable it or
-change the current 14 GiB reserve. The next validation must include an actually
-constrained execution environment and conservative allowance/fallback tests.
+Brian's November 15 measurement-based ruling now sets the exact smoke's
+allowance to 1 GiB: twice 0.39 GiB (a conservative rounding of the observed
+peak), plus 0.22 GiB absolute headroom. No extra small-machine experiment is
+needed to establish that process estimate. Installed RAM does not multiply a
+process's footprint. The current 14 GiB reserve is unchanged, however, so
+this does not enable the proposed 8 GiB-available profile or claim 16 GiB
+machine compatibility. The handoff still requires constrained execution before
+that compatibility claim. A separately approved Jetson experiment would assess
+a different compiler/platform, not establish the desktop process's footprint.
+Optional groups and heavy/unknown classes retain conservative estimates; the
+four-test measurement is not applied to the whole suite. Existing full-driver
+identity-qualified measured history and larger class floors remain unchanged.

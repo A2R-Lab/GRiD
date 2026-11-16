@@ -5,6 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 import pytest
 import subprocess
+import shutil
+import sys
 from test import provisional_receipt as p
 
 
@@ -25,6 +27,96 @@ def test_smoke_is_real_full_scope_and_optional_units_do_not_overlap():
     assert all(any(f'[{r}-' in n for r in ('iiwa14', 'go2', 'fr3')) for n in extra)
 
 
+def test_minimal_optional_grouping_matches_recording_driver():
+    from test.run_split_suite import _atom_key
+    smoke = p.manifest(p.ROOT / 'test/gpu-proof-provisional-smoke.txt')
+    full = p.manifest(p.ROOT / 'test/gpu-proof-tests.txt')
+    expected = {}
+    for node in sorted(full - smoke):
+        if '/test_cuda_executable_equivalence.py::' in node:
+            key = _atom_key(node)
+            if len(key) > 1 and key[1] in {'iiwa14', 'go2', 'fr3'}:
+                expected.setdefault(key, []).append(node)
+    assert p.optional_units(full, smoke) == list(expected.values())
+
+
+@pytest.mark.parametrize('case', ['dispatch', 'full', 'symlink', 'dangling'])
+def test_isolated_ci_without_submodules(tmp_path, case):
+    """Real isolated interpreter + git; signature service is a stated test double.
+
+    -S excludes editable-install hooks that could otherwise hide missing CI
+    dependencies. Load only installed PyYAML; no robotics package is needed.
+    This tests trusted dispatch, NOT a genuine signed receipt acceptance.
+    """
+    import yaml
+    trusted = tmp_path / 'trusted'
+    (trusted / 'test').mkdir(parents=True)
+    for name in ('provisional_receipt.py', 'receipt_integrity.py',
+                 'gpu-proof-provisional-smoke.txt', 'gpu-proof-tests.txt',
+                 'gpu-proof-policy-provisional.yaml', 'gpu-proof-policy-release.yaml',
+                 'gpu-proof-provisional-skips.txt'):
+        shutil.copy(p.ROOT / 'test' / name, trusted / 'test' / name)
+    poison = "raise RuntimeError('PLANTED_CODE_EXECUTED')\n"
+    # Package initialization and the full recording driver must never run.
+    for name in ('__init__.py', 'run_split_suite.py'):
+        (trusted / 'test' / name).write_text(poison)
+    candidate = tmp_path / 'candidate'
+    (candidate / 'receipts').mkdir(parents=True)
+    for name in ('yaml.py', 'json.py', 'sitecustomize.py', 'receipt_integrity.py'):
+        (candidate / name).write_text(poison)
+    def git(*args):
+        return subprocess.check_output(['git', *args], cwd=candidate, text=True).strip()
+    git('init', '-q')
+    git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+        'commit', '-qm', 'fixture', '--allow-empty')
+    head = git('rev-parse', 'HEAD')
+    smoke = p.manifest(trusted / 'test/gpu-proof-provisional-smoke.txt')
+    ids = p.manifest(trusted / 'test/gpu-proof-tests.txt') if case == 'full' else smoke
+    data = receipt(sorted(ids)); data['repo']['commit_sha'] = head
+    path = candidate / 'receipts/provisional.json'
+    secret = tmp_path / 'outside.txt'
+    secret.write_text('PRIVATE_SENTINEL_DO_NOT_READ')
+    if case in ('symlink', 'dangling'):
+        path.symlink_to(secret if case == 'symlink' else tmp_path / 'missing')
+    else:
+        path.write_text(json.dumps(data))
+    bootstrap = '''
+import sys, runpy
+sys.path.insert(0, sys.argv[1])
+import yaml
+sys.path.pop(0)
+module = runpy.run_path(sys.argv[2], run_name='trusted_verifier')
+verify = module['verify']
+def signature_double(command, **kwargs):
+    if 'verify' in command:
+        print('TRUSTED_SIGNATURE_DISPATCH')
+    else:
+        return original_run(command, **kwargs)
+original_run = verify.__globals__['subprocess'].run
+verify.__globals__['subprocess'].run = signature_double
+verify.__globals__['_gpu_proof_bin'] = lambda: 'trusted-signature-test-double'
+from pathlib import Path
+verify(Path(sys.argv[3]), root=Path(sys.argv[4]), author='contributor', head=sys.argv[5])
+'''
+    result = subprocess.run([sys.executable, '-I', '-S', '-c', bootstrap,
+                             str(Path(yaml.__file__).parent.parent),
+                             str(trusted / 'test/provisional_receipt.py'),
+                             str(path), str(candidate), head], cwd=candidate,
+                            capture_output=True, text=True)
+    output = result.stdout + result.stderr
+    assert 'ModuleNotFoundError' not in output
+    assert 'PLANTED_CODE_EXECUTED' not in output
+    assert 'PRIVATE_SENTINEL_DO_NOT_READ' not in output
+    if case == 'dispatch':
+        assert result.returncode == 0, output
+        assert 'TRUSTED_SIGNATURE_DISPATCH' in output
+    else:
+        assert result.returncode != 0
+        assert 'TRUSTED_SIGNATURE_DISPATCH' not in output
+        assert ('outside the bounded contributor robot set' if case == 'full'
+                else 'must not be a symlink') in output
+
+
 def test_unknown_arch_valid_scope_is_not_full_receipt():
     p.check_scope(receipt(), {'smoke'}, {'smoke', 'extra', 'unused'})
 
@@ -36,14 +128,14 @@ def test_small_native_class_allowance_and_unknown_fallback():
     full = p.manifest(p.ROOT / 'test/gpu-proof-tests.txt')
     optional = p.optional_units(full, smoke)
     allowance = p.unit_peak_kb(smoke, smoke, optional)
-    assert allowance == int(8 * 1.3 * gib)
+    assert allowance == gib  # 2 * 0.39 GiB + 0.22 GiB headroom
     for group in optional:
-        assert p.unit_peak_kb(group, smoke, optional) == allowance
+        assert p.unit_peak_kb(group, smoke, optional) == int(8 * 1.3 * gib)
     for group in (set(), smoke | {'unreviewed'}, {'test/new.py::unknown'}):
         assert p.unit_peak_kb(group, group, []) == int(16 * 1.3 * gib)
     # Admission depends on available memory, not installed capacity. The
     # current contributor profile does NOT yet claim the proposed 8 GiB lane.
-    for available, expected in ((28, True), (24, False), (8, False)):
+    for available, expected in ((24, True), (16, True), (14.9, False), (8, False)):
         admission = MemoryAdmission(floor_kb=14*gib,
                                     available=lambda: available*gib, rss=lambda pid: 0)
         assert admission.reserve('smoke', allowance) is expected
@@ -102,6 +194,7 @@ def test_workflow_executes_only_base_tools():
     assert 'run: python candidate' not in source
     assert 'persist-credentials: false' in source
     assert 'contents: read' in source
+    assert '! -L candidate/receipts/provisional.json' in source
 
 
 @pytest.mark.parametrize('mode', ['budget', 'failed_optional', 'pressure', 'no_memory'])
@@ -132,6 +225,7 @@ def test_record_budget_and_failures_never_hide_outcomes(tmp_path, monkeypatch, m
         pid = 123
         def __init__(self, command, **kw):
             assert kw['start_new_session'] is True
+            assert kw['env']['GRID_RBD_BUILD_JOBS'] == '1'
             node = command[-1]; launched.append(node)
             self.returncode = 1 if node == 'extra' and mode == 'failed_optional' else 0
             self.polls = 0

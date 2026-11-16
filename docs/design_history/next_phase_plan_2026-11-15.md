@@ -12,17 +12,20 @@ RAM admission, shard-name explanation, smaller-plan fallback visibility and
 historical-policy documentation findings. The 30-minute partition target remains
 provisional: the extra-session overhead is not measured until the refresh.
 
-The contributor's reviewed small-native class now needs 24.4 GiB available
-(14 GiB reserve plus 8 GiB times 1.3), rather than 34.8 GiB. That is a class
-allowance, not a claim that the four smoke tests consume 10.4 GiB. Unknown
-groups retain the conservative allowance. The exact cold-smoke measurement is
-recorded separately from the policy; a single measurement cannot establish a
-universal bound.
+The contributor's exact measured four-test smoke now needs 15 GiB available
+(14 GiB reserve plus 1 GiB allowance: twice 0.39 plus 0.22 GiB headroom).
+Unmeasured optional small-native groups still need 24.4 GiB; unknown groups
+retain 34.8 GiB. This is an approximate admission estimate, not a universal
+memory bound. See the measurement and low-memory plan for platform limits.
 
-Before relying on the contributor workflow, run the separately authorized fork
-PR adversarial exercise in a scratch repository. Local policy tests cannot
-exercise GitHub's full event and token behavior. Push/PR/merge and the single
-promotion receipt refresh remain approval gates, not overnight side effects.
+Claude ran the adversarial exercise in a private scratch repository using
+same-repository branches, not forks. No candidate code executed; deletion and
+signature-tampering cases failed correctly. It exposed a verifier import defect,
+now locally repaired and covered by isolated no-submodule tests. Claude must
+rerun the full-as-provisional and symlink cases plus a genuine signed receipt;
+fork-specific event/token protections remain untested. Keep the scratch repo
+until the rerun is complete. Push/PR/merge and the single promotion receipt
+refresh remain approval gates, not local side effects.
 
 ## 2. Make useful validation fit a 16 GiB host
 
@@ -56,6 +59,12 @@ exact acceptance results and limitations. A finite passing sample set is not a
 condition-number support rule. It also does not establish full feature parity.
 
 Next integration checkpoints, in order:
+
+Brian's November 15 ruling supersedes autonomous implementation of this list:
+Claude first presents a fast local-frame design with structure, pass counts and
+scratch to Brian. Slow serial-pair code will not ship. No production emitter
+work starts before that design decision; the passing private probe is an
+accuracy baseline, not a performance candidate.
 
 1. Review the local recursion and solve as a complete numerical method; retain
    independent float64 identities and adverse float32 cases as regression data.
