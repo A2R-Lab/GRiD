@@ -199,9 +199,14 @@ run is needed to adopt fewer identities under the current merge contract.
 ### Trusted contributor evidence CI
 
 `contributor-evidence.yml` uses `pull_request_target` only to read receipts:
-it executes verifier code, dependencies and policies from the PR base and
+it executes verifier code, dependencies and policies from the current tip of
+the PR's base branch in the base repository and
 never installs or imports the candidate. Both checkouts have credentials
-disabled; permissions are read-only. The base authorizes the fixed smoke,
+disabled; permissions are read-only. The checked-out immutable SHA is printed
+in the run log and job summary. The PR event's `base.sha` is not the policy
+source: a long-lived PR must receive later verifier hardening. Each run keeps
+its checked-out tree fixed even if the branch advances during verification.
+The base authorizes the fixed smoke,
 optional small-robot groups and fingerprint paths. Stage the verifier and
 policy on `dev` before relying on this new base-owned workflow; a workflow
 introduced only in a PR cannot attest its own implementation. Changes to
@@ -212,25 +217,35 @@ twice the rounded-up 0.39 GiB cold sampled process-tree peak, plus 0.22 GiB
 absolute headroom. The measurement used a 64 GiB host, RTX 5090, CUDA 13.2 and
 one compiler unit on November 15; see
 `docs/design_history/low_memory_validation_plan_2026-11-15.md` for provenance.
-The unchanged 14 GiB host reserve makes smoke admission require 15 GiB
-available. Unmeasured optional small-native groups retain 8 GiB times 1.3
-(24.4 GiB total); unknown groups retain 16 GiB times 1.3 (34.8 GiB total).
+The provisional lane uses a 2 GiB reserve, making smoke require 3 GiB available;
+the target of 8 GiB available therefore has 5 GiB additional admission headroom.
+The full lab lane retains its 14 GiB reserve. Unmeasured optional small-native
+groups retain 8 GiB times 1.3 (12.4 GiB total in the contributor lane); unknown
+groups retain 16 GiB times 1.3 (22.8 GiB total). On a constrained machine the
+mandatory smoke can finish while optional groups are refused cleanly.
 Changing the exact mandatory ID set does not inherit the measured allowance.
 These are estimates, not memory caps or promises for every compiler/GPU. A
 smaller machine does not inherently increase a process's RAM consumption;
-live available RAM determines admission. The whole pytest process tree
+live available RAM determines admission. Contributor admission uses the smaller
+of host MemAvailable and remaining cgroup v1/v2 memory headroom at every visible
+ancestor, including v2 memory.high. Cache counts as used, swap is not extra
+capacity, and unreadable accounting refuses admission. Limits outside a mounted
+cgroup namespace cannot be observed; these estimates are not isolation.
+The whole pytest process tree
 is sampled, including inline compilers. Pressure drains the current unit and
-prevents further admission; it is not a hard RSS limit. A planned low-memory
-lane targeting about 8 GiB available has not been enabled.
+prevents further admission; it is not a hard RSS limit. The 2 GiB reserve is
+policy headroom for a contributor workstation, not a measured OS requirement.
 
 The optional-evidence verifier loads its trusted sibling directly, without
 importing the robotics test package or recording driver. It needs only the
 standard library, PyYAML and gpu-proof in the base checkout, with no submodules.
 Symlink receipts (including dangling links) fail closed. Local isolated tests
 exercise trusted dispatch, not cryptographic acceptance of a signed fixture.
-Claude's November 15 scratch-repository test exercised same-repository PRs,
-not forks; after the import repair, rerun the full-as-provisional and symlink
-cases plus a genuine signed provisional receipt before relying on this lane.
+Claude's November 18 scratch-repository rerun exercised same-repository PRs,
+not forks: forged full scope and both symlink forms fail for the intended
+reasons; control and planted-code cases use only trusted code. A genuine signed
+provisional receipt and the latest base-tip workflow still need end-to-end
+validation before relying on this lane.
 
 ## Freeze and publish
 

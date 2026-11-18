@@ -18,6 +18,7 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+CONTRIBUTOR_RESERVE_KB = 2 * 1024 * 1024
 # Load exactly the trusted sibling, not test/__init__.py (which imports the
 # robotics stack). Keep candidate/cwd/PYTHONPATH out of isolated CI imports.
 _spec = importlib.util.spec_from_file_location(
@@ -166,7 +167,7 @@ def record(out, minutes, author):
     # Only the explicitly invoked recording path needs the local robotics tree.
     sys.path.insert(0, str(ROOT))
     from test.run_validation import validation_env
-    from test.compile_sched import mem_available_kb
+    from test.host_memory import effective_available_kb
     from test.compile_sched import session_tree_rss_kb
     from test.resource_admission import MemoryAdmission
     smoke = manifest(ROOT / 'test/gpu-proof-provisional-smoke.txt')
@@ -181,7 +182,7 @@ def record(out, minutes, author):
     if out == ROOT or ROOT in out.parents:
         raise ValueError('recording output must be outside the candidate checkout')
     out.mkdir(parents=True, exist_ok=False)
-    admission = MemoryAdmission(floor_kb=14 * 1024 * 1024, available=mem_available_kb,
+    admission = MemoryAdmission(floor_kb=CONTRIBUTOR_RESERVE_KB, available=effective_available_kb,
                                 rss=session_tree_rss_kb, log_path=out / 'memory-admission.jsonl')
     started = time.monotonic()
     receipts = []
@@ -197,11 +198,11 @@ def record(out, minutes, author):
         if index and time.monotonic() - started + estimate > minutes * 60:
             break
         # Measured exact smoke, conservative optional/unknown classes. The
-        # reserve is unchanged; a lower-memory lane needs its own profile.
+        # contributor reserve protects OS headroom, not a shared lab workload.
         token = f'provisional-{index:03d}'
         predicted = unit_peak_kb(unit, smoke, units[1:])
         print(f'{token}: allowance={predicted / 1024**2:.1f} GiB; '
-              'host reserve=14.0 GiB; includes inline compilation', flush=True)
+              'contributor reserve=2.0 GiB; includes inline compilation', flush=True)
         if not admission.reserve(token, predicted):
             if not index:
                 raise RuntimeError('insufficient memory for mandatory smoke: '

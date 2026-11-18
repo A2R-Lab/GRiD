@@ -1,8 +1,9 @@
 # Memory-aware contributor validation
 
-Status: proposed low-memory profile, not a hardware support claim. Brian asked
-for useful validation on a 16 GiB host with about 8 GiB available. The existing
-contributor scope remains unchanged until the low-memory profile is measured.
+Status: contributor reserve implemented November 18; constrained execution
+validation remains required before a compatibility claim. Brian asked for
+useful validation on a 16 GiB host with about 8 GiB available. The existing
+contributor scope and all numerical gates remain unchanged.
 
 ## Separate resources from evidence
 
@@ -17,14 +18,14 @@ tiers substitutes for primary or release evidence.
 ## Target profiles
 
 - CPU-only: no GPU, compiler or signing requirement; existing CPU gates.
-- Low-memory GPU: target 8 GiB MemAvailable on a 16 GiB host, one compiler unit,
-  one active build or GPU test group, and no prewarm/test overlap. A candidate
-  admission equation is a 2 GiB host reserve plus 1.3 times a cold process-tree
-  estimate. This permits a predicted peak at most about 4.6 GiB. These numbers
-  are design targets, not enabled defaults or measured guarantees.
+- Low-memory GPU: target 8 GiB effective available RAM on a 16 GiB host, one compiler unit,
+  one active build or GPU test group, and no prewarm/test overlap. Admission
+  uses a 2 GiB reserve plus the 1 GiB allowance for the exact measured four-ID
+  smoke. Host MemAvailable and visible ancestor cgroup headroom both bound it.
+  This is an enabled admission policy, not a measured hardware guarantee.
 - Standard contributor: the reviewed mandatory smoke plus complete optional
-  groups. Current implementation leaves 14 GiB available and reserves 1 GiB
-  for the exact four measured smoke IDs (15 GiB available for admission).
+  groups. The same 2 GiB contributor reserve applies; more available memory
+  permits whole optional groups. The full lab lane keeps its 14 GiB reserve.
   Unmeasured optional small-native groups retain 8 GiB before a 1.3 margin;
   unknown groups retain 16 GiB before margin.
 - Full validation/release: exact required scope. Memory may serialize or pause
@@ -85,10 +86,10 @@ Brian's November 15 measurement-based ruling now sets the exact smoke's
 allowance to 1 GiB: twice 0.39 GiB (a conservative rounding of the observed
 peak), plus 0.22 GiB absolute headroom. No extra small-machine experiment is
 needed to establish that process estimate. Installed RAM does not multiply a
-process's footprint. The current 14 GiB reserve is unchanged, however, so
-this does not enable the proposed 8 GiB-available profile or claim 16 GiB
-machine compatibility. The handoff still requires constrained execution before
-that compatibility claim. A separately approved Jetson experiment would assess
+process's footprint. On November 18 the contributor reserve was reduced to
+2 GiB, with effective cgroup-aware admission; the full lab reserve stays 14 GiB.
+The handoff still requires constrained execution before claiming 16 GiB
+machine compatibility. A separately approved Jetson experiment would assess
 a different compiler/platform, not establish the desktop process's footprint.
 Optional groups and heavy/unknown classes retain conservative estimates; the
 four-test measurement is not applied to the whole suite. Existing full-driver

@@ -133,12 +133,15 @@ def test_small_native_class_allowance_and_unknown_fallback():
         assert p.unit_peak_kb(group, smoke, optional) == int(8 * 1.3 * gib)
     for group in (set(), smoke | {'unreviewed'}, {'test/new.py::unknown'}):
         assert p.unit_peak_kb(group, group, []) == int(16 * 1.3 * gib)
-    # Admission depends on available memory, not installed capacity. The
-    # current contributor profile does NOT yet claim the proposed 8 GiB lane.
-    for available, expected in ((24, True), (16, True), (14.9, False), (8, False)):
-        admission = MemoryAdmission(floor_kb=14*gib,
+    # The contributor floor admits measured smoke on an 8 GiB available lane;
+    # it does not admit unmeasured optional groups on the same machine.
+    for available, expected in ((16, True), (8, True), (3, True), (2.9, False)):
+        admission = MemoryAdmission(floor_kb=p.CONTRIBUTOR_RESERVE_KB,
                                     available=lambda: available*gib, rss=lambda pid: 0)
         assert admission.reserve('smoke', allowance) is expected
+    admission = MemoryAdmission(floor_kb=p.CONTRIBUTOR_RESERVE_KB,
+                                available=lambda: 8*gib, rss=lambda pid: 0)
+    assert not admission.reserve('optional', p.unit_peak_kb(optional[0], smoke, optional))
 
 
 @pytest.mark.parametrize('kind', ['missing', 'extra', 'duplicate', 'unfinished', 'failed',
@@ -195,6 +198,16 @@ def test_workflow_executes_only_base_tools():
     assert 'persist-credentials: false' in source
     assert 'contents: read' in source
     assert '! -L candidate/receipts/provisional.json' in source
+    import yaml
+    workflow = yaml.load(source, Loader=yaml.BaseLoader)
+    steps = workflow['jobs']['evidence']['steps']
+    trusted = steps[0]['with']
+    assert trusted['repository'] == '${{ github.event.pull_request.base.repo.full_name }}'
+    assert trusted['ref'] == 'refs/heads/${{ github.event.pull_request.base.ref }}'
+    assert 'base.sha' not in source
+    assert steps[1]['working-directory'] == 'trusted'
+    assert 'git rev-parse --verify HEAD' in steps[1]['run']
+    assert '$GITHUB_STEP_SUMMARY' in steps[1]['run']
 
 
 @pytest.mark.parametrize('mode', ['budget', 'failed_optional', 'pressure', 'no_memory'])
@@ -213,7 +226,11 @@ def test_record_budget_and_failures_never_hide_outcomes(tmp_path, monkeypatch, m
     times = iter([0, 1900 if mode == 'budget' else 0])
     monkeypatch.setattr(p.time, 'monotonic', lambda: next(times))
     class Admission:
-        def __init__(self, **kw): self.blocked = None
+        def __init__(self, **kw):
+            from test.host_memory import effective_available_kb
+            assert kw['floor_kb'] == p.CONTRIBUTOR_RESERVE_KB
+            assert kw['available'] is effective_available_kb
+            self.blocked = None
         def reserve(self, *args): return mode != 'no_memory'
         def attach(self, *args): pass
         def pressure(self):
