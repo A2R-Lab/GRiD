@@ -1,0 +1,258 @@
+{
+  "environment": {
+    "gpu_info": {
+      "cuda_visible_devices": null,
+      "devices": [
+        {
+          "compute_capability": "12.0",
+          "driver_version": "620.70.06",
+          "index": "0",
+          "memory": "32607 MiB",
+          "name": "NVIDIA GeForce RTX 5090",
+          "uuid": "GPU-bf781ab0-9632-4b9a-497b-c3b846aae70c"
+        }
+      ],
+      "source": "nvidia-smi"
+    },
+    "nvcc_version": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2026 NVIDIA Corporation\nBuilt on Fri_May_08_10:53:34_AM_PDT_2026\nCuda compilation tools, release 13.2, V13.2.86\nBuild cuda_13.2.r13.2/compiler.37953736_0",
+    "platform": "Linux-7.0.0-43-generic-x86_64-with-glibc2.39",
+    "plugin_version": "0.5.0",
+    "pytest_version": "9.0.3",
+    "python_version": "3.12.3"
+  },
+  "fingerprint": {
+    "algorithm": "sha256-manifest-v2",
+    "digest": "993b4121bce3a17aa47a0ef98f5947d0a3136d0116a3f83cbda24732252823f3",
+    "excluded_paths": [
+      "gpu-proof.json",
+      "grid_assets/launch_configs/README.md",
+      "grid_assets/robots/URDF_SOURCES.md",
+      "grid_assets/robots/drake/README.md",
+      "grid_codegen/README.md",
+      "grid_codegen/collision/HANDOFF.md"
+    ],
+    "extra_paths": [],
+    "file_count": 404,
+    "included_paths": [
+      "MANIFEST.in",
+      "_build_resources.py",
+      "bindings/examples/consumer_artifact_migration.py",
+      "bindings/grid_rbd",
+      "bindings/src",
+      "external/GLASS",
+      "external/RBDReference",
+      "external/URDFParser",
+      "grid_assets",
+      "grid_codegen",
+      "pyproject.toml",
+      "setup.py",
+      "test/__init__.py",
+      "test/codegen_neutrality.py",
+      "test/compile_sched.py",
+      "test/conftest.py",
+      "test/cuda_equivalents",
+      "test/ee_constant_slot_warnings.py",
+      "test/gpu-proof-expected-skips.txt",
+      "test/gpu-proof-policy-provisional.yaml",
+      "test/gpu-proof-policy-release.yaml",
+      "test/gpu-proof-policy.yaml",
+      "test/gpu-proof-provisional-skips.txt",
+      "test/gpu-proof-provisional-smoke.txt",
+      "test/gpu-proof-receipts.yaml",
+      "test/gpu-proof-tests.txt",
+      "test/header_key_replay.py",
+      "test/helpers.py",
+      "test/host_memory.py",
+      "test/prewarm_cuda_flagship.py",
+      "test/provisional_receipt.py",
+      "test/python_wrappers",
+      "test/receipt_integrity.py",
+      "test/resource_admission.py",
+      "test/resource_history.py",
+      "test/run_gpu_proof.sh",
+      "test/run_split_suite.py",
+      "test/run_validation.py",
+      "test/test_manifold_conventions.py",
+      "test/test_model_descriptor.py",
+      "tools/check_installed_numerics.py",
+      "tools/check_installed_package.py"
+    ]
+  },
+  "mode": "local",
+  "repo": {
+    "branch": "codex/overnight-next-phase-20261115",
+    "commit_sha": "705ba0f357cbf54eccba2743f573414ca8bf3ffe",
+    "dirty": false,
+    "github_username": "plancherb1",
+    "remote_url": "git@github.com:A2R-Lab/GRiD.git"
+  },
+  "schema_version": "3",
+  "session": {
+    "ended_at": "2026-11-18T09:13:55Z",
+    "node_ids": [
+      "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[fr3-fixed-inverse_dynamics-threads32]",
+      "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics-threads32]",
+      "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_floating_base_generated_cuda_matches_python_reference[go2-floating-forward_dynamics-threads32]",
+      "test/cuda_equivalents/test_cuda_polynomial_coupling.py::test_polynomial_coupling_dynamics_match_projection[baked-fixed]"
+    ],
+    "outcome": "passed",
+    "pytest_args": [
+      [
+        "-q",
+        "-m",
+        "gpu_proof",
+        "--gpu-proof-enable",
+        "--gpu-proof-out=/home/plancher/Desktop/GRiD/docs/open-tasks/grid-next-20261118/provisional-8g/shards/unit-000.json",
+        "--gpu-proof-github-user=plancherb1",
+        "--gpu-proof-shard=provisional-000",
+        "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[fr3-fixed-inverse_dynamics-threads32]",
+        "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics-threads32]",
+        "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_floating_base_generated_cuda_matches_python_reference[go2-floating-forward_dynamics-threads32]",
+        "test/cuda_equivalents/test_cuda_polynomial_coupling.py::test_polynomial_coupling_dynamics_match_projection[baked-fixed]"
+      ]
+    ],
+    "shards": [
+      {
+        "ended_at": "2026-11-18T09:13:55Z",
+        "node_count": 4,
+        "signer": "plancherb1",
+        "source": "unit-000.json",
+        "started_at": "2026-11-18T09:13:23Z"
+      }
+    ],
+    "started_at": "2026-11-18T09:13:23Z"
+  },
+  "shards": [
+    {
+      "carried": null,
+      "dirty": false,
+      "ended_at": "2026-11-18T09:13:55Z",
+      "environment": {
+        "gpu_info": {
+          "cuda_visible_devices": null,
+          "devices": [
+            {
+              "compute_capability": "12.0",
+              "driver_version": "620.70.06",
+              "index": "0",
+              "memory": "32607 MiB",
+              "name": "NVIDIA GeForce RTX 5090",
+              "uuid": "GPU-bf781ab0-9632-4b9a-497b-c3b846aae70c"
+            }
+          ],
+          "source": "nvidia-smi"
+        },
+        "nvcc_version": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2026 NVIDIA Corporation\nBuilt on Fri_May_08_10:53:34_AM_PDT_2026\nCuda compilation tools, release 13.2, V13.2.86\nBuild cuda_13.2.r13.2/compiler.37953736_0",
+        "platform": "Linux-7.0.0-43-generic-x86_64-with-glibc2.39",
+        "plugin_version": "0.5.0",
+        "pytest_version": "9.0.3",
+        "python_version": "3.12.3"
+      },
+      "fingerprint": {
+        "algorithm": "sha256-manifest-v2",
+        "digest": "993b4121bce3a17aa47a0ef98f5947d0a3136d0116a3f83cbda24732252823f3",
+        "excluded_paths": [
+          "gpu-proof.json",
+          "grid_assets/launch_configs/README.md",
+          "grid_assets/robots/URDF_SOURCES.md",
+          "grid_assets/robots/drake/README.md",
+          "grid_codegen/README.md",
+          "grid_codegen/collision/HANDOFF.md"
+        ],
+        "extra_paths": [],
+        "file_count": 404,
+        "included_paths": [
+          "MANIFEST.in",
+          "_build_resources.py",
+          "bindings/examples/consumer_artifact_migration.py",
+          "bindings/grid_rbd",
+          "bindings/src",
+          "external/GLASS",
+          "external/RBDReference",
+          "external/URDFParser",
+          "grid_assets",
+          "grid_codegen",
+          "pyproject.toml",
+          "setup.py",
+          "test/__init__.py",
+          "test/codegen_neutrality.py",
+          "test/compile_sched.py",
+          "test/conftest.py",
+          "test/cuda_equivalents",
+          "test/ee_constant_slot_warnings.py",
+          "test/gpu-proof-expected-skips.txt",
+          "test/gpu-proof-policy-provisional.yaml",
+          "test/gpu-proof-policy-release.yaml",
+          "test/gpu-proof-policy.yaml",
+          "test/gpu-proof-provisional-skips.txt",
+          "test/gpu-proof-provisional-smoke.txt",
+          "test/gpu-proof-receipts.yaml",
+          "test/gpu-proof-tests.txt",
+          "test/header_key_replay.py",
+          "test/helpers.py",
+          "test/host_memory.py",
+          "test/prewarm_cuda_flagship.py",
+          "test/provisional_receipt.py",
+          "test/python_wrappers",
+          "test/receipt_integrity.py",
+          "test/resource_admission.py",
+          "test/resource_history.py",
+          "test/run_gpu_proof.sh",
+          "test/run_split_suite.py",
+          "test/run_validation.py",
+          "test/test_manifold_conventions.py",
+          "test/test_model_descriptor.py",
+          "tools/check_installed_numerics.py",
+          "tools/check_installed_package.py"
+        ]
+      },
+      "name": "provisional-000",
+      "node_ids": [
+        "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[fr3-fixed-inverse_dynamics-threads32]",
+        "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics-threads32]",
+        "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_floating_base_generated_cuda_matches_python_reference[go2-floating-forward_dynamics-threads32]",
+        "test/cuda_equivalents/test_cuda_polynomial_coupling.py::test_polynomial_coupling_dynamics_match_projection[baked-fixed]"
+      ],
+      "started_at": "2026-11-18T09:13:23Z"
+    }
+  ],
+  "signature": {
+    "value": "+44qNI/zjT63JT74xbE1Np/GTN/5Ss0UPD+8kiBT5Xx9QjzuXV+nuMgevC0wT+NXQc9aVSYC0oWKQd+d8LFZCg=="
+  },
+  "signer": {
+    "algorithm": "ed25519",
+    "backend": "ssh-local",
+    "github_user": "plancherb1",
+    "key_fingerprint": "SHA256:hfyUcDJTDLry3j7nJ9V2X8iEIgNFmFJQKGQirOdyWtY"
+  },
+  "tests": [
+    {
+      "checks": [],
+      "duration_s": 5.3653,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[fr3-fixed-inverse_dynamics-threads32]",
+      "outcome": "passed",
+      "phase": "call"
+    },
+    {
+      "checks": [],
+      "duration_s": 5.1067,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics-threads32]",
+      "outcome": "passed",
+      "phase": "call"
+    },
+    {
+      "checks": [],
+      "duration_s": 7.6628,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_floating_base_generated_cuda_matches_python_reference[go2-floating-forward_dynamics-threads32]",
+      "outcome": "passed",
+      "phase": "call"
+    },
+    {
+      "checks": [],
+      "duration_s": 13.0247,
+      "node_id": "test/cuda_equivalents/test_cuda_polynomial_coupling.py::test_polynomial_coupling_dynamics_match_projection[baked-fixed]",
+      "outcome": "passed",
+      "phase": "call"
+    }
+  ]
+}
