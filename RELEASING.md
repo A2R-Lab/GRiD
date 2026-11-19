@@ -267,9 +267,11 @@ and records predecessor identities with their old node sets. The union is the
 exact fresh CUDA scope; nodes and atoms cannot overlap shards. Resume validates
 both artifacts and replays the saved partition without repacking it from newer
 duration estimates. Older outputs without this map require a fresh full run.
-This is an audit map, not a cross-receipt merge protocol: a refresh that would
-have fewer new shards than stale identities is refused and requires a fresh full
-pass. Never relabel a carried receipt to make a smaller partition fit.
+This is an audit map, not a cross-receipt merge protocol. If the budget plan has
+fewer shards than stale identities, retain the complete name-count-constrained
+partition and record its fallback labels and predecessors. Fewer fresh atoms
+than stale identities still requires a fresh full pass. Never relabel a carried
+receipt to make a smaller partition fit.
 
 Strip optional `receipts/provisional.json` when promoting `dev` to `main`, before
 the release freeze. It is contributor evidence, never release evidence; do not

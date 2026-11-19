@@ -797,10 +797,18 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
                       "The recycled name is a merge identity, not a scope label.")
             cuda_fresh = renamed
         else:
-            raise RuntimeError(
-                f"refresh mapping cannot shadow {n_groups} stale names with "
-                f"{len(smaller)} planned shards. Run a fresh full pass; "
-                "cross-receipt identity merging is unsupported.")
+            print(f"  refresh partition fallback: proposed {len(smaller)} shards "
+                  f"but must shadow {n_groups} stale names; retaining the "
+                  "complete name-count-constrained partition. Mapping records "
+                  "the fallback; a fresh full run can adopt fewer identities.")
+            cuda_fresh = [_dc_replace(
+                spec, display_label=f"refresh_fallback_{index:02d}_" +
+                    '_'.join(dict.fromkeys(_atom_key(n)[0] for n in spec.targets)),
+                predecessors=tuple(
+                    {'merge_identity': old['name'], 'node_ids': sorted(old.get('node_ids') or [])}
+                    for old in stale if not _is_wrapper(old)
+                    and (old['name'] == spec.name or set(old.get('node_ids') or []) & set(spec.targets))))
+                for index, spec in enumerate(cuda_fresh)]
     elif fresh_ids:
         # Wholly-new tests with no stale name to recycle: new shards, names
         # de-conflicted from carried names (a same-named fresh shard would
