@@ -404,18 +404,18 @@ KERNEL_OVERLOADS = {
     ],
     # W1b.3 batched multi-target world positions / position-gradient (opt-in via
     # multi_target_batch; gated on _has_multi_target_position). Same launch shape as
-    # end_effector_pose: (T *out, const T *q, const int stride_q, robotModel, int N).
+    # workspace-aware host kernels: (out, workspace, q, stride_q, robotModel, N).
     "multi_target_position": [
         ("multi_target_position_kernel<T>",
-         "void (*)(T *, const T *, const int, const robotModel<T> *, const int)"),
+         "void (*)(T *, unsigned char *, const T *, const int, const robotModel<T> *, const int)"),
         ("multi_target_position_kernel_single_timing<T>",
-         "void (*)(T *, const T *, const int, const robotModel<T> *, const int)"),
+         "void (*)(T *, unsigned char *, const T *, const int, const robotModel<T> *, const int)"),
     ],
     "multi_target_position_gradient": [
         ("multi_target_position_gradient_kernel<T>",
-         "void (*)(T *, const T *, const int, const robotModel<T> *, const int)"),
+         "void (*)(T *, unsigned char *, const T *, const int, const robotModel<T> *, const int)"),
         ("multi_target_position_gradient_kernel_single_timing<T>",
-         "void (*)(T *, const T *, const int, const robotModel<T> *, const int)"),
+         "void (*)(T *, unsigned char *, const T *, const int, const robotModel<T> *, const int)"),
     ],
     "com": [
         ("com_kernel<T>",

@@ -75,3 +75,12 @@ def test_trapezoidal_is_registered():
         assert "TRAPEZOIDAL" in by_family.get(family, set()), (
             f"TRAPEZOIDAL missing from {family} KERNEL_ATTR_MANIFEST registration"
         )
+
+
+def test_multitarget_registration_keeps_workspace_argument():
+    entries = {entry[1]: entry[4] for entry in GRiDCodeGenerator.KERNEL_ATTR_MANIFEST}
+    for family in ('multi_target_position', 'multi_target_position_gradient'):
+        assert len(entries[family]) == 2
+        for name, signature in entries[family]:
+            assert signature == 'void (*)(T *, unsigned char *, const T *, const int, const robotModel<T> *, const int)'
+        assert any('_single_timing' in name for name, _ in entries[family])
