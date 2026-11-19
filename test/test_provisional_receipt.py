@@ -219,6 +219,9 @@ def test_workflow_executes_only_base_tools():
     assert steps[1]['working-directory'] == 'trusted'
     assert 'git rev-parse --verify HEAD' in steps[1]['run']
     assert '$GITHUB_STEP_SUMMARY' in steps[1]['run']
+    optional = next(step['run'] for step in steps if step.get('name') == 'Optional provisional evidence')
+    assert 'set -o pipefail' in optional
+    assert '| tee -a "$GITHUB_STEP_SUMMARY"' in optional
 
 
 @pytest.mark.parametrize('descendant', ['docs/guide.md', 'grid_codegen/source.py'])

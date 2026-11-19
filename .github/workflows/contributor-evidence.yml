@@ -54,6 +54,8 @@ jobs:
             echo 'No provisional receipt: neutral (GPU evidence is optional on dev).' >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          set -o pipefail
           python -I trusted/test/provisional_receipt.py \
             --verify "$GITHUB_WORKSPACE/candidate/receipts/provisional.json" \
-            --repo "$GITHUB_WORKSPACE/candidate" --author "$PR_AUTHOR" --head "$PR_HEAD"
+            --repo "$GITHUB_WORKSPACE/candidate" --author "$PR_AUTHOR" --head "$PR_HEAD" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
