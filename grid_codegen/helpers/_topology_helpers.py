@@ -1,6 +1,7 @@
 import numpy as np
 from ._gpu_err import legacy_wrapper_lines
 import sympy as sp
+from ._expr_printer import expr_T
 
 def gen_get_XI_size(self, include_base_inertia = False, include_homogenous_transforms = False):
     n = self.robot.get_num_joints()
@@ -206,7 +207,7 @@ def gen_init_XImats(self, include_base_inertia = False, include_homogenous_trans
                 val = Xmats[ind][row,col]
                 if not self.custom_is_constant(val): # initialize to 0
                     val = 0
-                str_val = str(val)
+                str_val = expr_T(val)
                 cpp_ind = self.gen_static_array_ind_3d(ind,col,row)
                 self.gen_add_code_line("h_XImats[" + str(cpp_ind) + "] = static_cast<T>(" + str_val + ");")
     # loop through Imats and add all values (inertias are always constant and stored as np arrays)
@@ -240,7 +241,7 @@ def gen_init_XImats(self, include_base_inertia = False, include_homogenous_trans
                     val = Xmats_hom[ind][row,col]
                     if not self.custom_is_constant(val): # initialize to 0
                         val = 0
-                    str_val = str(val)
+                    str_val = expr_T(val)
                     cpp_ind = baseXI_size + self.gen_static_array_ind_3d(ind,col,row,ind_stride=16,col_stride=4)
                     self.gen_add_code_line("h_XImats[" + str(cpp_ind) + "] = static_cast<T>(" + str_val + ");")
         # and the gradients
@@ -252,7 +253,7 @@ def gen_init_XImats(self, include_base_inertia = False, include_homogenous_trans
                         val = dXmats_hom[ind][row,col]
                         if not self.custom_is_constant(val): # initialize to 0
                             val = 0
-                        str_val = str(val)
+                        str_val = expr_T(val)
                         cpp_ind = baseXI_size + Xhom_size + self.gen_static_array_ind_3d(ind,col,row,ind_stride=16,col_stride=4)
                         self.gen_add_code_line("h_XImats[" + str(cpp_ind) + "] = static_cast<T>(" + str_val + ");")
         # and the 2nd derivatives
@@ -264,7 +265,7 @@ def gen_init_XImats(self, include_base_inertia = False, include_homogenous_trans
                         val = d2Xmats_hom[ind][row,col]
                         if not self.custom_is_constant(val): # initialize to 0
                             val = 0
-                        str_val = str(val)
+                        str_val = expr_T(val)
                         cpp_ind = baseXI_size + Xhom_size + dXhom_size + self.gen_static_array_ind_3d(ind,col,row,ind_stride=16,col_stride=4)
                         self.gen_add_code_line("h_XImats[" + str(cpp_ind) + "] = static_cast<T>(" + str_val + ");")
     # guarded device alloc + copy, free CPU memory, publish on success only
@@ -1147,7 +1148,7 @@ def gen_load_update_XImats_helpers(self, include_base_inertia = False, include_h
                 val = Xmats_serial[ind][row,col]
                 if not self.custom_is_constant(val):
                     # parse the symbolic value into the appropriate array access
-                    str_val = str(val)
+                    str_val = expr_T(val)
 
                     _jt = getattr(self.robot.get_joint_by_id(ind), "jtype", None)
                     str_val = _config_symbol_subst(self, str_val, ind, spherical = (_jt == "spherical"), ccode = False)
@@ -1175,7 +1176,7 @@ def gen_load_update_XImats_helpers(self, include_base_inertia = False, include_h
                     val = Xmats_hom[ind][row,col]
                     if not self.custom_is_constant(val):
                         # parse the symbolic value into the appropriate array access
-                        str_val = sp.ccode(val)
+                        str_val = expr_T(val)
                         # sin/cos (revolute) + theta (prismatic), mimic-aware
                         str_val = _xi_fixed_sincos_subst(self, str_val, ind)
                         # then output the code
@@ -1188,7 +1189,7 @@ def gen_load_update_XImats_helpers(self, include_base_inertia = False, include_h
                     val = dXmats_hom[ind][row,col]
                     if not self.custom_is_constant(val):
                         # parse the symbolic value into the appropriate array access
-                        str_val = sp.ccode(val)
+                        str_val = expr_T(val)
                         # sin/cos (revolute) + theta (prismatic), mimic-aware
                         str_val = _xi_fixed_sincos_subst(self, str_val, ind)
                         # then output the code
@@ -1201,7 +1202,7 @@ def gen_load_update_XImats_helpers(self, include_base_inertia = False, include_h
                     val = d2Xmats_hom[ind][row,col]
                     if not self.custom_is_constant(val):
                         # parse the symbolic value into the appropriate array access
-                        str_val = sp.ccode(val)
+                        str_val = expr_T(val)
                         # sin/cos (revolute) + theta (prismatic), mimic-aware
                         str_val = _xi_fixed_sincos_subst(self, str_val, ind)
                         # then output the code
@@ -1434,7 +1435,7 @@ def gen_load_update_XmatsHom_helpers(self, include_base_inertia = False, include
                 val = Xmats_hom[ind][row,col]
                 if not self.custom_is_constant(val):
                     # parse the symbolic value into the appropriate array access
-                    str_val = replace_hom_config_symbols(sp.ccode(val), ind)
+                    str_val = replace_hom_config_symbols(expr_T(val), ind)
                     # then output the code
                     cpp_ind = str(self.gen_static_array_ind_3d(ind,col,row,ind_stride=16,col_stride=4))
                     self.gen_add_code_line("s_XmatsHom[" + cpp_ind + "] = static_cast<T>(" + str_val + ");")
@@ -1455,7 +1456,7 @@ def gen_load_update_XmatsHom_helpers(self, include_base_inertia = False, include
                     val = dXmats_hom[ind][row,col]
                     if not self.custom_is_constant(val):
                         # parse the symbolic value into the appropriate array access
-                        str_val = replace_hom_config_symbols(sp.ccode(val), owner_jid if owner_jid is not None else ind)
+                        str_val = replace_hom_config_symbols(expr_T(val), owner_jid if owner_jid is not None else ind)
                         # then output the code
                         cpp_ind = str(self.gen_static_array_ind_3d(ind,col,row,ind_stride=16,col_stride=4))
                         self.gen_add_code_line("s_dXmatsHom[" + cpp_ind + "] = static_cast<T>(" + str_val + ");")
@@ -1473,7 +1474,7 @@ def gen_load_update_XmatsHom_helpers(self, include_base_inertia = False, include
                     val = d2Xmats_hom[ind][row,col]
                     if not self.custom_is_constant(val):
                         # parse the symbolic value into the appropriate array access
-                        str_val = replace_hom_config_symbols(sp.ccode(val), owner_jid if owner_jid is not None else ind)
+                        str_val = replace_hom_config_symbols(expr_T(val), owner_jid if owner_jid is not None else ind)
                         # then output the code
                         cpp_ind = str(self.gen_static_array_ind_3d(ind,col,row,ind_stride=16,col_stride=4))
                         self.gen_add_code_line("s_d2XmatsHom[" + cpp_ind + "] = static_cast<T>(" + str_val + ");")

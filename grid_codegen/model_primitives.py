@@ -7,6 +7,7 @@ import sympy as sp
 from .algorithms._eepose_gradient_hessian import (
     _ee_pose_inner_angle_expr, _ee_pose_root_fb_subst)
 from .helpers._topology_helpers import _xi_spherical_quat_subst
+from .helpers._expr_printer import expr_T
 
 
 def emit_joint_transforms(gen):
@@ -34,7 +35,7 @@ def emit_joint_transforms(gen):
                           '    const T s=sin(theta), c=cos(theta);', '    (void)s; (void)c;']
             for col in range(4):
                 for row in range(4):
-                    expression = sp.ccode(mats[jid][row, col])
+                    expression = expr_T(mats[jid][row, col])
                     if j['kind'] == 'floating':
                         expression = _ee_pose_root_fb_subst(expression)
                     elif j['kind'] == 'spherical':
