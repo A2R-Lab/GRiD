@@ -104,8 +104,8 @@ def run_job(cmd, log, timeout):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--stage", choices=("core", "wrappers", "table"), default="core")
-    ap.add_argument("--robots", nargs="+", choices=list(ROBOTS), default=list(ROBOTS))
+    ap.add_argument("--stage", choices=("core", "wrappers", "table", "consumers"), default="core")
+    ap.add_argument("--robots", nargs="+", choices=list(ROBOTS))
     ap.add_argument("--backends", nargs="+")
     ap.add_argument("--operations", nargs="+")
     ap.add_argument("--batches", nargs="+", type=int)
@@ -119,9 +119,20 @@ def main():
     mode.add_argument("--smoke", action="store_true", help="Defaults to B=16; 1 repeat, 2 warmups, 2 samples; never release evidence")
     mode.add_argument("--prepare-only", action="store_true", help="Populate builds/JIT caches at all requested shapes; no oracle validation or timings")
     ap.add_argument("--execute", action="store_true")
+    ap.add_argument("--correctness-only", action="store_true", help="Consumer stage: execute correctness checks without timing samples")
     ap.add_argument("--accuracy-policy", choices=ACCURACY_POLICIES, default="strict")
     ap.add_argument("--output", type=Path)
     args = ap.parse_args()
+    if args.stage == 'consumers':
+        from .consumer_collect import collect
+        try:
+            collect(args)
+        except ValueError as error:
+            ap.error(str(error))
+        return
+    if args.correctness_only:
+        ap.error('--correctness-only requires --stage consumers')
+    args.robots = args.robots or list(ROBOTS)
     if args.smoke:
         args.batches, args.repeats, args.iterations, args.warmups = args.batches or [16], 1, 2, 2
     else:

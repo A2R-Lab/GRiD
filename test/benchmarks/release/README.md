@@ -1,5 +1,56 @@
 # GRiD release collection
 
+## First consumer-boundary slice (schema 1)
+
+`collect --stage consumers` is a separate, versioned contract; legacy captures
+are not relabelled or combined with it. It covers inverse dynamics and end-effector
+pose on iiwa14 and go2, with GRiD CUDA and standard-API Pinocchio. Both use dense,
+row-major fp32 project-order inputs and outputs at batches 1, 4, 16, 64, 256 and
+1024. Pinocchio keeps its existing fp32 inverse dynamics and fp64 pose arithmetic;
+casts and quaternion normalization occur inside the native sample.
+
+The headline GPU boundary starts with device inputs and returns a ready device
+result. Pinocchio includes download, readiness, conversion, CPU evaluation,
+output cast and upload completion. GRiD includes copies from the common packed
+device inputs into its arena, computation and the dense device result copy.
+The host boundary starts and ends in host memory. Both allocate page-locked
+I/O buffers once outside samples, with no pageable fallback. Existing internal
+algorithm/pool allocations remain included. These measurements are synchronous
+consumer-call costs, not device-event kernel timings or asynchronous throughput.
+They must not be subtracted from legacy pre-staged timings as a pure copy cost.
+
+One acceptance function checks every explicit fixture row, both outputs against
+the oracle before and after sampling, the actual last timed outputs, and
+inter-call and cross-boundary agreement. A strict failure is ineligible. Equal
+repeat counts, every repeat's samples and mean, and the spread of repeat means
+are retained in `consumer-report.json`; the report leads with GPU ratios and
+flags spread exceeding 10% of the median repeat mean. The worker uses a fixed
+CPU thread ceiling, with no new tuning sweep. Warning labels remain visible in
+the aggregation contract; this bounded slice uses strict policy.
+
+Dry planning (no build, GPU use or timing):
+
+```bash
+.venv/bin/python -m test.benchmarks.release.collect --stage consumers
+```
+
+After explicit GPU approval and a booked correctness window, this smoke performs
+no timing samples and is never comparison or release evidence:
+
+```bash
+.venv/bin/python -m test.benchmarks.release.collect --stage consumers \
+  --correctness-only --batches 1 4 --cpu-threads 2 \
+  --execute --output /tmp/grid-consumer-correctness-NEW
+```
+
+Timing needs separate approval and an isolated window. A new `--output` directory
+is required. `--repeats 3` is the default for both backends. Every native CUDA
+return is checked; errors abort the campaign without publishing ratios. Bridge
+identities include compiler-resolved header dependencies, flags, compiler and
+fixture hash. No receipt cache or correctness evidence is reused by this stage.
+
+## Existing collector stages
+
 This validation-gated collector supplies the release figures. It
 does not reuse historical timing values or the old drivers' unmatched `with_mem`
 measurements. Collision work is excluded. Nothing here changes

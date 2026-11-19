@@ -230,7 +230,10 @@ class GridAdapter:
             *_compile._mjx_signature_flags(header)]
         nvcc = _compile.find_nvcc()
         version = subprocess.check_output([nvcc, "--version"], text=True)
-        key = hashlib.sha256((digest(source) + digest(header) + repr(flags) + version).encode()).hexdigest()[:20]
+        from .consumer_adapter import dependencies, fixture_digest
+        from .consumer_contract import build_identity
+        resolved = dependencies(nvcc, source, flags)
+        key = build_identity([header, *resolved], flags, version, fixture_digest(self.fixture))
         cache = ROOT / "test/benchmarks/results/release-build-cache"
         lib = build_locked(cache / ("kernel-" + key + ".so"), lambda out: [nvcc, *flags, "-o", str(out), str(source)])
         self.metadata.update(kernel_bridge_sha256=digest(lib), kernel_bridge_flags=flags,

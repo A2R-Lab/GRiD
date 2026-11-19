@@ -9,11 +9,9 @@
 //   with_mem : the `<op>` host function — H2D copies of the packed inputs,
 //              the kernel, and the D2H copy of the result (GRiD's own
 //              synchronous host call, exactly what the C ABI wraps).
-// Differences between the collector's backends then have one meaning each:
-//   with_mem - compute        = memory traffic of one call
-//   C ABI    - with_mem       = context lookup, staging memcpy, fences
-//   NumPy    - C ABI          = Python/pybind
-//   JAX/torch resident - compute = framework dispatch
+// Differences between these legacy boundaries combine transfer, wrapper and
+// synchronization effects. They are not isolated copy or dispatch costs.
+// The versioned consumer stage defines a separate matched boundary contract.
 //
 // Compiled per (robot, operation) artifact against that artifact's header
 // with the wrapper's nvcc flags (same arch, same fast-math settings), so the
@@ -23,6 +21,8 @@
 #include <cstdio>
 #include <cstring>
 #include "grid.cuh"
+#include "consumer_copy.h"
+#define KB_CUDA(expr) do { cudaError_t kb_e=(expr); if(kb_e!=cudaSuccess) return 100+int(kb_e); } while(0)
 
 #ifndef GRID_KERNEL_MAX_BATCH
 #define GRID_KERNEL_MAX_BATCH 256
@@ -149,11 +149,12 @@ int baked_threads(int op) {
 }
 
 // Like the wrapper: clamp to a kernel's register-limited block cap where the
-// wrapper does (ccrba); a failed attribute query keeps the request.
+// wrapper does (ccrba); failed queries propagate through the error contract.
 template <typename KernelPtr>
 dim3 clamp_threads(KernelPtr kernel, dim3 requested) {
     cudaFuncAttributes attr;
-    if (cudaFuncGetAttributes(&attr, (const void*)kernel) != cudaSuccess) { cudaGetLastError(); return requested; }
+    const cudaError_t error = cudaFuncGetAttributes(&attr, (const void*)kernel);
+    if (error != cudaSuccess) { gpuAssert(error, __FILE__, __LINE__); return requested; }
     unsigned cap = attr.maxThreadsPerBlock > 0 ? (unsigned)attr.maxThreadsPerBlock : requested.x;
     if (requested.x > cap) requested.x = cap;
     return requested;
@@ -519,6 +520,7 @@ extern "C" int grid_kernel_run(void *h, int op, const T *q, const T *qd, const T
     if (int rc = stage_inputs(c, op, q, qd, third, batch)) return rc;
     const dim3 thr((unsigned)(threads > 0 ? threads : baked_threads(op)), 1, 1);
     compute_only(c, op, gravity, batch, thr);
+    KB_CUDA(grid_consume_last_error());
     cudaError_t e = cudaDeviceSynchronize();
     if (e == cudaSuccess) e = cudaGetLastError();
     if (e != cudaSuccess) return 100 + (int)e;
@@ -551,6 +553,8 @@ extern "C" int grid_kernel_time(void *h, int op, const T *q, const T *qd, const 
     int done = 0;
     do {
         with_mem(c, op, gravity, batch, thr);
+        KB_CUDA(grid_consume_last_error());
+        KB_CUDA(cudaGetLastError());
         ++done;
     } while (done < warmups || now_us() - warm_start < warm_seconds * 1e6);
     cudaError_t e = cudaDeviceSynchronize();
@@ -559,20 +563,57 @@ extern "C" int grid_kernel_time(void *h, int op, const T *q, const T *qd, const 
     for (int i = 0; i < iterations; ++i) {
         const double t0 = now_us();
         with_mem(c, op, gravity, batch, thr);
-        cudaDeviceSynchronize();
+        KB_CUDA(grid_consume_last_error());
+        KB_CUDA(cudaGetLastError());
+        KB_CUDA(cudaDeviceSynchronize());
         with_mem_us[i] = now_us() - t0;
     }
     std::memcpy(out_with_mem, host_output(c, op), (size_t)batch * output_size(op) * sizeof(T));
 
-    for (int i = 0; i < warmups; ++i) compute_only(c, op, gravity, batch, thr);
-    cudaDeviceSynchronize();
+    for (int i = 0; i < warmups; ++i) {
+        compute_only(c, op, gravity, batch, thr);
+        KB_CUDA(grid_consume_last_error());
+        KB_CUDA(cudaGetLastError());
+        KB_CUDA(cudaDeviceSynchronize());
+    }
     for (int i = 0; i < iterations; ++i) {
         const double t0 = now_us();
         compute_only(c, op, gravity, batch, thr);
-        cudaDeviceSynchronize();
+        KB_CUDA(grid_consume_last_error());
+        KB_CUDA(cudaGetLastError());
+        KB_CUDA(cudaDeviceSynchronize());
         compute_us[i] = now_us() - t0;
     }
     e = cudaGetLastError();
     if (e != cudaSuccess) return 100 + (int)e;
     return download(c, op, batch, out_compute);
+}
+
+struct GridConsumer { KernelCtx *kernel; int op, threads; };
+extern "C" void *grid_consumer_create(void *kernel, int op, int threads) {
+    if(!kernel || (op!=OP_ID && op!=OP_EE_POSE)) return nullptr;
+    return new GridConsumer{static_cast<KernelCtx*>(kernel),op,threads>0?threads:baked_threads(op)};
+}
+extern "C" void grid_consumer_close(void *context) { delete static_cast<GridConsumer*>(context); }
+extern "C" int grid_consumer_eval(void *context, const float *input, float *out, int batch, bool device) {
+    if(!context || !input || !out || batch<1 || batch>GRID_KERNEL_MAX_BATCH) return -1;
+    auto &session=*static_cast<GridConsumer*>(context); auto &c=*session.kernel;
+    const int op=session.op,nq=grid::NUM_POS,nv=grid::NUM_VEL,nj=grid::NUM_JOINTS;
+    const int width=nq+(op==OP_ID?2*nv:0);
+    const auto kind=device?cudaMemcpyDeviceToDevice:cudaMemcpyHostToDevice;
+    // Explicit common packed layout -> GRiD arena. These copies/packing costs
+    // are inside the new contract, unlike the legacy pre-staged kernel timing.
+    KB_CUDA(cudaMemcpy2D(c.data->d_q_qd_u,3*nj*sizeof(T),input,width*sizeof(T),nq*sizeof(T),batch,kind));
+    if(op==OP_ID) {
+        KB_CUDA(cudaMemcpy2D(c.data->d_q_qd_u+nj,3*nj*sizeof(T),input+nq,width*sizeof(T),nv*sizeof(T),batch,kind));
+        KB_CUDA(cudaMemcpy2D(c.data->d_qdd,nj*sizeof(T),input+nq+nv,width*sizeof(T),nv*sizeof(T),batch,kind));
+    }
+    compute_only(c,op,T(-9.81),batch,dim3(session.threads,1,1));
+    KB_CUDA(grid_consume_last_error());
+    KB_CUDA(cudaGetLastError()); KB_CUDA(cudaDeviceSynchronize());
+    const T *src=device_output(c,op); if(!src) return -2;
+    KB_CUDA(consumer_copy_dense(out,op==OP_ID?nv:6,src,output_size(op),batch,
+                                device?cudaMemcpyDeviceToDevice:cudaMemcpyDeviceToHost));
+    KB_CUDA(cudaDeviceSynchronize());
+    return 0;
 }
