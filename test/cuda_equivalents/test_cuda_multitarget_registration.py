@@ -18,7 +18,7 @@ from RBDReference import RBDReference
 RUNNER = Path(__file__).with_name('cuda_multitarget_registration_runner.cu')
 
 
-def build(directory, scalar):
+def build(directory, scalar, *, compile_only=False):
     robot = _robot('go2', True)
     targets = [dict(anchor_jid=int(j), offset=(0.03, -0.02, 0.05)) for j in robot.get_leaf_nodes()]
     with contextlib.redirect_stdout(io.StringIO()):
@@ -26,9 +26,16 @@ def build(directory, scalar):
             algorithm_list=['end_effector_pose'], multi_target_batch=targets,
             enable_mujoco_kernels=False, output_path=str(directory / 'grid.cuh'))
     exe = directory / 'registration'
-    # Compile-only regression uses a fixed virtual architecture, no GPU query.
+    # The standalone compiler check never queries a GPU; runtime coverage uses
+    # the same optimization and native architecture as its multi-target sibling.
     compiler = shutil.which('nvcc') or '/usr/local/cuda/bin/nvcc'
-    command = [compiler, '-std=c++17', '-O1', '-arch=compute_80',
+    if compile_only:
+        flags = ['-O1', '-arch=compute_80']
+    else:
+        from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
+        arch = _detect_cuda_arch()
+        flags = ['-O2', '-gencode', f'arch=compute_{arch},code=sm_{arch}']
+    command = [compiler, '-std=c++17', *flags,
                '-DSCALAR=' + scalar, '-I' + str(directory), str(RUNNER), '-o', str(exe)]
     result = subprocess.run(command, text=True, capture_output=True)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -77,5 +84,5 @@ if __name__ == '__main__':
         for scalar in ('float', 'double'):
             directory = Path(root)/scalar
             directory.mkdir()
-            build(directory, scalar)
+            build(directory, scalar, compile_only=True)
             print(scalar + ': checked and unchecked registration compiled; not executed')
