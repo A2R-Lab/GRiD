@@ -72,11 +72,11 @@ def impure_lines(source):
 
 
 def test_printer_types_every_constant():
-    x, y, t = sp.symbols("q1_fb q2_fb theta")
+    x, y, t = sp.symbols("a b theta")
     assert expr_T(2.0 * x * y / (x**2 + y**2)) == \
-        "static_cast<T>(2.0)*q1_fb*q2_fb/(((q1_fb)*(q1_fb)) + ((q2_fb)*(q2_fb)))"
-    assert expr_T(x / 2) == "(static_cast<T>(1.0/2.0))*q1_fb"
-    assert expr_T(1 / x) == "(static_cast<T>(1)/((q1_fb)))"
+        "static_cast<T>(2.0)*a*b/(((a)*(a)) + ((b)*(b)))"
+    assert expr_T(x / 2) == "(static_cast<T>(1.0/2.0))*a"
+    assert expr_T(1 / x) == "(static_cast<T>(1)/((a)))"
     assert expr_T(0.0465 * sp.sin(t)) == "static_cast<T>(0.0465)*sin(theta)"
     assert expr_T(sp.Float(0.5)) == "0.5" and expr_T(sp.Integer(3)) == "3"
     for expression in (x**3 - 0.1 * y, sp.sqrt(x) / 3, x**sp.Rational(3, 2), -sp.cos(t) * 1.5):

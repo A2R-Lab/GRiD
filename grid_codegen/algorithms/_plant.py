@@ -2773,6 +2773,10 @@ def gen_grid_plant(self, algorithms):
     self.gen_add_code_line("")
     self.gen_add_func_doc("Plant namespace: cost / constraint / plant-step primitives composed over grid::")
     self.gen_add_code_line("namespace " + self.file_namespace + "_plant {", True)
+    if self.robot.floating_base:
+        # the one base-quaternion helper pair lives in the main namespace
+        self.gen_add_code_line("using " + self.file_namespace + "::grid_quat_inv_norm2;")
+        self.gen_add_code_line("using " + self.file_namespace + "::grid_base_rotation;")
 
     # Quadratic costs have no grid:: dep — always emit.
     self.gen_quadratic_state_cost()

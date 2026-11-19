@@ -727,7 +727,12 @@ class GRiDCodeGenerator:
                      runtime_armature = None,
                      contact_frames = None, enable_contact_runtime = False, enable_mujoco_kernels = None,
                      emit_alloc_gating = False, fragments_dir = None,
-                     vendor_glass = True, glass_revision = None, cost_frames = None, emit_plant = None):
+                     vendor_glass = True, glass_revision = None, cost_frames = None, emit_plant = None,
+                     assume_unit_quaternions = False):
+        # Floating base only. False (default): the header normalises the base quaternion
+        # inside grid_quat_inv_norm2. True: the caller guarantees unit quaternions and the
+        # header computes no normalisation.
+        self.assume_unit_quaternions = bool(assume_unit_quaternions)
         algorithms, include_any_kinematics, include_homogenous_transforms = self._resolve_emission_plan(include_base_inertia=include_base_inertia, include_homogenous_transforms=include_homogenous_transforms, fixed_target_name=fixed_target_name, output_path=output_path, codegen_profile=codegen_profile, algorithm_list=algorithm_list, enable_floating_second_order=enable_floating_second_order, enable_idsva_so_world_frame=enable_idsva_so_world_frame, enable_idsva_so_body_frame=enable_idsva_so_body_frame, runtime_inertia=runtime_inertia, runtime_transform=runtime_transform, runtime_joint_dynamics=runtime_joint_dynamics, runtime_armature=runtime_armature, multi_target_batch=multi_target_batch, collision_spec=collision_spec, contact_frames=contact_frames, enable_contact_runtime=enable_contact_runtime, enable_mujoco_kernels=enable_mujoco_kernels, emit_alloc_gating=emit_alloc_gating, fragments_dir=fragments_dir, vendor_glass=vendor_glass, glass_revision=glass_revision, cost_frames=cost_frames)
         file_notes = [ "Interface is:", \
             "    __host__   robotModel<T> *d_robotModel = init_robotModel<T>()", \
@@ -812,6 +817,8 @@ class GRiDCodeGenerator:
         # then open our namespace
         self.gen_add_func_doc("All functions are kept in this namespace")
         self.gen_add_code_line("namespace " + self.file_namespace + " {", True)
+        from .helpers._code_generation_helpers import gen_base_quaternion_helpers
+        gen_base_quaternion_helpers(self)
         self.gen_add_shared_memory_helpers()
         # W1b.3 (Inc4b): multi_target PRESENCE marker emitted here — BEFORE the gridData
         # struct (in gen_add_constants_helpers just below) — so the struct's
