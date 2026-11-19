@@ -102,8 +102,8 @@ def summarize_repeats(samples, *, expected_repeats, noise_fraction=0.1):
                 noisy=spread > noise_fraction*center, samples_us=samples)
 
 
-def build_identity(paths, flags, compiler, fixture_sha256):
+def build_identity(paths, flags, compiler):
     contents = {str(Path(p).resolve()): hashlib.sha256(Path(p).read_bytes()).hexdigest()
                 for p in sorted(set(map(Path, paths)))}
-    payload = dict(files=contents, flags=flags, compiler=compiler, fixture_sha256=fixture_sha256)
+    payload = dict(files=contents, flags=flags, compiler=compiler)
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()

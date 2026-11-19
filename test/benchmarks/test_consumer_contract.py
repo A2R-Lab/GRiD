@@ -55,18 +55,65 @@ def test_repeats_and_contract_versions_are_not_silently_combined():
     with pytest.raises(ValueError): summarize_repeats([[10]], expected_repeats=3)
 
 
-def test_build_identity_covers_dependencies_flags_compiler_fixture(tmp_path):
+def test_build_identity_covers_code_dependencies_not_runtime_samples(tmp_path):
     source, header = tmp_path/'bridge.cpp', tmp_path/'nested.h'
     source.write_text('source'); header.write_text('header')
     def key(**kwargs):
         return build_identity([source, header], kwargs.get('flags', ['-O2']),
-                              kwargs.get('compiler', 'compiler v1'), kwargs.get('fixture', 'a'*64))
+                              kwargs.get('compiler', 'compiler v1'))
     old = key()
     assert old == key()
-    for kw in ({'flags': ['-O3']}, {'compiler': 'v2'}, {'fixture': 'b'*64}):
+    for kw in ({'flags': ['-O3']}, {'compiler': 'v2'}):
         assert key(**kw) != old
     header.write_text('changed')
     assert key() != old
+
+
+def test_batch_cells_share_maximum_compile_capacity(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from test.benchmarks.release import grid_adapter
+    from test.benchmarks.release.consumer_adapter import ConsumerAdapter
+    capacities = []
+    def stop_before_gpu(backend, operation, fixture, capacity, directory):
+        capacities.append(capacity)
+        raise RuntimeError('stop before GPU')
+    monkeypatch.setattr(grid_adapter, 'GridAdapter', stop_before_gpu)
+    fixture = SimpleNamespace(spec=SimpleNamespace(robot_id='iiwa14'), q=np.zeros((4,7)), nv=7)
+    for batch in (1,4):
+        with pytest.raises(RuntimeError, match='stop before GPU'):
+            ConsumerAdapter('grid_cuda', 'inverse_dynamics', fixture, batch, tmp_path)
+    assert capacities == [4,4]
+
+
+def test_cuda_root_follows_selected_nvcc(monkeypatch, tmp_path):
+    from grid_rbd import _compile
+    from test.benchmarks.release.consumer_adapter import cuda_root, host_compiler
+    nvcc = tmp_path/'toolkit/bin/nvcc'; nvcc.parent.mkdir(parents=True); nvcc.touch()
+    monkeypatch.setattr(_compile, 'find_nvcc', lambda: str(nvcc))
+    assert cuda_root() == nvcc.parent.parent
+    monkeypatch.setenv('CXX','missing-compiler-for-test')
+    with pytest.raises(FileNotFoundError): host_compiler()
+
+
+@pytest.mark.parametrize('host,kernel', [
+    ('end_effector_pose', 'end_effector_pose_kernel'),
+    ('end_effector_pose_FR_foot_joint', 'end_effector_pose_kernel_FR_foot_joint'),
+])
+def test_consumer_kernel_alias_follows_generated_target(tmp_path, host, kernel):
+    from test.benchmarks.release.grid_adapter import consumer_kernel_flags
+    header = tmp_path/'grid.cuh'
+    header.write_text('    #define GRID_RBD_EE_POSE_FN '+host+'\n')
+    assert consumer_kernel_flags(header) == ['-DGRID_CONSUMER_EE_KERNEL='+kernel]
+
+
+def test_consumer_kernel_alias_absent_or_unrecognized(tmp_path):
+    from test.benchmarks.release.grid_adapter import consumer_kernel_flags
+    header = tmp_path/'grid.cuh'
+    header.write_text('// inverse dynamics only\n')
+    assert consumer_kernel_flags(header) == []
+    header.write_text('#define GRID_RBD_EE_POSE_FN unexpected_target\n')
+    with pytest.raises(ValueError, match='unsupported generated pose alias'):
+        consumer_kernel_flags(header)
 
 
 def test_compiler_discovers_nested_and_conditional_headers(tmp_path):

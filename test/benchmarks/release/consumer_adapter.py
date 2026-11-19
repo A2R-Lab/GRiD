@@ -1,6 +1,8 @@
 """Native adapters for the bounded two-consumer experiment (no Python in samples)."""
 import ctypes as C
 import hashlib
+import os
+import shutil
 from pathlib import Path
 import subprocess
 
@@ -21,11 +23,25 @@ def dependencies(compiler, source, flags):
     return [Path(p) for p in shlex.split(output.replace('\\\n', ' ').split(':', 1)[1])]
 
 
+def host_compiler():
+    compiler = os.environ.get('CXX', 'g++')
+    resolved = shutil.which(compiler)
+    if not resolved:
+        raise FileNotFoundError(f'host compiler not found: {compiler}')
+    return resolved
+
+
+def cuda_root():
+    from grid_rbd._compile import find_nvcc
+    return Path(find_nvcc()).resolve().parent.parent
+
+
 class ConsumerAdapter:
     def __init__(self, backend, operation, fixture, batch, directory, cpu_threads=1):
         if fixture.spec.robot_id not in ROBOTS or operation not in OPERATIONS:
             raise ValueError('outside first consumer slice')
         self.backend = backend
+        self.supports_native = backend == 'grid_cuda'
         self.session = self.context = None
         self.adapter = None
         self.output_width = fixture.nv if operation == 'inverse_dynamics' else 6
@@ -35,7 +51,9 @@ class ConsumerAdapter:
         try:
             if backend == 'grid_cuda':
                 from .grid_adapter import GridAdapter, KERNEL_OPS
-                self.adapter = GridAdapter(backend, operation, fixture, batch, directory)
+                # Every cell shares one compiled capacity/arena size, just as
+                # the core stage does. Cache hits reuse this same artifact.
+                self.adapter = GridAdapter(backend, operation, fixture, len(fixture.q), directory)
                 self.adapter.prepare(batch)
                 self.library = self.adapter.kernel
                 self.library.grid_consumer_create.argtypes = [C.c_void_p, C.c_int, C.c_int]
@@ -61,12 +79,13 @@ class ConsumerAdapter:
             self.evaluate.argtypes = [C.c_void_p, self.fp, self.fp, C.c_int, C.c_bool]
             self.evaluate.restype = C.c_int
             source = Path(__file__).with_name('consumer_bridge.cpp')
-            compiler = 'g++'
-            flags = ['-std=c++17', '-O2', '-fPIC', '-shared', '-I/usr/local/cuda/include',
-                     '-L/usr/local/cuda/lib64', '-Wl,-rpath,/usr/local/cuda/lib64', '-lcudart']
+            compiler = host_compiler()
+            toolkit = cuda_root()
+            flags = ['-std=c++17', '-O2', '-fPIC', '-shared', '-I'+str(toolkit/'include'),
+                     '-L'+str(toolkit/'lib64'), '-Wl,-rpath,'+str(toolkit/'lib64'), '-lcudart']
             version = subprocess.check_output([compiler, '--version'], text=True)
             paths = dependencies(compiler, source, flags)
-            key = build_identity(paths, flags, version, fixture_digest(fixture))
+            key = build_identity(paths, flags, version)
             library = build_locked(ROOT/'test/benchmarks/results/release-build-cache'/f'consumer-{key}.so',
                                    lambda out: [compiler, str(source), *flags, '-o', str(out)])
             self.driver = C.CDLL(str(library))
@@ -83,12 +102,34 @@ class ConsumerAdapter:
             self._check(self.driver.consumer_create(C.byref(session), C.cast(self.evaluate, C.c_void_p), self.context,
                         backend == 'grid_cuda', batch, inputs.shape[1], self.output_width, inputs.ctypes.data_as(self.fp)))
             self.session = session
+            if self.supports_native:
+                self.library.grid_consumer_threads.argtypes = [C.c_void_p]
+                self.library.grid_consumer_threads.restype = C.c_int
+                for name, types in {
+                    'grid_consumer_stage': [C.c_void_p, self.fp, C.c_int, C.c_bool],
+                    'grid_consumer_native_once': [C.c_void_p, C.c_int],
+                    'grid_consumer_native_download': [C.c_void_p, C.c_int, self.fp],
+                    'grid_consumer_native_measure': [C.c_void_p, C.c_int, C.c_int, C.c_double, C.c_int, self.dp, self.fp],
+                }.items():
+                    getattr(self.library, name).argtypes = types
+                    getattr(self.library, name).restype = C.c_int
+                self._check(self.library.grid_consumer_stage(self.context, inputs.ctypes.data_as(self.fp), batch, False))
             self.metadata = {**self.adapter.metadata, 'consumer_bridge_sha256': digest(library),
                              'consumer_build_identity': key, 'consumer_fixture_sha256': fixture_digest(fixture),
                              'cpu_threads': cpu_threads if backend != 'grid_cuda' else None,
                              'boundary_io_allocation': 'persistent pinned host and device buffers',
                              'backend_internal_allocations': 'existing algorithm and pool behavior included',
                              'contract_precision': 'fp32 I/O; Pinocchio ID fp32, pose fp64; GRiD fp32'}
+            if self.supports_native:
+                self.metadata['consumer_threads_used'] = self.library.grid_consumer_threads(self.context)
+            self.native_contract = dict(schema=1, boundary='gpu_native_layout', dtype='float32',
+                input_layout='GRiD q_qd_u and qdd arenas; NUM_POS-wide slots',
+                output_row_stride=fixture.nq if operation == 'inverse_dynamics' else 6,
+                logical_output_width=self.output_width, batch=batch,
+                fixture_sha256=fixture_digest(fixture),
+                included='compute and device completion',
+                excluded='input staging, dense output packing and validation download',
+                completion='native arena result ready on device on return')
             if backend == 'pinocchio_plain':
                 self.metadata.update(thread_policy='fixed ceiling capped by batch; no tuning',
                                      active_cpu_threads=min(cpu_threads, batch),
@@ -105,12 +146,20 @@ class ConsumerAdapter:
 
     def once(self, boundary):
         out = np.empty((self.batch, self.output_width), np.float32)
+        if boundary == 'native_gpu':
+            self._check(self.library.grid_consumer_native_once(self.context, self.batch))
+            self._check(self.library.grid_consumer_native_download(self.context, self.batch, out.ctypes.data_as(self.fp)))
+            return out
         self._check(self.driver.consumer_once(self.session, int(boundary == 'gpu'), out.ctypes.data_as(self.fp)))
         return out
 
     def measure(self, boundary, warmups, iterations, warm_seconds):
         out = np.empty((self.batch, self.output_width), np.float32)
         samples = np.empty(iterations, np.float64)
+        if boundary == 'native_gpu':
+            self._check(self.library.grid_consumer_native_measure(self.context, self.batch, warmups, warm_seconds,
+                iterations, samples.ctypes.data_as(self.dp), out.ctypes.data_as(self.fp)))
+            return samples.tolist(), out
         self._check(self.driver.consumer_measure(self.session, int(boundary == 'gpu'), warmups, warm_seconds,
                                                  iterations, samples.ctypes.data_as(self.dp), out.ctypes.data_as(self.fp)))
         return samples.tolist(), out

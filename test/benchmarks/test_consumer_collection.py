@@ -47,7 +47,8 @@ def test_plan_is_equal_repeats_and_bounded():
                            correctness_only=False, smoke=False, accuracy_policy='strict')
     result = plan(args)
     assert result['batches'] == [1,4,16,64,256,1024]
-    assert len(result['jobs']) == 24
+    assert len(result['jobs']) == 36
+    assert {j['cpu_threads'] for j in result['jobs'] if j['backend']=='pinocchio_plain'} == {1,2}
     args.robots = ['g1']
     with pytest.raises(ValueError): plan(args)
 
@@ -77,3 +78,29 @@ def test_report_rejects_missing_repeats_legacy_and_different_boundaries():
     assert not summarize(changed, repeats=3)['ratios']
     captures[-1]['cells'][0]['validation']['status'] = 'accuracy_warning'
     assert summarize(captures, repeats=3)['cells'][-1]['status'] == 'accuracy_warning'
+
+
+@pytest.mark.parametrize('fault', [None, 'native_gpu'])
+def test_native_layout_is_separately_validated_and_never_relabels_dense(fault):
+    adapter = Adapter(fault)
+    adapter.supports_native = True
+    adapter.native_contract = {'boundary':'gpu_native_layout','included':'compute and completion'}
+    meta = contract('inverse_dynamics',4,3,3,'a'*64)
+    result = run_cell(adapter,meta,np.zeros((4,3)),correctness_only=False,warmups=1,iterations=2,warm_seconds=0)
+    assert result['comparison_eligible'] is (fault is None)
+    assert result['native_layout']['comparison_eligible'] is (fault is None)
+    assert result['native_layout']['contract'] != result['contract']
+    assert adapter.measurements == ['host','gpu','native_gpu']
+
+
+def test_pinocchio_thread_variants_are_not_combined():
+    meta = contract('inverse_dynamics',4,3,3,'a'*64)
+    cell = run_cell(Adapter(),meta,np.zeros((4,3)),correctness_only=False,warmups=1,iterations=2,warm_seconds=0)
+    captures = [dict(robot='iiwa14',operation='inverse_dynamics',backend=b,cpu_threads=t,repeat=i,
+                     collector_sources={'a':'a'*64},cells=[copy.deepcopy(cell)])
+                for b,t in [('grid_cuda',None),('pinocchio_plain',1),('pinocchio_plain',4)] for i in range(3)]
+    result = summarize(captures,repeats=3)
+    assert result['headline_boundary'] is None
+    assert {r['cpu_threads'] for r in result['ratios']} == {1,4}
+    result = summarize(captures[:-1],repeats=3)
+    assert [r['cpu_threads'] for r in result['ratios']] == [1]

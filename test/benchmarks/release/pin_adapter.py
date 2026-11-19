@@ -36,7 +36,7 @@ def _locked_build(library, command):
             temporary.replace(library)
 
 
-def cache_keys(fixture_sha256='legacy'):
+def cache_keys():
     """(codegen_key, bridge_key, dependencies): the JIT libraries depend on the
     code generators and their settings only; the bridge key adds the dispatch
     code around them so a threading change never invalidates G1 codegen."""
@@ -49,7 +49,8 @@ def cache_keys(fixture_sha256='legacy'):
     bridge_sources = (here / "pin_bridge.cpp", here / "release_pool.h")
     flags = pinocchio_cflags() + pinocchio_libs()
     flags += ['-Wl,-rpath,' + flag[2:] for flag in list(flags) if flag.startswith('-L')]
-    toolchain = subprocess.check_output(["g++", "--version"], text=True)
+    from .consumer_adapter import host_compiler
+    toolchain = subprocess.check_output([host_compiler(), "--version"], text=True)
     pin_version = importlib.metadata.version("pin")
     codegen = {str(p): digest(p) for p in codegen_sources}
     bridge = {**codegen, **{str(p): digest(p) for p in bridge_sources}}
@@ -57,9 +58,8 @@ def cache_keys(fixture_sha256='legacy'):
     from .consumer_adapter import dependencies
     from .consumer_contract import build_identity
     compile_flags = ['-std=c++17', '-O2', '-DNDEBUG', '-DHAVE_CPPADCG', '-fPIC', '-shared', '-pthread', *flags]
-    resolved = dependencies('g++', here / 'pin_bridge.cpp', compile_flags)
-    bridge_key = build_identity([*bridge_sources, *resolved], compile_flags,
-                                toolchain+pin_version, fixture_sha256)
+    resolved = dependencies(host_compiler(), here / 'pin_bridge.cpp', compile_flags)
+    bridge_key = build_identity([*bridge_sources, *resolved], compile_flags, toolchain+pin_version)
     return codegen_key, bridge_key, bridge, flags, pin_version
 
 
@@ -81,11 +81,11 @@ class PinAdapter:
             raise ValueError("cpu_threads must be positive")
         self.op, self.f = operation, fixture
         source = Path(__file__).with_name("pin_bridge.cpp")
-        from .consumer_adapter import fixture_digest
-        codegen_key, key, dependencies, flags, pin_version = cache_keys(fixture_digest(fixture))
+        codegen_key, key, dependencies, flags, pin_version = cache_keys()
         CACHE.mkdir(parents=True, exist_ok=True)
         library = CACHE / f"pin-{key}.so"
-        _locked_build(library, lambda out: ["g++", "-std=c++17", "-O2", "-DNDEBUG", "-DHAVE_CPPADCG", "-fPIC", "-shared",
+        from .consumer_adapter import host_compiler
+        _locked_build(library, lambda out: [host_compiler(), "-std=c++17", "-O2", "-DNDEBUG", "-DHAVE_CPPADCG", "-fPIC", "-shared",
             "-pthread", str(source), "-o", str(out), *flags])
         self.lib = ctypes.CDLL(str(library))
         self.lib.pin_release_error.restype = ctypes.c_char_p

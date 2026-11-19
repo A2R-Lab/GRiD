@@ -14,6 +14,15 @@ def run_cell(adapter, metadata, expected, *, correctness_only, warmups, iteratio
     cell = dict(contract=metadata, validation=preflight, status=preflight['status'], comparison_eligible=False)
     if not preflight['comparison_eligible']:
         return cell
+    native = None
+    if getattr(adapter, 'supports_native', False):
+        native = {phase: adapter.once('native_gpu') for phase in ('before', 'after', 'repeat')}
+        validation = accept(metadata, rows, expected, {'host': snapshots['host'], 'gpu': native})
+        cell['native_layout'] = dict(contract=adapter.native_contract, validation=validation,
+                                    comparison_eligible=False)
+        if not validation['comparison_eligible']:
+            cell['status'] = 'validation_failed'
+            return cell
     if not correctness_only:
         samples = {}
         for boundary in ('host', 'gpu'):
@@ -21,9 +30,19 @@ def run_cell(adapter, metadata, expected, *, correctness_only, warmups, iteratio
             snapshots[boundary]['repeat'] = adapter.once(boundary)
         # 'after' is the actual last timed result, not a replacement call.
         cell['samples_us'] = samples
+        if native is not None:
+            samples, native['after'] = adapter.measure('native_gpu', warmups, iterations, warm_seconds)
+            native['repeat'] = adapter.once('native_gpu')
+            cell['native_layout']['samples_us'] = samples
     cell['validation'] = accept(metadata, rows, expected, snapshots)
     cell['comparison_eligible'] = not correctness_only and cell['validation']['comparison_eligible']
     cell['status'] = cell['validation']['status']
+    if native is not None:
+        result = cell['native_layout']
+        result['validation'] = accept(metadata, rows, expected, {'host': snapshots['host'], 'gpu': native})
+        result['comparison_eligible'] = not correctness_only and result['validation']['comparison_eligible']
+        if not result['validation']['comparison_eligible']:
+            cell.update(status='validation_failed', comparison_eligible=False)
     cell['adapter'] = dict(adapter.metadata)
     return cell
 
@@ -34,7 +53,7 @@ def main():
         ap.add_argument('--'+name, required=True)
     ap.add_argument('--batches', nargs='+', type=int, required=True)
     ap.add_argument('--output', type=Path, required=True)
-    ap.add_argument('--iterations', type=int, default=30)
+    ap.add_argument('--iterations', type=int, default=100)
     ap.add_argument('--warmups', type=int, default=5)
     ap.add_argument('--warm-seconds', type=float, default=1.5)
     ap.add_argument('--cpu-threads', type=int, default=1)
@@ -44,6 +63,7 @@ def main():
     from .consumer_adapter import ConsumerAdapter, fixture_digest
     capture = dict(schema=1, purpose='correctness' if args.correctness_only else 'consumer-measurement',
                    robot=args.robot, backend=args.backend, operation=args.operation,
+                   cpu_threads=args.cpu_threads if args.backend == 'pinocchio_plain' else None,
                    collector_sources=source_fingerprints(), cells=[])
     failed = False
     try:
@@ -58,7 +78,7 @@ def main():
                 adapter = ConsumerAdapter(args.backend, args.operation, fixture, batch, args.output.parent, args.cpu_threads)
                 cell = run_cell(adapter, metadata, expected, correctness_only=args.correctness_only,
                                 warmups=args.warmups, iterations=args.iterations, warm_seconds=args.warm_seconds)
-                failed |= not cell['validation']['comparison_eligible']
+                failed |= cell['status'] not in ('validated', 'accuracy_warning')
             except Exception as error:
                 failed = True
                 cell = dict(batch=batch, comparison_eligible=False, status='error', reason=str(error))

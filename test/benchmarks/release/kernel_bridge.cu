@@ -589,7 +589,53 @@ extern "C" int grid_kernel_time(void *h, int op, const T *q, const T *qd, const 
     return download(c, op, batch, out_compute);
 }
 
-struct GridConsumer { KernelCtx *kernel; int op, threads; };
+struct GridConsumer { KernelCtx *kernel; int op, threads; const void *function=nullptr; size_t shared=0; };
+// Select the same generated kernel/tier as the legacy host wrapper. Setup
+// checks occur once; no numerical kernel or generated header is modified.
+static int consumer_configure(GridConsumer &s) {
+    if(s.op==OP_ID) {
+#if GRID_HAS_INVERSE_DYNAMICS
+#if defined(GRID_RBD_SIG_MJX_INVERSE_DYNAMICS)
+#define CONSUMER_ID_ARGS T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER, false
+#else
+#define CONSUMER_ID_ARGS T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER
+#endif
+        s.function=(const void*)static_cast<void(*)(T*,const T*,const int,const T*,T*,const grid::robotModel<T>*,const T,const int)>(&grid::inverse_dynamics_kernel<CONSUMER_ID_ARGS>);
+        s.shared=grid::INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>();
+#endif
+    } else if(s.op==OP_EE_POSE) {
+#if GRID_HAS_END_EFFECTOR_POSE && defined(GRID_CONSUMER_EE_KERNEL)
+#if defined(GRID_RBD_SIG_MJX_EE_POSE)
+#define CONSUMER_EE_ARGS T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER, false
+#else
+#define CONSUMER_EE_ARGS T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER
+#endif
+        s.function=(const void*)static_cast<void(*)(T*,const T*,const int,const grid::robotModel<T>*,const int)>(&grid::GRID_CONSUMER_EE_KERNEL<CONSUMER_EE_ARGS>);
+        s.shared=grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>();
+#endif
+    }
+    if(!s.function) return -2;
+    cudaFuncAttributes attributes;
+    KB_CUDA(cudaFuncGetAttributes(&attributes,s.function));
+    if(attributes.maxThreadsPerBlock>0 && s.threads>attributes.maxThreadsPerBlock)
+        s.threads=attributes.maxThreadsPerBlock;
+    KB_CUDA(grid::grid_check_dynamic_shared_memory_bytes("consumer",s.shared));
+    return 0;
+}
+// Enqueue only. The dense path completes after packing its output; the native
+// path completes immediately after this launch. The legacy host wrapper has an
+// internal fence, so calling it here would double-count synchronization.
+static int consumer_enqueue(GridConsumer &s, int batch) {
+    auto &c=*s.kernel;
+    T *out=const_cast<T*>(device_output(c,s.op)), *input=c.data->d_q_qd_u;
+    T *qdd=c.data->d_qdd, *forces=c.data->d_f_ext;
+    auto *model=c.model; T gravity=T(-9.81); int stride=3*grid::NUM_JOINTS;
+    void *id_args[]={&out,&input,&stride,&qdd,&forces,&model,&gravity,&batch};
+    void *pose_args[]={&out,&input,&stride,&model,&batch};
+    KB_CUDA(cudaLaunchKernel(s.function,dim3(batch,1,1),dim3(s.threads,1,1),
+                             s.op==OP_ID?id_args:pose_args,s.shared,0));
+    return 0;
+}
 extern "C" void *grid_consumer_create(void *kernel, int op, int threads) {
     if(!kernel || (op!=OP_ID && op!=OP_EE_POSE)) return nullptr;
     auto &c=*static_cast<KernelCtx*>(kernel);
@@ -599,11 +645,16 @@ extern "C" void *grid_consumer_create(void *kernel, int op, int threads) {
     if(e==cudaSuccess) e=cudaMemset(c.data->d_qdd,0,size_t(grid::NUM_JOINTS)*GRID_KERNEL_MAX_BATCH*sizeof(T));
     if(e==cudaSuccess) e=cudaDeviceSynchronize();
     if(e!=cudaSuccess) return nullptr;
-    return new GridConsumer{static_cast<KernelCtx*>(kernel),op,threads>0?threads:baked_threads(op)};
+    auto *session=new GridConsumer{static_cast<KernelCtx*>(kernel),op,threads>0?threads:baked_threads(op)};
+    if(consumer_configure(*session)) { delete session; return nullptr; }
+    return session;
+}
+extern "C" int grid_consumer_threads(void *context) {
+    return context ? static_cast<GridConsumer*>(context)->threads : 0;
 }
 extern "C" void grid_consumer_close(void *context) { delete static_cast<GridConsumer*>(context); }
-extern "C" int grid_consumer_eval(void *context, const float *input, float *out, int batch, bool device) {
-    if(!context || !input || !out || batch<1 || batch>GRID_KERNEL_MAX_BATCH) return -1;
+extern "C" int grid_consumer_stage(void *context, const float *input, int batch, bool device) {
+    if(!context || !input || batch<1 || batch>GRID_KERNEL_MAX_BATCH) return -1;
     auto &session=*static_cast<GridConsumer*>(context); auto &c=*session.kernel;
     const int op=session.op,nq=grid::NUM_POS,nv=grid::NUM_VEL,nj=grid::NUM_JOINTS;
     const int width=nq+(op==OP_ID?2*nv:0);
@@ -615,12 +666,50 @@ extern "C" int grid_consumer_eval(void *context, const float *input, float *out,
         KB_CUDA(cudaMemcpy2D(c.data->d_q_qd_u+nj,3*nj*sizeof(T),input+nq,width*sizeof(T),nv*sizeof(T),batch,kind));
         KB_CUDA(cudaMemcpy2D(c.data->d_qdd,nj*sizeof(T),input+nq+nv,width*sizeof(T),nv*sizeof(T),batch,kind));
     }
-    compute_only(c,op,T(-9.81),batch,dim3(session.threads,1,1));
+    return 0;
+}
+extern "C" int grid_consumer_eval(void *context, const float *input, float *out, int batch, bool device) {
+    if(!out) return -1;
+    if(int rc=grid_consumer_stage(context,input,batch,device)) return rc;
+    auto &session=*static_cast<GridConsumer*>(context); auto &c=*session.kernel;
+    const int op=session.op,nv=grid::NUM_VEL;
+    if(int rc=consumer_enqueue(session,batch)) return rc;
     KB_CUDA(grid_consume_last_error());
-    KB_CUDA(cudaGetLastError()); KB_CUDA(cudaDeviceSynchronize());
+    KB_CUDA(cudaGetLastError());
     const T *src=device_output(c,op); if(!src) return -2;
     KB_CUDA(consumer_copy_dense(out,op==OP_ID?nv:6,src,output_size(op),batch,
                                 device?cudaMemcpyDeviceToDevice:cudaMemcpyDeviceToHost));
     KB_CUDA(cudaDeviceSynchronize());
     return 0;
+}
+
+// Distinct boundary: the consumer already holds GRiD's native input layout.
+// Only computation and completion belong to this call. Packing and validation
+// download are explicitly outside it; the result stays in the native arena.
+extern "C" int grid_consumer_native_once(void *context, int batch) {
+    if(!context || batch<1 || batch>GRID_KERNEL_MAX_BATCH) return -1;
+    auto &s=*static_cast<GridConsumer*>(context);
+    if(int rc=consumer_enqueue(s,batch)) return rc;
+    KB_CUDA(grid_consume_last_error()); KB_CUDA(cudaGetLastError());
+    KB_CUDA(cudaDeviceSynchronize()); return 0;
+}
+extern "C" int grid_consumer_native_download(void *context, int batch, float *out) {
+    if(!context || !out || batch<1 || batch>GRID_KERNEL_MAX_BATCH) return -1;
+    auto &s=*static_cast<GridConsumer*>(context);
+    const T *src=device_output(*s.kernel,s.op); if(!src) return -2;
+    KB_CUDA(consumer_copy_dense(out,s.op==OP_ID?grid::NUM_VEL:6,src,output_size(s.op),batch,cudaMemcpyDeviceToHost));
+    return 0;
+}
+extern "C" int grid_consumer_native_measure(void *context, int batch, int warmups,
+        double warm_seconds, int iterations, double *samples, float *last) {
+    if(!samples || !last || warmups<1 || iterations<1 || warm_seconds<0) return -1;
+    double start=now_us(); int done=0;
+    do { if(int rc=grid_consumer_native_once(context,batch)) return rc; ++done; }
+    while(done<warmups || now_us()-start<warm_seconds*1e6);
+    for(int i=0;i<iterations;++i) {
+        start=now_us();
+        if(int rc=grid_consumer_native_once(context,batch)) return rc;
+        samples[i]=now_us()-start;
+    }
+    return grid_consumer_native_download(context,batch,last);
 }

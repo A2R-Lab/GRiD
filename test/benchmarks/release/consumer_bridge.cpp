@@ -48,8 +48,9 @@ static int call(Consumer &c, bool on_gpu) {
     if(c.gpu) {
         int rc=c.evaluate(c.context,on_gpu?c.device_in:c.host_in,
                           on_gpu?c.device_out:c.host_out,c.batch,on_gpu);
-        if(rc) return rc;
-        return error(cudaDeviceSynchronize());
+        // GPU callbacks guarantee completion after their output copy. Do not
+        // add a second device fence to the matched dense boundary.
+        return rc;
     }
     if(on_gpu) {
         int rc=error(cudaMemcpy(c.host_in,c.device_in,c.input_bytes,cudaMemcpyDeviceToHost));

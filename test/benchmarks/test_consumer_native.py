@@ -60,7 +60,7 @@ def session(native, gpu=False):
     return ptr, evaluate
 
 
-@pytest.mark.parametrize('gpu,on_gpu,trace', [(False,0,'E'), (False,1,'DSEHSD'), (True,0,'ES'), (True,1,'ESD')])
+@pytest.mark.parametrize('gpu,on_gpu,trace', [(False,0,'E'), (False,1,'DSEHSD'), (True,0,'E'), (True,1,'ED')])
 def test_native_order_and_no_allocation_inside_call(native, gpu, on_gpu, trace):
     ptr, callback = session(native, gpu)
     try:

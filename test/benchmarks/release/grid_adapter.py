@@ -4,6 +4,7 @@ import ctypes
 import fcntl
 import hashlib
 import os
+import re
 from pathlib import Path
 import subprocess
 import numpy as np
@@ -16,6 +17,18 @@ KERNEL_OPS = {op: i for i, op in enumerate(("inverse_dynamics", "inverse_dynamic
     "crba", "nonlinear_effects", "generalized_gravity", "ccrba", "coriolis_matrix",
     "end_effector_pose_gradient"))}
 assert tuple(KERNEL_OPS)[:3] == CORE
+
+
+def consumer_kernel_flags(header):
+    """Resolve the generated fixed-target pose kernel without changing headers."""
+    match = re.search(r'^\s*#define\s+GRID_RBD_EE_POSE_FN\s+([^\n]+)', header.read_text(), re.MULTILINE)
+    if match is None:
+        return []
+    name = match.group(1).strip()
+    if not re.fullmatch(r'end_effector_pose(?:_[A-Za-z0-9_]+)?', name):
+        raise ValueError(f'unsupported generated pose alias: {name}')
+    kernel = name.replace('end_effector_pose', 'end_effector_pose_kernel', 1)
+    return ['-DGRID_CONSUMER_EE_KERNEL=' + kernel]
 
 
 def tree_map(fn, value):
@@ -227,13 +240,13 @@ class GridAdapter:
             f"-gencode=arch=compute_{arch},code=sm_{arch}", f"-DGRID_RBD_ARCH={arch}",
             f"-DGRID_KERNEL_MAX_BATCH={int(meta['max_batch'])}", f"-DGRID_KERNEL_NUM_EES={int(meta.get('num_ees', 1))}",
             f"-I{store}", f"-I{glass}", f"-I{glass / 'src'}",
-            *_compile._mjx_signature_flags(header)]
+            *_compile._mjx_signature_flags(header), *consumer_kernel_flags(header)]
         nvcc = _compile.find_nvcc()
         version = subprocess.check_output([nvcc, "--version"], text=True)
-        from .consumer_adapter import dependencies, fixture_digest
+        from .consumer_adapter import dependencies
         from .consumer_contract import build_identity
         resolved = dependencies(nvcc, source, flags)
-        key = build_identity([header, *resolved], flags, version, fixture_digest(self.fixture))
+        key = build_identity([header, *resolved], flags, version)
         cache = ROOT / "test/benchmarks/results/release-build-cache"
         lib = build_locked(cache / ("kernel-" + key + ".so"), lambda out: [nvcc, *flags, "-o", str(out), str(source)])
         self.metadata.update(kernel_bridge_sha256=digest(lib), kernel_bridge_flags=flags,

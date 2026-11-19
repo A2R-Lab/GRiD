@@ -24,8 +24,11 @@ def plan(args):
     return dict(schema=1, boundary_contract_version=1,
                 purpose='correctness' if args.correctness_only else 'consumer-measurement',
                 batches=batches, repeats=repeats,
-                jobs=[dict(robot=r, backend=b, operation=o, repeat=i) for r in robots
-                      for o in operations for b in backends for i in range(repeats)])
+                cpu_thread_policy='report 1 and ceiling separately; no tuning',
+                jobs=[dict(robot=r, backend=b, operation=o, repeat=i, cpu_threads=t) for r in robots
+                      for o in operations for b in backends
+                      for t in (sorted({1, args.cpu_threads}) if b == 'pinocchio_plain' else [None])
+                      for i in range(repeats)])
 
 
 def summarize(captures, *, repeats):
@@ -33,7 +36,8 @@ def summarize(captures, *, repeats):
     for capture in captures:
         for cell in capture.get('cells', []):
             metadata = cell.get('contract', {})
-            key = (capture['robot'], capture['operation'], metadata.get('batch', cell.get('batch')), capture['backend'])
+            key = (capture['robot'], capture['operation'], metadata.get('batch', cell.get('batch')), capture['backend'],
+                   capture.get('cpu_threads', 1 if capture['backend'] == 'pinocchio_plain' else None))
             groups.setdefault(key, []).append((capture['repeat'], cell, capture.get('collector_sources')))
     output = []
     for key, values in sorted(groups.items()):
@@ -41,7 +45,7 @@ def summarize(captures, *, repeats):
         cells = [cell for _, cell, _ in sorted(values, key=lambda pair: pair[0])]
         sources = values[0][2]
         first = cells[0].get('contract', {})
-        row = dict(zip(('robot', 'operation', 'batch', 'backend'), key), contract=first,
+        row = dict(zip(('robot', 'operation', 'batch', 'backend', 'cpu_threads'), key), contract=first,
                    collector_sources=sources, adapter=cells[0].get('adapter'), comparison_eligible=False)
         if (sorted(ids) == list(range(repeats)) and all(c.get('comparison_eligible')
                 and c.get('validation', {}).get('comparison_eligible')
@@ -57,20 +61,31 @@ def summarize(captures, *, repeats):
                        status='accuracy_warning' if any(c['validation']['status']=='accuracy_warning' for c in cells) else 'validated',
                        boundaries={b: summarize_repeats([c['samples_us'][b] for c in cells], expected_repeats=repeats)
                                    for b in ('gpu', 'host')})
+            native = [c.get('native_layout') for c in cells]
+            if all(n and n.get('comparison_eligible') and n['validation'].get('comparison_eligible')
+                   and n['validation'].get('validated_row_ids') == list(range(first['batch']))
+                   and n['validation'].get('fixture_sha256') == first['fixture_sha256']
+                   and n['contract'] == native[0]['contract'] for n in native):
+                row['native_layout'] = dict(contract=native[0]['contract'], comparison_eligible=True,
+                    summary=summarize_repeats([n['samples_us'] for n in native], expected_repeats=repeats))
         output.append(row)
     ratios = []
-    indexed = {(r['robot'], r['operation'], r['batch'], r['backend']): r for r in output}
     for row in output:
         if row['backend'] != 'grid_cuda' or not row['comparison_eligible']:
             continue
-        peer = indexed.get((row['robot'], row['operation'], row['batch'], 'pinocchio_plain'))
-        if (peer and peer['comparison_eligible'] and row['collector_sources'] == peer['collector_sources']
-                and compatible(row['contract'], peer['contract'])):
-            ratios.append(dict(robot=row['robot'], operation=row['operation'], batch=row['batch'],
-                               cpu_over_grid={b: peer['boundaries'][b]['median_repeat_mean_us']/row['boundaries'][b]['median_repeat_mean_us']
-                                              for b in ('gpu', 'host')
-                                              if row['boundaries'][b]['median_repeat_mean_us'] > 0}))
-    return dict(schema=1, headline_boundary='gpu', cells=output, ratios=ratios)
+        peers = [p for p in output if p['backend'] == 'pinocchio_plain'
+                 and all(p[k] == row[k] for k in ('robot', 'operation', 'batch'))]
+        for peer in peers:
+            if (peer['comparison_eligible'] and row['collector_sources'] == peer['collector_sources']
+                    and compatible(row['contract'], peer['contract'])):
+                ratios.append(dict(robot=row['robot'], operation=row['operation'], batch=row['batch'],
+                                   cpu_threads=peer['cpu_threads'], boundary_contract='dense-contract only',
+                                   cpu_over_grid={b: peer['boundaries'][b]['median_repeat_mean_us']/row['boundaries'][b]['median_repeat_mean_us']
+                                                  for b in ('gpu', 'host')
+                                                  if row['boundaries'][b]['median_repeat_mean_us'] > 0}))
+    return dict(schema=1, headline_boundary=None,
+                boundary_labels={'gpu': 'GPU dense contract', 'native_layout': 'GPU native layout (GRiD only)', 'host': 'host dense contract'},
+                cells=output, ratios=ratios)
 
 
 def collect(args):
@@ -85,13 +100,13 @@ def collect(args):
     write_json(args.output/'plan.json', payload)
     failed, captures = False, []
     for job in payload['jobs']:
-        name = '{robot}-{operation}-{backend}-r{repeat}'.format(**job)
+        name = '{robot}-{operation}-{backend}-t{cpu_threads}-r{repeat}'.format(**job)
         path = args.output/(name+'.json')
         command = [sys.executable, '-m', 'test.benchmarks.release.consumer_worker',
                    '--robot', job['robot'], '--backend', job['backend'], '--operation', job['operation'],
                    '--batches', *map(str, payload['batches']), '--output', str(path),
                    '--warmups', str(args.warmups), '--iterations', str(args.iterations),
-                   '--warm-seconds', str(args.warm_seconds), '--cpu-threads', str(args.cpu_threads)]
+                   '--warm-seconds', str(args.warm_seconds), '--cpu-threads', str(job['cpu_threads'] or 1)]
         if args.correctness_only:
             command.append('--correctness-only')
         rc, expired = run_job(command, args.output/(name+'.log'), args.timeout)
