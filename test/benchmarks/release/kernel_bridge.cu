@@ -592,6 +592,13 @@ extern "C" int grid_kernel_time(void *h, int op, const T *q, const T *qd, const 
 struct GridConsumer { KernelCtx *kernel; int op, threads; };
 extern "C" void *grid_consumer_create(void *kernel, int op, int threads) {
     if(!kernel || (op!=OP_ID && op!=OP_EE_POSE)) return nullptr;
+    auto &c=*static_cast<KernelCtx*>(kernel);
+    // Match the wrapper's zero padding once, outside samples. Calls update
+    // only physical inputs; these two operations never write their padding.
+    cudaError_t e=cudaMemset(c.data->d_q_qd_u,0,size_t(3)*grid::NUM_JOINTS*GRID_KERNEL_MAX_BATCH*sizeof(T));
+    if(e==cudaSuccess) e=cudaMemset(c.data->d_qdd,0,size_t(grid::NUM_JOINTS)*GRID_KERNEL_MAX_BATCH*sizeof(T));
+    if(e==cudaSuccess) e=cudaDeviceSynchronize();
+    if(e!=cudaSuccess) return nullptr;
     return new GridConsumer{static_cast<KernelCtx*>(kernel),op,threads>0?threads:baked_threads(op)};
 }
 extern "C" void grid_consumer_close(void *context) { delete static_cast<GridConsumer*>(context); }
