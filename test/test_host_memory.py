@@ -71,3 +71,47 @@ def test_v1_memory_controller(memory):
         (directory / 'memory.usage_in_bytes').write_text(str(GIB))
         (directory / 'memory.limit_in_bytes').write_text(str(8 * GIB))
     assert effective_available_kb(proc) == 7 * GIB // 1024
+
+
+def test_hybrid_uses_memory_hierarchy(memory):
+    proc, mount, leaf = memory
+    test_v1_memory_controller(memory)
+    unified = mount.parent / 'unified'
+    (unified / 'worker').mkdir(parents=True)
+    with (proc / 'self/cgroup').open('a') as f:
+        f.write('0::/worker\n')
+    with (proc / 'self/mountinfo').open('a') as f:
+        f.write(f'2 0 0:2 / {unified} rw - cgroup2 cgroup rw\n')
+    assert effective_available_kb(proc) == 7 * GIB // 1024
+    (leaf / 'memory.usage_in_bytes').write_text('broken')
+    assert effective_available_kb(proc) == 0  # cannot fall back to unified
+
+
+def test_undelegated_leaf_keeps_ancestor_limit(memory):
+    proc, mount, leaf = memory
+    for name in ('memory.current', 'memory.max', 'memory.high'):
+        (leaf / name).unlink()
+    (leaf.parent / 'cgroup.subtree_control').write_text('cpu io')
+    (leaf.parent / 'memory.max').write_text(str(8 * GIB))
+    assert effective_available_kb(proc) == 7 * GIB // 1024
+    (leaf.parent / 'cgroup.subtree_control').write_text('cpu memory')
+    assert effective_available_kb(proc) == 0
+
+
+def test_inactive_v2_memory(memory):
+    proc, mount, leaf = memory
+    for directory in (mount, leaf.parent, leaf):
+        for name in ('memory.current', 'memory.max', 'memory.high'):
+            (directory / name).unlink()
+        (directory / 'cgroup.controllers').write_text('cpu io')
+        (directory / 'cgroup.subtree_control').write_text('cpu')
+    assert effective_available_kb(proc) == 64 * GIB // 1024
+    (mount / 'cgroup.controllers').unlink()
+    assert effective_available_kb(proc) == 0
+
+
+@pytest.mark.parametrize('name', ['memory.current', 'memory.max', 'memory.high'])
+def test_negative_accounting_refused(memory, name):
+    proc, mount, leaf = memory
+    (leaf / name).write_text('-1')
+    assert effective_available_kb(proc) == 0

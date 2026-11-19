@@ -135,6 +135,8 @@ class ShardSpec:
     fingerprint_paths: list     # narrow receipt fingerprint paths (comma-free)
     est_secs: float = 0.0
     apply_marker: bool = False  # add -m gpu_proof (cuda shards)
+    display_label: str = ''     # scope label, independent of receipt merge name
+    predecessors: tuple = ()   # prior identities and their exact node sets
 
 # ─── warm manifest ───────────────────────────────────────────────────────────
 # module -> list of warm_robot kwarg dicts (cache-key-relevant kwargs only).
@@ -783,17 +785,22 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
                     while name in taken:
                         name += '_r'
                     taken.add(name)
-                renamed.append(_dc_replace(spec, name=name))
+                predecessors = tuple(
+                    {'merge_identity': old['name'], 'node_ids': sorted(old.get('node_ids') or [])}
+                    for old in stale if not _is_wrapper(old)
+                    and (old['name'] == name or set(old.get('node_ids') or []) & set(spec.targets)))
+                renamed.append(_dc_replace(spec, name=name, display_label=spec.name,
+                                           predecessors=predecessors))
                 print(f"  refresh shard identity: {name} replaces planned "
                       f"{spec.name}; {len(spec.targets)} tests; "
                       f"{spec.est_secs / 60:.1f} estimated minutes. "
                       "The recycled name is a merge identity, not a scope label.")
             cuda_fresh = renamed
         else:
-            print(f"  refresh partition fallback: proposed {len(smaller)} shards "
-                  f"but must shadow {n_groups} stale names; retaining the "
-                  "name-count-constrained partition. Use a fresh full run to "
-                  "adopt fewer shard identities.")
+            raise RuntimeError(
+                f"refresh mapping cannot shadow {n_groups} stale names with "
+                f"{len(smaller)} planned shards. Run a fresh full pass; "
+                "cross-receipt identity merging is unsupported.")
     elif fresh_ids:
         # Wholly-new tests with no stale name to recycle: new shards, names
         # de-conflicted from carried names (a same-named fresh shard would
@@ -806,7 +813,8 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
             while nm in taken:
                 nm += "_r"
             taken.add(nm)
-            deconflicted.append(sp if nm == sp.name else _dc_replace(sp, name=nm))
+            deconflicted.append(sp if nm == sp.name else
+                                _dc_replace(sp, name=nm, display_label=sp.name))
         cuda_fresh = deconflicted
     return ([s["name"] for s in stale],
             [s["name"] for s in carried],
@@ -920,15 +928,45 @@ def save_partition(out_dir: Path, shards: list[ShardSpec]) -> None:
     durations/estimates have changed since the run started."""
     data = [dict(name=s.name, domain=s.domain, targets=s.targets,
                  fingerprint_paths=s.fingerprint_paths, est_secs=s.est_secs,
-                 apply_marker=s.apply_marker) for s in shards]
+                 apply_marker=s.apply_marker, display_label=s.display_label,
+                 predecessors=s.predecessors) for s in shards]
+    mapping = partition_mapping(shards)
     (out_dir / "partition.json").write_text(json.dumps(data, indent=2) + "\n")
+    (out_dir / "partition-map.json").write_text(json.dumps(mapping, indent=2, sort_keys=True) + "\n")
+
+
+def partition_mapping(shards):
+    """Versioned audit artifact; never authorizes carry across receipts."""
+    nodes, names, atoms = set(), set(), set()
+    rows = []
+    for spec in shards:
+        ids = sorted(spec.targets)
+        keys = sorted({_atom_key(node) for node in ids})
+        if (spec.domain != 'cuda' or not ids or len(ids) != len(set(ids))
+                or nodes.intersection(ids) or spec.name in names or atoms.intersection(keys)):
+            raise ValueError('partition must have disjoint complete node sets and compile atoms')
+        nodes.update(ids); names.add(spec.name); atoms.update(keys)
+        predecessors = sorted(spec.predecessors, key=lambda row: row['merge_identity'])
+        if len({p['merge_identity'] for p in predecessors}) != len(predecessors):
+            raise ValueError('duplicate predecessor identity')
+        rows.append(dict(merge_identity=spec.name, display_label=spec.display_label or spec.name,
+                         node_ids=ids, compile_atoms=[list(key) for key in keys],
+                         predecessors=predecessors))
+    return dict(schema=1, scope='cuda', node_ids=sorted(nodes), shards=rows)
 
 
 def load_partition(out_dir: Path) -> list[ShardSpec] | None:
     p = out_dir / "partition.json"
     if not p.exists():
         return None
-    return [ShardSpec(**d) for d in json.loads(p.read_text())]
+    shards = [ShardSpec(**dict(d, predecessors=tuple(d.get('predecessors', ()))))
+              for d in json.loads(p.read_text())]
+    mapping_path = out_dir / 'partition-map.json'
+    if not mapping_path.exists():
+        raise ValueError('partition mapping missing; start a fresh full run')
+    if json.loads(mapping_path.read_text()) != partition_mapping(shards):
+        raise ValueError('partition mapping differs from replay scope or identity')
+    return shards
 
 
 def update_durations(merged_receipt: Path) -> None:

@@ -378,6 +378,40 @@ def test_partition_persistence_roundtrip(tmp_path):
     assert rss.load_partition(tmp_path / "nope") is None
 
 
+def test_partition_map_pins_scope_labels_atoms_and_predecessors(tmp_path):
+    from dataclasses import replace
+    shards = rss.pack_cuda_shards(_synthetic_ids(), {}, 20 * 60.0)
+    label = shards[0].name
+    shards[0] = replace(shards[0], name='old_merge_name', display_label=label,
+                        predecessors=({'merge_identity': 'old_merge_name',
+                                       'node_ids': list(shards[0].targets)},))
+    rss.save_partition(tmp_path, shards)
+    data = json.loads((tmp_path / 'partition-map.json').read_text())
+    assert data['schema'] == 1
+    assert data['node_ids'] == sorted(_synthetic_ids())
+    row = data['shards'][0]
+    assert row['merge_identity'] == 'old_merge_name' and row['display_label'] == label
+    assert row['predecessors'] == list(shards[0].predecessors)
+    assert row['compile_atoms'] == [list(k) for k in sorted({rss._atom_key(n) for n in row['node_ids']})]
+    original = (tmp_path / 'partition-map.json').read_bytes()
+    rss.save_partition(tmp_path, rss.load_partition(tmp_path))
+    assert (tmp_path / 'partition-map.json').read_bytes() == original
+    data['shards'][0]['node_ids'].pop()
+    (tmp_path / 'partition-map.json').write_text(json.dumps(data))
+    with pytest.raises(ValueError, match='replay scope'):
+        rss.load_partition(tmp_path)
+
+
+def test_partition_map_refuses_overlap_and_legacy_resume(tmp_path):
+    shards = rss.pack_cuda_shards(_synthetic_ids(), {}, 20 * 60.0)
+    with pytest.raises(ValueError, match='disjoint'):
+        rss.partition_mapping(shards + shards[:1])
+    rss.save_partition(tmp_path, shards)
+    (tmp_path / 'partition-map.json').unlink()
+    with pytest.raises(ValueError, match='fresh full run'):
+        rss.load_partition(tmp_path)
+
+
 def test_live_collection_partition_is_complete():
     """Integration: the REAL collection partitions completely (the builder
     asserts set-equality internally) and node-id targets survive as argv
@@ -606,17 +640,13 @@ def test_plan_refresh_stale_detection_and_repack(monkeypatch, capsys):
     assert 'merge identity, not a scope label' in capsys.readouterr().out
 
 
-def test_refresh_fewer_shards_explains_required_identity_fallback(capsys):
+def test_refresh_fewer_shards_requires_fresh_full():
     ids = [_fid('iiwa14', 'fixed', cell, 32) for cell in ('crba', 'aba')]
     old = {'shards': [_mk_shard(f'old_{i}', [nid], ['test.py'], 'old')
                       for i, nid in enumerate(ids)]}
     assert len(rss.pack_cuda_shards(ids, {}, 1e9)) == 1
-    _, carried, _, fresh = rss.plan_refresh(old, ids, [], {}, 1e9,
-                                           _plan(old, lambda paths: 'changed'))
-    assert not carried
-    assert {s.name for s in fresh} == {'old_0', 'old_1'}
-    assert sorted(n for s in fresh for n in s.targets) == sorted(ids)
-    assert 'refresh partition fallback' in capsys.readouterr().out
+    with pytest.raises(RuntimeError, match='fresh full pass'):
+        rss.plan_refresh(old, ids, [], {}, 1e9, _plan(old, lambda paths: 'changed'))
 
 
 def test_plan_refresh_edge_cases(monkeypatch):
@@ -648,7 +678,7 @@ def test_plan_refresh_edge_cases(monkeypatch):
         _mk_shard("cuda_09_two", stale_b, ["b.py"], "OLD"),
     ]}
     _, carried3, _, fresh3 = rss.plan_refresh(
-        old3, stale_a + stale_b, [], {}, 7200.0, _plan(old3, fn1))
+        old3, stale_a + stale_b, [], {}, 1.0, _plan(old3, fn1))
     assert carried3 == []
     assert {s.name for s in fresh3} == {"cuda_05_one", "cuda_09_two"}
     assert sorted(i for s in fresh3 for i in s.targets) == sorted(stale_a + stale_b)
@@ -727,13 +757,13 @@ def test_plan_refresh_cuda_carry_gate(monkeypatch):
     monkeypatch.setattr(codegen_neutrality, "cuda_carry_soundness",
                         lambda r: (True, "proven"))
     stale, carried, wrap_run, cuda_fresh = rss.plan_refresh(
-        old, ids, ["test_w"], {}, 7200.0, _plan(old, same))
+        old, ids, ["test_w"], {}, 1.0, _plan(old, same))
     assert set(carried) == {"cuda_00_x", "cuda_01_y", "test_w"} and not stale
 
     monkeypatch.setattr(codegen_neutrality, "cuda_carry_soundness",
                         lambda r: (False, "not neutral"))
     stale, carried, wrap_run, cuda_fresh = rss.plan_refresh(
-        old, ids, ["test_w"], {}, 7200.0, _plan(old, same))
+        old, ids, ["test_w"], {}, 1.0, _plan(old, same))
     assert set(stale) == {"cuda_00_x", "cuda_01_y"}
     assert carried == ["test_w"]          # wrapper carry untouched
     assert {s.name for s in cuda_fresh} == {"cuda_00_x", "cuda_01_y"}

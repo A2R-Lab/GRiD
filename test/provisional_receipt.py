@@ -53,6 +53,23 @@ def check_scope(receipt, smoke, allowed):
         raise ValueError('provisional evidence must identify its GPU')
 
 
+def evidence_blob(root, revision):
+    """Inspect the Git type before reading any optional evidence content."""
+    entries = subprocess.check_output(
+        ['git', 'ls-tree', '-z', revision, '--', 'receipts/provisional.json'],
+        cwd=root, text=True).split('\0')
+    entries = [entry for entry in entries if entry]
+    if not entries:
+        return None
+    if len(entries) != 1:
+        raise ValueError('ambiguous provisional receipt entry')
+    metadata, name = entries[0].split('\t', 1)
+    mode, kind, oid = metadata.split()
+    if name != 'receipts/provisional.json' or mode not in {'100644', '100755'} or kind != 'blob':
+        raise ValueError('provisional receipt must be a regular Git blob, not a symlink')
+    return oid
+
+
 def verify(path, *, root=ROOT, trusted=ROOT, author, head):
     """Fail closed on unsigned, self-selected scope/signers, or source descendants."""
     import yaml
@@ -64,13 +81,23 @@ def verify(path, *, root=ROOT, trusted=ROOT, author, head):
     if actual_head != head:
         raise ValueError('verification checkout is not the PR head')
     path = Path(path)
-    if path.is_symlink():
+    if path.is_symlink() or path.parent.is_symlink():
         raise ValueError('provisional receipt must not be a symlink')
     path = path.resolve()
     if path != (root / 'receipts/provisional.json').resolve():
         raise ValueError('CI only accepts receipts/provisional.json')
     path.relative_to(root.resolve())
-    receipt = json.loads(path.read_text())
+    candidate_blob = evidence_blob(root, head)
+    if candidate_blob is None:
+        print('No provisional receipt: neutral (optional evidence).')
+        return
+    base_blob = evidence_blob(trusted, 'HEAD')
+    if candidate_blob == base_blob:
+        print('Inherited provisional receipt: neutral; no new evidence claimed.')
+        return
+    # Read the object we inspected, never candidate code or an untracked file.
+    receipt = json.loads(subprocess.check_output(
+        ['git', 'cat-file', 'blob', candidate_blob], cwd=root, text=True))
     smoke = manifest(trusted / 'test/gpu-proof-provisional-smoke.txt')
     allowed = manifest(trusted / 'test/gpu-proof-tests.txt')
     check_scope(receipt, smoke, allowed)

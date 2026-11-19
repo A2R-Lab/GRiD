@@ -60,6 +60,9 @@ def test_isolated_ci_without_submodules(tmp_path, case):
     # Package initialization and the full recording driver must never run.
     for name in ('__init__.py', 'run_split_suite.py'):
         (trusted / 'test' / name).write_text(poison)
+    subprocess.run(['git', 'init', '-q', str(trusted)], check=True)
+    subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                    'commit', '-qm', 'trusted', '--allow-empty'], cwd=trusted, check=True)
     candidate = tmp_path / 'candidate'
     (candidate / 'receipts').mkdir(parents=True)
     for name in ('yaml.py', 'json.py', 'sitecustomize.py', 'receipt_integrity.py'):
@@ -80,6 +83,10 @@ def test_isolated_ci_without_submodules(tmp_path, case):
         path.symlink_to(secret if case == 'symlink' else tmp_path / 'missing')
     else:
         path.write_text(json.dumps(data))
+    git('add', 'receipts/provisional.json')
+    git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+        'commit', '-qm', 'evidence')
+    head = git('rev-parse', 'HEAD')
     bootstrap = '''
 import sys, runpy
 sys.path.insert(0, sys.argv[1])
@@ -96,7 +103,7 @@ original_run = verify.__globals__['subprocess'].run
 verify.__globals__['subprocess'].run = signature_double
 verify.__globals__['_gpu_proof_bin'] = lambda: 'trusted-signature-test-double'
 from pathlib import Path
-verify(Path(sys.argv[3]), root=Path(sys.argv[4]), author='contributor', head=sys.argv[5])
+verify(Path(sys.argv[3]), root=Path(sys.argv[4]), trusted=Path(sys.argv[2]).parents[1], author='contributor', head=sys.argv[5])
 '''
     result = subprocess.run([sys.executable, '-I', '-S', '-c', bootstrap,
                              str(Path(yaml.__file__).parent.parent),
@@ -168,6 +175,10 @@ def test_verification_uses_trusted_author_and_policy(tmp_path, monkeypatch):
     commands = []
     def output(cmd, **kwargs):
         if cmd[1] == 'rev-parse': return 'b' * 40 + '\n'
+        if cmd[1] == 'ls-tree':
+            return ('100644 blob ' + 'c' * 40 + '\treceipts/provisional.json\0'
+                    if kwargs['cwd'] == candidate else '')
+        if cmd[1] == 'cat-file': return json.dumps(r)
         return 'receipts/provisional.json\n'
     def run(cmd, **kwargs):
         commands.append(cmd)
@@ -184,7 +195,7 @@ def test_verification_uses_trusted_author_and_policy(tmp_path, monkeypatch):
     p.verify(path, root=candidate, author='contributor', head='b' * 40)
     assert any('verify' in cmd for cmd in commands)
     monkeypatch.setattr(p.subprocess, 'check_output', lambda cmd, **kw:
-                        'b' * 40 if cmd[1] == 'rev-parse' else 'grid_codegen/changed.py')
+                        'grid_codegen/changed.py' if cmd[1] == 'diff' else output(cmd, **kw))
     with pytest.raises(ValueError, match='source changed'):
         p.verify(path, root=candidate, author='contributor', head='b' * 40)
 
@@ -208,6 +219,47 @@ def test_workflow_executes_only_base_tools():
     assert steps[1]['working-directory'] == 'trusted'
     assert 'git rev-parse --verify HEAD' in steps[1]['run']
     assert '$GITHUB_STEP_SUMMARY' in steps[1]['run']
+
+
+@pytest.mark.parametrize('descendant', ['docs/guide.md', 'grid_codegen/source.py'])
+def test_inherited_evidence_is_neutral_on_descendants(tmp_path, monkeypatch, descendant):
+    trusted, candidate = tmp_path / 'trusted', tmp_path / 'candidate'
+    trusted.mkdir()
+    def git(root, *args):
+        return subprocess.check_output(['git', *args], cwd=root, text=True).strip()
+    def commit(root):
+        git(root, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+            'commit', '-qm', 'fixture')
+    git(trusted, 'init', '-q')
+    (trusted / 'receipts').mkdir()
+    # Deliberately not JSON: inherited content must never reach the verifier.
+    (trusted / 'receipts/provisional.json').write_text('historical evidence')
+    git(trusted, 'add', 'receipts/provisional.json'); commit(trusted)
+    subprocess.run(['git', 'clone', '-q', str(trusted), str(candidate)], check=True)
+    changed = candidate / descendant
+    changed.parent.mkdir(parents=True); changed.write_text('new source')
+    git(candidate, 'add', descendant); commit(candidate)
+    path = candidate / 'receipts/provisional.json'
+    p.verify(path, root=candidate, trusted=trusted, author='another-contributor',
+             head=git(candidate, 'rev-parse', 'HEAD'))
+    # Changing evidence cannot borrow the inherited exemption.
+    path.write_text('changed invalid evidence')
+    git(candidate, 'add', 'receipts/provisional.json'); commit(candidate)
+    with pytest.raises(json.JSONDecodeError):
+        p.verify(path, root=candidate, trusted=trusted, author='another-contributor',
+                 head=git(candidate, 'rev-parse', 'HEAD'))
+
+
+def test_inherited_git_symlink_is_rejected_before_content(tmp_path):
+    subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
+    (tmp_path / 'receipts').mkdir()
+    path = tmp_path / 'receipts/provisional.json'
+    path.symlink_to('/private/sentinel')
+    subprocess.run(['git', 'add', 'receipts/provisional.json'], cwd=tmp_path, check=True)
+    subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                    'commit', '-qm', 'symlink'], cwd=tmp_path, check=True)
+    with pytest.raises(ValueError, match='regular Git blob'):
+        p.evidence_blob(tmp_path, 'HEAD')
 
 
 @pytest.mark.parametrize('mode', ['budget', 'failed_optional', 'pressure', 'no_memory'])

@@ -228,7 +228,10 @@ These are estimates, not memory caps or promises for every compiler/GPU. A
 smaller machine does not inherently increase a process's RAM consumption;
 live available RAM determines admission. Contributor admission uses the smaller
 of host MemAvailable and remaining cgroup v1/v2 memory headroom at every visible
-ancestor, including v2 memory.high. Cache counts as used, swap is not extra
+ancestor in the memory controller's own hierarchy (v1 on hybrid hosts when
+memory is attached there). Undelegated v2 leaves still inherit the visible
+ancestor's accounting. `memory.high` is a conservative admission ceiling to
+avoid reclaim and throttling, not a hard kernel limit. Cache counts as used, swap is not extra
 capacity, and unreadable accounting refuses admission. Limits outside a mounted
 cgroup namespace cannot be observed; these estimates are not isolation.
 The whole pytest process tree
@@ -244,10 +247,34 @@ exercise trusted dispatch, not cryptographic acceptance of a signed fixture.
 Claude's November 18 scratch-repository rerun exercised same-repository PRs,
 not forks: forged full scope and both symlink forms fail for the intended
 reasons; control and planted-code cases use only trusted code. A genuine signed
-provisional receipt and the latest base-tip workflow still need end-to-end
-validation before relying on this lane.
+four-test provisional receipt also passed the latest base-tip workflow on
+November 18. These were same-repository exercises; a real fork exercise is
+still pending. The private scratch repository has since been deleted.
+
+Optional evidence has a lifecycle: CI inspects the Git object type first and
+rejects symlinks, even inherited ones. A regular-file `receipts/provisional.json`
+whose blob is identical to the current trusted base's blob is inherited and
+neutral, including on source-changing descendants. It makes no new validation
+claim. New or changed evidence is verified in full, including the signer,
+signature, scope and the unchanged-source-since-recording rule.
 
 ## Freeze and publish
+
+CUDA partitions now persist `partition-map.json` schema 1 alongside
+`partition.json`. Each row separates the immutable receipt merge identity from
+the planned display label, records exact node IDs and indivisible compile atoms,
+and records predecessor identities with their old node sets. The union is the
+exact fresh CUDA scope; nodes and atoms cannot overlap shards. Resume validates
+both artifacts and replays the saved partition without repacking it from newer
+duration estimates. Older outputs without this map require a fresh full run.
+This is an audit map, not a cross-receipt merge protocol: a refresh that would
+have fewer new shards than stale identities is refused and requires a fresh full
+pass. Never relabel a carried receipt to make a smaller partition fit.
+
+Strip optional `receipts/provisional.json` when promoting `dev` to `main`, before
+the release freeze. It is contributor evidence, never release evidence; do not
+copy it into the release branch. Review this removal explicitly in the promotion
+diff. Historical primary and secondary receipts remain subject to their policies.
 
 Set the agreed version in `pyproject.toml` before freezing. Run the CPU/docs/artifact
 gates, `make release-check`, and focused GPU/sanitizer checks, then commit all
