@@ -278,6 +278,11 @@ def gen_lie_group_helpers(self):
         # float32 kernel matching the float64 oracle). Mirrors RBDReference._d2_se3_*
         # (validated ~1e-14 vs mpmath complex-step; pinocchio sanity + plant_hessian).
         # SE(3)-exp coefficient VALUE (c[5]={a,b,s,c2,c3}, c1==b) + DERIVATIVE dc[5].
+        "// Deliberately in double: the one exemption from computing in T (see",
+        "// test/test_generated_code_pure_T.py). The second derivatives of SE(3) integration",
+        "// cancel badly in single precision, so this family (grid_se3_d2_coefs, grid_d2_*,",
+        "// grid_d2Integrate_block) and its call in integrator_hessian_device stay double.",
+        "// It is slow on GPUs with reduced double throughput.",
         "__device__ inline void grid_se3_d2_coefs(double t, double c[5], double dc[5]) {",
         "    if (t >= 0.2) {",
         "        double s=sin(t), co=cos(t), t2=t*t, t3=t2*t, t4=t3*t, t5=t4*t, t6=t5*t;",
