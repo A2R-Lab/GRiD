@@ -42,6 +42,25 @@ def test_printer_folds_the_squared_norm():
         expr_T(q1 / (q1**2 + q2**2))
 
 
+def test_norm_substitution_keeps_the_grouping_and_refuses_what_it_cannot_place():
+    """The substitution works on printed text. These are the forms it must keep right."""
+    for tag in ("fb", "sph"):
+        q1, q2, q3, q4 = sp.symbols(f"q1_{tag} q2_{tag} q3_{tag} q4_{tag}")
+        n2 = q1**2 + q2**2 + q3**2 + q4**2
+        call = f"grid_quat_norm2<T>(q1_{tag}, q2_{tag}, q3_{tag}, q4_{tag})"
+        assert expr_T(q1 / n2) == f"q1_{tag}/({call})"
+        assert expr_T(sp.sqrt(n2)) == f"sqrt({call})"
+        assert expr_T(q1 / sp.sqrt(n2)) == f"q1_{tag}/sqrt({call})"
+        assert expr_T((n2 + 1) / n2) == f"({call} + 1)/({call})"
+        assert expr_T(q1 / n2**5) == f"q1_{tag}/pow({call}, static_cast<T>(5))"
+        # a sum that is not the squared norm is left alone
+        assert "grid_quat_norm2" not in expr_T(q1**2 + q2**2 + q3**2 + 2 * q4**2)
+        # a divisor that is not the squared norm itself is refused, not printed
+        for divisor in (2 * n2, n2 + 1, q1**2 + q2**2, q1):
+            with pytest.raises(ValueError, match="squared norm"):
+                expr_T(q2 / divisor)
+
+
 @pytest.mark.parametrize("unit", [False, True])
 def test_floating_header_normalises_in_one_place(tmp_path, unit):
     source = header(tmp_path, "go2", True, enable_mujoco_kernels=True, assume_unit_quaternions=unit)
@@ -73,11 +92,48 @@ def test_spherical_joint_quaternion_uses_the_same_helper(tmp_path):
         assert not re.search(r"/\s*\(+\s*\(?s_q\[0\]\)?\s*\*", source)
 
 
-def test_cache_key_carries_the_flag_only_for_a_model_with_a_quaternion():
+def _robot(joint):
+    return f'<?xml version="1.0"?><robot name="r"><link name="a"/><link name="b"/>{joint}</robot>'.encode()
+
+
+def _joint(kind):
+    return f'<joint name="j" type="{kind}"><parent link="a"/><child link="b"/></joint>'
+
+
+def test_quaternion_detection_reads_the_joints_as_the_parser_does():
     from grid_rbd._cache import has_quaternion_coordinates
-    assert has_quaternion_coordinates(b"<robot/>", True)
-    assert has_quaternion_coordinates(b'<joint name="a" type="spherical">', False)
-    assert not has_quaternion_coordinates(b'<joint name="a" type="revolute">', False)
+    assert has_quaternion_coordinates(_robot(_joint("revolute")), True)
+    assert has_quaternion_coordinates(_robot(_joint("spherical")), False)
+    assert has_quaternion_coordinates(_robot(_joint("spher&#105;cal")), False)       # an encoded attribute
+    assert has_quaternion_coordinates(_robot(_joint("spherical").replace('"', "'")), False)
+    assert not has_quaternion_coordinates(_robot(_joint("revolute")), False)
+    assert not has_quaternion_coordinates(_robot("<!-- " + _joint("spherical") + " -->" + _joint("revolute")), False)
+    assert has_quaternion_coordinates(b"not a urdf", False)                          # unreadable: keep the option
+
+
+def test_option_enters_the_code_options_only_when_true_on_a_model_with_a_quaternion(tmp_path):
+    """Both routes (the handle and the artifact builder) build their options the same way."""
+    from grid_rbd import _artifacts
+    spherical, encoded, revolute = (tmp_path / name for name in ("s.urdf", "e.urdf", "r.urdf"))
+    spherical.write_bytes(_robot(_joint("spherical")))
+    encoded.write_bytes(_robot(_joint("spher&#105;cal")))
+    revolute.write_bytes(_robot(_joint("revolute")))
+
+    def options(path, floating, unit):
+        return _artifacts._code_options(
+            path, 120, floating_base=floating, ee_joint_names=None, dtype="float32", algorithm_list=None,
+            enable_mujoco_kernels=True, cost_frames=None, contact_frames=None, use_joint_dynamics=False,
+            friction_model="sign", friction_width=None, runtime_inertia=False, runtime_transform=False,
+            runtime_joint_dynamics=False, emit_plant=False, collision=False, collision_res=None,
+            collision_native=False, spherized_urdf=None, strict_collision=True, launch_config_profile=None,
+            assume_unit_quaternions=unit)
+
+    for path, floating in ((spherical, False), (encoded, False), (revolute, True)):
+        assert options(path, floating, True).get("assume_unit_quaternions") is True
+        assert "assume_unit_quaternions" not in options(path, floating, False)
+        assert options(path, floating, True) != options(path, floating, False)
+    assert "assume_unit_quaternions" not in options(revolute, False, True)
+    assert options(revolute, False, True) == options(revolute, False, False)
 
 
 def test_fixed_base_header_has_no_quaternion_helper(tmp_path):

@@ -247,10 +247,21 @@ def _jax_ffi_tag() -> str:
 def has_quaternion_coordinates(urdf_bytes: bytes, floating_base: bool) -> bool:
     """True when the model carries a quaternion: a floating base or a spherical joint.
     ``assume_unit_quaternions`` changes the generated header only for such a model, so it
-    enters the cache key only then."""
-    import re
-    return bool(floating_base) or bool(
-        re.search(rb"<joint\b[^>]*\btype\s*=\s*[\"']spherical[\"']", urdf_bytes))
+    enters the cache key only then.
+
+    The joints are read as URDFParser reads them (the same XML parser, the direct `joint`
+    children of `robot`), so an encoded attribute counts and a commented-out joint does
+    not. A document this cannot read counts as carrying a quaternion: an unneeded cache
+    entry costs a build, a dropped option changes the generated code."""
+    if floating_base:
+        return True
+    from bs4 import BeautifulSoup
+    try:
+        robot = BeautifulSoup(urdf_bytes, "xml").find("robot")
+        return robot is None or any(
+            joint.get("type") == "spherical" for joint in robot.find_all("joint", recursive=False))
+    except Exception:
+        return True
 
 
 def canonical_options(options: dict[str, Any]) -> str:
