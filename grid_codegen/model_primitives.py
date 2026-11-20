@@ -39,7 +39,7 @@ def emit_joint_transforms(gen):
                     if j['kind'] == 'floating':
                         expression = _ee_pose_root_fb_subst(expression)
                     elif j['kind'] == 'spherical':
-                        expression = _xi_spherical_quat_subst(gen, expression, jid, ccode=True)
+                        expression = _xi_spherical_quat_subst(gen, expression, jid)
                     else:
                         expression = expression.replace('sin(theta)', 's').replace('cos(theta)', 'c')
                     lines.append(f'    out[{row+4*col}]=static_cast<T>({expression});')

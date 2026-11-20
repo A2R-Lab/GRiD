@@ -2709,12 +2709,10 @@ def gen_ee_pose_inner_xform_from_q_lines(self):
 def _ee_pose_root_fb_subst(str_val):
     """Floating-root fb-symbol -> s_q slot substitution for the standalone FK
     inners. Mirrors replace_hom_config_symbols' floating branch in
-    _topology_helpers.gen_load_update_XmatsHom_helpers (same sp.ccode input,
-    same order: squared forms before bare symbols) so the standalone root
-    block is textually identical to the canonical loader's emission."""
+    _topology_helpers.gen_load_update_XmatsHom_helpers (same expr_T input) so
+    the standalone root block is textually identical to the canonical loader's
+    emission."""
     _fb_syms = ["x_fb", "y_fb", "z_fb", "q1_fb", "q2_fb", "q3_fb", "q4_fb"]
-    for i, sym in enumerate(_fb_syms):
-        str_val = str_val.replace(sym + "**2", "s_q[" + str(i) + "]*s_q[" + str(i) + "]")
     for i, sym in enumerate(_fb_syms):
         str_val = str_val.replace(sym, "s_q[" + str(i) + "]")
     return str_val
