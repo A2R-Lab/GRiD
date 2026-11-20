@@ -4273,3 +4273,29 @@ alone explains the loss. The release restores the same opt-in diagnostic default
 for every robot and documents the lost standalone receipt coverage. Preserve
 both inputs behind the flag for algorithm-level follow-up; a mixed-precision
 private diagnostic is evidence, not an approved product implementation.
+
+### Generated device code computes in T, and a rewrite keeps the rounding (2026-11-20)
+
+Every generated function is templated on T and computes in T. A decimal literal is a
+double and promotes the expression it meets, so symbolic expressions are printed by
+`grid_codegen/helpers/_expr_printer.py::expr_T` only. `test/test_generated_code_pure_T.py`
+scans whole headers: the functions it can parse, and every line GRiD writes after the
+vendored GLASS section, at any indentation. The second check exists because the first
+missed the model primitives, whose functions start at column zero with a signature over
+two lines; they computed the configuration difference in double for months. The one
+exemption is the second derivative of SE(3) integration, which lives in GLASS
+(`se3_retract_hessian`) and is double inside for any T. It is slow on a GPU with reduced
+double throughput.
+
+A quaternion (floating base, spherical joint) is normalised through one helper,
+`grid_quat_norm2`, which returns 1 when the header is generated with
+`assume_unit_quaternions`. The helper returns the squared norm, not its reciprocal. The
+first version returned the reciprocal, so the transform loaders computed `x*(1/n)` where
+they had computed `x/n`. The two round differently. Every double gate and every float
+gate that was run passed, and the gen3 floating `integrator_rk4` gradient at
+`energetic_random_1` (float32, cond(M) 6e4) went from inside its measured bound to
+1.12e-2 against 8e-3. A rewrite of an expression that feeds the floating forward
+dynamics gradient in single precision is a numerical change even when it is the same
+mathematics. Compare the regenerated header with the old one after substituting the
+helper call back: the loaders should be textually identical. Include a gen3 or rizon4
+floating integrator cell in the gate of any such change; go2 and iiwa14 do not see it.
