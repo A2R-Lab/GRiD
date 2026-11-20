@@ -81,6 +81,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+          fetch-depth: 0            # the receipt tier inventory reads pyproject.toml at each receipt's commit
 
       - uses: actions/setup-python@v5
         with:
