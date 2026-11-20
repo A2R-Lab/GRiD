@@ -497,20 +497,20 @@ def gen_base_quaternion_helpers(self):
         "// " + ("the caller passes unit quaternions and no normalisation is computed." if unit
                  else "nonzero quaternion (generate with assume_unit_quaternions to skip it)."),
         "template <typename T>",
-        "__host__ __device__ __forceinline__ T grid_quat_inv_norm2(T qx, T qy, T qz, T qw) {",
+        "__host__ __device__ __forceinline__ T grid_quat_norm2(T qx, T qy, T qz, T qw) {",
         ("    (void)qx; (void)qy; (void)qz; (void)qw; return static_cast<T>(1);" if unit
-         else "    return static_cast<T>(1)/(qx*qx + qy*qy + qz*qz + qw*qw);"),
+         else "    return qx*qx + qy*qy + qz*qz + qw*qw;"),
         "}",
         "// Row-major 3x3 rotation, R[3*i+j], of the quaternion q = (x, y, z, w).",
         "template <typename T>",
         "__host__ __device__ __forceinline__ void grid_base_rotation(const T *q, T *R) {",
         "    const T qx = q[0], qy = q[1], qz = q[2], qw = q[3];",
-        "    const T s = static_cast<T>(2)*grid_quat_inv_norm2<T>(qx, qy, qz, qw);",
-        "    const T xx = s*qx*qx, yy = s*qy*qy, zz = s*qz*qz;",
-        "    const T xy = s*qx*qy, xz = s*qx*qz, yz = s*qy*qz, wx = s*qw*qx, wy = s*qw*qy, wz = s*qw*qz;",
-        "    R[0] = static_cast<T>(1) - (yy+zz); R[1] = xy-wz;                       R[2] = xz+wy;",
-        "    R[3] = xy+wz;                       R[4] = static_cast<T>(1) - (xx+zz); R[5] = yz-wx;",
-        "    R[6] = xz-wy;                       R[7] = yz+wx;                       R[8] = static_cast<T>(1) - (xx+yy);",
+        "    const T s = static_cast<T>(2)/grid_quat_norm2<T>(qx, qy, qz, qw);",
+        "    const T xx = qx*qx, yy = qy*qy, zz = qz*qz;",
+        "    const T xy = qx*qy, xz = qx*qz, yz = qy*qz, wx = qw*qx, wy = qw*qy, wz = qw*qz;",
+        "    R[0] = static_cast<T>(1) - s*(yy+zz); R[1] = s*(xy-wz);                    R[2] = s*(xz+wy);",
+        "    R[3] = s*(xy+wz);                    R[4] = static_cast<T>(1) - s*(xx+zz); R[5] = s*(yz-wx);",
+        "    R[6] = s*(xz-wy);                    R[7] = s*(yz+wx);                    R[8] = static_cast<T>(1) - s*(xx+yy);",
         "}",
         ""
     ])

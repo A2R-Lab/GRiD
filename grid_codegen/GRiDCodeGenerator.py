@@ -730,7 +730,7 @@ class GRiDCodeGenerator:
                      vendor_glass = True, glass_revision = None, cost_frames = None, emit_plant = None,
                      assume_unit_quaternions = False):
         # Floating base only. False (default): the header normalises the base quaternion
-        # inside grid_quat_inv_norm2. True: the caller guarantees unit quaternions and the
+        # inside grid_quat_norm2. True: the caller guarantees unit quaternions and the
         # header computes no normalisation.
         self.assume_unit_quaternions = bool(assume_unit_quaternions)
         algorithms, include_any_kinematics, include_homogenous_transforms = self._resolve_emission_plan(include_base_inertia=include_base_inertia, include_homogenous_transforms=include_homogenous_transforms, fixed_target_name=fixed_target_name, output_path=output_path, codegen_profile=codegen_profile, algorithm_list=algorithm_list, enable_floating_second_order=enable_floating_second_order, enable_idsva_so_world_frame=enable_idsva_so_world_frame, enable_idsva_so_body_frame=enable_idsva_so_body_frame, runtime_inertia=runtime_inertia, runtime_transform=runtime_transform, runtime_joint_dynamics=runtime_joint_dynamics, runtime_armature=runtime_armature, multi_target_batch=multi_target_batch, collision_spec=collision_spec, contact_frames=contact_frames, enable_contact_runtime=enable_contact_runtime, enable_mujoco_kernels=enable_mujoco_kernels, emit_alloc_gating=emit_alloc_gating, fragments_dir=fragments_dir, vendor_glass=vendor_glass, glass_revision=glass_revision, cost_frames=cost_frames)

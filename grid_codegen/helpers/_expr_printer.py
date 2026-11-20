@@ -60,24 +60,23 @@ class _TPrinter(C99CodePrinter):
 _PRINTER = _TPrinter()
 
 # The floating base quaternion. Its rotation is normalised by the squared norm, and the
-# symbolic matrices repeat that division in every entry. `expr_T` folds each of them into
-# one call of the header's `grid_quat_inv_norm2`, the same reciprocal `grid_base_rotation`
-# uses, so the header has a single definition of how the base quaternion is normalised
-# (and a single place where `assume_unit_quaternions` removes it).
+# symbolic matrices repeat that division in every entry. `expr_T` prints each occurrence
+# of the squared norm as one call of the header's `grid_quat_norm2`, the same function
+# `grid_base_rotation` divides by, so the header has a single definition of how the base
+# quaternion is normalised (and a single place where `assume_unit_quaternions` removes
+# it). The division itself stays where the expression has it: `x/n` and `x*(1/n)` round
+# differently, and the floating forward dynamics gradient in single precision is
+# sensitive enough to that for an integrator cell to leave its measured bound.
 _FB_QUAT = sp.symbols("q1_fb q2_fb q3_fb q4_fb")
 _FB_NORM2 = sum(q**2 for q in _FB_QUAT)
-_FB_INV = sp.Symbol("grid_fb_inv_norm2")
-FB_INV_NORM2_CALL = "grid_quat_inv_norm2<T>(q1_fb, q2_fb, q3_fb, q4_fb)"
+_FB_NORM2_TEXT = _PRINTER.doprint(_FB_NORM2)
+FB_NORM2_CALL = "grid_quat_norm2<T>(q1_fb, q2_fb, q3_fb, q4_fb)"
 
 
-def _fold_base_quaternion_norm(value):
-    if not value.has(*_FB_QUAT):
-        return value
-    value = value.subs(_FB_NORM2, 1 / _FB_INV)
+def _check_base_quaternion_divisors(value):
     for power in value.atoms(sp.Pow):
-        if power.exp.is_negative and power.base.has(*_FB_QUAT):
+        if power.exp.is_negative and power.base.has(*_FB_QUAT) and power.base != _FB_NORM2:
             raise ValueError(f"base quaternion divided by something other than its squared norm: {power}")
-    return value
 
 
 def expr_T(value):
@@ -87,5 +86,8 @@ def expr_T(value):
         return str(int(value))
     if value.is_Number:
         return repr(float(value))            # the caller's cast to T makes it a T constant
-    text = assert_pure_T(_PRINTER.doprint(_fold_base_quaternion_norm(value)))
-    return text.replace(_FB_INV.name, FB_INV_NORM2_CALL)
+    text = assert_pure_T(_PRINTER.doprint(value))
+    if value.has(*_FB_QUAT):
+        _check_base_quaternion_divisors(value)
+        text = text.replace(_FB_NORM2_TEXT, FB_NORM2_CALL)
+    return text
