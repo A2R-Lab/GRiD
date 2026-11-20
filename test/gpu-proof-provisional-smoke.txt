@@ -1,0 +1,5 @@
+# Mandatory contributor smoke. Every outcome must pass; no learned skips.
+test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[fr3-fixed-inverse_dynamics-threads32]
+test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics-threads32]
+test/cuda_equivalents/test_cuda_executable_equivalence.py::test_floating_base_generated_cuda_matches_python_reference[go2-floating-forward_dynamics-threads32]
+test/cuda_equivalents/test_cuda_polynomial_coupling.py::test_polynomial_coupling_dynamics_match_projection[baked-fixed]

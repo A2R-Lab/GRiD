@@ -1,0 +1,61 @@
+name: Trusted contributor evidence
+
+# No candidate code, actions, requirements, policies or hooks execute here.
+# pull_request_target supplies the protected base workflow and event identity.
+# Both checkouts disable credentials; no lab runner or write token is involved.
+on:
+  pull_request_target:
+    branches: [dev, main]
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.base.repo.full_name }}
+          ref: refs/heads/${{ github.event.pull_request.base.ref }}
+          path: trusted
+          persist-credentials: false
+      - name: Record trusted base tip
+        working-directory: trusted
+        run: |
+          trusted_sha=$(git rev-parse --verify HEAD)
+          echo "Trusted base commit: $trusted_sha"
+          echo "Trusted base commit: $trusted_sha" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install trusted verifier dependencies
+        run: pip install "$(grep -o '^pytest-gpu-proof==[0-9.]*' trusted/install/requirements-dev.txt)" pyyaml
+      - name: Historical validity (all PRs)
+        run: python -I trusted/test/receipt_integrity.py --verify-all --repo "$GITHUB_WORKSPACE/candidate" --policy-root "$GITHUB_WORKSPACE/trusted"
+      - name: Current primary freshness (main only)
+        if: github.event.pull_request.base.ref == 'main'
+        run: |
+          gpu-proof verify --receipt candidate/gpu-proof.json --repo candidate \
+            --policy trusted/test/gpu-proof-policy.yaml \
+            --expected-skips trusted/test/gpu-proof-expected-skips.txt
+      - name: Optional provisional evidence
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ ! -e candidate/receipts/provisional.json ] && [ ! -L candidate/receipts/provisional.json ]; then
+            echo 'No provisional receipt: neutral (GPU evidence is optional on dev).' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          set -o pipefail
+          python -I trusted/test/provisional_receipt.py \
+            --verify "$GITHUB_WORKSPACE/candidate/receipts/provisional.json" \
+            --repo "$GITHUB_WORKSPACE/candidate" --author "$PR_AUTHOR" --head "$PR_HEAD" \
+            | tee -a "$GITHUB_STEP_SUMMARY"

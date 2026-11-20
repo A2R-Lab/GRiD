@@ -23,8 +23,10 @@ def test_publish_receipt_checkout_includes_candidate_history():
                     if step.get('uses', '').startswith('actions/checkout@'))
     assert checkout['with']['fetch-depth'] == 0
     verification = '\n'.join(step.get('run', '') for step in receipt['steps'])
-    assert '--policy test/gpu-proof-policy-release.yaml' in verification
-    assert '--expected-skips test/gpu-proof-expected-skips.txt' in verification
+    assert 'test/receipt_integrity.py --release "${GITHUB_REF_NAME#v}"' in verification
+    source = (ROOT / 'test/receipt_integrity.py').read_text()
+    assert "root / 'test/gpu-proof-policy-release.yaml'" in source
+    assert "'--expected-skips', str(root / row.expected_skips)" in source
 
 
 def test_manual_rehearsal_cannot_publish_to_production():

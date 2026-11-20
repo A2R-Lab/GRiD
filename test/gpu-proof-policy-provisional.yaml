@@ -1,0 +1,6 @@
+# Trusted base policy. The verifier adds base fingerprint requirements and
+# binds allowed_signers to the PR author from GitHub event metadata.
+allow_dirty: false
+allow_carried: false
+max_age_days: 30
+require_mode: local

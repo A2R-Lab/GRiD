@@ -4,6 +4,14 @@ Compatibility and known limitations
 Platforms and toolchain
 -----------------------
 
+.. include:: receipt_tiers.inc
+
+The inventory distinguishes historical evidence from release freshness.
+Primary evidence is required for every release, minor-tier evidence for X.Y.0,
+and major-tier evidence for X.0.0. A provisional contributor receipt does not
+add a supported platform. A version-specific secondary waiver is shown in the
+inventory; primary evidence cannot be waived.
+
 * There is one artifact per GPU architecture unless ``GRID_RBD_CUDA_ARCHS`` names
   several and the build is a fat binary. A robot ``.so`` is otherwise compiled for
   the ``sm_XX`` of the GPU that registers it (or ``cuda_arch=``); loading it on a
