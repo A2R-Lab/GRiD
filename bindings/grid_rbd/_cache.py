@@ -244,6 +244,15 @@ def _jax_ffi_tag() -> str:
         return ""
 
 
+def has_quaternion_coordinates(urdf_bytes: bytes, floating_base: bool) -> bool:
+    """True when the model carries a quaternion: a floating base or a spherical joint.
+    ``assume_unit_quaternions`` changes the generated header only for such a model, so it
+    enters the cache key only then."""
+    import re
+    return bool(floating_base) or bool(
+        re.search(rb"<joint\b[^>]*\btype\s*=\s*[\"']spherical[\"']", urdf_bytes))
+
+
 def canonical_options(options: dict[str, Any]) -> str:
     """Canonical JSON serialization of compile options for hashing.
 

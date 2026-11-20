@@ -59,24 +59,27 @@ class _TPrinter(C99CodePrinter):
 
 _PRINTER = _TPrinter()
 
-# The floating base quaternion. Its rotation is normalised by the squared norm, and the
-# symbolic matrices repeat that division in every entry. `expr_T` prints each occurrence
-# of the squared norm as one call of the header's `grid_quat_norm2`, the same function
-# `grid_base_rotation` divides by, so the header has a single definition of how the base
-# quaternion is normalised (and a single place where `assume_unit_quaternions` removes
-# it). The division itself stays where the expression has it: `x/n` and `x*(1/n)` round
-# differently, and the floating forward dynamics gradient in single precision is
-# sensitive enough to that for an integrator cell to leave its measured bound.
-_FB_QUAT = sp.symbols("q1_fb q2_fb q3_fb q4_fb")
-_FB_NORM2 = sum(q**2 for q in _FB_QUAT)
-_FB_NORM2_TEXT = _PRINTER.doprint(_FB_NORM2)
-FB_NORM2_CALL = "grid_quat_norm2<T>(q1_fb, q2_fb, q3_fb, q4_fb)"
+# Quaternions: the floating base (q*_fb) and every spherical joint (q*_sph). Their
+# rotations are normalised by the squared norm, and the symbolic matrices repeat that
+# division in every entry. `expr_T` prints each occurrence of the squared norm as one call
+# of the header's `grid_quat_norm2`, the same function `grid_base_rotation` divides by, so
+# the header has a single definition of how a quaternion is normalised (and a single place
+# where `assume_unit_quaternions` removes it). The division itself stays where the
+# expression has it: `x/n` and `x*(1/n)` round differently, and the floating forward
+# dynamics gradient in single precision is sensitive enough to that for an integrator cell
+# to leave its measured bound.
+_QUATERNIONS = tuple(sp.symbols(" ".join(f"q{k}_{tag}" for k in (1, 2, 3, 4))) for tag in ("fb", "sph"))
+_NORM2 = tuple(sum(q**2 for q in quat) for quat in _QUATERNIONS)
+_NORM2_CALLS = tuple((_PRINTER.doprint(norm2), "grid_quat_norm2<T>(" + ", ".join(q.name for q in quat) + ")")
+                     for quat, norm2 in zip(_QUATERNIONS, _NORM2))
+FB_NORM2_CALL = _NORM2_CALLS[0][1]
 
 
-def _check_base_quaternion_divisors(value):
+def _check_quaternion_divisors(value):
     for power in value.atoms(sp.Pow):
-        if power.exp.is_negative and power.base.has(*_FB_QUAT) and power.base != _FB_NORM2:
-            raise ValueError(f"base quaternion divided by something other than its squared norm: {power}")
+        if power.exp.is_negative and any(power.base.has(*quat) and power.base != norm2
+                                         for quat, norm2 in zip(_QUATERNIONS, _NORM2)):
+            raise ValueError(f"quaternion divided by something other than its squared norm: {power}")
 
 
 def expr_T(value):
@@ -87,7 +90,8 @@ def expr_T(value):
     if value.is_Number:
         return repr(float(value))            # the caller's cast to T makes it a T constant
     text = assert_pure_T(_PRINTER.doprint(value))
-    if value.has(*_FB_QUAT):
-        _check_base_quaternion_divisors(value)
-        text = text.replace(_FB_NORM2_TEXT, FB_NORM2_CALL)
+    if any(value.has(*quat) for quat in _QUATERNIONS):
+        _check_quaternion_divisors(value)
+        for norm2_text, call in _NORM2_CALLS:
+            text = text.replace(norm2_text, call)
     return text

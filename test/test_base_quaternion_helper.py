@@ -55,6 +55,31 @@ def test_floating_header_normalises_in_one_place(tmp_path, unit):
     assert not COPIES.search(source)
 
 
+def test_spherical_joint_quaternion_uses_the_same_helper(tmp_path):
+    from pathlib import Path
+    import external.URDFParser as parser_package
+    urdf = Path(parser_package.__file__).parent / "tests/fixtures/spherical_arm.urdf"
+    algorithms = ["inverse_dynamics", "forward_dynamics", "end_effector_pose", "inverse_dynamics_gradient"]
+    for unit in (False, True):
+        path = tmp_path / f"spherical_{unit}.cuh"
+        with open(os.devnull, "w") as sink, contextlib.redirect_stdout(sink):
+            robot = URDFParser().parse(str(urdf), floating_base=False)
+            GRiDCodeGenerator(robot, FILE_NAMESPACE="grid").gen_all_code(
+                output_path=str(path), algorithm_list=algorithms, assume_unit_quaternions=unit)
+        source = path.read_text()
+        bodies = HELPER.findall(source)
+        assert len(bodies) == 1 and ("return static_cast<T>(1);" in bodies[0]) == unit
+        assert source.count("grid_quat_norm2<T>(s_q[0], s_q[1], s_q[2], s_q[3])") > 10
+        assert not re.search(r"/\s*\(+\s*\(?s_q\[0\]\)?\s*\*", source)
+
+
+def test_cache_key_carries_the_flag_only_for_a_model_with_a_quaternion():
+    from grid_rbd._cache import has_quaternion_coordinates
+    assert has_quaternion_coordinates(b"<robot/>", True)
+    assert has_quaternion_coordinates(b'<joint name="a" type="spherical">', False)
+    assert not has_quaternion_coordinates(b'<joint name="a" type="revolute">', False)
+
+
 def test_fixed_base_header_has_no_quaternion_helper(tmp_path):
     source = header(tmp_path, "iiwa14", False)
     assert "grid_quat_norm2" not in source and "grid_base_rotation" not in source

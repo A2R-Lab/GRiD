@@ -2773,8 +2773,8 @@ def gen_grid_plant(self, algorithms):
     self.gen_add_code_line("")
     self.gen_add_func_doc("Plant namespace: cost / constraint / plant-step primitives composed over grid::")
     self.gen_add_code_line("namespace " + self.file_namespace + "_plant {", True)
-    if self.robot.floating_base:
-        # the one base-quaternion helper pair lives in the main namespace
+    if self.robot.floating_base or self.robot.robot_has_spherical():
+        # the one quaternion helper pair lives in the main namespace
         self.gen_add_code_line("using " + self.file_namespace + "::grid_quat_norm2;")
         self.gen_add_code_line("using " + self.file_namespace + "::grid_base_rotation;")
 

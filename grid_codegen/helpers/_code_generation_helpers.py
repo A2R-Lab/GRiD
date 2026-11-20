@@ -486,12 +486,12 @@ def _gen_mjx_build_R_lines(q_name="s_q", out="R"):
 
 
 def gen_base_quaternion_helpers(self):
-    """The two helpers every use of the floating base quaternion goes through."""
-    if not self.robot.floating_base:
+    """The two helpers every use of a quaternion (floating base or spherical joint) goes through."""
+    if not (self.robot.floating_base or self.robot.robot_has_spherical()):
         return
     unit = bool(getattr(self, "assume_unit_quaternions", False))
     self.gen_add_code_lines([
-        "// Floating base quaternion (xyzw). Every kernel builds the base rotation through",
+        "// Quaternions (xyzw) of the floating base and of spherical joints. Every rotation is built through",
         "// these two helpers. " + ("This header was generated with assume_unit_quaternions:" if unit
                                     else "The quaternion is normalised here, so callers may pass any"),
         "// " + ("the caller passes unit quaternions and no normalisation is computed." if unit

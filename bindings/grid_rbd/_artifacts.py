@@ -248,7 +248,7 @@ def _code_options(urdf_path: Path, cuda_arch: int, *, floating_base, ee_joint_na
         opts["algorithm_list"] = sorted(set(algos))
     if not enable_mujoco_kernels:
         opts["enable_mujoco_kernels"] = False
-    if assume_unit_quaternions and floating_base:
+    if assume_unit_quaternions and _cache.has_quaternion_coordinates(Path(urdf_path).read_bytes(), floating_base):
         opts["assume_unit_quaternions"] = True
     if cost_frames:
         opts["cost_frames"] = [str(n) for n in cost_frames]
