@@ -9,11 +9,9 @@
 //   with_mem : the `<op>` host function — H2D copies of the packed inputs,
 //              the kernel, and the D2H copy of the result (GRiD's own
 //              synchronous host call, exactly what the C ABI wraps).
-// Differences between the collector's backends then have one meaning each:
-//   with_mem - compute        = memory traffic of one call
-//   C ABI    - with_mem       = context lookup, staging memcpy, fences
-//   NumPy    - C ABI          = Python/pybind
-//   JAX/torch resident - compute = framework dispatch
+// Differences between these legacy boundaries combine transfer, wrapper and
+// synchronization effects. They are not isolated copy or dispatch costs.
+// The versioned consumer stage defines a separate matched boundary contract.
 //
 // Compiled per (robot, operation) artifact against that artifact's header
 // with the wrapper's nvcc flags (same arch, same fast-math settings), so the
@@ -23,6 +21,9 @@
 #include <cstdio>
 #include <cstring>
 #include "grid.cuh"
+#include "consumer_copy.h"
+#include "consumer_completion.h"
+#define KB_CUDA(expr) do { cudaError_t kb_e=(expr); if(kb_e!=cudaSuccess) return 100+int(kb_e); } while(0)
 
 #ifndef GRID_KERNEL_MAX_BATCH
 #define GRID_KERNEL_MAX_BATCH 256
@@ -49,11 +50,11 @@ double now_us() {
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-// Operation codes: 0..12 = the collector's OPS order (pin_adapter.OPS); 13 = the
-// end-effector pose gradient (grid_adapter.KERNEL_OPS carries the same table).
+// Operation codes: 0..12 = the collector's OPS order (pin_adapter.OPS); 13 and 14 = the
+// end-effector pose gradient and Hessian (grid_adapter.KERNEL_OPS carries the same table).
 constexpr int OP_ID = 0, OP_ID_GRAD = 1, OP_IDSVA_SO = 2, OP_MINV = 3, OP_FD = 4, OP_FD_GRAD = 5,
               OP_FDSVA_SO = 6, OP_EE_POSE = 7, OP_CRBA = 8, OP_NLE = 9, OP_GRAVITY = 10, OP_CCRBA = 11, OP_CORIOLIS = 12,
-              OP_EE_GRAD = 13;
+              OP_EE_GRAD = 13, OP_EE_HESS = 14;
 #define KB_CAT_(a, b) a##b
 #define KB_CAT(a, b) KB_CAT_(a, b)
 #if !defined(GRID_HAS_IDSVA_SO)
@@ -92,6 +93,9 @@ bool op_built(int op) {
 #if GRID_HAS_END_EFFECTOR_POSE_GRADIENT && defined(GRID_RBD_EE_POSE_GRADIENT_FN)
         case OP_EE_GRAD: return true;
 #endif
+#if GRID_HAS_END_EFFECTOR_POSE_HESSIAN && defined(GRID_RBD_EE_POSE_HESSIAN_FN)
+        case OP_EE_HESS: return true;
+#endif
 #if GRID_HAS_CRBA
         case OP_CRBA: return true;
 #endif
@@ -122,6 +126,7 @@ int output_size(int op) {
         case OP_MINV: case OP_CRBA: case OP_CORIOLIS: return nv * nv;
         case OP_EE_POSE: return 6 * GRID_KERNEL_NUM_EES;
         case OP_EE_GRAD: return 6 * GRID_KERNEL_NUM_EES * nv;
+        case OP_EE_HESS: return 6 * GRID_KERNEL_NUM_EES * nv * nv;
         case OP_NLE: case OP_GRAVITY: return nv;
         case OP_CCRBA: return 6 * nv + 6;
         default: return 0;
@@ -139,6 +144,7 @@ int baked_threads(int op) {
         case OP_FDSVA_SO: return grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::THREADS;
         case OP_EE_POSE: return grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::THREADS;
         case OP_EE_GRAD: return grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::THREADS;
+        case OP_EE_HESS: return grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::THREADS;
         case OP_CRBA: return grid::launch_cfg<grid::GRID_ALGO_CRBA>::THREADS;
         case OP_NLE: return grid::launch_cfg<grid::GRID_ALGO_NONLINEAR_EFFECTS>::THREADS;
         case OP_GRAVITY: return grid::launch_cfg<grid::GRID_ALGO_GENERALIZED_GRAVITY>::THREADS;
@@ -149,11 +155,12 @@ int baked_threads(int op) {
 }
 
 // Like the wrapper: clamp to a kernel's register-limited block cap where the
-// wrapper does (ccrba); a failed attribute query keeps the request.
+// wrapper does (ccrba); failed queries propagate through the error contract.
 template <typename KernelPtr>
 dim3 clamp_threads(KernelPtr kernel, dim3 requested) {
     cudaFuncAttributes attr;
-    if (cudaFuncGetAttributes(&attr, (const void*)kernel) != cudaSuccess) { cudaGetLastError(); return requested; }
+    const cudaError_t error = cudaFuncGetAttributes(&attr, (const void*)kernel);
+    if (error != cudaSuccess) { gpuAssert(error, __FILE__, __LINE__); return requested; }
     unsigned cap = attr.maxThreadsPerBlock > 0 ? (unsigned)attr.maxThreadsPerBlock : requested.x;
     if (requested.x > cap) requested.x = cap;
     return requested;
@@ -238,6 +245,15 @@ dim3 clamp_threads(KernelPtr kernel, dim3 requested) {
 #define KB_EEG_FN grid::GRID_RBD_EE_POSE_GRADIENT_FN
 #define KB_EEG_FN_CO grid::KB_CAT(GRID_RBD_EE_POSE_GRADIENT_FN, _compute_only)
 #endif
+#if GRID_HAS_END_EFFECTOR_POSE_HESSIAN && defined(GRID_RBD_EE_POSE_HESSIAN_FN)
+#if defined(GRID_RBD_SIG_MJX_EE_POSE_HESSIAN)
+#define KB_EEH_ARGS T, false, grid::GRID_DATA_ALL, false, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER
+#else
+#define KB_EEH_ARGS T, false, grid::GRID_DATA_ALL, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER
+#endif
+#define KB_EEH_FN grid::GRID_RBD_EE_POSE_HESSIAN_FN
+#define KB_EEH_FN_CO grid::KB_CAT(GRID_RBD_EE_POSE_HESSIAN_FN, _compute_only)
+#endif
 
 // Per-algorithm kernel-attribute registration for the ONE operation this
 // context times (the aggregate grid::init_grid<T>() would address-take, and so
@@ -279,6 +295,9 @@ cudaError_t register_op(int op, const char **failed_op) {
 #endif
 #if GRID_HAS_END_EFFECTOR_POSE_GRADIENT && defined(GRID_RBD_EE_POSE_GRADIENT_FN)
         case OP_EE_GRAD: return grid::init_grid_kernel_attr_end_effector_pose_gradient_checked<T>(failed_op);
+#endif
+#if GRID_HAS_END_EFFECTOR_POSE_HESSIAN && defined(GRID_RBD_EE_POSE_HESSIAN_FN)
+        case OP_EE_HESS: return grid::init_grid_kernel_attr_end_effector_pose_hessian_checked<T>(failed_op);
 #endif
 #if GRID_HAS_CRBA
         case OP_CRBA: return grid::init_grid_kernel_attr_crba_checked<T>(failed_op);
@@ -329,6 +348,9 @@ void with_mem(KernelCtx &c, int op, T gravity, int n, dim3 thr) {
 #if GRID_HAS_END_EFFECTOR_POSE_GRADIENT && defined(GRID_RBD_EE_POSE_GRADIENT_FN)
         case OP_EE_GRAD: KB_EEG_FN<KB_EEG_ARGS>(c.data, c.model, n, blocks, thr, c.streams); break;
 #endif
+#if GRID_HAS_END_EFFECTOR_POSE_HESSIAN && defined(GRID_RBD_EE_POSE_HESSIAN_FN)
+        case OP_EE_HESS: KB_EEH_FN<KB_EEH_ARGS>(c.data, c.model, n, blocks, thr, c.streams); break;
+#endif
 #if GRID_HAS_CRBA
         case OP_CRBA: grid::crba<KB_CRBA_ARGS>(c.data, c.model, gravity, n, blocks, thr, c.streams); break;
 #endif
@@ -378,6 +400,9 @@ void compute_only(KernelCtx &c, int op, T gravity, int n, dim3 thr) {
 #if GRID_HAS_END_EFFECTOR_POSE_GRADIENT && defined(GRID_RBD_EE_POSE_GRADIENT_FN)
         case OP_EE_GRAD: KB_EEG_FN_CO<KB_EEG_ARGS>(c.data, c.model, n, blocks, thr); break;
 #endif
+#if GRID_HAS_END_EFFECTOR_POSE_HESSIAN && defined(GRID_RBD_EE_POSE_HESSIAN_FN)
+        case OP_EE_HESS: KB_EEH_FN_CO<KB_EEH_ARGS>(c.data, c.model, n, blocks, thr); break;
+#endif
 #if GRID_HAS_CRBA
         case OP_CRBA: grid::crba_compute_only<KB_CRBA_ARGS>(c.data, c.model, gravity, n, blocks, thr); break;
 #endif
@@ -412,6 +437,7 @@ const T *host_output(const KernelCtx &c, int op) {
         case OP_FD_GRAD: return c.data->h_df_du;
         case OP_EE_POSE: return c.data->h_end_effector_pose;
         case OP_EE_GRAD: return c.data->h_end_effector_pose_gradient;
+        case OP_EE_HESS: return c.data->h_end_effector_pose_hessian;
         case OP_CRBA: return c.data->h_M;
         case OP_CCRBA: return c.data->h_ccrba;
         case OP_CORIOLIS: return c.data->h_coriolis;
@@ -434,6 +460,7 @@ const T *device_output(const KernelCtx &c, int op) {
         case OP_FD_GRAD: return c.data->d_df_du;
         case OP_EE_POSE: return c.data->d_end_effector_pose;
         case OP_EE_GRAD: return c.data->d_end_effector_pose_gradient;
+        case OP_EE_HESS: return c.data->d_end_effector_pose_hessian;
         case OP_CRBA: return c.data->d_M;
         case OP_CCRBA: return c.data->d_ccrba;
         case OP_CORIOLIS: return c.data->d_coriolis;
@@ -519,6 +546,7 @@ extern "C" int grid_kernel_run(void *h, int op, const T *q, const T *qd, const T
     if (int rc = stage_inputs(c, op, q, qd, third, batch)) return rc;
     const dim3 thr((unsigned)(threads > 0 ? threads : baked_threads(op)), 1, 1);
     compute_only(c, op, gravity, batch, thr);
+    KB_CUDA(grid_consume_last_error());
     cudaError_t e = cudaDeviceSynchronize();
     if (e == cudaSuccess) e = cudaGetLastError();
     if (e != cudaSuccess) return 100 + (int)e;
@@ -551,6 +579,8 @@ extern "C" int grid_kernel_time(void *h, int op, const T *q, const T *qd, const 
     int done = 0;
     do {
         with_mem(c, op, gravity, batch, thr);
+        KB_CUDA(grid_consume_last_error());
+        KB_CUDA(cudaGetLastError());
         ++done;
     } while (done < warmups || now_us() - warm_start < warm_seconds * 1e6);
     cudaError_t e = cudaDeviceSynchronize();
@@ -559,20 +589,175 @@ extern "C" int grid_kernel_time(void *h, int op, const T *q, const T *qd, const 
     for (int i = 0; i < iterations; ++i) {
         const double t0 = now_us();
         with_mem(c, op, gravity, batch, thr);
-        cudaDeviceSynchronize();
+        KB_CUDA(grid_consume_last_error());
+        KB_CUDA(cudaGetLastError());
+        KB_CUDA(cudaDeviceSynchronize());
         with_mem_us[i] = now_us() - t0;
     }
     std::memcpy(out_with_mem, host_output(c, op), (size_t)batch * output_size(op) * sizeof(T));
 
-    for (int i = 0; i < warmups; ++i) compute_only(c, op, gravity, batch, thr);
-    cudaDeviceSynchronize();
+    for (int i = 0; i < warmups; ++i) {
+        compute_only(c, op, gravity, batch, thr);
+        KB_CUDA(grid_consume_last_error());
+        KB_CUDA(cudaGetLastError());
+        KB_CUDA(cudaDeviceSynchronize());
+    }
     for (int i = 0; i < iterations; ++i) {
         const double t0 = now_us();
         compute_only(c, op, gravity, batch, thr);
-        cudaDeviceSynchronize();
+        KB_CUDA(grid_consume_last_error());
+        KB_CUDA(cudaGetLastError());
+        KB_CUDA(cudaDeviceSynchronize());
         compute_us[i] = now_us() - t0;
     }
     e = cudaGetLastError();
     if (e != cudaSuccess) return 100 + (int)e;
     return download(c, op, batch, out_compute);
+}
+
+// host_call: the operation runs through GRiD's generated compute-only host function
+// (launch and fence are the generator's). Inverse dynamics and pose keep the mirrored
+// single launch below, which has no fence of its own.
+struct GridConsumer { KernelCtx *kernel; int op, threads; const void *function=nullptr; size_t shared=0; bool host_call=false; };
+static int consumer_dense_width(int op) { return op==OP_EE_POSE ? 6 : grid::NUM_VEL; }
+// Select the same generated kernel/tier as the legacy host wrapper. Setup
+// checks occur once; no numerical kernel or generated header is modified.
+static int consumer_configure(GridConsumer &s) {
+    if(s.op==OP_FD) {
+        if(!op_built(OP_FD)) return -2;
+        s.host_call=true;
+        return 0;
+    }
+    if(s.op==OP_ID) {
+#if GRID_HAS_INVERSE_DYNAMICS
+#if defined(GRID_RBD_SIG_MJX_INVERSE_DYNAMICS)
+#define CONSUMER_ID_ARGS T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER, false
+#else
+#define CONSUMER_ID_ARGS T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER
+#endif
+        s.function=(const void*)static_cast<void(*)(T*,const T*,const int,const T*,T*,const grid::robotModel<T>*,const T,const int)>(&grid::inverse_dynamics_kernel<CONSUMER_ID_ARGS>);
+        s.shared=grid::INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>();
+#endif
+    } else if(s.op==OP_EE_POSE) {
+#if GRID_HAS_END_EFFECTOR_POSE && defined(GRID_CONSUMER_EE_KERNEL)
+#if defined(GRID_RBD_SIG_MJX_EE_POSE)
+#define CONSUMER_EE_ARGS T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER, false
+#else
+#define CONSUMER_EE_ARGS T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER
+#endif
+        s.function=(const void*)static_cast<void(*)(T*,const T*,const int,const grid::robotModel<T>*,const int)>(&grid::GRID_CONSUMER_EE_KERNEL<CONSUMER_EE_ARGS>);
+        s.shared=grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>();
+#endif
+    }
+    if(!s.function) return -2;
+    cudaFuncAttributes attributes;
+    KB_CUDA(cudaFuncGetAttributes(&attributes,s.function));
+    if(attributes.maxThreadsPerBlock>0 && s.threads>attributes.maxThreadsPerBlock)
+        s.threads=attributes.maxThreadsPerBlock;
+    KB_CUDA(grid::grid_check_dynamic_shared_memory_bytes("consumer",s.shared));
+    return 0;
+}
+// Enqueue only for a mirrored launch: the dense path completes after packing its
+// output, the native path immediately after this launch. A host call returns
+// completed; consumer_completion.h decides which fence each boundary still owes.
+static int consumer_enqueue(GridConsumer &s, int batch) {
+    auto &c=*s.kernel;
+    if(s.host_call) {
+        // Returns after the generated function's own completion fence.
+        compute_only(c,s.op,T(-9.81),batch,dim3((unsigned)s.threads,1,1));
+        return 0;
+    }
+    T *out=const_cast<T*>(device_output(c,s.op)), *input=c.data->d_q_qd_u;
+    T *qdd=c.data->d_qdd, *forces=c.data->d_f_ext;
+    auto *model=c.model; T gravity=T(-9.81); int stride=3*grid::NUM_JOINTS;
+    void *id_args[]={&out,&input,&stride,&qdd,&forces,&model,&gravity,&batch};
+    void *pose_args[]={&out,&input,&stride,&model,&batch};
+    KB_CUDA(cudaLaunchKernel(s.function,dim3(batch,1,1),dim3(s.threads,1,1),
+                             s.op==OP_ID?id_args:pose_args,s.shared,0));
+    return 0;
+}
+static int consumer_launch_errors() {
+    KB_CUDA(grid_consume_last_error());
+    KB_CUDA(cudaGetLastError());
+    return 0;
+}
+extern "C" void *grid_consumer_create(void *kernel, int op, int threads) {
+    if(!kernel || (op!=OP_ID && op!=OP_EE_POSE && op!=OP_FD)) return nullptr;
+    auto &c=*static_cast<KernelCtx*>(kernel);
+    // Match the wrapper's zero padding once, outside samples. Calls update
+    // only physical inputs; these operations never write their padding.
+    cudaError_t e=cudaMemset(c.data->d_q_qd_u,0,size_t(3)*grid::NUM_JOINTS*GRID_KERNEL_MAX_BATCH*sizeof(T));
+    if(e==cudaSuccess) e=cudaMemset(c.data->d_qdd,0,size_t(grid::NUM_JOINTS)*GRID_KERNEL_MAX_BATCH*sizeof(T));
+    if(e==cudaSuccess) e=cudaDeviceSynchronize();
+    if(e!=cudaSuccess) return nullptr;
+    auto *session=new GridConsumer{static_cast<KernelCtx*>(kernel),op,threads>0?threads:baked_threads(op)};
+    if(consumer_configure(*session)) { delete session; return nullptr; }
+    return session;
+}
+extern "C" int grid_consumer_host_call(void *context) {
+    return context ? int(static_cast<GridConsumer*>(context)->host_call) : 0;
+}
+// For a mirrored launch this is the block size launched (clamped in consumer_configure).
+// For a host call it is the size requested: the generated function applies its own clamp.
+extern "C" int grid_consumer_threads(void *context) {
+    return context ? static_cast<GridConsumer*>(context)->threads : 0;
+}
+extern "C" void grid_consumer_close(void *context) { delete static_cast<GridConsumer*>(context); }
+extern "C" int grid_consumer_stage(void *context, const float *input, int batch, bool device) {
+    if(!context || !input || batch<1 || batch>GRID_KERNEL_MAX_BATCH) return -1;
+    auto &session=*static_cast<GridConsumer*>(context); auto &c=*session.kernel;
+    const int op=session.op,nq=grid::NUM_POS,nv=grid::NUM_VEL,nj=grid::NUM_JOINTS;
+    const int width=nq+(op==OP_EE_POSE?0:2*nv);
+    const auto kind=device?cudaMemcpyDeviceToDevice:cudaMemcpyHostToDevice;
+    // Explicit common packed layout -> GRiD arena. These copies/packing costs
+    // are inside the new contract, unlike the legacy pre-staged kernel timing.
+    KB_CUDA(cudaMemcpy2D(c.data->d_q_qd_u,3*nj*sizeof(T),input,width*sizeof(T),nq*sizeof(T),batch,kind));
+    if(op!=OP_EE_POSE) {
+        KB_CUDA(cudaMemcpy2D(c.data->d_q_qd_u+nj,3*nj*sizeof(T),input+nq,width*sizeof(T),nv*sizeof(T),batch,kind));
+        // third field: acceleration for inverse dynamics, torque for forward dynamics
+        if(op==OP_ID) KB_CUDA(cudaMemcpy2D(c.data->d_qdd,nj*sizeof(T),input+nq+nv,width*sizeof(T),nv*sizeof(T),batch,kind));
+        else KB_CUDA(cudaMemcpy2D(c.data->d_q_qd_u+2*nj,3*nj*sizeof(T),input+nq+nv,width*sizeof(T),nv*sizeof(T),batch,kind));
+    }
+    return 0;
+}
+extern "C" int grid_consumer_eval(void *context, const float *input, float *out, int batch, bool device) {
+    if(!out) return -1;
+    if(int rc=grid_consumer_stage(context,input,batch,device)) return rc;
+    auto &session=*static_cast<GridConsumer*>(context); auto &c=*session.kernel;
+    const int op=session.op;
+    const T *src=device_output(c,op); if(!src) return -2;
+    return consumer_dense_call(
+        [&] { return consumer_enqueue(session,batch); }, consumer_launch_errors,
+        [&] { return consumer_copy_dense(out,consumer_dense_width(op),src,output_size(op),batch,
+                                         device?cudaMemcpyDeviceToDevice:cudaMemcpyDeviceToHost); });
+}
+
+// Distinct boundary: the consumer already holds GRiD's native input layout.
+// Only computation and completion belong to this call. Packing and validation
+// download are explicitly outside it; the result stays in the native arena.
+extern "C" int grid_consumer_native_once(void *context, int batch) {
+    if(!context || batch<1 || batch>GRID_KERNEL_MAX_BATCH) return -1;
+    auto &s=*static_cast<GridConsumer*>(context);
+    // The generated host function has fenced already; a second fence would be timed.
+    return consumer_native_call(s.host_call, [&] { return consumer_enqueue(s,batch); }, consumer_launch_errors);
+}
+extern "C" int grid_consumer_native_download(void *context, int batch, float *out) {
+    if(!context || !out || batch<1 || batch>GRID_KERNEL_MAX_BATCH) return -1;
+    auto &s=*static_cast<GridConsumer*>(context);
+    const T *src=device_output(*s.kernel,s.op); if(!src) return -2;
+    KB_CUDA(consumer_copy_dense(out,consumer_dense_width(s.op),src,output_size(s.op),batch,cudaMemcpyDeviceToHost));
+    return 0;
+}
+extern "C" int grid_consumer_native_measure(void *context, int batch, int warmups,
+        double warm_seconds, int iterations, double *samples, float *last) {
+    if(!samples || !last || warmups<1 || iterations<1 || warm_seconds<0) return -1;
+    double start=now_us(); int done=0;
+    do { if(int rc=grid_consumer_native_once(context,batch)) return rc; ++done; }
+    while(done<warmups || now_us()-start<warm_seconds*1e6);
+    for(int i=0;i<iterations;++i) {
+        start=now_us();
+        if(int rc=grid_consumer_native_once(context,batch)) return rc;
+        samples[i]=now_us()-start;
+    }
+    return grid_consumer_native_download(context,batch,last);
 }

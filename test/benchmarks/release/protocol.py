@@ -116,8 +116,6 @@ def capability(backend, operation, robot):
     if backend == "grid_native":
         return None if operation in WRAPPER_OPS else "adapter_pending: native C-ABI timing bridge covers RNEA and its gradient"
     if backend == "grid_cuda":
-        if operation == "end_effector_pose_hessian":
-            return "adapter_pending: CUDA host-call timing bridge covers every operation but the end-effector Hessian"
         return None
     if backend == "grid_numpy_prealloc" and operation not in NUMPY_OUT_OPS:
         return ("not_applicable: NumPy out= exists for the gradient and second-order outputs; "

@@ -43,7 +43,7 @@ def test_capability_gaps_are_not_library_claims():
                for b in ("pinocchio", "pinocchio_plain", "mjx", "mujoco_warp", "mujoco_cpu"))
     assert p.capability("pinocchio","end_effector_pose_hessian","iiwa14").startswith("adapter_pending:")
     assert all(p.capability("grid_cuda",op,"g1") is None for op in p.CORE)
-    assert p.capability("grid_cuda","minv","g1") is None and p.capability("grid_cuda","end_effector_pose_hessian","g1").startswith("adapter_pending:")
+    assert p.capability("grid_cuda","minv","g1") is None and p.capability("grid_cuda","end_effector_pose_hessian","g1") is None
     assert p.capability("grid_cuda","end_effector_pose_gradient","g1") is None
     assert p.capability("grid_native","idsva_so","g1").startswith("adapter_pending:")
     assert p.capability("pinocchio_plain","ccrba","g1") is None and p.capability("pinocchio","ccrba","g1").startswith("adapter_pending:")

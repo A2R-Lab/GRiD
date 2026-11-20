@@ -48,12 +48,18 @@ def cache_keys():
         here.parent / "baselines/pinocchio/ReusableThreads/ReusableThreads.h")
     bridge_sources = (here / "pin_bridge.cpp", here / "release_pool.h")
     flags = pinocchio_cflags() + pinocchio_libs()
-    toolchain = subprocess.check_output(["g++", "--version"], text=True)
+    flags += ['-Wl,-rpath,' + flag[2:] for flag in list(flags) if flag.startswith('-L')]
+    from .consumer_adapter import host_compiler
+    toolchain = subprocess.check_output([host_compiler(), "--version"], text=True)
     pin_version = importlib.metadata.version("pin")
     codegen = {str(p): digest(p) for p in codegen_sources}
     bridge = {**codegen, **{str(p): digest(p) for p in bridge_sources}}
     codegen_key = hashlib.sha256((repr(codegen)+repr(flags)+toolchain+pin_version).encode()).hexdigest()[:20]
-    bridge_key = hashlib.sha256((repr(bridge)+repr(flags)+toolchain+pin_version).encode()).hexdigest()[:20]
+    from .consumer_adapter import dependencies
+    from .consumer_contract import build_identity
+    compile_flags = ['-std=c++17', '-O2', '-DNDEBUG', '-DHAVE_CPPADCG', '-fPIC', '-shared', '-pthread', *flags]
+    resolved = dependencies(host_compiler(), here / 'pin_bridge.cpp', compile_flags)
+    bridge_key = build_identity([*bridge_sources, *resolved], compile_flags, toolchain+pin_version)
     return codegen_key, bridge_key, bridge, flags, pin_version
 
 
@@ -78,7 +84,8 @@ class PinAdapter:
         codegen_key, key, dependencies, flags, pin_version = cache_keys()
         CACHE.mkdir(parents=True, exist_ok=True)
         library = CACHE / f"pin-{key}.so"
-        _locked_build(library, lambda out: ["g++", "-std=c++17", "-O2", "-DNDEBUG", "-DHAVE_CPPADCG", "-fPIC", "-shared",
+        from .consumer_adapter import host_compiler
+        _locked_build(library, lambda out: [host_compiler(), "-std=c++17", "-O2", "-DNDEBUG", "-DHAVE_CPPADCG", "-fPIC", "-shared",
             "-pthread", str(source), "-o", str(out), *flags])
         self.lib = ctypes.CDLL(str(library))
         self.lib.pin_release_error.restype = ctypes.c_char_p
