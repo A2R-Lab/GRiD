@@ -4282,14 +4282,21 @@ double and promotes the expression it meets, so symbolic expressions are printed
 scans whole headers: the functions it can parse, and every line GRiD writes after the
 vendored GLASS section, at any indentation. The second check exists because the first
 missed the model primitives, whose functions start at column zero with a signature over
-two lines; they computed the configuration difference in double for months. The one
+two lines; they computed the configuration difference in double for months. The test is a
+scan of the text for known forms (a floating literal that is neither cast to T nor merely
+stored, an integer `pow`, the word `double`), with canaries for each. It is a regression
+check, not a proof about the arithmetic: a promotion that needs type information to see
+passes it. Its exemptions are whole statements and exact function names, compared after
+comments and string contents are removed. The one
 exemption is the second derivative of SE(3) integration, which lives in GLASS
 (`se3_retract_hessian`) and is double inside for any T. It is slow on a GPU with reduced
 double throughput.
 
 A quaternion (floating base, spherical joint) is normalised through one helper,
 `grid_quat_norm2`, which returns 1 when the header is generated with
-`assume_unit_quaternions`. The helper returns the squared norm, not its reciprocal. The
+`assume_unit_quaternions`. The option removes the normalisation in the rotation loaders
+and the convention blocks GRiD generates. The GLASS Lie primitives the integrator calls
+keep their own. The helper returns the squared norm, not its reciprocal. The
 first version returned the reciprocal, so the transform loaders computed `x*(1/n)` where
 they had computed `x/n`. The two round differently. Every double gate and every float
 gate that was run passed, and the gen3 floating `integrator_rk4` gradient at

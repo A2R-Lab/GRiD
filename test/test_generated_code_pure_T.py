@@ -1,13 +1,17 @@
-"""CPU-only guard: generated device code computes in T.
+"""CPU-only regression check: generated device code computes in T.
 
-A C++ decimal literal is a double and promotes any T operand it meets, and `pow` with an
-integer exponent resolves to the double routine. Symbolic expressions are therefore
-printed by `grid_codegen.helpers._expr_printer.expr_T` only, and this test scans whole
-generated headers so that no other emitter reintroduces either form.
+A C++ floating literal without a suffix is a double and promotes any T operand it meets,
+and `pow` with an integer exponent resolves to the double routine. Symbolic expressions are
+therefore printed by `grid_codegen.helpers._expr_printer.expr_T` only, and this test scans
+whole generated headers so that no other emitter reintroduces either form.
+
+It is a scan of the text for known forms, not a proof about the arithmetic: a promotion
+that needs type information to see (a double returned by a called function, say) passes.
+The canaries below state what it does catch.
 
 The second derivatives of SE(3) integration are written in double on purpose (their
 coefficients cancel badly in single precision). They live in GLASS, are the only
-exemption and are listed by name.
+exemption and are listed by exact name.
 """
 from __future__ import annotations
 
@@ -23,31 +27,68 @@ from external.URDFParser.URDFParser import URDFParser
 from grid_codegen.GRiDCodeGenerator import GRiDCodeGenerator
 from grid_codegen.helpers._expr_printer import assert_pure_T, expr_T, promoting_literals
 
-DELIBERATE_DOUBLE = ("se3_d2_", "se3_retract_hessian")
+# Exact names, not prefixes: a new function is not exempt because of how it is called.
+DELIBERATE_DOUBLE = frozenset({"se3_d2_coefs", "se3_retract_hessian"})
 # Everything after the vendored GLASS section is written by GRiD. There the word `double`
-# may appear only in host timing printouts and in the constant model records, whose values
-# are cast to T before any arithmetic.
+# may appear only in the statements below: the constant model records, whose values are
+# cast to T before any arithmetic, and the host timing printout. A statement is compared
+# whole, after comments and string contents are removed.
 GLASS_END = "} // namespace glass"
-HOST_OR_RECORD = ("time_delta_us_timespec",
-                  "double multiplier, offset, axis[3], pitch, T_parent_joint_zero[16];",
-                  "double position_limit[2], velocity_limit, effort_limit;",
-                  "double T_body_frame[16];")
+RECORD_STATEMENTS = frozenset({"double multiplier, offset, axis[3], pitch, T_parent_joint_zero[16]",
+                               "double position_limit[2], velocity_limit, effort_limit",
+                               "double T_body_frame[16]"})
+HOST_TIMING = re.compile(r'printf\(""\s*,\s*time_delta_us_timespec\(start,end\)/static_cast<double>\(num_timesteps\)\)')
 _FUNCTION = re.compile(r"^    (?:[\w:<>,\s\*&]*\s)?(\w+)\s*\(.*\)\s*(?:const\s*)?\{\s*$")
-_TYPED = re.compile(r"(?:static_cast<T>|T)\(\s*-?[\d.eE+\-]+(?:\s*/\s*[\d.eE+\-]+)?\s*\)|\(T\)\s*-?[\d.]+(?:[eE][-+]?\d+)?")
-_CONSTANT_STORE = re.compile(r"=\s*-?[\d.]+(?:[eE][-+]?\d+)?\s*;")
-_NUMBER = r"(?:\d+\.\d*|\.\d+)(?:[eE][-+]?\d+)?(?![\w.])"
-_OPERATOR = r"(?:[*/+\-]|[<>]=?|[=!]=)"
-# a double literal as an operand next to a variable, an element or a parenthesised term
-_MIXED = re.compile(r"(?:(?:[A-Za-z_]\w*|\]|\))\s*" + _OPERATOR + r"\s*" + _NUMBER + r")|(?:(?<![\w.])" + _NUMBER
-                    + r"\s*" + _OPERATOR + r"\s*[A-Za-z_(])")
-_INTEGER_POW = re.compile(r"(?<![\w.])pow\(\s*[^,()]+(?:\[[^\]]*\])?\s*,\s*\d+\s*\)")
+# A floating literal without a float suffix is a double: 1.5, 1., .5, 1e-5, 1.5e3.
+_LITERAL = re.compile(r"(?<![\w.])(?:(?:\d+\.\d*|\.\d+)(?:[eE][-+]?\d+)?|\d+[eE][-+]?\d+)(?![\w.])")
+_NUM = r"-?(?:(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)"
+# A literal is typed when a cast to T encloses it and nothing else.
+_TYPED = re.compile(r"(?:static_cast<T>|\bT)\(\s*" + _NUM + r"(?:\s*/\s*" + _NUM + r")?\s*\)|\(T\)\s*" + _NUM)
+# Storing a literal converts it and computes nothing: `x = 0.0;`, `return 0.0;`, a braced list of constants.
+_CONSTANT_STORE = re.compile(r"(?:(?<![=!<>+\-*/])=|\breturn)\s*" + _NUM + r"\s*(?=;)")
+# A braced list holds constants only (numbers, names such as enumerators, nested lists): no operator.
+_ITEM = r"(?:" + _NUM + r"|[A-Za-z_][\w:]*|\{\})"
+_CONSTANT_LIST = re.compile(r"\{\s*(?:" + _ITEM + r"(?:\s*,\s*" + _ITEM + r")*)?\s*,?\s*\}")
+_POW = re.compile(r"(?<![\w.])(?:std::)?pow\s*\(")
+
+
+def code_of(raw):
+    """The line without string contents and without its comment."""
+    return re.sub(r'"(?:[^"\\]|\\.)*"', '""', raw).split("//")[0]
+
+
+def integer_powers(line):
+    """Every `pow(x, n)` with an integer literal n, whatever x contains."""
+    found = []
+    for match in _POW.finditer(line):
+        depth, split, end = 1, None, None
+        for at in range(match.end(), len(line)):
+            c = line[at]
+            depth += (c in "([") - (c in ")]")
+            if c == "," and depth == 1:
+                split = at
+            if depth == 0:
+                end = at
+                break
+        if split is not None and end is not None and re.fullmatch(r"\s*-?\d+\s*", line[split + 1:end]):
+            found.append(line[match.start():end + 1])
+    return found
+
+
+def computes_outside_T(line):
+    """True for code (comments and strings already removed) with a double literal that is
+    neither cast to T nor merely stored, an integer `pow`, or the word `double`."""
+    text, before = _CONSTANT_STORE.sub("", _TYPED.sub("K", line)), None
+    while text != before:                                  # innermost lists first
+        before, text = text, _CONSTANT_LIST.sub("{}", text)
+    return bool(_LITERAL.search(text) or integer_powers(line) or re.search(r"\bdouble\b", line))
 
 
 def device_functions(source):
     """(name, first line, body lines) of every __device__ / __global__ function."""
     lines, out, qualifier, current, depth = source.splitlines(), [], "", None, 0
     for number, raw in enumerate(lines, 1):
-        line = raw.split("//")[0]
+        line = code_of(raw)
         if current is None:
             stripped = raw.strip()
             if stripped.startswith(("__device__", "__global__", "__host__")):
@@ -70,26 +111,25 @@ def device_functions(source):
 def impure_lines(source):
     found = []
     for name, _, body in device_functions(source):
-        if name.startswith(DELIBERATE_DOUBLE):
+        if name in DELIBERATE_DOUBLE:
             continue
         for number, line in body:
-            text = _CONSTANT_STORE.sub(";", _TYPED.sub("K", line))
-            if _MIXED.search(text) or _INTEGER_POW.search(line) or re.search(r"\bdouble\b", line):
+            if computes_outside_T(line):
                 found.append((name, number, line.strip()[:160]))
     return found
 
 
 def stray_double_lines(source):
     """Lines GRiD wrote, at any indentation and in any function, that compute outside T."""
-    found = []
+    found, in_block_comment = [], False
     for raw in source[source.index(GLASS_END):].splitlines():
-        if any(allowed in raw for allowed in HOST_OR_RECORD):
+        line = code_of(raw)
+        if in_block_comment or line.lstrip().startswith(("/*", "*")):
+            in_block_comment = "*/" not in line and (in_block_comment or line.lstrip().startswith("/*"))
             continue
-        line = re.sub(r'"(?:[^"\\]|\\.)*"', '""', raw).split("//")[0]      # message strings are not code
-        if line.lstrip().startswith(("*", "/*")):
-            continue
-        text = _CONSTANT_STORE.sub(";", _TYPED.sub("K", line))
-        if _MIXED.search(text) or _INTEGER_POW.search(line) or re.search(r"\bdouble\b", line):
+        kept = ";".join(statement for statement in line.split(";")
+                        if statement.strip() not in RECORD_STATEMENTS and not HOST_TIMING.fullmatch(statement.strip()))
+        if computes_outside_T(kept):
             found.append(line.strip()[:160])
     return found
 
@@ -106,24 +146,85 @@ def test_printer_types_every_constant():
         assert not promoting_literals(expr_T(expression))
 
 
-def test_impure_text_is_rejected():
+def _device(body):
+    return f"    __device__\n    void f(T *a) {{\n        {body}\n    }}\n"
+
+
+def _stray(body):
+    return GLASS_END + f"\ntemplate<class T> __device__ inline void f(\n    const T *a, T *e) {{\n    {body}\n}}\n"
+
+
+IMPURE = ("a[0] = 2.0*a[1];", "a[0] = a[1]/3.0;", "a[0] = 1e-5*a[1];", "a[0] = 1.*a[1];", "a[0] = .5*a[1];",
+          "a[0] = fma(a[1],a[2],1.0);", "a[0] = (a[1] > 0.0) ? a[1] : a[2];", "a[0] = pow(a[1],2);",
+          "a[0] = pow(sin(a[1]),2);", "a[0] = std::pow(a[1] + f(a[2], 3), 2);", "a[0] = T(2.0)*a[1] + 2.0;",
+          "double b = a[0];", "a[0] = static_cast<double>(a[1]);", "T b[2] = {0.5*a[0], 1.0};",
+          "out = record{1, {2.0*a[0]}};")
+PURE = ("a[0] = static_cast<T>(2.0)*a[1]; a[1] = 0.0;", "a[0] = T(1e-5)*a[1];", "a[0] = (T)0.5*a[1];",
+        "a[0] = pow(a[1], a[2]);", "a[0] = static_cast<T>(1.0/3.0)*a[1];", "return 0.0;", "T b[2] = {0.0, 1.0};",
+        "out = joint_record{0,-1,joint_kind::floating,true,1.0,{0.0,1e-3,0.0},{1.0,0.0}};",
+        "a[0] = 2*a[1]; // 2.0 in a comment, and double too", 'printf("%f 2.0 double", a[0]);', "a[0] = 1.5f*a[1];",
+        "a[0] = x1e5*a[1];")
+
+
+@pytest.mark.parametrize("body", IMPURE)
+def test_canary_is_caught_by_both_scanners(body):
+    assert impure_lines(_device(body)) != []
+    assert stray_double_lines(_stray(body)) != []
+
+
+@pytest.mark.parametrize("body", PURE)
+def test_pure_line_passes_both_scanners(body):
+    assert impure_lines(_device(body)) == []
+    assert stray_double_lines(_stray(body)) == []
+
+
+def test_impure_text_is_rejected_by_the_printer_check():
     for text in ("2.0*s_q[3]", "pow(s_q[4], 2)", "s_q[0]/3.0"):
         with pytest.raises(ValueError):
             assert_pure_T(text)
-    assert impure_lines("    __device__\n    void f(T *a) {\n        a[0] = 2.0*a[1];\n    }\n") != []
-    assert impure_lines("    __device__\n    void f(T *a) {\n        a[0] = static_cast<T>(2.0)*a[1]; a[1] = 0.0;\n    }\n") == []
+
+
+def test_exemptions_are_whole_statements_and_exact_names():
     # a function at column zero with a signature over two lines, as the model primitives are written
     stray = GLASS_END + "\ntemplate<class T> __device__ inline void f(\n    const T *a, double *e) {\n    double b[3]; e[0]=double(a[0])*2.;\n}\n"
     assert len(stray_double_lines(stray)) == 2
-    assert stray_double_lines(GLASS_END + "\ntemplate<class T> __device__ inline void f(\n    const T *a, T *e) {\n    e[0]=a[0]*T(2);\n}\n") == []
+    record = "    int id, attached_body, joint_id; frame_kind kind; double T_body_frame[16];"
+    timing = '    printf("Single Call ABA %fus\\n",time_delta_us_timespec(start,end)/static_cast<double>(num_timesteps));'
+    assert stray_double_lines(GLASS_END + "\n" + record + "\n" + timing + "\n") == []
+    # the name of an exemption in a comment, in a string or next to other code exempts nothing
+    for contaminated in ("double x=a[0]; // time_delta_us_timespec", "double x=a[0]; // double T_body_frame[16];",
+                         'double x=a[0]; printf("time_delta_us_timespec");', "double T_body_frame[16]; double x=a[0];",
+                         "double y = time_delta_us_timespec(start,end)*a[0];"):
+        assert stray_double_lines(GLASS_END + "\n    " + contaminated + "\n") != [], contaminated
+    # a block comment is not code
+    assert stray_double_lines(GLASS_END + "\n/* double here\n * and 2.0*x here\n */\n") == []
+    # only the named functions are exempt, not every function that starts like one
+    named = "    __device__\n    void {}(T *a) {{\n        double b = 2.0*a[1];\n    }}\n"
+    assert impure_lines(named.format("se3_d2_coefs")) == []
+    assert impure_lines(named.format("se3_d2_coefs_new")) != []
+    assert impure_lines(named.format("se3_retract_hessian_fast")) != []
 
 
-@pytest.mark.parametrize("robot_id,floating", [("iiwa14", False), ("go2", True), ("g1", True)])
+# what the generator supports on a spherical joint
+SPHERICAL_ALGORITHMS = ["inverse_dynamics", "crba", "minv", "forward_dynamics", "aba", "end_effector_pose",
+                        "end_effector_pose_gradient", "end_effector_pose_hessian", "integrator", "integrator_gradient",
+                        "inverse_dynamics_gradient", "forward_dynamics_gradient", "idsva_so_world_frame", "fdsva_so"]
+
+
+def _urdf(robot_id):
+    if robot_id == "spherical_arm":
+        import external.URDFParser as parser_package
+        return os.path.join(os.path.dirname(parser_package.__file__), "tests/fixtures/spherical_arm.urdf")
+    return str(robot_urdf(robot_id))
+
+
+@pytest.mark.parametrize("robot_id,floating", [("iiwa14", False), ("go2", True), ("g1", True), ("spherical_arm", False)])
 def test_generated_device_code_is_pure_T(robot_id, floating, tmp_path):
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
-        robot = URDFParser().parse(str(robot_urdf(robot_id)), floating_base=floating)
+        robot = URDFParser().parse(_urdf(robot_id), floating_base=floating)
         header = tmp_path / "grid.cuh"
-        GRiDCodeGenerator(robot, FILE_NAMESPACE="grid").gen_all_code(output_path=str(header))
+        GRiDCodeGenerator(robot, FILE_NAMESPACE="grid").gen_all_code(
+            output_path=str(header), algorithm_list=SPHERICAL_ALGORITHMS if robot_id == "spherical_arm" else None)
     source = header.read_text()
     found = impure_lines(source)
     assert not found, f"{len(found)} device lines compute outside T, first: {found[:5]}"
