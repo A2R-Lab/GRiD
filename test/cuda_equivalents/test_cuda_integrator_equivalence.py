@@ -174,6 +174,20 @@ _FLOATING_MIMIC_NORM_RTOL = 3e-3
 #   abs 413 at scale 1.2e5). The same model with grad_q 1.3e-3 and grad_qd/Minv 2.9e-4
 #   (200 trials) gives norm_rel max 7.8e-3 at high_velocity, 6.1e-3 at
 #   energetic_random_1, 4.6e-3 at high_acceleration. Bound 8e-3 = the model's max.
+#   gen3, re-measured 2026-11-20 (bound 8e-3 to 2e-2, maintainer ruling). The model
+#   above was too narrow. Measured on the RTX 5090 at the four RK4 stage states: the
+#   float32 Minv and inverse dynamics gradient agree with the reference to 1e-7, but the
+#   forward dynamics value is off by 2e-6 to 5e-4, because |qdd| is 1e3 to 3e4 times
+#   smaller than |Minv| |u - c| in the product that forms it. The gradient in q is
+#   formed at that qdd, and its error (up to 9e-3 at one stage) is reproduced by the
+#   qdd error alone. How the transforms round therefore moves the cell: 15 kernels
+#   that differ in a few transform assignments (literal times variable computed in
+#   double or in float) give norm_rel 1.3e-3 to 7.8e-3 at high_velocity and 4.7e-4 to
+#   1.16e-2 at energetic_random_1, always in the next-velocity rows and q columns.
+#   Bound 2e-2 = 1.7 times the largest value seen on a real kernel. Removing the
+#   error needs a refinement of qdd (one more inverse dynamics pass per evaluation),
+#   which was ruled too slow for a float32 library; an fp64 build is exact. Not a
+#   noise-model bound: if a kernel exceeds it, measure the stages again first.
 #   g1 (2026-10-20, the Jetson AGX Orin sm_87 receipt at 9071c0a and again at main
 #   47dd900: rk4 dAB @ high_velocity_accel dt=0.1 missed 2 of 7350 entries at both
 #   tiers and both thread counts, worst 1.48x the allowance, norm_rel 1.45e-3; the
@@ -192,7 +206,7 @@ _FLOATING_MIMIC_NORM_RTOL = 3e-3
 #   the sm_87 kernel sits at 0.58 of it, the sm_120 kernel at 0.16.
 _FLOATING_FDGRAD_NORM_RTOL = {
     "rizon4": 6e-3,
-    "gen3": 8e-3,
+    "gen3": 2e-2,
     "g1": 2.5e-3,
 }
 

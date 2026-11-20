@@ -209,6 +209,17 @@ GRiD computes in fp32 on the GPU. Inputs of any float dtype are cast to
 ``float32`` before the launch and outputs are ``float32``; the signed receipt
 and the release timing both ran this path.
 
+Single precision has a cost on ill-conditioned models. On a floating-base robot
+with light distal links the mass matrix has a condition number of 1e4 to 1e5, and
+at high joint velocity the acceleration is much smaller than the terms that form
+it. Forward dynamics is then accurate to 1e-5 to 5e-4 instead of 1e-6, and its
+gradient in ``q`` to about 1e-2 of the gradient's norm. The integrator gradients
+inherit this, most visibly RK4 at a large step. The validation suite records the
+measured bound per robot (Kinova Gen3 on a floating base is the worst case it
+covers, at 2e-2 through one RK4 step of 0.1 s). Moderate states are far from
+these figures. If an application needs tighter derivatives in such states, use
+the fp64 tier below.
+
 ``dtype="float64"`` selects the fp64 tier, an alpha feature. It builds a
 separate ``.so`` (``-DGRID_WRAPPER_T_DOUBLE`` and the codegen knob that
 re-derives the shared-memory spill tiers for 8-byte values) whose handle takes
