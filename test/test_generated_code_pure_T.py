@@ -6,8 +6,8 @@ printed by `grid_codegen.helpers._expr_printer.expr_T` only, and this test scans
 generated headers so that no other emitter reintroduces either form.
 
 The second derivatives of SE(3) integration are written in double on purpose (their
-coefficients cancel badly in single precision); they are the only exemption and are
-listed by name.
+coefficients cancel badly in single precision). They live in GLASS, are the only
+exemption and are listed by name.
 """
 from __future__ import annotations
 
@@ -23,7 +23,15 @@ from external.URDFParser.URDFParser import URDFParser
 from grid_codegen.GRiDCodeGenerator import GRiDCodeGenerator
 from grid_codegen.helpers._expr_printer import assert_pure_T, expr_T, promoting_literals
 
-DELIBERATE_DOUBLE = ("se3_d2_", "se3_retract_hessian", "integrator_hessian_device")
+DELIBERATE_DOUBLE = ("se3_d2_", "se3_retract_hessian")
+# Everything after the vendored GLASS section is written by GRiD. There the word `double`
+# may appear only in host timing printouts and in the constant model records, whose values
+# are cast to T before any arithmetic.
+GLASS_END = "} // namespace glass"
+HOST_OR_RECORD = ("time_delta_us_timespec",
+                  "double multiplier, offset, axis[3], pitch, T_parent_joint_zero[16];",
+                  "double position_limit[2], velocity_limit, effort_limit;",
+                  "double T_body_frame[16];")
 _FUNCTION = re.compile(r"^    (?:[\w:<>,\s\*&]*\s)?(\w+)\s*\(.*\)\s*(?:const\s*)?\{\s*$")
 _TYPED = re.compile(r"(?:static_cast<T>|T)\(\s*-?[\d.eE+\-]+(?:\s*/\s*[\d.eE+\-]+)?\s*\)|\(T\)\s*-?[\d.]+(?:[eE][-+]?\d+)?")
 _CONSTANT_STORE = re.compile(r"=\s*-?[\d.]+(?:[eE][-+]?\d+)?\s*;")
@@ -71,6 +79,21 @@ def impure_lines(source):
     return found
 
 
+def stray_double_lines(source):
+    """Lines GRiD wrote, at any indentation and in any function, that compute outside T."""
+    found = []
+    for raw in source[source.index(GLASS_END):].splitlines():
+        if any(allowed in raw for allowed in HOST_OR_RECORD):
+            continue
+        line = re.sub(r'"(?:[^"\\]|\\.)*"', '""', raw).split("//")[0]      # message strings are not code
+        if line.lstrip().startswith(("*", "/*")):
+            continue
+        text = _CONSTANT_STORE.sub(";", _TYPED.sub("K", line))
+        if _MIXED.search(text) or _INTEGER_POW.search(line) or re.search(r"\bdouble\b", line):
+            found.append(line.strip()[:160])
+    return found
+
+
 def test_printer_types_every_constant():
     x, y, t = sp.symbols("a b theta")
     assert expr_T(2.0 * x * y / (x**2 + y**2)) == \
@@ -89,6 +112,10 @@ def test_impure_text_is_rejected():
             assert_pure_T(text)
     assert impure_lines("    __device__\n    void f(T *a) {\n        a[0] = 2.0*a[1];\n    }\n") != []
     assert impure_lines("    __device__\n    void f(T *a) {\n        a[0] = static_cast<T>(2.0)*a[1]; a[1] = 0.0;\n    }\n") == []
+    # a function at column zero with a signature over two lines, as the model primitives are written
+    stray = GLASS_END + "\ntemplate<class T> __device__ inline void f(\n    const T *a, double *e) {\n    double b[3]; e[0]=double(a[0])*2.;\n}\n"
+    assert len(stray_double_lines(stray)) == 2
+    assert stray_double_lines(GLASS_END + "\ntemplate<class T> __device__ inline void f(\n    const T *a, T *e) {\n    e[0]=a[0]*T(2);\n}\n") == []
 
 
 @pytest.mark.parametrize("robot_id,floating", [("iiwa14", False), ("go2", True), ("g1", True)])
@@ -97,5 +124,8 @@ def test_generated_device_code_is_pure_T(robot_id, floating, tmp_path):
         robot = URDFParser().parse(str(robot_urdf(robot_id)), floating_base=floating)
         header = tmp_path / "grid.cuh"
         GRiDCodeGenerator(robot, FILE_NAMESPACE="grid").gen_all_code(output_path=str(header))
-    found = impure_lines(header.read_text())
+    source = header.read_text()
+    found = impure_lines(source)
     assert not found, f"{len(found)} device lines compute outside T, first: {found[:5]}"
+    stray = stray_double_lines(source)
+    assert not stray, f"{len(stray)} lines after the vendored GLASS section compute outside T, first: {stray[:5]}"
