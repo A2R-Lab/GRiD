@@ -895,6 +895,12 @@ class RobotHandle:
         return bool(self._meta.get("runtime_joint_dynamics", False))
 
     @property
+    def assume_unit_quaternions(self) -> bool:
+        """True if registered with assume_unit_quaternions=True: the generated code
+        does not normalise the floating base quaternion and the caller must."""
+        return bool(self._meta.get("assume_unit_quaternions", False))
+
+    @property
     def runtime_armature(self) -> bool:
         """True if registered with runtime_armature=True (the mutable rotor-armature
         table backing :py:meth:`set_armature`)."""

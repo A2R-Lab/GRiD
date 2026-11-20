@@ -337,6 +337,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
             collision_spec=collision_spec,
             enable_floating_second_order=True,
             enable_mujoco_kernels=enable_mujoco_kernels,
+            assume_unit_quaternions=bool(options.get("assume_unit_quaternions", False)),
             # Defer the world-frame emission decision to gen_all_code's default
             # (None -> _idsva_so_use_world_frame): world-frame for floating,
             # spherical, OR high-DOF fixed-base (NV >= threshold). Hardcoding
@@ -400,6 +401,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         "algorithm_list": list(algorithm_list),
         "generated_algorithms": sorted(cg.generated_algorithms),
         "enable_mujoco_kernels": bool(enable_mujoco_kernels),
+        "assume_unit_quaternions": bool(options.get("assume_unit_quaternions", False)),
     }
     meta["configuration_layout"] = [tuple(b[k] for k in ('kind', 'q_start', 'v_start', 'nq', 'nv'))
                                     for b in descriptor['configuration_layout']]

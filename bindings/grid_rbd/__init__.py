@@ -191,6 +191,7 @@ def register_robot(
     output_convention: str = "pinocchio",
     algorithm_list: list[str] | tuple[str, ...] | str | None = None,
     enable_mujoco_kernels: bool = True,
+    assume_unit_quaternions: bool = False,
     _profile_overlay: str | None = "pybind",
 ) -> RobotHandle:
     """Register a robot for fast subsequent calls.
@@ -225,7 +226,8 @@ def register_robot(
       ``floating_base``, ``ee_joint_names``.
     - *Build contents & size* (re-keys the cache): ``max_batch_size``,
       ``dtype``, ``algorithm_list``, ``enable_mujoco_kernels`` (only when
-      ``False``), ``use_joint_dynamics``, ``friction_model`` and
+      ``False``), ``assume_unit_quaternions`` (only when ``True`` on a floating
+      base), ``use_joint_dynamics``, ``friction_model`` and
       ``friction_width`` (only when non-default), ``enable_tool``.
     - *Runtime-mutable tables* (re-keys the cache): ``runtime_inertia``,
       ``runtime_transform``, ``runtime_joint_dynamics``.
@@ -391,6 +393,12 @@ def register_robot(
         surfaces (id_gradient / fd_gradient / idsva_so / fdsva_so, floating base) honor
         it. Equivalent to setting ``handle.output_convention`` after registration, or
         using the per-call thread-safe ``handle.mujoco`` view.
+    assume_unit_quaternions : bool, optional
+        Default ``False``: the generated code normalises the floating base quaternion
+        wherever it is read, so a quaternion that has drifted from unit norm gives the
+        same result as its normalised value. Set ``True`` when every input quaternion is
+        already unit, and the normalisation is compiled out. This is a code generation
+        option and selects a separate cached build. It has no effect on a fixed base.
     enable_mujoco_kernels : bool, optional
         Default ``True``. Set ``False`` to build a PIN-ONLY ``.so``: the mjx
         (MuJoCo-convention) kernel twins are not instantiated and their C-ABI entry
@@ -478,7 +486,8 @@ def register_robot(
             runtime_inertia=runtime_inertia,
             runtime_transform=runtime_transform, enable_tool=enable_tool,
             contact_frames=contact_frames,
-            enable_mujoco_kernels=enable_mujoco_kernels, dtype=dtype)
+            enable_mujoco_kernels=enable_mujoco_kernels,
+            assume_unit_quaternions=assume_unit_quaternions, dtype=dtype)
     if backend == "torch":
         from . import torch as _torch_backend
         return _torch_backend.register_robot(
@@ -494,7 +503,8 @@ def register_robot(
             runtime_inertia=runtime_inertia,
             runtime_transform=runtime_transform, enable_tool=enable_tool,
             contact_frames=contact_frames,
-            enable_mujoco_kernels=enable_mujoco_kernels, dtype=dtype)
+            enable_mujoco_kernels=enable_mujoco_kernels,
+            assume_unit_quaternions=assume_unit_quaternions, dtype=dtype)
 
     cache_key, so_path, meta = warm_robot(
         name, urdf_path, urdf_string=urdf_string, floating_base=floating_base,
@@ -508,6 +518,7 @@ def register_robot(
         friction_model=friction_model, friction_width=friction_width,
         contact_frames=contact_frames, cost_frames=cost_frames,
         algorithm_list=algorithm_list, enable_mujoco_kernels=enable_mujoco_kernels,
+        assume_unit_quaternions=assume_unit_quaternions,
     )
     handle = RobotHandle(name, str(so_path), meta)
     # output_convention is a runtime IO setting (no effect on the cached .so), so it
@@ -570,6 +581,7 @@ def warm_robot(
     contact_frames: list[str] | tuple[str, ...] | None = None,
     algorithm_list: list[str] | tuple[str, ...] | str | None = None,
     enable_mujoco_kernels: bool = True,
+    assume_unit_quaternions: bool = False,
     plan_only: bool = False,
     friction_model: str = "sign",
     friction_width=None,
@@ -720,6 +732,11 @@ def warm_robot(
     # never get mjx twins -- but still re-keys, so it is only injected when asked for.
     if not enable_mujoco_kernels:
         code_options["enable_mujoco_kernels"] = False
+    # The floating base quaternion is normalised inside the generated code unless the caller
+    # states that every input is already unit. In the cache key only when True, and only on a
+    # floating base, where it changes the header.
+    if assume_unit_quaternions and floating_base:
+        code_options["assume_unit_quaternions"] = True
     # Launch-config bake (A1b + FFI autotune): the binding launches via the jax/torch
     # FFI path, so it bakes the "ffi" profile (ffi_bases) by default — see
     # _compile.generate_grid_cuh + GRiDCodeGenerator.load_launch_config. The per-algo

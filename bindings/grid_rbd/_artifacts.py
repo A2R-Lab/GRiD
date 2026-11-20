@@ -227,7 +227,8 @@ def _code_options(urdf_path: Path, cuda_arch: int, *, floating_base, ee_joint_na
                   enable_mujoco_kernels, cost_frames, contact_frames, use_joint_dynamics, friction_model,
                   friction_width, runtime_inertia, runtime_transform, runtime_joint_dynamics, emit_plant,
                   collision, collision_res, collision_native, spherized_urdf, strict_collision,
-                  launch_config_profile, runtime_armature: bool = False, armature=None) -> dict[str, Any]:
+                  launch_config_profile, runtime_armature: bool = False, armature=None,
+                  assume_unit_quaternions: bool = False) -> dict[str, Any]:
     if dtype not in ("float32", "float64"):
         raise ValueError(f"dtype must be 'float32' or 'float64', got {dtype!r}")
     opts: dict[str, Any] = {
@@ -247,6 +248,8 @@ def _code_options(urdf_path: Path, cuda_arch: int, *, floating_base, ee_joint_na
         opts["algorithm_list"] = sorted(set(algos))
     if not enable_mujoco_kernels:
         opts["enable_mujoco_kernels"] = False
+    if assume_unit_quaternions and floating_base:
+        opts["assume_unit_quaternions"] = True
     if cost_frames:
         opts["cost_frames"] = [str(n) for n in cost_frames]
     if contact_frames:
@@ -560,6 +563,7 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
                    dtype: str = "float32",
                    algorithm_list: Sequence[str] | str | None = None,
                    enable_mujoco_kernels: bool = True,
+                   assume_unit_quaternions: bool = False,
                    cost_frames: Sequence[str] | None = None,
                    contact_frames: Sequence[str] | None = None,
                    use_joint_dynamics: bool = False,
@@ -598,7 +602,7 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
     metadata to the generated header and binary; older artifacts need rebuilding.
 
     The codegen keywords (`floating_base`, `ee_joint_names`, `dtype`, `algorithm_list`,
-    `enable_mujoco_kernels`, `cost_frames`, `contact_frames`, the joint-dynamics and runtime
+    `enable_mujoco_kernels`, `assume_unit_quaternions`, `cost_frames`, `contact_frames`, the joint-dynamics and runtime
     knobs) mean what they mean on `register_robot`; `emit_plant` is the generator's plant-block
     switch (None: the generator's rule), and `collision`, `collision_res`, `collision_native`
     and `spherized_urdf` select the generated `grid_collision` namespace (a sphere model is
@@ -649,7 +653,8 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
                            "(for example cuda_arch=120 for an sm_120 card).")
     code_options = _code_options(
         urdf_p, cuda_arch, floating_base=floating_base, ee_joint_names=ee_joint_names, dtype=dtype,
-        algorithm_list=algorithm_list, enable_mujoco_kernels=enable_mujoco_kernels, cost_frames=cost_frames,
+        algorithm_list=algorithm_list, enable_mujoco_kernels=enable_mujoco_kernels,
+        assume_unit_quaternions=assume_unit_quaternions, cost_frames=cost_frames,
         contact_frames=contact_frames, use_joint_dynamics=use_joint_dynamics, friction_model=friction_model,
         friction_width=friction_width, runtime_inertia=runtime_inertia, runtime_transform=runtime_transform,
         runtime_joint_dynamics=runtime_joint_dynamics, runtime_armature=runtime_armature, armature=armature,
