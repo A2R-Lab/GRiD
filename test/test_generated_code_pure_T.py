@@ -23,7 +23,7 @@ from external.URDFParser.URDFParser import URDFParser
 from grid_codegen.GRiDCodeGenerator import GRiDCodeGenerator
 from grid_codegen.helpers._expr_printer import assert_pure_T, expr_T, promoting_literals
 
-DELIBERATE_DOUBLE = ("se3_d2_", "grid_se3_d2_", "grid_d2_", "grid_d2Integrate_block", "integrator_hessian_device")
+DELIBERATE_DOUBLE = ("se3_d2_", "se3_retract_hessian", "integrator_hessian_device")
 _FUNCTION = re.compile(r"^    (?:[\w:<>,\s\*&]*\s)?(\w+)\s*\(.*\)\s*(?:const\s*)?\{\s*$")
 _TYPED = re.compile(r"(?:static_cast<T>|T)\(\s*-?[\d.eE+\-]+(?:\s*/\s*[\d.eE+\-]+)?\s*\)|\(T\)\s*-?[\d.]+(?:[eE][-+]?\d+)?")
 _CONSTANT_STORE = re.compile(r"=\s*-?[\d.]+(?:[eE][-+]?\d+)?\s*;")

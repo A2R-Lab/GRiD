@@ -918,7 +918,7 @@ class GRiDCodeGenerator:
             if "end_effector_pose_hessian" in algorithms:
                 self.gen_load_update_XmatsHom_helpers(include_base_inertia,include_gradients = True, include_hessians = True)
         # then generate kinematic algorithms.
-        # SE(3) Lie-group helpers (grid_integrate_floating_q, grid_so3_*, grid_quat_*)
+        # SE(3) Lie-group helpers (grid_integrate_floating_q, grid_dIntegrate_*, grid_d2Integrate_block)
         # are needed by the FD-on-Jacobian d2ee inner on floating base. Emit them
         # here too so callers that skip the integrator codegen still get them; track
         # the emission so gen_integrator skips its own emit (avoiding redefinitions).
