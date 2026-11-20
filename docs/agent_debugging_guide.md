@@ -4273,3 +4273,17 @@ alone explains the loss. The release restores the same opt-in diagnostic default
 for every robot and documents the lost standalone receipt coverage. Preserve
 both inputs behind the flag for algorithm-level follow-up; a mixed-precision
 private diagnostic is evidence, not an approved product implementation.
+
+### Multi-target registration casts must include workspace (2026-11-19)
+
+The multi-target position and gradient production kernels accept an
+`unsigned char *d_workspace` after the output pointer, including their
+`_single_timing` twins. Their attribute manifest omitted that argument, so
+address-taking in checked and unchecked registration failed to compile even
+though direct device-function runners passed. Keep a compile-only regression
+that instantiates both registration surfaces for float and double. The paired
+floating-base GPU regression exercises shared and minimal workspace tiers;
+successful compilation alone is not evidence that either kernel ran correctly.
+Run the explicit compiler regression with
+`python -m test.cuda_equivalents.test_cuda_multitarget_registration --compile-only`;
+keep it out of the compile-free CPU pytest lane.
