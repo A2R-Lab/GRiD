@@ -4306,3 +4306,15 @@ dynamics gradient in single precision is a numerical change even when it is the 
 mathematics. Compare the regenerated header with the old one after substituting the
 helper call back: the loaders should be textually identical. Include a gen3 or rizon4
 floating integrator cell in the gate of any such change; go2 and iiwa14 do not see it.
+
+Keeping the division restored that sample. It is not a stability cure. The same file's
+`high_velocity` sample went from 3.16e-3 on the parent commit to 7.64e-3 when the printer
+began to cast constants to T, and passes with 5 percent of the bound left. Headers that
+take a few transform assignments from the other version give 1.3e-3 to 7.8e-3 on
+`high_velocity` and 4.7e-4 to 1.16e-2 on `energetic_random_1`, on the same GPU and build
+flags. In every one the error is in the gradient of the next velocity with respect to q.
+The cell is sensitive to how the transforms are rounded; which stage amplifies it
+(transform formation, the inverse mass matrix, the gradient, the RK4 composition) is not
+isolated yet. Do not read a pass or a fail of this cell after such a change as a
+statement about the change alone, and do not raise the bound on that argument: measure
+the stages first.
