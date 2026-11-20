@@ -11,11 +11,11 @@ import numpy as np
 from .protocol import digest, ROOT, CORE, VECTOR_OPS, Q_ONLY_OPS, Q_QD_OPS, PREALLOC
 
 # Operation codes of kernel_bridge.cu: 0..12 are the collector's OPS order
-# (pin_adapter.OPS); 13 is the end-effector pose gradient, bridge only.
+# (pin_adapter.OPS); 13 and 14 are the end-effector pose gradient and Hessian, bridge only.
 KERNEL_OPS = {op: i for i, op in enumerate(("inverse_dynamics", "inverse_dynamics_gradient", "idsva_so", "minv",
     "forward_dynamics", "forward_dynamics_gradient", "fdsva_so", "end_effector_pose",
     "crba", "nonlinear_effects", "generalized_gravity", "ccrba", "coriolis_matrix",
-    "end_effector_pose_gradient"))}
+    "end_effector_pose_gradient", "end_effector_pose_hessian"))}
 assert tuple(KERNEL_OPS)[:3] == CORE
 
 
