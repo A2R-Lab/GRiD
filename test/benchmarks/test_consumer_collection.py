@@ -47,7 +47,7 @@ def test_plan_is_equal_repeats_and_bounded():
                            correctness_only=False, smoke=False, accuracy_policy='strict')
     result = plan(args)
     assert result['batches'] == [1,4,16,64,256,1024]
-    assert len(result['jobs']) == 36
+    assert len(result['jobs']) == 54
     assert {j['cpu_threads'] for j in result['jobs'] if j['backend']=='pinocchio_plain'} == {1,2}
     args.robots = ['g1']
     with pytest.raises(ValueError): plan(args)

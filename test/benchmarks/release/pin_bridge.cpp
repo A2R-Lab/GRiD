@@ -319,8 +319,8 @@ extern "C" void *pin_consumer_create(void *pool, int batch, int threads) {
     if(!pool || batch<1 || threads<1) return nullptr;
     auto *p=static_cast<ReleasePinPool*>(pool);
     const auto &m=p->contexts[0]->model; const int op=p->contexts[0]->op;
-    if((op!=0 && op!=7) || (m.nq!=m.nv && m.nq!=m.nv+1)) return nullptr;
-    auto *c=new PinConsumer{p,batch,m.nq,m.nv,op==0?m.nv:6,op,threads,m.nq==m.nv+1};
+    if((op!=0 && op!=4 && op!=7) || (m.nq!=m.nv && m.nq!=m.nv+1)) return nullptr;
+    auto *c=new PinConsumer{p,batch,m.nq,m.nv,op==7?6:m.nv,op,threads,m.nq==m.nv+1};
     c->q.resize(size_t(batch)*m.nq); c->v.resize(size_t(batch)*m.nv); c->a.resize(c->v.size());
     c->result.resize(size_t(batch)*c->width);
     c->qf.resize(c->q.size()); c->vf.resize(c->v.size()); c->af.resize(c->a.size());
@@ -331,7 +331,8 @@ extern "C" int pin_consumer_eval(void *context, const float *input, float *out, 
     if(!context || !input || !out || device) return -1;
     auto &c=*static_cast<PinConsumer*>(context);
     if(batch!=c.batch) return -1;
-    const int stride=c.nq+(c.op==0?2*c.nv:0);
+    const bool dynamics=c.op!=7;      // inverse (0) and forward (4) dynamics read q, v and a third field
+    const int stride=c.nq+(dynamics?2*c.nv:0);
     for(int b=0;b<batch;++b) {
         for(int k=0;k<c.nq;++k) c.q[size_t(b)*c.nq+k]=input[size_t(b)*stride+k];
         if(c.floating) {
@@ -340,13 +341,13 @@ extern "C" int pin_consumer_eval(void *context, const float *input, float *out, 
             norm=std::sqrt(norm); if(!(norm>0)) return -2;
             for(int k=3;k<7;++k) c.q[size_t(b)*c.nq+k]/=norm;
         }
-        if(c.op==0) for(int k=0;k<c.nv;++k) {
+        if(dynamics) for(int k=0;k<c.nv;++k) {
             c.v[size_t(b)*c.nv+k]=input[size_t(b)*stride+c.nq+k];
             c.a[size_t(b)*c.nv+k]=input[size_t(b)*stride+c.nq+c.nv+k];
         }
     }
     int rc;
-    if(c.op==0) {
+    if(dynamics) {
         std::copy(c.q.begin(),c.q.end(),c.qf.begin());
         std::copy(c.v.begin(),c.v.end(),c.vf.begin());
         std::copy(c.a.begin(),c.a.end(),c.af.begin());

@@ -3,11 +3,11 @@
 ## First consumer-boundary slice (schema 1)
 
 `collect --stage consumers` is a separate, versioned contract; legacy captures
-are not relabelled or combined with it. It covers inverse dynamics and end-effector
-pose on iiwa14 and go2, with GRiD CUDA and standard-API Pinocchio. Both use dense,
-row-major fp32 project-order inputs and outputs at batches 1, 4, 16, 64, 256 and
-1024. Pinocchio keeps its existing fp32 inverse dynamics and fp64 pose arithmetic;
-casts and quaternion normalization occur inside the native sample.
+are not relabelled or combined with it. It covers inverse dynamics, forward
+dynamics and end-effector pose on iiwa14 and go2, with GRiD CUDA and standard-API
+Pinocchio. Both use dense, row-major fp32 project-order inputs and outputs at batches
+1, 4, 16, 64, 256 and 1024. Pinocchio keeps its existing fp32 dynamics and fp64 pose
+arithmetic; casts and quaternion normalization occur inside the native sample.
 
 The **GPU dense-contract** boundary starts with device inputs and returns a ready device
 result. Pinocchio includes download, readiness, conversion, CPU evaluation,
@@ -70,6 +70,16 @@ limit are checked during setup; the actual thread count is recorded. The dense
 GPU callback completes after its output copy, and the native-layout callback
 after computation; each has one explicit device fence. The common driver adds
 no duplicate fence. Legacy host-call paths retain their existing behavior.
+
+Forward dynamics, and any operation added after it, does not mirror the launch. It
+calls GRiD's generated compute-only host function, so the launch, the workspace and
+the completion fence are the generator's. That fence is inside every call: the
+native-layout sample has two fences (the function's and the bridge's, the second with
+nothing left to wait for) and the dense sample has the function's fence before the
+output copy and one after it. The capture records which launch a cell used
+(`consumer_launch`). Inverse dynamics and pose keep the single mirrored launch, and
+their native-layout time must agree with the legacy `grid_kernel_time` resident time
+of the same cell within the repeat spread.
 
 ## Existing collector stages
 

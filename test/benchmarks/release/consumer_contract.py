@@ -9,7 +9,8 @@ from .protocol import agreement, accuracy_status, ACCURACY_POLICY_VERSION
 
 VERSION = 1
 BATCHES = (1, 4, 16, 64, 256, 1024)
-OPERATIONS = ('inverse_dynamics', 'end_effector_pose')
+OPERATIONS = ('inverse_dynamics', 'end_effector_pose', 'forward_dynamics')
+THIRD_FIELD = {'inverse_dynamics': 'a', 'forward_dynamics': 'u'}
 ROBOTS = ('iiwa14', 'go2')
 
 
@@ -18,17 +19,19 @@ def contract(operation, batch, nq, nv, fixture_sha256):
         raise ValueError('outside the first consumer slice')
     if len(fixture_sha256) != 64 or any(c not in '0123456789abcdef' for c in fixture_sha256):
         raise ValueError('fixture identity must be SHA256')
+    dynamics = operation in THIRD_FIELD
     return dict(schema=VERSION, operation=operation, batch=batch, fixture_sha256=fixture_sha256,
                 input=dict(dtype='float32', layout='row-major', representation='dense',
-                           fields=['q', 'v', 'a'] if operation == 'inverse_dynamics' else ['q'],
-                           width=nq+2*nv if operation == 'inverse_dynamics' else nq,
-                           bytes=4*batch*(nq+2*nv if operation == 'inverse_dynamics' else nq),
+                           fields=['q', 'v', THIRD_FIELD[operation]] if dynamics else ['q'],
+                           width=nq+2*nv if dynamics else nq,
+                           bytes=4*batch*(nq+2*nv if dynamics else nq),
                            convention='project-order; local tangent; quaternion xyzw'),
                 output=dict(dtype='float32', layout='row-major', representation='dense',
-                            width=nv if operation == 'inverse_dynamics' else 6,
-                            bytes=4*batch*(nv if operation == 'inverse_dynamics' else 6),
-                            convention='project generalized force' if operation == 'inverse_dynamics'
-                            else 'world xyz; roll pitch yaw'),
+                            width=nv if dynamics else 6,
+                            bytes=4*batch*(nv if dynamics else 6),
+                            convention={'inverse_dynamics': 'project generalized force',
+                                        'forward_dynamics': 'project generalized acceleration',
+                                        'end_effector_pose': 'world xyz; roll pitch yaw'}[operation]),
                 boundaries=['host', 'gpu'], allocation='persistent I/O buffers outside samples; backend internals included',
                 completion='host: result readable on return; gpu: result ready on device on return',
                 staging='page-locked host buffers required; no pageable fallback',

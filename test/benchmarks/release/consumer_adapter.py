@@ -44,7 +44,7 @@ class ConsumerAdapter:
         self.supports_native = backend == 'grid_cuda'
         self.session = self.context = None
         self.adapter = None
-        self.output_width = fixture.nv if operation == 'inverse_dynamics' else 6
+        self.output_width = 6 if operation == 'end_effector_pose' else fixture.nv
         self.batch = batch
         self.fp, self.dp = C.POINTER(C.c_float), C.POINTER(C.c_double)
         self.metadata = {}
@@ -119,12 +119,17 @@ class ConsumerAdapter:
                              'cpu_threads': cpu_threads if backend != 'grid_cuda' else None,
                              'boundary_io_allocation': 'persistent pinned host and device buffers',
                              'backend_internal_allocations': 'existing algorithm and pool behavior included',
-                             'contract_precision': 'fp32 I/O; Pinocchio ID fp32, pose fp64; GRiD fp32'}
+                             'contract_precision': 'fp32 I/O; Pinocchio dynamics fp32, pose fp64; GRiD fp32'}
             if self.supports_native:
                 self.metadata['consumer_threads_used'] = self.library.grid_consumer_threads(self.context)
+                self.library.grid_consumer_host_call.argtypes = [C.c_void_p]
+                self.library.grid_consumer_host_call.restype = C.c_int
+                host_call = bool(self.library.grid_consumer_host_call(self.context))
+                self.metadata['consumer_launch'] = ('generated compute-only host function; its completion fence is inside every call'
+                                                    if host_call else 'single mirrored kernel launch; one fence after the output copy')
             self.native_contract = dict(schema=1, boundary='gpu_native_layout', dtype='float32',
                 input_layout='GRiD q_qd_u and qdd arenas; NUM_POS-wide slots',
-                output_row_stride=fixture.nq if operation == 'inverse_dynamics' else 6,
+                output_row_stride=6 if operation == 'end_effector_pose' else fixture.nq,
                 logical_output_width=self.output_width, batch=batch,
                 fixture_sha256=fixture_digest(fixture),
                 included='compute and device completion',

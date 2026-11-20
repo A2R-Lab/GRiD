@@ -11,7 +11,7 @@ def plan(args):
     robots, backends = args.robots or list(ROBOTS), args.backends or list(BACKENDS)
     operations, batches = args.operations or list(OPERATIONS), args.batches or list(BATCHES)
     if not set(robots) <= set(ROBOTS) or not set(backends) <= set(BACKENDS) or not set(operations) <= set(OPERATIONS):
-        raise ValueError('consumers stage only supports iiwa14/go2, grid_cuda/pinocchio_plain, inverse_dynamics/end_effector_pose')
+        raise ValueError('consumers stage only supports iiwa14/go2, grid_cuda/pinocchio_plain, ' + '/'.join(OPERATIONS))
     if not batches or not set(batches) <= set(BATCHES) or len(batches) != len(set(batches)):
         raise ValueError('consumer batches must be unique members of 1,4,16,64,256,1024')
     if args.prepare_only:

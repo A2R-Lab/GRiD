@@ -126,3 +126,13 @@ def test_compiler_discovers_nested_and_conditional_headers(tmp_path):
     paths = dependencies('g++', source, ['-DSELECTED=1'])
     assert {source, nested, selected} <= set(paths)
     assert ignored not in paths
+
+
+def test_forward_dynamics_contract_names_torque_and_acceleration():
+    from test.benchmarks.release.consumer_contract import contract, compatible
+    forward = contract('forward_dynamics', 16, 19, 18, 'b'*64)
+    inverse = contract('inverse_dynamics', 16, 19, 18, 'b'*64)
+    assert forward['input']['fields'] == ['q', 'v', 'u'] and inverse['input']['fields'] == ['q', 'v', 'a']
+    assert forward['input']['width'] == inverse['input']['width'] == 19 + 2*18
+    assert forward['output']['width'] == 18 and 'acceleration' in forward['output']['convention']
+    assert compatible(forward, forward) and not compatible(forward, inverse)

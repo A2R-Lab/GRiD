@@ -614,10 +614,19 @@ extern "C" int grid_kernel_time(void *h, int op, const T *q, const T *qd, const 
     return download(c, op, batch, out_compute);
 }
 
-struct GridConsumer { KernelCtx *kernel; int op, threads; const void *function=nullptr; size_t shared=0; };
+// host_call: the operation runs through GRiD's generated compute-only host function
+// (launch and fence are the generator's). Inverse dynamics and pose keep the mirrored
+// single launch below, which has no fence of its own.
+struct GridConsumer { KernelCtx *kernel; int op, threads; const void *function=nullptr; size_t shared=0; bool host_call=false; };
+static int consumer_dense_width(int op) { return op==OP_EE_POSE ? 6 : grid::NUM_VEL; }
 // Select the same generated kernel/tier as the legacy host wrapper. Setup
 // checks occur once; no numerical kernel or generated header is modified.
 static int consumer_configure(GridConsumer &s) {
+    if(s.op==OP_FD) {
+        if(!op_built(OP_FD)) return -2;
+        s.host_call=true;
+        return 0;
+    }
     if(s.op==OP_ID) {
 #if GRID_HAS_INVERSE_DYNAMICS
 #if defined(GRID_RBD_SIG_MJX_INVERSE_DYNAMICS)
@@ -652,6 +661,11 @@ static int consumer_configure(GridConsumer &s) {
 // internal fence, so calling it here would double-count synchronization.
 static int consumer_enqueue(GridConsumer &s, int batch) {
     auto &c=*s.kernel;
+    if(s.host_call) {
+        // Returns after the generated function's own completion fence.
+        compute_only(c,s.op,T(-9.81),batch,dim3((unsigned)s.threads,1,1));
+        return 0;
+    }
     T *out=const_cast<T*>(device_output(c,s.op)), *input=c.data->d_q_qd_u;
     T *qdd=c.data->d_qdd, *forces=c.data->d_f_ext;
     auto *model=c.model; T gravity=T(-9.81); int stride=3*grid::NUM_JOINTS;
@@ -662,10 +676,10 @@ static int consumer_enqueue(GridConsumer &s, int batch) {
     return 0;
 }
 extern "C" void *grid_consumer_create(void *kernel, int op, int threads) {
-    if(!kernel || (op!=OP_ID && op!=OP_EE_POSE)) return nullptr;
+    if(!kernel || (op!=OP_ID && op!=OP_EE_POSE && op!=OP_FD)) return nullptr;
     auto &c=*static_cast<KernelCtx*>(kernel);
     // Match the wrapper's zero padding once, outside samples. Calls update
-    // only physical inputs; these two operations never write their padding.
+    // only physical inputs; these operations never write their padding.
     cudaError_t e=cudaMemset(c.data->d_q_qd_u,0,size_t(3)*grid::NUM_JOINTS*GRID_KERNEL_MAX_BATCH*sizeof(T));
     if(e==cudaSuccess) e=cudaMemset(c.data->d_qdd,0,size_t(grid::NUM_JOINTS)*GRID_KERNEL_MAX_BATCH*sizeof(T));
     if(e==cudaSuccess) e=cudaDeviceSynchronize();
@@ -673,6 +687,9 @@ extern "C" void *grid_consumer_create(void *kernel, int op, int threads) {
     auto *session=new GridConsumer{static_cast<KernelCtx*>(kernel),op,threads>0?threads:baked_threads(op)};
     if(consumer_configure(*session)) { delete session; return nullptr; }
     return session;
+}
+extern "C" int grid_consumer_host_call(void *context) {
+    return context ? int(static_cast<GridConsumer*>(context)->host_call) : 0;
 }
 extern "C" int grid_consumer_threads(void *context) {
     return context ? static_cast<GridConsumer*>(context)->threads : 0;
@@ -682,14 +699,16 @@ extern "C" int grid_consumer_stage(void *context, const float *input, int batch,
     if(!context || !input || batch<1 || batch>GRID_KERNEL_MAX_BATCH) return -1;
     auto &session=*static_cast<GridConsumer*>(context); auto &c=*session.kernel;
     const int op=session.op,nq=grid::NUM_POS,nv=grid::NUM_VEL,nj=grid::NUM_JOINTS;
-    const int width=nq+(op==OP_ID?2*nv:0);
+    const int width=nq+(op==OP_EE_POSE?0:2*nv);
     const auto kind=device?cudaMemcpyDeviceToDevice:cudaMemcpyHostToDevice;
     // Explicit common packed layout -> GRiD arena. These copies/packing costs
     // are inside the new contract, unlike the legacy pre-staged kernel timing.
     KB_CUDA(cudaMemcpy2D(c.data->d_q_qd_u,3*nj*sizeof(T),input,width*sizeof(T),nq*sizeof(T),batch,kind));
-    if(op==OP_ID) {
+    if(op!=OP_EE_POSE) {
         KB_CUDA(cudaMemcpy2D(c.data->d_q_qd_u+nj,3*nj*sizeof(T),input+nq,width*sizeof(T),nv*sizeof(T),batch,kind));
-        KB_CUDA(cudaMemcpy2D(c.data->d_qdd,nj*sizeof(T),input+nq+nv,width*sizeof(T),nv*sizeof(T),batch,kind));
+        // third field: acceleration for inverse dynamics, torque for forward dynamics
+        if(op==OP_ID) KB_CUDA(cudaMemcpy2D(c.data->d_qdd,nj*sizeof(T),input+nq+nv,width*sizeof(T),nv*sizeof(T),batch,kind));
+        else KB_CUDA(cudaMemcpy2D(c.data->d_q_qd_u+2*nj,3*nj*sizeof(T),input+nq+nv,width*sizeof(T),nv*sizeof(T),batch,kind));
     }
     return 0;
 }
@@ -697,12 +716,12 @@ extern "C" int grid_consumer_eval(void *context, const float *input, float *out,
     if(!out) return -1;
     if(int rc=grid_consumer_stage(context,input,batch,device)) return rc;
     auto &session=*static_cast<GridConsumer*>(context); auto &c=*session.kernel;
-    const int op=session.op,nv=grid::NUM_VEL;
+    const int op=session.op;
     if(int rc=consumer_enqueue(session,batch)) return rc;
     KB_CUDA(grid_consume_last_error());
     KB_CUDA(cudaGetLastError());
     const T *src=device_output(c,op); if(!src) return -2;
-    KB_CUDA(consumer_copy_dense(out,op==OP_ID?nv:6,src,output_size(op),batch,
+    KB_CUDA(consumer_copy_dense(out,consumer_dense_width(op),src,output_size(op),batch,
                                 device?cudaMemcpyDeviceToDevice:cudaMemcpyDeviceToHost));
     KB_CUDA(cudaDeviceSynchronize());
     return 0;
@@ -722,7 +741,7 @@ extern "C" int grid_consumer_native_download(void *context, int batch, float *ou
     if(!context || !out || batch<1 || batch>GRID_KERNEL_MAX_BATCH) return -1;
     auto &s=*static_cast<GridConsumer*>(context);
     const T *src=device_output(*s.kernel,s.op); if(!src) return -2;
-    KB_CUDA(consumer_copy_dense(out,s.op==OP_ID?grid::NUM_VEL:6,src,output_size(s.op),batch,cudaMemcpyDeviceToHost));
+    KB_CUDA(consumer_copy_dense(out,consumer_dense_width(s.op),src,output_size(s.op),batch,cudaMemcpyDeviceToHost));
     return 0;
 }
 extern "C" int grid_consumer_native_measure(void *context, int batch, int warmups,
