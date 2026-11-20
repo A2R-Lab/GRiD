@@ -73,11 +73,14 @@ no duplicate fence. Legacy host-call paths retain their existing behavior.
 
 Forward dynamics, and any operation added after it, does not mirror the launch. It
 calls GRiD's generated compute-only host function, so the launch, the workspace and
-the completion fence are the generator's. That fence is inside every call: the
-native-layout sample has two fences (the function's and the bridge's, the second with
-nothing left to wait for) and the dense sample has the function's fence before the
-output copy and one after it. The capture records which launch a cell used
-(`consumer_launch`). Inverse dynamics and pose keep the single mirrored launch, and
+the completion fence are the generator's. That fence is inside every call, so the
+bridge adds none on the native layout: the sample has the function's fence alone. The
+dense sample has the function's fence before the output copy and the bridge's after
+it. `consumer_completion.h` holds this rule and a CPU test traces all three cases.
+The capture records which launch a cell used (`consumer_launch`). For a mirrored
+launch it records the block size launched (`consumer_threads_used`); for a host call
+only the size requested (`consumer_threads_requested`), because the generated function
+applies its own clamp. Inverse dynamics and pose keep the single mirrored launch, and
 their native-layout time must agree with the legacy `grid_kernel_time` resident time
 of the same cell within the repeat spread.
 

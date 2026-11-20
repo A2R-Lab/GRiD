@@ -22,6 +22,7 @@
 #include <cstring>
 #include "grid.cuh"
 #include "consumer_copy.h"
+#include "consumer_completion.h"
 #define KB_CUDA(expr) do { cudaError_t kb_e=(expr); if(kb_e!=cudaSuccess) return 100+int(kb_e); } while(0)
 
 #ifndef GRID_KERNEL_MAX_BATCH
@@ -656,9 +657,9 @@ static int consumer_configure(GridConsumer &s) {
     KB_CUDA(grid::grid_check_dynamic_shared_memory_bytes("consumer",s.shared));
     return 0;
 }
-// Enqueue only. The dense path completes after packing its output; the native
-// path completes immediately after this launch. The legacy host wrapper has an
-// internal fence, so calling it here would double-count synchronization.
+// Enqueue only for a mirrored launch: the dense path completes after packing its
+// output, the native path immediately after this launch. A host call returns
+// completed; consumer_completion.h decides which fence each boundary still owes.
 static int consumer_enqueue(GridConsumer &s, int batch) {
     auto &c=*s.kernel;
     if(s.host_call) {
@@ -673,6 +674,11 @@ static int consumer_enqueue(GridConsumer &s, int batch) {
     void *pose_args[]={&out,&input,&stride,&model,&batch};
     KB_CUDA(cudaLaunchKernel(s.function,dim3(batch,1,1),dim3(s.threads,1,1),
                              s.op==OP_ID?id_args:pose_args,s.shared,0));
+    return 0;
+}
+static int consumer_launch_errors() {
+    KB_CUDA(grid_consume_last_error());
+    KB_CUDA(cudaGetLastError());
     return 0;
 }
 extern "C" void *grid_consumer_create(void *kernel, int op, int threads) {
@@ -691,6 +697,8 @@ extern "C" void *grid_consumer_create(void *kernel, int op, int threads) {
 extern "C" int grid_consumer_host_call(void *context) {
     return context ? int(static_cast<GridConsumer*>(context)->host_call) : 0;
 }
+// For a mirrored launch this is the block size launched (clamped in consumer_configure).
+// For a host call it is the size requested: the generated function applies its own clamp.
 extern "C" int grid_consumer_threads(void *context) {
     return context ? static_cast<GridConsumer*>(context)->threads : 0;
 }
@@ -717,14 +725,11 @@ extern "C" int grid_consumer_eval(void *context, const float *input, float *out,
     if(int rc=grid_consumer_stage(context,input,batch,device)) return rc;
     auto &session=*static_cast<GridConsumer*>(context); auto &c=*session.kernel;
     const int op=session.op;
-    if(int rc=consumer_enqueue(session,batch)) return rc;
-    KB_CUDA(grid_consume_last_error());
-    KB_CUDA(cudaGetLastError());
     const T *src=device_output(c,op); if(!src) return -2;
-    KB_CUDA(consumer_copy_dense(out,consumer_dense_width(op),src,output_size(op),batch,
-                                device?cudaMemcpyDeviceToDevice:cudaMemcpyDeviceToHost));
-    KB_CUDA(cudaDeviceSynchronize());
-    return 0;
+    return consumer_dense_call(
+        [&] { return consumer_enqueue(session,batch); }, consumer_launch_errors,
+        [&] { return consumer_copy_dense(out,consumer_dense_width(op),src,output_size(op),batch,
+                                         device?cudaMemcpyDeviceToDevice:cudaMemcpyDeviceToHost); });
 }
 
 // Distinct boundary: the consumer already holds GRiD's native input layout.
@@ -733,9 +738,8 @@ extern "C" int grid_consumer_eval(void *context, const float *input, float *out,
 extern "C" int grid_consumer_native_once(void *context, int batch) {
     if(!context || batch<1 || batch>GRID_KERNEL_MAX_BATCH) return -1;
     auto &s=*static_cast<GridConsumer*>(context);
-    if(int rc=consumer_enqueue(s,batch)) return rc;
-    KB_CUDA(grid_consume_last_error()); KB_CUDA(cudaGetLastError());
-    KB_CUDA(cudaDeviceSynchronize()); return 0;
+    // The generated host function has fenced already; a second fence would be timed.
+    return consumer_native_call(s.host_call, [&] { return consumer_enqueue(s,batch); }, consumer_launch_errors);
 }
 extern "C" int grid_consumer_native_download(void *context, int batch, float *out) {
     if(!context || !out || batch<1 || batch>GRID_KERNEL_MAX_BATCH) return -1;

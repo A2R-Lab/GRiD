@@ -121,10 +121,13 @@ class ConsumerAdapter:
                              'backend_internal_allocations': 'existing algorithm and pool behavior included',
                              'contract_precision': 'fp32 I/O; Pinocchio dynamics fp32, pose fp64; GRiD fp32'}
             if self.supports_native:
-                self.metadata['consumer_threads_used'] = self.library.grid_consumer_threads(self.context)
                 self.library.grid_consumer_host_call.argtypes = [C.c_void_p]
                 self.library.grid_consumer_host_call.restype = C.c_int
                 host_call = bool(self.library.grid_consumer_host_call(self.context))
+                # A mirrored launch reports the block size it launches. The generated host
+                # function clamps the request itself, so only the request is known here.
+                self.metadata['consumer_threads_requested' if host_call else 'consumer_threads_used'] = \
+                    self.library.grid_consumer_threads(self.context)
                 self.metadata['consumer_launch'] = ('generated compute-only host function; its completion fence is inside every call'
                                                     if host_call else 'single mirrored kernel launch; one fence after the output copy')
             self.native_contract = dict(schema=1, boundary='gpu_native_layout', dtype='float32',
