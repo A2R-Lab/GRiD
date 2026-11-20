@@ -477,21 +477,43 @@ def gen_add_sync(self):
 # is [pos(3), quat_xyzw(4), joints]; the tangent buffers (`s_qd`/`s_qdd`/`s_c`/...)
 # are [lin(3), ang(3), joints]. Pass custom names for kernels that buffer elsewhere.
 
-def _gen_mjx_build_R_lines(q_name="s_q"):
-    """Emit (as a list) the register declaration of the 3x3 row-major rotation
-    ``R`` (``R[3*i+j]``) from the xyzw quaternion at ``q_name[3..6]`` -- matching
-    ``mujoco_convention.rotation_from_quat_xyzw`` exactly. Caller must already be
-    on a single thread (these are plain register writes)."""
-    q = q_name
-    return [
-        f"T qx = {q}[3], qy = {q}[4], qz = {q}[5], qw = {q}[6];",
-        "T xx = qx*qx, yy = qy*qy, zz = qz*qz;",
-        "T xy = qx*qy, xz = qx*qz, yz = qy*qz, wx = qw*qx, wy = qw*qy, wz = qw*qz;",
-        "T R[9];",
-        "R[0] = static_cast<T>(1) - static_cast<T>(2)*(yy+zz); R[1] = static_cast<T>(2)*(xy-wz);                    R[2] = static_cast<T>(2)*(xz+wy);",
-        "R[3] = static_cast<T>(2)*(xy+wz);                    R[4] = static_cast<T>(1) - static_cast<T>(2)*(xx+zz); R[5] = static_cast<T>(2)*(yz-wx);",
-        "R[6] = static_cast<T>(2)*(xz-wy);                    R[7] = static_cast<T>(2)*(yz+wx);                    R[8] = static_cast<T>(1) - static_cast<T>(2)*(xx+yy);",
-    ]
+def _gen_mjx_build_R_lines(q_name="s_q", out="R"):
+    """Emit (as a list) the 3x3 row-major base rotation (``R[3*i+j]``) from the xyzw
+    quaternion at ``q_name[3..6]``, through the header's one ``grid_base_rotation``.
+    ``out="R"`` declares a register array ``R``; any other name is an existing buffer."""
+    declare = "T R[9]; " if out == "R" else ""
+    return [f"{declare}grid_base_rotation<T>(&{q_name}[3], {out});"]
+
+
+def gen_base_quaternion_helpers(self):
+    """The two helpers every use of a quaternion (floating base or spherical joint) goes through."""
+    if not (self.robot.floating_base or self.robot.robot_has_spherical()):
+        return
+    unit = bool(getattr(self, "assume_unit_quaternions", False))
+    self.gen_add_code_lines([
+        "// Quaternions (xyzw) of the floating base and of spherical joints. Every rotation is built through",
+        "// these two helpers. " + ("This header was generated with assume_unit_quaternions:" if unit
+                                    else "The quaternion is normalised here, so callers may pass any"),
+        "// " + ("the caller passes unit quaternions and no normalisation is computed." if unit
+                 else "nonzero quaternion (generate with assume_unit_quaternions to skip it)."),
+        "template <typename T>",
+        "__host__ __device__ __forceinline__ T grid_quat_norm2(T qx, T qy, T qz, T qw) {",
+        ("    (void)qx; (void)qy; (void)qz; (void)qw; return static_cast<T>(1);" if unit
+         else "    return qx*qx + qy*qy + qz*qz + qw*qw;"),
+        "}",
+        "// Row-major 3x3 rotation, R[3*i+j], of the quaternion q = (x, y, z, w).",
+        "template <typename T>",
+        "__host__ __device__ __forceinline__ void grid_base_rotation(const T *q, T *R) {",
+        "    const T qx = q[0], qy = q[1], qz = q[2], qw = q[3];",
+        "    const T s = static_cast<T>(2)/grid_quat_norm2<T>(qx, qy, qz, qw);",
+        "    const T xx = qx*qx, yy = qy*qy, zz = qz*qz;",
+        "    const T xy = qx*qy, xz = qx*qz, yz = qy*qz, wx = qw*qx, wy = qw*qy, wz = qw*qz;",
+        "    R[0] = static_cast<T>(1) - s*(yy+zz); R[1] = s*(xy-wz);                    R[2] = s*(xz+wy);",
+        "    R[3] = s*(xy+wz);                    R[4] = static_cast<T>(1) - s*(xx+zz); R[5] = s*(yz-wx);",
+        "    R[6] = s*(xz-wy);                    R[7] = s*(yz+wx);                    R[8] = static_cast<T>(1) - s*(xx+yy);",
+        "}",
+        ""
+    ])
 
 
 # ----------------------------------------------------------------------------

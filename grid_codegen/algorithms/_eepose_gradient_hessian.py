@@ -8,6 +8,7 @@ from ..helpers._code_generation_helpers import ident_suffix
 from grid_codegen.helpers._code_generation_helpers import gen_launch_pair, gen_emit_host_result_transfer, _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
 from grid_codegen.helpers._code_generation_helpers import gen_host_wrapper_head
 from grid_codegen.helpers._code_generation_helpers import host_q_compressed_input_transfer_lines
+from grid_codegen.helpers._expr_printer import expr_T
 
 
 def gen_end_effector_pose_inner_temp_mem_size(self, fixed_target_name = ""):
@@ -2708,12 +2709,10 @@ def gen_ee_pose_inner_xform_from_q_lines(self):
 def _ee_pose_root_fb_subst(str_val):
     """Floating-root fb-symbol -> s_q slot substitution for the standalone FK
     inners. Mirrors replace_hom_config_symbols' floating branch in
-    _topology_helpers.gen_load_update_XmatsHom_helpers (same sp.ccode input,
-    same order: squared forms before bare symbols) so the standalone root
-    block is textually identical to the canonical loader's emission."""
+    _topology_helpers.gen_load_update_XmatsHom_helpers (same expr_T input) so
+    the standalone root block is textually identical to the canonical loader's
+    emission."""
     _fb_syms = ["x_fb", "y_fb", "z_fb", "q1_fb", "q2_fb", "q3_fb", "q4_fb"]
-    for i, sym in enumerate(_fb_syms):
-        str_val = str_val.replace(sym + "**2", "s_q[" + str(i) + "]*s_q[" + str(i) + "]")
     for i, sym in enumerate(_fb_syms):
         str_val = str_val.replace(sym, "s_q[" + str(i) + "]")
     return str_val
@@ -2795,7 +2794,7 @@ def gen_ee_pose_inner_thread(self):
                     val = M[row, col]
                     if self.custom_is_constant(val):
                         continue
-                    str_val = _ee_pose_root_fb_subst(sp.ccode(val))
+                    str_val = _ee_pose_root_fb_subst(expr_T(val))
                     cell = self.gen_static_array_ind_3d(jid, col, row, ind_stride=16, col_stride=4)
                     self.gen_add_code_line("s_XmatsHom[16*" + str(jid) + " + " + str(cell - 16*jid) +
                                            "] = static_cast<T>(" + str_val + ");")
@@ -2822,7 +2821,7 @@ def gen_ee_pose_inner_thread(self):
                 val = M[row, col]
                 if self.custom_is_constant(val):
                     continue
-                str_val = sp.ccode(val)
+                str_val = expr_T(val)
                 # sin/cos(theta) -> the precomputed s/c locals; a PRISMATIC joint
                 # also leaves a BARE theta (its translation cell, e.g. an axial
                 # origin offset emits `theta + 0.1`) -> the local angle (which
@@ -2922,7 +2921,7 @@ def gen_update_XmatHom_joint(self):
                     continue
                 # sin/cos(theta) -> precomputed s/c; a PRISMATIC joint also leaves a
                 # BARE theta (e.g. an axial offset emits `theta + 0.1`) -> the param.
-                str_val = sp.ccode(val).replace("sin(theta)", "s").replace("cos(theta)", "c")
+                str_val = expr_T(val).replace("sin(theta)", "s").replace("cos(theta)", "c")
                 cell = self.gen_static_array_ind_3d(jid, col, row, ind_stride=16, col_stride=4)
                 self.gen_add_code_line("s_Xj[" + str(cell - 16*jid) +
                                        "] = static_cast<T>(" + str_val + ");")
@@ -2988,7 +2987,7 @@ def gen_ee_pose_inner_warp(self):
                     val = M[row, col]
                     if self.custom_is_constant(val):
                         continue
-                    str_val = _ee_pose_root_fb_subst(sp.ccode(val))
+                    str_val = _ee_pose_root_fb_subst(expr_T(val))
                     cell = self.gen_static_array_ind_3d(jid, col, row, ind_stride=16, col_stride=4)
                     self.gen_add_code_line("s_XmatsHom[16*" + str(jid) + " + " + str(cell - 16*jid) +
                                            "] = static_cast<T>(" + str_val + ");")
@@ -3014,7 +3013,7 @@ def gen_ee_pose_inner_warp(self):
                 val = M[row, col]
                 if self.custom_is_constant(val):
                     continue
-                str_val = sp.ccode(val)
+                str_val = expr_T(val)
                 # see the thread variant above: sin/cos(theta) -> s/c, then the
                 # bare theta (prismatic translation cell) -> the local angle
                 # (mimic angles pre-folded, non-mimic = the raw q-slot verbatim).

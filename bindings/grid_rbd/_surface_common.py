@@ -311,6 +311,11 @@ class BaseDelegateMixin:
         return self._base.num_armature_params
 
     @property
+    def assume_unit_quaternions(self) -> bool:
+        """True if registered with ``assume_unit_quaternions=True``."""
+        return self._base.assume_unit_quaternions
+
+    @property
     def runtime_armature(self) -> bool:
         """True if registered with ``runtime_armature=True`` (mutable rotor-armature
         table + :py:meth:`set_armature`). The backend kernels read the same

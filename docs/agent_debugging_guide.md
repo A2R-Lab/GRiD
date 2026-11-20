@@ -4373,3 +4373,48 @@ enter. Enforce the one-owned-GPU-job ceiling by observing completion before
 launching the next job, or by a fail-closed prerequisite tied to the exact run.
 Do not assume that invoking the coordinator queues work behind another
 correctness process, and never inspect or manipulate the timing lock directly.
+
+### Generated device code computes in T, and a rewrite keeps the rounding (2026-11-20)
+
+Every generated function is templated on T and computes in T. A decimal literal is a
+double and promotes the expression it meets, so symbolic expressions are printed by
+`grid_codegen/helpers/_expr_printer.py::expr_T` only. `test/test_generated_code_pure_T.py`
+scans whole headers: the functions it can parse, and every line GRiD writes after the
+vendored GLASS section, at any indentation. The second check exists because the first
+missed the model primitives, whose functions start at column zero with a signature over
+two lines; they computed the configuration difference in double for months. The test is a
+scan of the text for known forms (a floating literal that is neither cast to T nor merely
+stored, an integer `pow`, the word `double`), with canaries for each. It is a regression
+check, not a proof about the arithmetic: a promotion that needs type information to see
+passes it. Its exemptions are whole statements and exact function names, compared after
+comments and string contents are removed. The one
+exemption is the second derivative of SE(3) integration, which lives in GLASS
+(`se3_retract_hessian`) and is double inside for any T. It is slow on a GPU with reduced
+double throughput.
+
+A quaternion (floating base, spherical joint) is normalised through one helper,
+`grid_quat_norm2`, which returns 1 when the header is generated with
+`assume_unit_quaternions`. The option removes the normalisation in the rotation loaders
+and the convention blocks GRiD generates. The GLASS Lie primitives the integrator calls
+keep their own. The helper returns the squared norm, not its reciprocal. The
+first version returned the reciprocal, so the transform loaders computed `x*(1/n)` where
+they had computed `x/n`. The two round differently. Every double gate and every float
+gate that was run passed, and the gen3 floating `integrator_rk4` gradient at
+`energetic_random_1` (float32, cond(M) 6e4) went from inside its measured bound to
+1.12e-2 against 8e-3. A rewrite of an expression that feeds the floating forward
+dynamics gradient in single precision is a numerical change even when it is the same
+mathematics. Compare the regenerated header with the old one after substituting the
+helper call back: the loaders should be textually identical. Include a gen3 or rizon4
+floating integrator cell in the gate of any such change; go2 and iiwa14 do not see it.
+
+Keeping the division restored that sample. It is not a stability cure. The same file's
+`high_velocity` sample went from 3.16e-3 on the parent commit to 7.64e-3 when the printer
+began to cast constants to T, and passes with 5 percent of the bound left. Headers that
+take a few transform assignments from the other version give 1.3e-3 to 7.8e-3 on
+`high_velocity` and 4.7e-4 to 1.16e-2 on `energetic_random_1`, on the same GPU and build
+flags. In every one the error is in the gradient of the next velocity with respect to q.
+The cell is sensitive to how the transforms are rounded; which stage amplifies it
+(transform formation, the inverse mass matrix, the gradient, the RK4 composition) is not
+isolated yet. Do not read a pass or a fail of this cell after such a change as a
+statement about the change alone, and do not raise the bound on that argument: measure
+the stages first.

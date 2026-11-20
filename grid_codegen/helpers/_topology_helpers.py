@@ -1,6 +1,7 @@
 import numpy as np
 from ._gpu_err import legacy_wrapper_lines
 import sympy as sp
+from ._expr_printer import expr_T
 
 def gen_get_XI_size(self, include_base_inertia = False, include_homogenous_transforms = False):
     n = self.robot.get_num_joints()
@@ -206,7 +207,7 @@ def gen_init_XImats(self, include_base_inertia = False, include_homogenous_trans
                 val = Xmats[ind][row,col]
                 if not self.custom_is_constant(val): # initialize to 0
                     val = 0
-                str_val = str(val)
+                str_val = expr_T(val)
                 cpp_ind = self.gen_static_array_ind_3d(ind,col,row)
                 self.gen_add_code_line("h_XImats[" + str(cpp_ind) + "] = static_cast<T>(" + str_val + ");")
     # loop through Imats and add all values (inertias are always constant and stored as np arrays)
@@ -240,7 +241,7 @@ def gen_init_XImats(self, include_base_inertia = False, include_homogenous_trans
                     val = Xmats_hom[ind][row,col]
                     if not self.custom_is_constant(val): # initialize to 0
                         val = 0
-                    str_val = str(val)
+                    str_val = expr_T(val)
                     cpp_ind = baseXI_size + self.gen_static_array_ind_3d(ind,col,row,ind_stride=16,col_stride=4)
                     self.gen_add_code_line("h_XImats[" + str(cpp_ind) + "] = static_cast<T>(" + str_val + ");")
         # and the gradients
@@ -252,7 +253,7 @@ def gen_init_XImats(self, include_base_inertia = False, include_homogenous_trans
                         val = dXmats_hom[ind][row,col]
                         if not self.custom_is_constant(val): # initialize to 0
                             val = 0
-                        str_val = str(val)
+                        str_val = expr_T(val)
                         cpp_ind = baseXI_size + Xhom_size + self.gen_static_array_ind_3d(ind,col,row,ind_stride=16,col_stride=4)
                         self.gen_add_code_line("h_XImats[" + str(cpp_ind) + "] = static_cast<T>(" + str_val + ");")
         # and the 2nd derivatives
@@ -264,7 +265,7 @@ def gen_init_XImats(self, include_base_inertia = False, include_homogenous_trans
                         val = d2Xmats_hom[ind][row,col]
                         if not self.custom_is_constant(val): # initialize to 0
                             val = 0
-                        str_val = str(val)
+                        str_val = expr_T(val)
                         cpp_ind = baseXI_size + Xhom_size + dXhom_size + self.gen_static_array_ind_3d(ind,col,row,ind_stride=16,col_stride=4)
                         self.gen_add_code_line("h_XImats[" + str(cpp_ind) + "] = static_cast<T>(" + str_val + ");")
     # guarded device alloc + copy, free CPU memory, publish on success only
@@ -641,18 +642,18 @@ def _runtime_transform_xfixed_offset(self):
         return 3 * self.robot.get_num_joints()
     return 2 * self.robot.get_num_pos()
 
-def _config_symbol_subst(self, str_val, ind, spherical, ccode):
+def _config_symbol_subst(self, str_val, ind, spherical):
     """Substitute the configuration symbols of body `ind`'s transform cell string
     (hygiene 11, 2026-09-24: ONE copy of the chain the XImats and XmatsHom loaders
     each carried). Branches, in order: Tier-C spherical (the joint's own 4-wide
-    quaternion block, `ccode` picks the `pow(q,2)` spelling); floating base (the
+    quaternion block); floating base (the
     root's x/y/z + q1..q4 into s_q[0..6]; single-DoF bodies read sin/cos at
     s_temp[ind+6] / s_temp[ind+num_pos+6], or the folded s_q_eff layout
     (NB | sin | cos) when the robot has mimic joints); fixed mimic (the folded
     layout); fixed single-DoF (sin/cos at the joint's OWN q-slot — the §1e q-slot
     rule, so a downstream-of-spherical joint reads the right angle)."""
     if spherical:
-        return _xi_spherical_quat_subst(self, str_val, ind, ccode=ccode)
+        return _xi_spherical_quat_subst(self, str_val, ind)
     if self.robot.floating_base:
         if self.robot_has_mimic_joints():
             NB = self.robot.get_num_joints()
@@ -664,13 +665,6 @@ def _config_symbol_subst(self, str_val, ind, spherical, ccode):
             str_val = str_val.replace("sin(theta)","s_temp[" + str(ind + 6) + "]")
             str_val = str_val.replace("cos(theta)","s_temp[" + str(ind + n_pos + 6) + "]")
             str_val = str_val.replace("theta","s_q[" + str(ind + 6) + "]")
-        str_val = str_val.replace("x_fb**2", "s_q[0]*s_q[0]")
-        str_val = str_val.replace("y_fb**2", "s_q[1]*s_q[1]")
-        str_val = str_val.replace("z_fb**2", "s_q[2]*s_q[2]")
-        str_val = str_val.replace("q1_fb**2", "s_q[3]*s_q[3]")
-        str_val = str_val.replace("q2_fb**2", "s_q[4]*s_q[4]")
-        str_val = str_val.replace("q3_fb**2", "s_q[5]*s_q[5]")
-        str_val = str_val.replace("q4_fb**2", "s_q[6]*s_q[6]")
         str_val = str_val.replace("x_fb", "s_q[0]")
         str_val = str_val.replace("y_fb", "s_q[1]")
         str_val = str_val.replace("z_fb", "s_q[2]")
@@ -891,11 +885,10 @@ def _xi_fixed_sincos_subst(self, str_val, ind):
     s_temp[ind]/s_temp[ind+nq]/s_q[ind] (byte-identical to pre-mimic).
 
     Tier-C spherical bodies carry quaternion symbols (q1_sph..q4_sph) instead of
-    a single `theta`; they're substituted via _xi_spherical_quat_subst (ccode form
-    for the homogeneous-transform consumer) BEFORE the theta passes, which then
+    a single `theta`; they're substituted via _xi_spherical_quat_subst BEFORE the theta passes, which then
     no-op (no `theta` token remains). Byte-identical for non-spherical robots."""
     if self.robot.joint_is_spherical(ind):
-        return _xi_spherical_quat_subst(self, str_val, ind, ccode=True)
+        return _xi_spherical_quat_subst(self, str_val, ind)
     if self.robot_has_mimic_joints():
         NB = self.robot.get_num_joints()
         str_val = str_val.replace("sin(theta)", "s_temp[" + str(ind + NB) + "]")
@@ -914,7 +907,7 @@ def _xi_fixed_sincos_subst(self, str_val, ind):
     str_val = str_val.replace("theta", "s_q[" + str(qslot) + "]")
     return str_val
 
-def _xi_spherical_quat_subst(self, str_val, ind, ccode=False):
+def _xi_spherical_quat_subst(self, str_val, ind):
     """Substitute a SPHERICAL (ball) joint's unit-quaternion symbols
     (q1_sph..q4_sph = x,y,z,w) into a transform cell for body `ind`.
 
@@ -925,25 +918,12 @@ def _xi_spherical_quat_subst(self, str_val, ind, ccode=False):
     the floating-root q1_fb..q4_fb substitution but parameterized on the joint's
     own q-block start (the root is hardcoded to s_q[3..6]).
 
-    `ccode=True` selects the C `pow(q, 2)` squared form emitted by `sp.ccode`
-    (homogeneous transforms); the default handles the Python `q**2` repr used by
-    the spatial X block (`str(val)`). The substitution is q-normalized in the
-    symbolic transform itself, so no separate normalization is needed here."""
+    The cell comes from `expr_T`, which prints powers as products and the squared
+    norm as a call of `grid_quat_norm2`, so only bare symbols remain to replace."""
     qoff = self.robot.get_joint_index_q(ind)
     if isinstance(qoff, (list, tuple)):
         qoff = qoff[0]
-    syms = ["q1_sph", "q2_sph", "q3_sph", "q4_sph"]
-    if ccode:
-        # sp.ccode emits pow(qk_sph, 2); replace the squared form first so the
-        # bare-symbol pass below doesn't corrupt the `pow(` argument.
-        for k, s in enumerate(syms):
-            slot = "s_q[" + str(qoff + k) + "]"
-            str_val = str_val.replace("pow(" + s + ", 2)", slot + "*" + slot)
-    else:
-        for k, s in enumerate(syms):
-            slot = "s_q[" + str(qoff + k) + "]"
-            str_val = str_val.replace(s + "**2", slot + "*" + slot)
-    for k, s in enumerate(syms):
+    for k, s in enumerate(["q1_sph", "q2_sph", "q3_sph", "q4_sph"]):
         str_val = str_val.replace(s, "s_q[" + str(qoff + k) + "]")
     return str_val
 
@@ -1147,10 +1127,10 @@ def gen_load_update_XImats_helpers(self, include_base_inertia = False, include_h
                 val = Xmats_serial[ind][row,col]
                 if not self.custom_is_constant(val):
                     # parse the symbolic value into the appropriate array access
-                    str_val = str(val)
+                    str_val = expr_T(val)
 
                     _jt = getattr(self.robot.get_joint_by_id(ind), "jtype", None)
-                    str_val = _config_symbol_subst(self, str_val, ind, spherical = (_jt == "spherical"), ccode = False)
+                    str_val = _config_symbol_subst(self, str_val, ind, spherical = (_jt == "spherical"))
                     # runtime_transform: replace the joint-origin xf_* symbols with
                     # s_Xfixed scratch loads (rebuilt in the prologue). Only the TL
                     # (xf_TL_*) and BL (xf_BL_*) symbols appear in cols 0-2; BR is the
@@ -1175,7 +1155,7 @@ def gen_load_update_XImats_helpers(self, include_base_inertia = False, include_h
                     val = Xmats_hom[ind][row,col]
                     if not self.custom_is_constant(val):
                         # parse the symbolic value into the appropriate array access
-                        str_val = sp.ccode(val)
+                        str_val = expr_T(val)
                         # sin/cos (revolute) + theta (prismatic), mimic-aware
                         str_val = _xi_fixed_sincos_subst(self, str_val, ind)
                         # then output the code
@@ -1188,7 +1168,7 @@ def gen_load_update_XImats_helpers(self, include_base_inertia = False, include_h
                     val = dXmats_hom[ind][row,col]
                     if not self.custom_is_constant(val):
                         # parse the symbolic value into the appropriate array access
-                        str_val = sp.ccode(val)
+                        str_val = expr_T(val)
                         # sin/cos (revolute) + theta (prismatic), mimic-aware
                         str_val = _xi_fixed_sincos_subst(self, str_val, ind)
                         # then output the code
@@ -1201,7 +1181,7 @@ def gen_load_update_XImats_helpers(self, include_base_inertia = False, include_h
                     val = d2Xmats_hom[ind][row,col]
                     if not self.custom_is_constant(val):
                         # parse the symbolic value into the appropriate array access
-                        str_val = sp.ccode(val)
+                        str_val = expr_T(val)
                         # sin/cos (revolute) + theta (prismatic), mimic-aware
                         str_val = _xi_fixed_sincos_subst(self, str_val, ind)
                         # then output the code
@@ -1412,7 +1392,7 @@ def gen_load_update_XmatsHom_helpers(self, include_base_inertia = False, include
             _emit_mimic_q_fold(self)
     # loop through Xmats and update all non-constant values serially
     def replace_hom_config_symbols(str_val, ind):
-        return _config_symbol_subst(self, str_val, ind, spherical = self.robot.joint_is_spherical(ind), ccode = True)
+        return _config_symbol_subst(self, str_val, ind, spherical = self.robot.joint_is_spherical(ind))
 
     # Split the per-matrix updates into separate serial sections (one each
     # for X_hom, dX_hom, d2X_hom) with a __syncthreads() between each.
@@ -1434,7 +1414,7 @@ def gen_load_update_XmatsHom_helpers(self, include_base_inertia = False, include
                 val = Xmats_hom[ind][row,col]
                 if not self.custom_is_constant(val):
                     # parse the symbolic value into the appropriate array access
-                    str_val = replace_hom_config_symbols(sp.ccode(val), ind)
+                    str_val = replace_hom_config_symbols(expr_T(val), ind)
                     # then output the code
                     cpp_ind = str(self.gen_static_array_ind_3d(ind,col,row,ind_stride=16,col_stride=4))
                     self.gen_add_code_line("s_XmatsHom[" + cpp_ind + "] = static_cast<T>(" + str_val + ");")
@@ -1455,7 +1435,7 @@ def gen_load_update_XmatsHom_helpers(self, include_base_inertia = False, include
                     val = dXmats_hom[ind][row,col]
                     if not self.custom_is_constant(val):
                         # parse the symbolic value into the appropriate array access
-                        str_val = replace_hom_config_symbols(sp.ccode(val), owner_jid if owner_jid is not None else ind)
+                        str_val = replace_hom_config_symbols(expr_T(val), owner_jid if owner_jid is not None else ind)
                         # then output the code
                         cpp_ind = str(self.gen_static_array_ind_3d(ind,col,row,ind_stride=16,col_stride=4))
                         self.gen_add_code_line("s_dXmatsHom[" + cpp_ind + "] = static_cast<T>(" + str_val + ");")
@@ -1473,7 +1453,7 @@ def gen_load_update_XmatsHom_helpers(self, include_base_inertia = False, include
                     val = d2Xmats_hom[ind][row,col]
                     if not self.custom_is_constant(val):
                         # parse the symbolic value into the appropriate array access
-                        str_val = replace_hom_config_symbols(sp.ccode(val), owner_jid if owner_jid is not None else ind)
+                        str_val = replace_hom_config_symbols(expr_T(val), owner_jid if owner_jid is not None else ind)
                         # then output the code
                         cpp_ind = str(self.gen_static_array_ind_3d(ind,col,row,ind_stride=16,col_stride=4))
                         self.gen_add_code_line("s_d2XmatsHom[" + cpp_ind + "] = static_cast<T>(" + str_val + ");")

@@ -1,4 +1,4 @@
-from grid_codegen.helpers._code_generation_helpers import gen_launch_pair, gen_emit_host_result_transfer, gen_workspace_cast_expr, gen_workspace_repoint_line, host_mode_flags, host_q_qd_input_transfer_lines, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines, gen_launch_pair, gen_emit_host_result_transfer, gen_workspace_cast_expr, gen_workspace_repoint_line, host_mode_flags, host_q_qd_input_transfer_lines, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
 
 
 from grid_codegen.helpers._topology_helpers import _jd_alpha_fold
@@ -1400,17 +1400,9 @@ def _emit_inverse_dynamics_gradient_mjx_output(self, use_qdd_input):
     self.gen_add_code_line("// precompute shared helpers (R + base source vectors) into dead crba scratch")
     self.gen_add_code_line("T *s_mjxh = s_temp + " + str(crba_scr_off) + ";")
     self.gen_add_code_line("if (threadIdx.x == 0 && threadIdx.y == 0) {", True)
-    # Build R (row-major R[3*i+j]) from the xyzw base quaternion (s_q already
-    # reordered by the input epilogue) — mirrors mujoco_convention.rotation_from
-    # _quat_xyzw / the _gen_mjx_build_R_lines helper exactly. Write into s_mjxh[0..8].
-    self.gen_add_code_lines([
-        "T qx = s_q[3], qy = s_q[4], qz = s_q[5], qw = s_q[6];",
-        "T xx = qx*qx, yy = qy*qy, zz = qz*qz;",
-        "T xy = qx*qy, xz = qx*qz, yz = qy*qz, wx = qw*qx, wy = qw*qy, wz = qw*qz;",
-        "s_mjxh[0] = static_cast<T>(1) - static_cast<T>(2)*(yy+zz); s_mjxh[1] = static_cast<T>(2)*(xy-wz);                    s_mjxh[2] = static_cast<T>(2)*(xz+wy);",
-        "s_mjxh[3] = static_cast<T>(2)*(xy+wz);                    s_mjxh[4] = static_cast<T>(1) - static_cast<T>(2)*(xx+zz); s_mjxh[5] = static_cast<T>(2)*(yz-wx);",
-        "s_mjxh[6] = static_cast<T>(2)*(xz-wy);                    s_mjxh[7] = static_cast<T>(2)*(yz+wx);                    s_mjxh[8] = static_cast<T>(1) - static_cast<T>(2)*(xx+yy);",
-    ])
+    # R (row-major R[3*i+j]) from the xyzw base quaternion (s_q already reordered by
+    # the input epilogue), written into s_mjxh[0..8].
+    self.gen_add_code_lines(_gen_mjx_build_R_lines("s_q", out="s_mjxh"))
     self.gen_add_code_lines([
         # sources
         "s_mjxh[9] = s_qd[0]; s_mjxh[10] = s_qd[1]; s_mjxh[11] = s_qd[2];",

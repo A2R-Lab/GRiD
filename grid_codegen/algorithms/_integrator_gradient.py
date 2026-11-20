@@ -1663,12 +1663,10 @@ def gen_integrator_hessian_device_floating(self):
     self.gen_add_end_control_flow()
     self.gen_add_sync()
     # Compute the SE(3) blocks once, serially. dInt_v (6x6) is evaluated in
-    # double; the two 6x6x6 d2Int tensors use the ANALYTIC closed form
+    # T; the two 6x6x6 d2Int tensors use the ANALYTIC closed form
     # grid_d2Integrate_block (no finite differencing).
     self.gen_add_serial_ops()
-    self.gen_add_code_line("double w_d[6]; for (int m = 0; m < 6; ++m) w_d[m] = static_cast<double>(s_w[m]);")
-    self.gen_add_code_line("double dIv_d[36]; grid_dIntegrate_v_block<double>(w_d, dIv_d);")
-    self.gen_add_code_line("for (int m = 0; m < 36; ++m) s_dInt_v[m] = static_cast<T>(dIv_d[m]);")
+    self.gen_add_code_line("grid_dIntegrate_v_block<T>(s_w, s_dInt_v);")
     self.gen_add_code_line("grid_d2Integrate_block<T, true >(s_w, s_d2Int_qv);")
     self.gen_add_code_line("grid_d2Integrate_block<T, false>(s_w, s_d2Int_vv);")
     self.gen_add_end_control_flow()
@@ -1786,11 +1784,9 @@ def _emit_integrator_hessian_mjx_output(self):
     self.gen_add_code_line("T *s_d2AB_pin = d_mjx_ws;                       // read-only pin-hessian copy (2nv*nz*nz)")
     self.gen_add_code_line("T *s_dInt_q  = &d_mjx_ws[" + str(twoN * nz * nz) + "];          // 6x6 dIntegrate_q")
     self.gen_add_code_line("T *s_dAB_pin = &d_mjx_ws[" + str(twoN * nz * nz + 36) + "];      // pin dAB [A|B] col-major (2nv*3nv)")
-    # dInt_q at the same w the SE(3) blocks used (Euler dt*qd / SI dt*v_new). Double FD.
+    # dInt_q at the same w the SE(3) blocks used (Euler dt*qd / SI dt*v_new), in T.
     self.gen_add_serial_ops()
-    self.gen_add_code_line("double wq_d[6]; for (int m = 0; m < 6; ++m) wq_d[m] = static_cast<double>(s_w[m]);")
-    self.gen_add_code_line("double dIq_d[36]; grid_dIntegrate_q_block<double>(wq_d, dIq_d);")
-    self.gen_add_code_line("for (int m = 0; m < 36; ++m) s_dInt_q[m] = static_cast<T>(dIq_d[m]);")
+    self.gen_add_code_line("grid_dIntegrate_q_block<T>(s_w, s_dInt_q);")
     self.gen_add_end_control_flow()
     self.gen_add_sync()
     # Reconstruct the pin dAB = [A|B], COLUMN-major s_dAB_pin[col*2n + row], reusing

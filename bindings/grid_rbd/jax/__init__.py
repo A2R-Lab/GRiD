@@ -1676,6 +1676,7 @@ def register_robot(
     enable_tool: bool = False,
     contact_frames: list[str] | tuple[str, ...] | None = None,
     enable_mujoco_kernels: bool = True,
+    assume_unit_quaternions: bool = False,
     dtype: str = "float32",
     friction_model: str = "sign",
     friction_width=None,
@@ -1727,6 +1728,7 @@ def register_robot(
         runtime_transform=runtime_transform,  # mutable joint-origin table (shared device global)
         enable_tool=enable_tool,  # tool welding: attach_tool/detach_tool/tool_fext surface
         contact_frames=contact_frames,  # multi-contact f_ext frames (baked); forwarded, never dropped
+        assume_unit_quaternions=assume_unit_quaternions,
         enable_mujoco_kernels=enable_mujoco_kernels,
         dtype=dtype,  # pin-only builds (RAM/compile-time)
         _profile_overlay=None,  # jax's baked default IS the ffi profile — no overlay

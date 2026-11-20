@@ -1361,6 +1361,7 @@ def register_robot(
     enable_tool: bool = False,
     contact_frames: list[str] | tuple[str, ...] | None = None,
     enable_mujoco_kernels: bool = True,
+    assume_unit_quaternions: bool = False,
     dtype: str = "float32",
     friction_model: str = "sign",
     friction_width=None,
@@ -1392,6 +1393,7 @@ def register_robot(
         runtime_transform=runtime_transform,  # mutable joint-origin table (shared device global)
         enable_tool=enable_tool,  # tool welding: attach_tool/detach_tool/tool_fext surface
         contact_frames=contact_frames,  # multi-contact f_ext frames (baked); forwarded, never dropped
+        assume_unit_quaternions=assume_unit_quaternions,
         enable_mujoco_kernels=enable_mujoco_kernels,  # pin-only builds (RAM/compile-time)
         dtype=dtype,  # Wave 2a: fp64 .so carries an fp64 torch surface
         _profile_overlay="torch",  # E6 torch threads overlay
