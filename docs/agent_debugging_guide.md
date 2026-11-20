@@ -4274,6 +4274,106 @@ for every robot and documents the lost standalone receipt coverage. Preserve
 both inputs behind the flag for algorithm-level follow-up; a mixed-precision
 private diagnostic is evidence, not an approved product implementation.
 
+### Multi-target registration casts must include workspace (2026-11-19)
+
+The multi-target position and gradient production kernels accept an
+`unsigned char *d_workspace` after the output pointer, including their
+`_single_timing` twins. Their attribute manifest omitted that argument, so
+address-taking in checked and unchecked registration failed to compile even
+though direct device-function runners passed. Keep a compile-only regression
+that instantiates both registration surfaces for float and double. The paired
+floating-base GPU regression exercises shared and minimal workspace tiers;
+successful compilation alone is not evidence that either kernel ran correctly.
+Run the explicit compiler regression with
+`python -m test.cuda_equivalents.test_cuda_multitarget_registration --compile-only`;
+keep it out of the compile-free CPU pytest lane.
+
+### Receipt tiers and numerical attribution (2026-11-14)
+
+Historical receipt validity and current release freshness are separate gates.
+Verify historical source identity at the recorded ancestor with trusted policy;
+never make an old receipt current by relaxing the release policy. Contributor
+scope, signer and policy come from the PR base and event identity, not its code.
+An optional time budget can decline another complete unit, not hide a failed one.
+When splitting an old refresh shard, keep its name covered by a fresh replacement;
+additional pieces need collision-free names and exact aggregate node ownership.
+
+Large raw tensor error does not identify the dominant final-output error. In the
+64-capture CPU study, replacing only dM/dq removed seven of nine counterfactual
+failures, including all four gen3 failures; replacing the largest-looking tensor
+block did not do so. Preserve entrywise gate results, per-block substitutions and
+captured-input identity. CPU local-frame CRBA differentiation is a candidate
+algorithm, not a device-accuracy claim: reduction order, generated transforms
+and candidate-dependent tensor errors still need end-to-end validation.
+
+For future warp/thread ports, audit mutable function-local shared arrays as
+well as barriers and GLASS calls. ID's polynomial-coupling alpha/alpha-prime
+tables are block-shared even when a caller supplies an arena; changing the
+linear-algebra namespace alone would alias multiple problems in one block.
+An emitter AST inventory does not resolve generated C++ calls or dynamic Python
+registration. Missing graph edges and unmeasured build context prohibit narrowed
+reuse; a report-only key match is not evidence that a test or compile may be omitted.
+
+### CPU Hessian attribution and generated dependency evidence (2026-11-14)
+
+Compare frame formulations at identical rounded spatial inputs, not just the
+same nominal q. Different quaternion normalization precision can confound a
+float32 arithmetic experiment. Check the float64 algebraic identity before
+studying roundoff; preserve the ordered Lie-tangent root Hessian rather than
+symmetrizing it. In the 64-capture CPU follow-up, a local RNEA q-Hessian passed
+the unchanged composed gates in two summation orders. Reassociating the existing
+world-frame expressions moved failures between samples. Neither result is
+device evidence: bias/gradient substitutions and transplanted tensor error
+still require an end-to-end referee. Error amplified by the inverse is not
+necessarily cancellation in the final contraction; inspect signed entrywise
+contributions before assigning the cause.
+
+Generated entry-body equality is weaker than object-input equality. The bounded
+ID regeneration experiment changed an out-of-line helper, a robot mass and a
+runtime-inertia option; all changed the complete header while both ID root
+definitions remained byte-identical. Keep broad invalidation until transitive
+helper/table/configuration/header edges have independent coverage. A successful
+mutation set is a bounded check, not a compiler-closure proof or reuse permission.
+
+### Precision audit and standalone GPU scratch (2026-11-15)
+
+A float32 output dtype does not prove float32 arithmetic inside a library.
+This NumPy version's `linalg.solve` chooses its double LAPACK loop and casts
+back to float32. The CPU local-frame study initially used it for root gravity.
+Use the analytic rotation when available; otherwise inspect the selected
+backend routine. The corrected chain uses explicit float32 root rotation and
+SciPy's single-precision Cholesky routines, with regressions against silently
+reintroducing the NumPy solve. Preserve preliminary evidence and label the
+limitation rather than retroactively calling it pure float32.
+
+For a GPU numerical candidate, separate supplied intermediates from values
+computed on device. A tensor-only probe composed with CPU solves is an
+intermediate gate; the end-to-end probe must upload only model constants and
+q/qd/u before establishing a device accuracy result. Poison output storage,
+check all CUDA errors, compare raw bytes across launch shapes and repeats,
+and retain sanitizer results separately from numerical acceptance.
+
+A standalone kernel fitting 48 KiB is not proof that it fits a product inner's
+scratch contract. Include gradients, factors, transforms and simultaneously
+live outputs in the placement/lifetime proof across every spill tier. The
+private local-frame probe deliberately repeats directional work; neither its
+smaller tensor scratch nor passing tests establishes runtime speed.
+
+The reciprocal caveat applies to disassembly: seeing DMUL in a float kernel is
+not by itself evidence of a double dynamics algorithm. Compile-only CUDA 13.2
+sentinels for `sinf(float)` and `cosf(float)` also contain a DMUL, unlike the
+division/sqrt/square-power sentinels. Keep source precision, library internals
+and executed instruction paths distinct; static inspection is not a dynamic
+instruction count. Never replace math APIs with fast approximations merely to
+make an instruction grep empty.
+
+The existing correctness launcher takes a shared reservation against timing,
+not an exclusive correctness-queue slot. Two correctness invocations may both
+enter. Enforce the one-owned-GPU-job ceiling by observing completion before
+launching the next job, or by a fail-closed prerequisite tied to the exact run.
+Do not assume that invoking the coordinator queues work behind another
+correctness process, and never inspect or manipulate the timing lock directly.
+
 ### Generated device code computes in T, and a rewrite keeps the rounding (2026-11-20)
 
 Every generated function is templated on T and computes in T. A decimal literal is a

@@ -1,5 +1,91 @@
 # GRiD release collection
 
+## First consumer-boundary slice (schema 1)
+
+`collect --stage consumers` is a separate, versioned contract; legacy captures
+are not relabelled or combined with it. It covers inverse dynamics, forward
+dynamics and end-effector pose on iiwa14 and go2, with GRiD CUDA and standard-API
+Pinocchio. Both use dense, row-major fp32 project-order inputs and outputs at batches
+1, 4, 16, 64, 256 and 1024. Pinocchio keeps its existing fp32 dynamics and fp64 pose
+arithmetic; casts and quaternion normalization occur inside the native sample.
+
+The **GPU dense-contract** boundary starts with device inputs and returns a ready device
+result. Pinocchio includes download, readiness, conversion, CPU evaluation,
+output cast and upload completion. GRiD includes copies from the common packed
+device inputs into its arena, computation and the dense device result copy.
+GRiD also reports a separate **GPU native-layout** boundary: inputs are already
+in its native arena and its result stays there, ready on return. Staging, dense
+output packing and validation downloads are outside that sample. Both layouts
+are explicitly named; neither is a silent headline or substitute for the other.
+CPU/GRiD ratios use only the common dense contract, never the native-layout row.
+The host boundary starts and ends in host memory. Both allocate page-locked
+I/O buffers once outside samples, with no pageable fallback. Existing internal
+algorithm/pool allocations remain included. These measurements are synchronous
+consumer-call costs, not device-event kernel timings or asynchronous throughput.
+They must not be subtracted from legacy pre-staged timings as a pure copy cost.
+
+One acceptance function checks every explicit fixture row, both outputs against
+the oracle before and after sampling, the actual last timed outputs, and
+inter-call and cross-boundary agreement. A strict failure is ineligible. Equal
+repeat counts, every repeat's samples and mean, and the spread of repeat means
+are retained in `consumer-report.json`; the report flags spread exceeding 10%
+of the median repeat mean. Pinocchio is reported at one thread and at the requested
+ceiling, capped by batch, as separate variants with equal repeats. There is no
+tuning sweep or timing-based choice. Warning labels remain visible in
+the aggregation contract; this bounded slice uses strict policy.
+
+Dry planning (no build, GPU use or timing):
+
+```bash
+.venv/bin/python -m test.benchmarks.release.collect --stage consumers
+```
+
+After explicit GPU approval and a booked correctness window, this smoke performs
+no timing samples and is never comparison or release evidence:
+
+```bash
+.venv/bin/python -m test.benchmarks.release.collect --stage consumers \
+  --correctness-only --batches 1 4 --cpu-threads 2 \
+  --execute --output /tmp/grid-consumer-correctness-NEW
+```
+
+Timing needs separate approval and an isolated window. A new `--output` directory
+is required. `--repeats 3` is the default for both backends. Every native CUDA
+return is checked; errors abort the campaign without publishing ratios. Bridge
+identities include compiler-resolved header dependencies, flags and compiler.
+Runtime fixture hashes remain in the validation/contract metadata and do not
+invalidate compiled code. Every batch uses the largest requested GRiD capacity,
+so there is one compiled artifact per robot/operation and a constant arena size.
+The CUDA toolkit follows `find_nvcc()` and the host compiler honors `CXX`.
+The worker defaults to 100 iterations, matching the core stage. No receipt cache
+or correctness evidence is reused by this stage.
+
+The legacy `clamp_threads` attribute-query failure now uses `gpuAssert`: this
+aborts under the default generated error policy, or records a sticky error under
+`GRID_GPUERRCHK_NO_EXIT`. Either behavior fails the worker instead of clearing
+and ignoring a CUDA error. The consumer bridge enqueues the same generated kernel
+and resource tier directly: the legacy host wrapper fences internally, which would
+add an extra fence here. Registration, shared-memory checks and the kernel thread
+limit are checked during setup; the actual thread count is recorded. The dense
+GPU callback completes after its output copy, and the native-layout callback
+after computation; each has one explicit device fence. The common driver adds
+no duplicate fence. Legacy host-call paths retain their existing behavior.
+
+Forward dynamics, and any operation added after it, does not mirror the launch. It
+calls GRiD's generated compute-only host function, so the launch, the workspace and
+the completion fence are the generator's. That fence is inside every call, so the
+bridge adds none on the native layout: the sample has the function's fence alone. The
+dense sample has the function's fence before the output copy and the bridge's after
+it. `consumer_completion.h` holds this rule and a CPU test traces all three cases.
+The capture records which launch a cell used (`consumer_launch`). For a mirrored
+launch it records the block size launched (`consumer_threads_used`); for a host call
+only the size requested (`consumer_threads_requested`), because the generated function
+applies its own clamp. Inverse dynamics and pose keep the single mirrored launch, and
+their native-layout time must agree with the legacy `grid_kernel_time` resident time
+of the same cell within the repeat spread.
+
+## Existing collector stages
+
 This validation-gated collector supplies the release figures. It
 does not reuse historical timing values or the old drivers' unmatched `with_mem`
 measurements. Collision work is excluded. Nothing here changes

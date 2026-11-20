@@ -17,9 +17,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -122,6 +125,9 @@ class ReceiptRow:
     expected_skips: str
     header_keys: str
     primary: bool
+    tier: str = 'minor'
+    waivers: tuple = ()
+    retired_in: str | None = None
 
     @property
     def sm(self) -> str:
@@ -134,7 +140,8 @@ def _row(entry, *, primary, table_path) -> ReceiptRow:
     missing = [k for k in ('arch', 'label', 'receipt') if k not in entry]
     if missing:
         raise ValueError(f'{table_path}: row {entry!r} lacks {missing}')
-    unknown = sorted(set(entry) - {'arch', 'label', 'receipt', 'expected_skips', 'header_keys'})
+    unknown = sorted(set(entry) - {'arch', 'label', 'receipt', 'expected_skips', 'header_keys',
+                                  'tier', 'waivers', 'retired_in'})
     if unknown:
         raise ValueError(f'{table_path}: row {entry!r} has unknown key(s) {unknown}')
     arch = entry['arch']
@@ -142,7 +149,7 @@ def _row(entry, *, primary, table_path) -> ReceiptRow:
         raise ValueError(f'{table_path}: arch must be a positive integer '
                          f'(compute capability times ten), got {arch!r}')
     receipt = str(entry['receipt'])
-    if Path(receipt).is_absolute():
+    if Path(receipt).is_absolute() or '..' in Path(receipt).parts:
         raise ValueError(f'{table_path}: receipt paths are repository-relative: {receipt}')
     if not primary and not receipt.startswith(SECONDARY_DIR + '/'):
         raise ValueError(f'{table_path}: secondary receipt {receipt} must live under '
@@ -152,9 +159,61 @@ def _row(entry, *, primary, table_path) -> ReceiptRow:
     else:
         header_keys = entry.get('header_keys', receipt[:-len('.json')] + '-header-keys.json'
                                 if receipt.endswith('.json') else receipt + '-header-keys.json')
+    tier = entry.get('tier', 'primary' if primary else 'minor')
+    if tier not in {'primary', 'minor', 'major', 'retired'} or (tier == 'primary') != primary:
+        raise ValueError(f'{table_path}: invalid tier {tier!r} for this row')
+    waivers = entry.get('waivers', [])
+    if not isinstance(waivers, list) or (primary and waivers):
+        raise ValueError(f'{table_path}: waivers must be a list; primary waivers are forbidden')
+    versions = set()
+    for waiver in waivers:
+        if not isinstance(waiver, dict) or set(waiver) != {'version', 'reason'}:
+            raise ValueError(f'{table_path}: waiver needs exactly version and reason')
+        release_version(waiver['version'])
+        if not isinstance(waiver['reason'], str) or not waiver['reason'].strip():
+            raise ValueError(f'{table_path}: waiver reason must be nonempty')
+        if waiver['version'] in versions:
+            raise ValueError(f'{table_path}: duplicate waiver version')
+        versions.add(waiver['version'])
+    retired = entry.get('retired_in')
+    if tier == 'retired':
+        if not retired or release_version(retired)[2] != 0:
+            raise ValueError(f'{table_path}: retirement needs an X.Y.0 version')
+    elif retired is not None:
+        raise ValueError(f'{table_path}: retired_in requires retired tier')
+    for value in (header_keys, entry.get('expected_skips', DEFAULT_EXPECTED_SKIPS)):
+        if not isinstance(value, str) or Path(value).is_absolute() or '..' in Path(value).parts:
+            raise ValueError(f'{table_path}: evidence paths must be repository-relative')
     return ReceiptRow(arch=arch, label=str(entry['label']), receipt=receipt,
                       expected_skips=str(entry.get('expected_skips', DEFAULT_EXPECTED_SKIPS)),
-                      header_keys=str(header_keys), primary=primary)
+                      header_keys=str(header_keys), primary=primary, tier=tier,
+                      waivers=tuple((w['version'], w['reason']) for w in waivers), retired_in=retired)
+
+
+def release_version(version: str) -> tuple[int, int, int]:
+    """Only explicit stable X.Y.Z releases; reject ambiguous/pre-release tags."""
+    if not isinstance(version, str) or not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version):
+        raise ValueError(f'expected stable X.Y.Z release version, got {version!r}')
+    return tuple(map(int, version.split('.')))
+
+
+def requires_fresh(row: ReceiptRow, version: str) -> bool:
+    major, minor, patch = release_version(version)
+    if row.tier == 'retired':
+        if release_version(version) < release_version(row.retired_in):
+            raise ValueError('cannot apply retirement to an earlier release')
+        return False
+    return row.primary or (row.tier == 'minor' and patch == 0) or (
+        row.tier == 'major' and minor == 0 and patch == 0)
+
+
+def provisional_row(arch: int) -> ReceiptRow:
+    """Evidence routing only: an unknown architecture gains no support tier."""
+    if type(arch) is not int or arch <= 0:
+        raise ValueError('no valid GPU architecture')
+    return ReceiptRow(arch, 'Contributor GPU (not a support claim)',
+                      'receipts/provisional.json', 'test/gpu-proof-provisional-skips.txt',
+                      'receipts/provisional-header-keys.json', False, 'provisional')
 
 
 def load_receipt_table(path: Path = RECEIPTS_TABLE) -> list[ReceiptRow]:
@@ -327,15 +386,85 @@ def rst_table_rows(receipts: list[dict]) -> str:
 
 
 def _gpu_proof_bin() -> str:
+    sibling = Path(sys.executable).with_name('gpu-proof')
+    if sibling.exists():
+        return str(sibling)
     venv = REPO_ROOT / '.venv' / 'bin' / 'gpu-proof'
     return str(venv) if venv.exists() else (shutil.which('gpu-proof') or 'gpu-proof')
 
 
+@contextmanager
+def recorded_tree(root: Path, commit: str):
+    """Never execute historical code. Only give the installed verifier its data."""
+    if not re.fullmatch(r'[0-9a-f]{40}', commit):
+        raise ValueError('recorded commit must be a full SHA-1')
+    subprocess.run(['git', 'merge-base', '--is-ancestor', commit, 'HEAD'],
+                   cwd=root, check=True, capture_output=True)
+    directory = Path(tempfile.mkdtemp(prefix='grid-receipt-validity-'))
+    tree = directory / 'tree'
+    added = False
+    try:
+        subprocess.run(['git', 'worktree', 'add', '--detach', str(tree), commit],
+                       cwd=root, check=True, capture_output=True)
+        added = True
+        try:
+            yield tree, directory
+        finally:
+            # No force: unexpected edits must not be silently discarded.
+            # If removal fails, preserve the private directory for diagnosis.
+            subprocess.run(['git', 'worktree', 'remove', str(tree)],
+                           cwd=root, check=True, capture_output=True)
+        shutil.rmtree(directory)  # only our scratch, after verified worktree removal
+    except BaseException:
+        if not added and not tree.exists():
+            directory.rmdir()
+        raise
+
+
+def historical_policy(policy: dict, receipt: dict, now: datetime) -> dict:
+    """Evaluate age at recording, not today; retain the original carry-age bound.
+
+    gpu-proof has no as-of option. Shift both age ceilings by the elapsed whole
+    days plus one (rounding allowance). Signature, timestamps, dirty flags,
+    ancestry, fingerprint, results and exact historical scope still verify.
+    This policy is NEVER used for current merge or release freshness.
+    """
+    ended = _ended_at(receipt)
+    if ended is None or ended.tzinfo is None:
+        raise ValueError('historical receipt needs a timezone-aware end timestamp')
+    elapsed = max(0, (now - ended).days + 1)
+    return dict(policy, max_age_days=policy.get('max_age_days', 30) + elapsed,
+                carried_max_age_days=policy.get('carried_max_age_days', 30) + elapsed)
+
+
+def verify_recorded(row: ReceiptRow, *, root: Path, policy: str, now: datetime,
+                    run=subprocess.run):
+    import yaml
+    path = (root / row.receipt).resolve()
+    path.relative_to(root.resolve())
+    receipt = json.loads(path.read_text())
+    if receipt_arch(receipt) != row.arch:
+        raise ValueError('receipt GPU architecture differs from table row')
+    with recorded_tree(root, receipt['repo']['commit_sha']) as (tree, scratch):
+        # Policy comes from the trusted caller, not the recorded checkout.
+        rules = historical_policy(yaml.safe_load((root / policy).read_text()), receipt, now)
+        policy_path = scratch / 'historical-policy.json'
+        policy_path.write_text(json.dumps(rules))
+        skips = tree / row.expected_skips
+        skips.resolve().relative_to(tree.resolve())
+        if not skips.is_file():
+            raise ValueError('expected-skip baseline missing at recorded commit')
+        return run([_gpu_proof_bin(), 'verify', '--receipt', str(path), '--repo', str(tree),
+                    '--policy', str(policy_path), '--expected-skips', str(skips)],
+                   cwd=root, capture_output=True, text=True)
+
+
 def verify_all(table: list[ReceiptRow] | None = None, *, root: Path = REPO_ROOT,
                policy: str = EVERYDAY_POLICY, run=subprocess.run,
-               now: datetime | None = None) -> int:
-    """Verify every receipt of the table that exists under ``root`` with the
-    everyday policy and its own expected-skips file; one summary line per
+               now: datetime | None = None, historical: bool = True,
+               required_receipts: set[str] | None = None) -> int:
+    """Verify every receipt at its recorded ancestor (historical validity).
+    The trusted everyday policy and historical skips apply; one summary per
     architecture. A missing secondary receipt is reported, not an error; a
     missing primary receipt, or any failed verification, returns 1."""
     now = now or datetime.now(timezone.utc)
@@ -346,7 +475,7 @@ def verify_all(table: list[ReceiptRow] | None = None, *, root: Path = REPO_ROOT,
         if not path.exists():
             kind = 'primary' if row.primary else 'secondary'
             print(f'{head}: not recorded ({kind} receipt missing)')
-            if row.primary:
+            if row.primary or row.receipt in (required_receipts or set()):
                 rc = 1
             continue
         try:
@@ -357,10 +486,18 @@ def verify_all(table: list[ReceiptRow] | None = None, *, root: Path = REPO_ROOT,
             continue
         age = (f'{(now - summary["ended_at"]).days} d old' if summary['ended_at']
                else 'age unknown')
-        proc = run([_gpu_proof_bin(), 'verify', '--receipt', str(path), '--repo', str(root),
-                    '--policy', str(root / policy),
-                    '--expected-skips', str(root / row.expected_skips)],
-                   cwd=root, capture_output=True, text=True)
+        try:
+            if historical:
+                proc = verify_recorded(row, root=root, policy=policy, now=now, run=run)
+            else:
+                proc = run([_gpu_proof_bin(), 'verify', '--receipt', str(path), '--repo', str(root),
+                            '--policy', str(root / policy),
+                            '--expected-skips', str(root / row.expected_skips)],
+                           cwd=root, capture_output=True, text=True)
+        except (ValueError, KeyError, OSError, subprocess.CalledProcessError) as exc:
+            print(f'{head}: FAIL ({exc})')
+            rc = 1
+            continue
         ok = proc.returncode == 0
         if not ok:
             rc = 1
@@ -370,6 +507,65 @@ def verify_all(table: list[ReceiptRow] | None = None, *, root: Path = REPO_ROOT,
               f'{summary["passed"]} passed, {summary["skipped"]} skipped; '
               f'{"ok" if ok else f"FAIL (rc={proc.returncode})"}')
     return rc
+
+
+def verify_release(version: str, table=None, *, root: Path = REPO_ROOT,
+                   run=subprocess.run) -> int:
+    """Historical validity for all evidence, fresh full evidence by release tier."""
+    release_version(version)
+    table = table or load_receipt_table(root / 'test/gpu-proof-receipts.yaml')
+    rc = verify_all(table, root=root, run=run)
+    for row in table:
+        if not requires_fresh(row, version):
+            continue
+        waiver = dict(row.waivers).get(version)
+        if waiver and not row.primary:
+            print(f'{row.sm}: WAIVED for {version}: {waiver}')
+            continue
+        path = root / row.receipt
+        if not path.is_file():
+            print(f'{row.sm}: required {row.tier} receipt missing for {version}; FAIL')
+            rc = 1
+            continue
+        if receipt_arch(json.loads(path.read_text())) != row.arch:
+            print(f'{row.sm}: receipt architecture mismatch; FAIL')
+            rc = 1
+            continue
+        proc = run([_gpu_proof_bin(), 'verify', '--receipt', str(path), '--repo', str(root),
+                    '--policy', str(root / 'test/gpu-proof-policy-release.yaml'),
+                    '--expected-skips', str(root / row.expected_skips)],
+                   cwd=root, capture_output=True, text=True)
+        sys.stdout.write(proc.stdout or '')
+        sys.stdout.write(proc.stderr or '')
+        rc |= proc.returncode != 0
+    return int(rc)
+
+
+def tier_table(table=None, *, root: Path = REPO_ROOT) -> str:
+    """Generated policy inventory, distinct from manually curated toolchain facts."""
+    lines = ['.. list-table:: Hardware receipt policy (generated)',
+             '   :header-rows: 1', '',
+             '   * - Architecture', '     - Tier', '     - Recorded source version',
+             '     - Receipt date', '     - Waivers / retirement']
+    for row in table or load_receipt_table(root / 'test/gpu-proof-receipts.yaml'):
+        version = date = 'not recorded'
+        path = root / row.receipt
+        if path.is_file():
+            receipt = json.loads(path.read_text())
+            date = receipt_summary(receipt)['date']
+            commit = receipt['repo']['commit_sha']
+            if not re.fullmatch('[0-9a-f]{40}', commit):
+                raise ValueError('invalid receipt commit')
+            result = subprocess.run(['git', 'show', f'{commit}:pyproject.toml'], cwd=root,
+                                    check=True, capture_output=True, text=True)
+            match = re.search(r'^version\s*=\s*"([^"]+)"', result.stdout, re.M)
+            version = (match[1] if match else 'unknown') + f' ({commit[:7]})'
+        note = '; '.join(f'{v}: {reason}' for v, reason in row.waivers) or 'none'
+        if row.retired_in:
+            note += f'; retired in {row.retired_in}'
+        cells = [f'{row.sm} ({row.label})', row.tier, version, date, note]
+        lines.append('   * - ' + '\n     - '.join(c.replace('\n', ' ') for c in cells))
+    return '\n'.join(lines) + '\n'
 
 
 def receipts_on_disk(table: list[ReceiptRow] | None = None, *, root: Path = REPO_ROOT) -> list[dict]:
@@ -396,9 +592,16 @@ def main(argv=None):
     parser.add_argument('--table', action='store_true',
                         help='print reStructuredText list-table rows for the compatibility page '
                              'from every receipt on disk (or from --receipt alone)')
+    parser.add_argument('--release', metavar='X.Y.Z', help='verify validity and release-tier freshness')
+    parser.add_argument('--tier-table', action='store_true', help='generate policy inventory RST')
+    parser.add_argument('--repo', type=Path, default=REPO_ROOT,
+                        help='candidate repository; no code from it is executed')
+    parser.add_argument('--policy-root', type=Path, default=REPO_ROOT,
+                        help='trusted checkout owning table and policy (PR base in CI)')
     args = parser.parse_args(argv)
     chosen = [n for n, v in (('--write-manifest', args.write_manifest),
-                             ('--verify-all', args.verify_all), ('--table', args.table)) if v]
+                             ('--verify-all', args.verify_all), ('--table', args.table),
+                             ('--release', args.release), ('--tier-table', args.tier_table)) if v]
     if len(chosen) != 1:
         parser.error('choose exactly one of --write-manifest PATH, --verify-all, --table')
     if args.write_manifest:
@@ -410,7 +613,15 @@ def main(argv=None):
         print(f'Wrote {len(ids)} node IDs -> {args.write_manifest}')
         return 0
     if args.verify_all:
-        return verify_all()
+        table = load_receipt_table(args.policy_root / 'test/gpu-proof-receipts.yaml')
+        required = {row.receipt for row in table if (args.policy_root / row.receipt).is_file()}
+        return verify_all(table, root=args.repo, policy=str(args.policy_root / EVERYDAY_POLICY),
+                          required_receipts=required)
+    if args.release:
+        return verify_release(args.release)
+    if args.tier_table:
+        sys.stdout.write(tier_table())
+        return 0
     receipts = ([json.loads(args.receipt.read_text())] if args.receipt
                 else receipts_on_disk())
     sys.stdout.write(rst_table_rows(receipts))

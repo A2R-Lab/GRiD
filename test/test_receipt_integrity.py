@@ -348,7 +348,7 @@ def test_verify_all_runs_each_receipt_with_its_own_skips_and_reports_missing_one
         calls.append(command)
         return SimpleNamespace(returncode=0, stdout='', stderr='')
     now = ri.datetime(2026, 10, 25, tzinfo=ri.timezone.utc)
-    assert ri.verify_all(table, root=root, run=run, now=now) == 0
+    assert ri.verify_all(table, root=root, run=run, now=now, historical=False) == 0
     lines = capsys.readouterr().out.strip().splitlines()
     assert len(lines) == 3
     assert 'NVIDIA GeForce RTX 5090, 32 GB; commit 1234567; 4 d old; 1 passed, 1 skipped; ok' in lines[0]
@@ -362,10 +362,10 @@ def test_verify_all_runs_each_receipt_with_its_own_skips_and_reports_missing_one
     # a failed verification is the exit code, and the verifier's output is shown
     def failing(command, **kwargs):
         return SimpleNamespace(returncode=1, stdout='[gpu-proof] FAIL: stale\n', stderr='')
-    assert ri.verify_all(table, root=root, run=failing, now=now) == 1
+    assert ri.verify_all(table, root=root, run=failing, now=now, historical=False) == 1
     out = capsys.readouterr().out
     assert '[gpu-proof] FAIL: stale' in out and 'FAIL (rc=1)' in out
     # a missing primary receipt is an error, a missing secondary is not
     (root / 'gpu-proof.json').unlink()
-    assert ri.verify_all(table, root=root, run=run, now=now) == 1
+    assert ri.verify_all(table, root=root, run=run, now=now, historical=False) == 1
     assert 'primary receipt missing' in capsys.readouterr().out

@@ -83,6 +83,36 @@ def test_dry_launcher_has_no_output_or_lock_side_effects(launch):
     assert not launcher.LOCK_PATH.exists()
 
 
+def test_provisional_dry_plan_has_no_side_effects(launch, capsys):
+    launch.invoke('--provisional', '--github-user', 'contributor')
+    assert 'provisional_receipt.py' in capsys.readouterr().out
+    assert not launch.calls and not launch.out.exists()
+    assert not launcher.LOCK_PATH.exists()
+
+
+def test_provisional_completion_never_promotes_primary(launch, monkeypatch):
+    original = launch.receipt()
+    keys = (launch.root / 'test/gpu-proof-header-keys.json').read_bytes()
+    def run(command, **kwargs):
+        assert '--record' in command and '--receipts' not in command
+        output = launcher.Path(command[command.index('--record') + 1])
+        output.mkdir()
+        (output / 'provisional.json').write_text('{}')
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(launcher, 'run_driver', run)
+    launch.invoke('--execute', '--provisional', '--github-user', 'contributor')
+    assert launch.status()['status'] == 'provisional-complete'
+    assert launch.receipt() == original
+    assert (launch.root / 'test/gpu-proof-header-keys.json').read_bytes() == keys
+    assert not launch.calls
+
+
+def test_provisional_rejects_release_mode_before_side_effects(launch):
+    with pytest.raises(SystemExit):
+        launch.invoke('--execute', '--provisional', '--full', '--github-user', 'contributor')
+    assert not launch.calls and not launch.out.exists()
+
+
 def test_bounded_profile_is_explicit_and_persisted(launch):
     launch.invoke('--execute', '--full', '--resource-profile', 'bounded-overlap')
     assert launch.status()['resource_profile'] == {

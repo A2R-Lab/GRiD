@@ -15,9 +15,17 @@ running the GPU suite on the primary GPU. PyPI moves when a maintainer tags
 
 Open pull requests against ``dev``. A pull request into ``dev`` needs the CPU
 lane, the packaging jobs and the docs build to pass. It needs no GPU and no
-receipt; the receipt job runs only for ``main``. If you have a GPU, run the
-tests that cover your change and report the GPU and the result in the pull
-request.
+new receipt. Historical receipts are checked for validity, not freshness.
+If you have a GPU, ``make receipt-pr GITHUB_USER=your-login OUT=/tmp/grid-pr-new``
+records separate provisional evidence with your GitHub SSH key. Complete smoke
+is mandatory; optional small-robot groups are admitted within a 30–60 minute
+budget. A started group finishes, even when a cold build overruns its estimate.
+Every executed outcome must pass. Copy the reported file to
+``receipts/provisional.json`` and commit only that file after the run. CI uses
+base-branch verifier code and policy, bound to the PR author's keys. Absence is
+neutral; unknown hardware evidence is not a support claim. No fork code runs
+automatically on lab hardware. See ``CONTRIBUTING.md`` for the exact command
+and the mandatory clean-checkout contract.
 
 Before ``main`` moves, a maintainer runs the stale-shard refresh, which
 re-runs the shards whose inputs changed and carries the others, and commits
