@@ -4418,3 +4418,30 @@ The cell is sensitive to how the transforms are rounded; which stage amplifies i
 isolated yet. Do not read a pass or a fail of this cell after such a change as a
 statement about the change alone, and do not raise the bound on that argument: measure
 the stages first.
+
+### Sums of products in T are fused per call site, so tiers stop agreeing (2026-11-21)
+
+Once the printer cast constants to T, a transform entry such as
+`static_cast<T>(0.0012914)*s_temp[0] + static_cast<T>(0.055325)*s_temp[14]` became float
+arithmetic. Before, the double literals made the whole sum a double that was rounded to
+float once. The compiler may fuse `a*b + c` into one multiply-add, and it decides per call
+site: the same helper inlined next to shared memory and next to workspace memory was fused
+differently. Five output-spill tests, which require a spilled tier to return the bits of
+the full tier, failed in the receipt (coriolis on g1, h1_2 and fetch; the forward dynamics
+gradient on floating g1 and baxter). On fetch the difference is one entry at 2.9e-12; on
+floating g1 the gradient moves by 2.9e-3, the same fp32 amplification as gen3 above.
+Compiling the same headers with `-fmad=false` removes every mismatch, which is how to
+confirm this class.
+
+The printer now writes every sum that contains a product as nested `fma(a, b, acc)` in a
+fixed order, and `grid_quat_norm2` does the same, so the fused form is in the source and
+no choice is left to the compiler. Divisions stay divisions. When you add an emitter that
+prints symbolic arithmetic, send it through `expr_T`; when you hand-write `a*b + c` in a
+helper that is inlined into kernels of more than one tier, write the `fma`.
+
+Two process lessons from the same day. The wide gate before a merge that changes emitted
+arithmetic must include the output-spill modules (`test_cuda_*_spill.py`), since they are
+the only tests that compare two layouts bit for bit. And the installed `grid_rbd._core` is
+built once by `pip install -e .`: a checkout that pulled the armature bindings without a
+rebuild failed 33 wrapper tests seven hours into a refresh. `test/installed_extension.py`
+now refuses that before the launcher starts; `make build` repairs it.
