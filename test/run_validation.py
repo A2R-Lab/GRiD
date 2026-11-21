@@ -131,6 +131,13 @@ def run_driver(command, *, log, lock, profile='serial'):
         signal.signal(signal.SIGTERM, previous)
 
 
+def installed_extension_problems():
+    """Text naming what is stale in the installed grid_rbd, or '' when it matches the sources."""
+    check = subprocess.run([sys.executable, str(ROOT / 'test/installed_extension.py')],
+                           cwd=ROOT, capture_output=True, text=True)
+    return (check.stdout + check.stderr).strip() if check.returncode else ''
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', type=Path, help='New evidence directory')
@@ -172,6 +179,10 @@ def main():
     if git('status', '--porcelain'):
         raise SystemExit('Commit correctness inputs before recording; tree must be clean.')
     candidate = git('rev-parse', 'HEAD')
+    # A stale compiled extension fails tests hours into the run; refuse it now.
+    stale = installed_extension_problems()
+    if stale:
+        raise SystemExit('Installed grid_rbd does not match this checkout:\n' + stale)
     if args.resume:
         prior_state_path = shard_dir.parent / 'state.json'
         if not prior_state_path.is_file():

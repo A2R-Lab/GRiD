@@ -499,7 +499,7 @@ def gen_base_quaternion_helpers(self):
         "template <typename T>",
         "__host__ __device__ __forceinline__ T grid_quat_norm2(T qx, T qy, T qz, T qw) {",
         ("    (void)qx; (void)qy; (void)qz; (void)qw; return static_cast<T>(1);" if unit
-         else "    return qx*qx + qy*qy + qz*qz + qw*qw;"),
+         else "    return fma(qx, qx, fma(qy, qy, fma(qz, qz, qw*qw)));"),
         "}",
         "// Row-major 3x3 rotation, R[3*i+j], of the quaternion q = (x, y, z, w).",
         "template <typename T>",
