@@ -228,7 +228,7 @@ def _code_options(urdf_path: Path, cuda_arch: int, *, floating_base, ee_joint_na
                   friction_width, runtime_inertia, runtime_transform, runtime_joint_dynamics, emit_plant,
                   collision, collision_res, collision_native, spherized_urdf, strict_collision,
                   launch_config_profile, runtime_armature: bool = False, armature=None,
-                  assume_unit_quaternions: bool = False) -> dict[str, Any]:
+                  assume_unit_quaternions: bool = False, planar_base: bool = False) -> dict[str, Any]:
     if dtype not in ("float32", "float64"):
         raise ValueError(f"dtype must be 'float32' or 'float64', got {dtype!r}")
     opts: dict[str, Any] = {
@@ -236,6 +236,13 @@ def _code_options(urdf_path: Path, cuda_arch: int, *, floating_base, ee_joint_na
         "ee_joint_names": list(ee_joint_names) if ee_joint_names else [],
         "cuda_arch": int(cuda_arch),
     }
+    # In the key only when True, so existing artifacts keep their keys.
+    if type(planar_base) is not bool:
+        raise TypeError("planar_base must be bool")
+    if planar_base:
+        if floating_base:
+            raise ValueError("floating_base and planar_base are mutually exclusive")
+        opts["planar_base"] = True
     if dtype == "float64":
         opts["dtype"] = "float64"
     if algorithm_list is not None:
@@ -559,6 +566,7 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
                    force_rebuild: bool = False,
                    plan_only: bool = False,
                    floating_base: bool = False,
+                   planar_base: bool = False,
                    ee_joint_names: Sequence[str] | None = None,
                    dtype: str = "float32",
                    algorithm_list: Sequence[str] | str | None = None,
@@ -601,7 +609,7 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
     cold and reused builds. Schema-2 artifacts bind validated coordinate
     metadata to the generated header and binary; older artifacts need rebuilding.
 
-    The codegen keywords (`floating_base`, `ee_joint_names`, `dtype`, `algorithm_list`,
+    The codegen keywords (`floating_base`, `planar_base`, `ee_joint_names`, `dtype`, `algorithm_list`,
     `enable_mujoco_kernels`, `assume_unit_quaternions`, `cost_frames`, `contact_frames`, the joint-dynamics and runtime
     knobs) mean what they mean on `register_robot`; `emit_plant` is the generator's plant-block
     switch (None: the generator's rule), and `collision`, `collision_res`, `collision_native`
@@ -629,7 +637,7 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
     urdf_bytes = urdf_p.read_bytes()
     if expected_descriptor_id is not None:
         from ._model import describe_model
-        actual = describe_model(urdf_p, floating_base=floating_base,
+        actual = describe_model(urdf_p, floating_base=floating_base, planar_base=planar_base,
                                 runtime_transform=runtime_transform)['descriptor_id']
         if actual != expected_descriptor_id:
             raise ValueError('expected_descriptor_id does not match requested model')
@@ -660,7 +668,8 @@ def build_artifact(consumer: str, name: str, urdf_path: str | Path, *,
         runtime_joint_dynamics=runtime_joint_dynamics, runtime_armature=runtime_armature, armature=armature,
         emit_plant=emit_plant, collision=collision,
         collision_res=collision_res, collision_native=collision_native, spherized_urdf=spherized_urdf,
-        strict_collision=strict_collision, launch_config_profile=launch_config_profile)
+        strict_collision=strict_collision, launch_config_profile=launch_config_profile,
+        planar_base=planar_base)
     identity = artifact_identity(cuda_arch)
     toolchain = resolve_consumer_toolchain(xflags, lflags)
     identity["host_cxx"] = toolchain.identity

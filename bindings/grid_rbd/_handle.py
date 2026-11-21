@@ -342,6 +342,14 @@ class RobotHandle:
         return bool(self._meta.get("floating_base", False))
 
     @property
+    def planar_base(self) -> bool:
+        """True when the first three coordinates are the planar base block
+        ``[px, py, theta]`` of a ``planar_base_joint`` at the root, whether it
+        came from ``register_robot(planar_base=True)`` or from the URDF. Such
+        a model is not a floating base."""
+        return bool(self._meta.get("planar_base", False))
+
+    @property
     def model_descriptor(self):
         """Nominal GRiD-native coordinates, irrespective of output_convention.
 

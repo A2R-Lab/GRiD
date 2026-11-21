@@ -195,6 +195,39 @@ def validate_descriptor(d):
     return d
 
 
+PLANAR_BASE_JOINT = "planar_base_joint"
+_PLANAR_BASE_KINDS = ("prismatic", "prismatic", "continuous")
+
+
+def planar_base_block(descriptor):
+    """Return (q_start, v_start, 3) of the planar base coordinates, else None.
+
+    A planar base is recognised by structure and name, with no schema field:
+    joints 0, 1 and 2 are planar_base_joint__sub0 (prismatic), __sub1
+    (prismatic) and __sub2 (continuous), the first parented to the root and
+    each of the others to the previous one, each owns its coordinate, and
+    every other joint descends from __sub2. The block holds [px, py, theta]. A URDF that declares the planar_base_joint
+    planar joint from its root link and the planar_base parse option give the
+    same descriptor, so both are recognised.
+    """
+    joints = descriptor.get("joints") if type(descriptor) is dict else None
+    if type(joints) is not list or len(joints) < 3:
+        return None
+    for index, kind in enumerate(_PLANAR_BASE_KINDS):
+        joint = joints[index]
+        if (joint.get("name") != f"{PLANAR_BASE_JOINT}__sub{index}"
+                or joint.get("kind") != kind
+                or joint.get("parent_body") != index - 1
+                or joint.get("mimic") is not None
+                or joint.get("q_start") != index or joint.get("v_start") != index):
+            return None
+    # The chain must carry the whole model: nothing else hangs off the root or
+    # off the two massless links inside the chain.
+    if any(joint.get("parent_body") in (-1, 0, 1) for joint in joints[3:]):
+        return None
+    return (joints[0]["q_start"], joints[0]["v_start"], 3)
+
+
 def descriptor_from_robot(robot, *, runtime_transform=False):
     """Extract effective placements and the configuration layout from one parsed model."""
     import numpy as np
