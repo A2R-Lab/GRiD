@@ -171,6 +171,7 @@ def register_robot(
     *,
     urdf_string: str | None = None,
     floating_base: bool = False,
+    planar_base: bool = False,
     ee_joint_names: list[str] | tuple[str, ...] | None = None,
     max_batch_size: int = 256,
     cache_dir: str | Path | None = None,
@@ -256,6 +257,13 @@ def register_robot(
         jax/torch backends forward to their submodule's register_robot.
     floating_base : bool, optional
         Treat the robot as floating-base. Default False (fixed-base).
+    planar_base : bool, optional
+        Attach the URDF root to the world through a planar joint named
+        ``planar_base_joint`` (plane normal +Z), as if the URDF declared it.
+        The first three coordinates are then ``[px, py, theta]`` with the
+        linear velocity in the world frame, all three unbounded. This is not
+        a floating base: ``handle.floating_base`` stays False and there is no
+        quaternion. Mutually exclusive with ``floating_base``. Default False.
     ee_joint_names : list[str] | None, optional
         Names of fixed joints to treat as end-effector targets. Default
         None ⇒ codegen uses all leaf nodes. Currently only the first
@@ -433,6 +441,8 @@ def register_robot(
     # output_convention="mujoco" then works on fixed AND floating robots alike (same interface).
     # The mjx kernels/symbols are only needed (and only emitted) on a FLOATING base, so the
     # enable_mujoco_kernels compatibility guard below applies only there.
+    if floating_base and planar_base:
+        raise ValueError("floating_base and planar_base are mutually exclusive")
     if output_convention == "mujoco" and floating_base and not enable_mujoco_kernels:
         # Caught here rather than at call time: on a floating base enable_mujoco_kernels=False
         # drops the mjx kernels from the .so entirely, so a 'mujoco' handle over that .so would
@@ -477,6 +487,7 @@ def register_robot(
         from . import jax as _jax_backend
         return _jax_backend.register_robot(
             name, urdf_path, urdf_string=urdf_string, floating_base=floating_base,
+            planar_base=planar_base,
             ee_joint_names=ee_joint_names, max_batch_size=max_batch_size,
             cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch,
             output_convention=output_convention, algorithm_list=algorithm_list,
@@ -494,6 +505,7 @@ def register_robot(
         from . import torch as _torch_backend
         return _torch_backend.register_robot(
             name, urdf_path, urdf_string=urdf_string, floating_base=floating_base,
+            planar_base=planar_base,
             ee_joint_names=ee_joint_names, max_batch_size=max_batch_size,
             cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch,
             output_convention=output_convention, algorithm_list=algorithm_list,
@@ -510,6 +522,7 @@ def register_robot(
 
     cache_key, so_path, meta = warm_robot(
         name, urdf_path, urdf_string=urdf_string, floating_base=floating_base,
+        planar_base=planar_base,
         ee_joint_names=ee_joint_names, max_batch_size=max_batch_size,
         cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch,
         dtype=dtype, runtime_inertia=runtime_inertia,
@@ -567,6 +580,7 @@ def warm_robot(
     *,
     urdf_string: str | None = None,
     floating_base: bool = False,
+    planar_base: bool = False,
     ee_joint_names: list[str] | tuple[str, ...] | None = None,
     max_batch_size: int = 256,
     cache_dir: str | Path | None = None,
@@ -642,6 +656,15 @@ def warm_robot(
         "max_batch": int(max_batch_size),
         "ee_joint_names": list(ee_joint_names) if ee_joint_names else [],
     }
+    # Planar base: the parser adds the planar_base_joint chain at the root, so
+    # the generated code differs from the fixed-base build of the same URDF.
+    # In the cache key only when True, so every existing entry keeps its key.
+    if type(planar_base) is not bool:
+        raise TypeError("planar_base must be bool")
+    if planar_base:
+        if floating_base:
+            raise ValueError("floating_base and planar_base are mutually exclusive")
+        code_options["planar_base"] = True
     # fp64 (Phase 8): only inject dtype into the cache key for the fp64 build so
     # existing fp32 cache entries (keyed without a dtype field) stay valid — an
     # fp32 register_robot is byte-identical to pre-Phase-8 and reuses its .so.
@@ -969,6 +992,7 @@ def precompile(
     urdf_string: str | None = None,
     tiers: Iterable[dict[str, Any]] | None = None,
     floating_base: bool = False,
+    planar_base: bool = False,
     ee_joint_names: list[str] | tuple[str, ...] | None = None,
     max_batch_size: int = 256,
     backends: Iterable[str] = ("numpy",),
@@ -1004,6 +1028,7 @@ def precompile(
     for i, tier in enumerate(tiers):
         opts = {
             "floating_base": floating_base,
+            "planar_base": planar_base,
             "ee_joint_names": ee_joint_names,
             "max_batch_size": max_batch_size,
             **dict(tier),
@@ -1078,7 +1103,7 @@ def load_robot(
         Inline URDF text instead of a file. Mutually exclusive with ``urdf_path``.
     name : str | None
         Override the auto-derived handle name. Default ``None`` ⇒
-        ``f"{stem}_{floating|fixed}_{sha256(urdf)[:12]}"`` (collision-resistant:
+        ``f"{stem}_{floating|planar|fixed}_{sha256(urdf)[:12]}"`` (collision-resistant:
         a 48-bit content hash + the base flag).
     cache_dir : str | Path | None
         Cache root override (see :py:func:`register_robot`).
@@ -1103,7 +1128,7 @@ def load_robot(
     # Stable, content-addressed default name: hash the URDF bytes so reusing the
     # SAME urdf reuses the cache + manifest binding, and two DIFFERENT urdfs map
     # to different names. sha256[:12] = 48 bits, collision-resistant for a robot
-    # library. Fold floating_base into the name so the fixed and floating loads
+    # library. Fold the base (fixed, floating, planar) into the name so the loads
     # of one urdf don't rebind each other's manifest entry (their cache keys
     # already differ). NOTE: the auto-name is for cache reuse only; the .so cache
     # key hashes the FULL urdf bytes + options, so a hash here never causes a
@@ -1117,7 +1142,8 @@ def load_robot(
             urdf_bytes = up.read_bytes()
             stem = up.stem or "robot"
         digest = hashlib.sha256(urdf_bytes).hexdigest()[:12]
-        base_tag = "floating" if floating_base else "fixed"
+        base_tag = ("floating" if floating_base
+                    else "planar" if opts.get("planar_base") else "fixed")
         name = f"{stem}_{base_tag}_{digest}"
 
     # register_robot is idempotent on the cache; for the fast backends it both

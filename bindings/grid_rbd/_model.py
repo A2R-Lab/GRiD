@@ -5,7 +5,7 @@ from pathlib import Path
 _log = logging.getLogger('grid_rbd')
 
 
-def parse_model(urdf_path, *, floating_base=False):
+def parse_model(urdf_path, *, floating_base=False, planar_base=False):
     from URDFParser import URDFParser
 
     class LibraryParser(URDFParser):
@@ -17,10 +17,16 @@ def parse_model(urdf_path, *, floating_base=False):
 
     if type(floating_base) is not bool:
         raise TypeError('floating_base must be bool')
-    return LibraryParser().parse(str(Path(urdf_path)), floating_base=floating_base)
+    if type(planar_base) is not bool:
+        raise TypeError('planar_base must be bool')
+    if floating_base and planar_base:
+        raise ValueError('floating_base and planar_base are mutually exclusive')
+    return LibraryParser().parse(str(Path(urdf_path)), floating_base=floating_base,
+                                 planar_base=planar_base)
 
 
-def describe_model(urdf_path, *, floating_base=False, runtime_transform=False, schema_version=1):
+def describe_model(urdf_path, *, floating_base=False, planar_base=False,
+                   runtime_transform=False, schema_version=1):
     """Return schema-1 coordinate/frame metadata without CUDA or compilation.
 
     The descriptor ID covers coordinate geometry, ownership and names, not
@@ -28,11 +34,14 @@ def describe_model(urdf_path, *, floating_base=False, runtime_transform=False, s
     are nominal when runtime_transform=True. Unknown schema versions and options
     are errors, never silently ignored. Zero-coordinate metadata is valid but
     does not promise every GPU operation supports a zero-coordinate model.
+    planar_base=True describes the model with the planar_base_joint chain at
+    the root; grid_codegen.model_descriptor.planar_base_block locates it.
     """
     from grid_codegen.model_descriptor import SCHEMA_VERSION, descriptor_from_robot
     if type(schema_version) is not int or schema_version != SCHEMA_VERSION:
         raise ValueError('unsupported model descriptor schema version')
     if type(runtime_transform) is not bool:
         raise TypeError('runtime_transform must be bool')
-    return descriptor_from_robot(parse_model(urdf_path, floating_base=floating_base),
+    return descriptor_from_robot(parse_model(urdf_path, floating_base=floating_base,
+                                             planar_base=planar_base),
                                  runtime_transform=runtime_transform)

@@ -2,7 +2,7 @@
 import json
 import re
 
-from .model_descriptor import validate_descriptor
+from .model_descriptor import planar_base_block, validate_descriptor
 
 JOINT_KINDS = ('revolute', 'continuous', 'prismatic', 'helical', 'screw', 'spherical', 'floating')
 FRAME_KINDS = ('root', 'joint', 'fixed_joint')
@@ -26,6 +26,10 @@ def emit_model_metadata(descriptor, namespace='grid'):
         return [matrix[r][c] for c in range(4) for r in range(4)]
     def optional(value):
         return str(-1 if value is None else value)
+    # Emitted only for a planar base (q[0..2] = px, py, theta), so the header of
+    # every other model is unchanged.
+    PLANAR_LINE = (['inline constexpr bool planar_base = true;']
+                   if planar_base_block(d) is not None else [])
     lines = ['// Model-coordinate metadata; not a complete physical-model identity.',
              f'namespace {namespace} {{ namespace model {{',
              'enum class joint_kind { ' + ', '.join(JOINT_KINDS) + ' };',
@@ -35,6 +39,7 @@ def emit_model_metadata(descriptor, namespace='grid'):
              f'inline constexpr int frame_count = {len(d["frames"])};',
              f'inline constexpr bool runtime_transform = {str(d["runtime_transform"]).lower()};',
              f'inline constexpr char descriptor_id[] = {string(d["descriptor_id"])};',
+             *PLANAR_LINE,
              f'inline constexpr char descriptor_json[] = {string(json.dumps(d, ensure_ascii=False, allow_nan=False, separators=(",", ":")))};',
              'struct joint_record {',
              '  int id, parent_body, child_body, q_start, v_start, local_nq, local_nv;',
