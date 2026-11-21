@@ -19,7 +19,8 @@ Usage
 The complete signature is::
 
    parse(filename, floating_base=False, using_quaternion=True,
-         joint_ordering="pinocchio_order", strict_inertial=False)
+         joint_ordering="pinocchio_order", strict_inertial=False,
+         reduce_couplings=True, planar_base=False)
 
 Keep ``using_quaternion=True`` for the documented floating-base GRiD paths.
 
@@ -81,6 +82,66 @@ A spherical joint is a second source of ``NQ != NV`` (quaternion position,
 3-wide tangent) in addition to the floating base; ``joint_is_spherical(jid)``
 and ``robot_has_spherical()`` report it. Closed kinematic loops are not
 supported.
+
+Planar joints and the planar base
+---------------------------------
+
+A URDF ``planar`` joint named ``J`` is decomposed when the file is parsed. It
+becomes three one-coordinate joints, ``J__sub0`` (prismatic), ``J__sub1``
+(prismatic) and ``J__sub2`` (continuous), joined by two massless links named
+``J__dummy0`` and ``J__dummy1``. The decomposition is exact, and every
+algorithm sees three ordinary scalar joints.
+
+* The coordinates are ``[px, py, theta]`` in that order, with ``nq = nv = 3``.
+  ``px`` and ``py`` are translations along the first and second in-plane axes
+  of the parent frame and ``theta`` is the rotation about the plane normal.
+* The velocity is ``[d px/dt, d py/dt, d theta/dt]``. The linear part is
+  expressed in the parent frame, so it does not rotate with ``theta``.
+* ``<axis>`` is the plane normal and defaults to ``0 0 1``. For a normal along
+  a coordinate axis the in-plane axes are the other two coordinate axes in
+  the order x, y, z, and the rotation is about the positive coordinate axis
+  whatever the sign written in the file. For any other normal ``n`` the
+  in-plane axes are ``R x`` and ``R y``, where ``R`` is the smallest rotation
+  that takes ``z`` to ``n``, and the rotation is about ``n``.
+* The joint ``<origin>`` is placed on ``J__sub0``. The other two sub-joints
+  have an identity origin.
+* ``<limit>`` on a planar joint is not read. All three coordinates are
+  unbounded. ``<dynamics>`` damping and friction apply to each sub-joint.
+* A planar joint cannot carry ``<mimic>``.
+
+Pinocchio's ``JointModelPlanar`` describes the same mechanism with different
+coordinates: ``q_pin = [x, y, cos(theta), sin(theta)]`` and a velocity
+``[vx, vy, omega]`` expressed in the moving joint frame. With ``c = cos(theta)``
+and ``s = sin(theta)`` the velocities are related by
+``v_pin = [c vx + s vy, -s vx + c vy, d theta/dt]``, written ``v_pin = G v``
+with ``G = blockdiag(Rz(theta)^T, 1)``. The accelerations then satisfy
+``a_pin = G a + (dG/dt) v``, the generalized forces ``tau = G^T tau_pin`` and
+the mass matrices ``M = G^T M_pin G``. Pinocchio's URDF reader ignores the
+``<axis>`` of a planar joint and always uses the XY plane.
+
+``parse(..., planar_base=True)`` attaches the root link of the URDF to a
+``world`` link through a planar joint named ``planar_base_joint`` with normal
+``0 0 1`` and identity origin. The result is the same model as a URDF that
+declares that joint: the first three joints are ``planar_base_joint__sub0``,
+``planar_base_joint__sub1`` and ``planar_base_joint__sub2`` and the first three
+coordinates are the base pose ``[px, py, theta]`` in the world frame. A planar
+base is not a floating base. ``robot.floating_base`` stays false, there is no
+quaternion, and no MuJoCo-convention kernels are generated; ``robot.planar_base``
+records that the option was used. ``planar_base`` and ``floating_base`` cannot
+both be set. When the URDF root is already a link named ``world``, it must have
+exactly one child joint and that joint must be fixed; the fixed joint is
+replaced and its origin is kept on the first sub-joint. Any other explicit
+``world`` root raises ``URDFParseError``, as does a URDF that already uses the
+``planar_base_joint`` names.
+
+The option is available as ``register_robot(..., planar_base=True)`` on the
+numpy, jax and torch backends, as ``describe_model(..., planar_base=True)``,
+as ``build_artifact(..., planar_base=True)`` and as ``grid-generate -p``
+(``--planar-base``). It enters the build cache key only when set, so a planar
+base build and the fixed-base build of the same URDF are separate cache
+entries. The handle property ``planar_base`` and the generated constant
+``grid::model::planar_base`` report a planar base found either way; see
+:doc:`model_coordinates`.
 
 Parse options and errors
 ------------------------

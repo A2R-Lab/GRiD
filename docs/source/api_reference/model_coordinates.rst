@@ -110,6 +110,34 @@ their accumulated placement. This is not an alias table for every original
 URDF link discarded during reduction. Names are opaque UTF-8 strings.
 Use frame kind as well as name when identifying the typed root entry.
 
+Planar base and unbounded coordinates
+-------------------------------------
+
+The schema has no planar-base field. A planar base is recognised by structure:
+``grid_codegen.model_descriptor.planar_base_block(descriptor)`` returns
+``(q_start, v_start, 3)``, which is ``(0, 0, 3)``, when joints 0, 1 and 2 are
+``planar_base_joint__sub0`` (prismatic), ``planar_base_joint__sub1`` (prismatic)
+and ``planar_base_joint__sub2`` (continuous), the first attached to the root
+reference, each of the others to the previous one, and every other joint
+below the third. It returns ``None`` otherwise. The block holds
+``[px, py, theta]`` as described in :doc:`urdf`. Both the ``planar_base``
+option and a URDF that declares the ``planar_base_joint`` planar joint from
+its root link are recognised, and they give the same descriptor ID. For such
+a model the generated header carries
+``inline constexpr bool planar_base = true;`` in ``grid::model`` and the
+Python handles report ``planar_base`` as true. The line is absent from every
+other header, and ``floating_base`` is false in both places.
+
+Position limits follow the URDF. In the descriptor ``limits.position`` is
+``None`` for a continuous joint, and ``[lower, upper]`` for the other scalar
+joints with ``None`` on a side that has no finite bound. The three planar
+sub-joints are therefore ``[None, None]``, ``[None, None]`` and ``None``. The
+generated limit table (``init_joint_limits``) is indexed by configuration
+slot, lower bounds first and upper bounds second, and holds ``-INFINITY`` and
+``+INFINITY`` for every slot without a finite bound: the planar coordinates,
+continuous joints, and the floating-base and spherical blocks. A mimic
+follower owns no slot and has no entry.
+
 Generated access
 ----------------
 
