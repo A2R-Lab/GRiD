@@ -21,7 +21,7 @@ def launch(tmp_path, monkeypatch):
     monkeypatch.setattr(launcher, 'ROOT', root)
     monkeypatch.setattr(launcher, 'LOCK_PATH', tmp_path / 'lock')
     state = SimpleNamespace(root=root, out=tmp_path / 'run', calls=[],
-                            dirty='', head='candidate', outcome='success')
+                            dirty='', head='candidate', outcome='success', stale='')
 
     def git(command, **kwargs):
         return state.dirty if command[1] == 'status' else state.head
@@ -66,6 +66,7 @@ def launch(tmp_path, monkeypatch):
     monkeypatch.setattr(launcher.subprocess, 'check_output', git)
     monkeypatch.setattr(launcher.subprocess, 'run', run)
     monkeypatch.setattr(launcher, 'run_driver', lambda command, **kwargs: run(command))
+    monkeypatch.setattr(launcher, 'installed_extension_problems', lambda: state.stale)
 
     def invoke(*extra):
         monkeypatch.setattr('sys.argv', ['run_validation', '--out', str(state.out), *extra])
@@ -75,6 +76,13 @@ def launch(tmp_path, monkeypatch):
     state.receipt = lambda: json.loads((root / 'gpu-proof.json').read_text())
     state.status = lambda: json.loads((state.out / 'state.json').read_text())
     return state
+
+
+def test_stale_installed_extension_is_refused_before_anything_starts(launch):
+    launch.stale = 'grid_rbd._core lacks 1 binding(s)'
+    with pytest.raises(SystemExit, match='does not match this checkout'):
+        launch.invoke('--execute')
+    assert not launch.calls and not launch.out.exists()
 
 
 def test_dry_launcher_has_no_output_or_lock_side_effects(launch):
@@ -272,6 +280,7 @@ def test_finalize_real_git_evidence_transition(tmp_path, monkeypatch):
     import subprocess
     root = tmp_path / 'repo'
     (root / 'test').mkdir(parents=True)
+    monkeypatch.setattr(launcher, 'installed_extension_problems', lambda: '')  # no package in this repo
     def git(*args):
         return subprocess.check_output(['git', *args], cwd=root, text=True).strip()
     git('init', '-q')
