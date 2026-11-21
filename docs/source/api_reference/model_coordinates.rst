@@ -125,8 +125,9 @@ option and a URDF that declares the ``planar_base_joint`` planar joint from
 its root link are recognised, and they give the same descriptor ID. For such
 a model the generated header carries
 ``inline constexpr bool planar_base = true;`` in ``grid::model`` and the
-Python handles report ``planar_base`` as true. The line is absent from every
-other header, and ``floating_base`` is false in both places.
+Python handles report ``planar_base`` as true. Every other header carries the
+same constant with the value ``false``, so a consumer can read it for any
+model. ``floating_base`` is false for a planar base in both places.
 
 Position limits follow the URDF. In the descriptor ``limits.position`` is
 ``None`` for a continuous joint, and ``[lower, upper]`` for the other scalar

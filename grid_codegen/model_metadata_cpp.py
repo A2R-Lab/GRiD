@@ -26,10 +26,8 @@ def emit_model_metadata(descriptor, namespace='grid'):
         return [matrix[r][c] for c in range(4) for r in range(4)]
     def optional(value):
         return str(-1 if value is None else value)
-    # Emitted only for a planar base (q[0..2] = px, py, theta), so the header of
-    # every other model is unchanged.
-    PLANAR_LINE = (['inline constexpr bool planar_base = true;']
-                   if planar_base_block(d) is not None else [])
+    # True when q[0..2] = [px, py, theta] of a planar base (see planar_base_block).
+    PLANAR_LINE = [f'inline constexpr bool planar_base = {str(planar_base_block(d) is not None).lower()};']
     lines = ['// Model-coordinate metadata; not a complete physical-model identity.',
              f'namespace {namespace} {{ namespace model {{',
              'enum class joint_kind { ' + ', '.join(JOINT_KINDS) + ' };',

@@ -252,9 +252,9 @@ def test_option_and_declared_joint_give_one_header(headers):
 
 
 def test_metadata_marks_only_the_planar_base(headers):
-    line = "inline constexpr bool planar_base = true;"
-    assert headers["option"].count(line) == 1
-    assert "planar_base" not in headers["fixed"]
+    assert headers["option"].count("inline constexpr bool planar_base = true;") == 1
+    assert headers["fixed"].count("inline constexpr bool planar_base = false;") == 1
+    assert "planar_base = true" not in headers["fixed"]
 
 
 def test_generated_limit_table(headers):
