@@ -67,7 +67,7 @@ def test_floating_header_normalises_in_one_place(tmp_path, unit):
     bodies = HELPER.findall(source)
     assert len(bodies) == 1
     assert ("return static_cast<T>(1);" in bodies[0]) == unit
-    assert ("return qx*qx + qy*qy + qz*qz + qw*qw;" in bodies[0]) == (not unit)
+    assert ("return fma(qx, qx, fma(qy, qy, fma(qz, qz, qw*qw)));" in bodies[0]) == (not unit)
     assert source.count("void grid_base_rotation(const T *q, T *R) {") == 1
     assert source.count("grid_base_rotation<T>(&") > 100
     assert source.count("grid_quat_norm2<T>(s_q[3], s_q[4], s_q[5], s_q[6])") > 100
