@@ -10,6 +10,54 @@ Rigid Body Dynamics with Analytical Gradients*. That implementation is preserved
 in the archival [robot-acceleration/GRiD](https://github.com/robot-acceleration/GRiD)
 repository. Everything below describes the packaged A2R-Lab releases.
 
+## [0.7.2] — 2026-11-22
+
+Output changes from 0.7.1: generated device code computes in T throughout, so
+single-precision results differ from 0.7.1 in the last bits wherever a baked
+constant multiplied a variable. A MuJoCo-convention kernel given a non-unit base
+quaternion now returns the result of the normalised quaternion. Every generated
+header gains `grid::model::planar_base`; descriptor IDs are unchanged.
+
+- Compute generated device code in T. Decimal literals no longer promote symbolic
+  expressions to double, the configuration difference and its Jacobians stay in
+  T, and integer powers are products. One printer emits all symbolic arithmetic,
+  and a CPU test scans generated headers for double literals, integer `pow` and
+  the word `double`. The one exemption is the second derivative of SE(3)
+  integration inside GLASS.
+- Write every generated sum of products as nested `fma` in a fixed order. Left
+  to the compiler, the same expression was fused at some call sites and not at
+  others, and a kernel that spilled its buffers out of shared memory no longer
+  returned the bits of the full kernel.
+- Normalise quaternions through one helper, `grid_quat_norm2`, for the floating
+  base and for spherical joints. Add `assume_unit_quaternions` (`gen_all_code`,
+  `register_robot`, the artifact builder, JAX and PyTorch): default false; when
+  true the normalisation is compiled out, as a separate cached build.
+- Add `planar_base=True` to the parser, `register_robot` on every backend,
+  `build_artifact` and `grid-generate -p`. It attaches the root to the world
+  through a planar joint named `planar_base_joint` with coordinates
+  `[px, py, theta]`, and cannot be combined with `floating_base`. The model
+  descriptor helper `planar_base_block`, the header constant and the handle
+  property `planar_base` identify the block. The documentation states the planar
+  convention, its mapping to Pinocchio and how unbounded coordinates appear in
+  the limit table and the descriptor.
+- Cover a planar root with continuous, prismatic and mimic joints in the receipt:
+  dynamics and their gradients, the Euler and RK4 step and gradient, the
+  end-effector pose, gradient and Hessian, the position cost, and collision.
+  Before this a planar joint was tested for inverse dynamics and the mass matrix
+  only.
+- Repair the generated registration of the multi-target position kernels, which
+  omitted the workspace argument and did not compile when used.
+- Raise the gen3 floating single-precision RK4 gradient bound from 8e-3 to 2e-2
+  after measuring it on fifteen kernels, and document what single precision
+  costs on ill-conditioned floating-base models. No other bound changes.
+- Add the consumer stage to the release collector: one dense fp32 contract for
+  GRiD and the CPU baseline on the host and on the device, with every row
+  checked against the oracle.
+- Validation infrastructure: host memory headroom reads the v1 cgroup hierarchy
+  correctly and fails closed; the provisional receipt checks evidence blobs in
+  full; the refresh planner records its fallback partition; the receipt launcher
+  refuses to start when the installed extension is older than its source.
+
 ## [0.7.1] — 2026-11-11
 
 Output changes from 0.7.0: mimic and spherical inverse-mass matrices no longer
@@ -816,6 +864,7 @@ update on top of that, organised here by theme:
 - Closed kinematic loops are unsupported.
 - No Windows, macOS, Jetson or precompiled-robot wheels.
 
+[0.7.2]: https://github.com/A2R-Lab/GRiD/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/A2R-Lab/GRiD/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/A2R-Lab/GRiD/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/A2R-Lab/GRiD/compare/v0.5.5...v0.6.0
