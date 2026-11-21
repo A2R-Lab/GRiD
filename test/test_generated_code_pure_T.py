@@ -137,13 +137,55 @@ def stray_double_lines(source):
 def test_printer_types_every_constant():
     x, y, t = sp.symbols("a b theta")
     assert expr_T(2.0 * x * y / (x**2 + y**2)) == \
-        "static_cast<T>(2.0)*a*b/(((a)*(a)) + ((b)*(b)))"
+        "static_cast<T>(2.0)*a*b/(fma(a, a, b*b))"
     assert expr_T(x / 2) == "(static_cast<T>(1.0/2.0))*a"
     assert expr_T(1 / x) == "(static_cast<T>(1)/((a)))"
     assert expr_T(0.0465 * sp.sin(t)) == "static_cast<T>(0.0465)*sin(theta)"
     assert expr_T(sp.Float(0.5)) == "0.5" and expr_T(sp.Integer(3)) == "3"
     for expression in (x**3 - 0.1 * y, sp.sqrt(x) / 3, x**sp.Rational(3, 2), -sp.cos(t) * 1.5):
         assert not promoting_literals(expr_T(expression))
+
+
+def test_printer_fuses_every_sum_of_products_explicitly():
+    """`a*b + c` left to the compiler is fused at some call sites and not at others, which made
+    two resource tiers of one kernel disagree in the last bit. The printer leaves no such sum."""
+    a, b, c, d = sp.symbols("a b c d")
+    assert expr_T(0.5 * a + 0.25 * b) == "fma(static_cast<T>(0.5), a, static_cast<T>(0.25)*b)"
+    assert expr_T(a * b + c * d + 2) == "fma(a, b, fma(c, d, static_cast<T>(2)))"
+    assert expr_T(a - b * c) == "fma(-b, c, a)"
+    assert expr_T(a * b + 1) == "fma(a, b, static_cast<T>(1))"
+    assert expr_T(a**2 + b) == "fma(a, a, b)"
+    # Sums without a product, and divisions, are printed as written.
+    assert expr_T(-a - 0.5) == "-a + static_cast<T>(-0.5)"
+    assert expr_T(0.5 / a + b * c) == "fma(b, c, static_cast<T>(0.5)/a)"
+    assert expr_T(-a / b + c * d) == "fma(c, d, -a/b)"
+    for expression in (a * b + c * d - 0.5 * a + 2, 1 - 2 * (a**2 + b**2), a * (b + c * d) + d):
+        assert not _unfused_sums(expr_T(expression)), expr_T(expression)
+    assert _unfused_sums("a*b + c") and _unfused_sums("fma(a, b, c*d + e)") and not _unfused_sums("fma(a, b, c) + d")
+
+
+def _unfused_sums(text):
+    """Parenthesised groups (and the whole text) that both multiply and add at their own level."""
+    found, stack = [], [[]]
+    for ch in text:
+        if ch == "(":
+            stack.append([])
+        elif ch == ")":
+            group = "".join(stack.pop())
+            if "*" in group and re.search(r"(?<![(,*/eE\s])\s*[+-]", group.strip()):
+                found.append(group)
+            stack[-1].append("G")
+        elif ch == ",":
+            group = "".join(stack[-1])
+            if "*" in group and re.search(r"(?<![(,*/eE\s])\s*[+-]", group.strip()):
+                found.append(group)
+            stack[-1] = []
+        else:
+            stack[-1].append(ch)
+    group = "".join(stack[0])
+    if "*" in group and re.search(r"(?<![(,*/eE\s])\s*[+-]", group.strip()):
+        found.append(group)
+    return found
 
 
 def _device(body):

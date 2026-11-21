@@ -172,6 +172,11 @@ def main():
     if git('status', '--porcelain'):
         raise SystemExit('Commit correctness inputs before recording; tree must be clean.')
     candidate = git('rev-parse', 'HEAD')
+    # A stale compiled extension fails tests hours into the run; refuse it now.
+    stale = subprocess.run([sys.executable, str(ROOT / 'test/installed_extension.py')],
+                           cwd=ROOT, capture_output=True, text=True)
+    if stale.returncode:
+        raise SystemExit('Installed grid_rbd does not match this checkout:\n' + (stale.stdout + stale.stderr).strip())
     if args.resume:
         prior_state_path = shard_dir.parent / 'state.json'
         if not prior_state_path.is_file():
