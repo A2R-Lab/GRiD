@@ -1138,6 +1138,10 @@ WRAPPER_HELPER_PATHS = {
     "test_consumer_artifact": ["bindings/examples/consumer_artifact_migration.py"],
     "test_armature_identification": ["test/cuda_equivalents/cuda_armature_identification_runner.cu"],
     "test_armature_composition": ["test/cuda_equivalents/cuda_runtime_energy_runner.cu"],
+    "test_planar_root_families": ["test/python_wrappers/planar_root_model.py",
+                                  "test/cuda_equivalents/cuda_collision_complete_runner.cu",
+                                  "test/cuda_equivalents/executable_cache.py",
+                                  "test/cuda_equivalents/cuda_harness.py"],
 }
 
 
