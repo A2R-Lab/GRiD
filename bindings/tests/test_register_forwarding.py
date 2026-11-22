@@ -31,7 +31,7 @@ _MATERIAL = dict(
     runtime_joint_dynamics=True, runtime_inertia=True, runtime_transform=True, runtime_armature=True,
     armature=[0, 0, 0, 0, 0, 0, .25],
     enable_tool=True, contact_frames=["foot_fl", "foot_fr"],
-    enable_mujoco_kernels=False, dtype="float32",
+    enable_mujoco_kernels=False, assume_unit_quaternions=True, dtype="float32",
 )
 
 

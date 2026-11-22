@@ -19,7 +19,8 @@ OP_NAMES = {"inverse_dynamics": "OP_ID", "inverse_dynamics_gradient": "OP_ID_GRA
             "minv": "OP_MINV", "forward_dynamics": "OP_FD", "forward_dynamics_gradient": "OP_FD_GRAD",
             "fdsva_so": "OP_FDSVA_SO", "end_effector_pose": "OP_EE_POSE", "crba": "OP_CRBA",
             "nonlinear_effects": "OP_NLE", "generalized_gravity": "OP_GRAVITY", "ccrba": "OP_CCRBA",
-            "coriolis_matrix": "OP_CORIOLIS", "end_effector_pose_gradient": "OP_EE_GRAD"}
+            "coriolis_matrix": "OP_CORIOLIS", "end_effector_pose_gradient": "OP_EE_GRAD",
+            "end_effector_pose_hessian": "OP_EE_HESS"}
 
 
 def _code():

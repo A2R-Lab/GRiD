@@ -10,8 +10,9 @@
 # so the underlying invocations stay copy-pasteable.
 
 PY := .venv/bin/python
+RECEIPT_BUDGET ?= 30
 
-.PHONY: help gen gen-check build test-cpu test-gpu test-fp64 receipt-refresh verify verify-all release-check clean-pycache
+.PHONY: help gen gen-check build test-cpu test-gpu test-fp64 receipt-refresh receipt-pr verify verify-all release-check clean-pycache
 
 help:
 	@echo "GRiD targets:"
@@ -59,6 +60,12 @@ test-fp64:
 # carries the rest, re-signs gpu-proof.json (commit it after).
 receipt-refresh:
 	SPLIT=1 SPLIT_REFRESH=1 test/run_gpu_proof.sh
+
+# Explicit execution; use test/run_validation.py without --execute to preview.
+# OUT must be a new directory outside the checkout; GITHUB_USER owns the key.
+receipt-pr:
+	@test -n "$(GITHUB_USER)" -a -n "$(OUT)" || (echo "Set GITHUB_USER and OUT (new external directory)"; exit 1)
+	$(PY) test/run_validation.py --provisional --github-user "$(GITHUB_USER)" --budget-minutes $(RECEIPT_BUDGET) --out "$(OUT)" --execute
 
 verify:
 	.venv/bin/gpu-proof verify --receipt gpu-proof.json --repo . --policy test/gpu-proof-policy.yaml --expected-skips test/gpu-proof-expected-skips.txt

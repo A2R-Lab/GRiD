@@ -21,7 +21,7 @@ def launch(tmp_path, monkeypatch):
     monkeypatch.setattr(launcher, 'ROOT', root)
     monkeypatch.setattr(launcher, 'LOCK_PATH', tmp_path / 'lock')
     state = SimpleNamespace(root=root, out=tmp_path / 'run', calls=[],
-                            dirty='', head='candidate', outcome='success')
+                            dirty='', head='candidate', outcome='success', stale='')
 
     def git(command, **kwargs):
         return state.dirty if command[1] == 'status' else state.head
@@ -66,6 +66,7 @@ def launch(tmp_path, monkeypatch):
     monkeypatch.setattr(launcher.subprocess, 'check_output', git)
     monkeypatch.setattr(launcher.subprocess, 'run', run)
     monkeypatch.setattr(launcher, 'run_driver', lambda command, **kwargs: run(command))
+    monkeypatch.setattr(launcher, 'installed_extension_problems', lambda: state.stale)
 
     def invoke(*extra):
         monkeypatch.setattr('sys.argv', ['run_validation', '--out', str(state.out), *extra])
@@ -77,10 +78,47 @@ def launch(tmp_path, monkeypatch):
     return state
 
 
+def test_stale_installed_extension_is_refused_before_anything_starts(launch):
+    launch.stale = 'grid_rbd._core lacks 1 binding(s)'
+    with pytest.raises(SystemExit, match='does not match this checkout'):
+        launch.invoke('--execute')
+    assert not launch.calls and not launch.out.exists()
+
+
 def test_dry_launcher_has_no_output_or_lock_side_effects(launch):
     launch.invoke()
     assert not launch.calls and not launch.out.exists()
     assert not launcher.LOCK_PATH.exists()
+
+
+def test_provisional_dry_plan_has_no_side_effects(launch, capsys):
+    launch.invoke('--provisional', '--github-user', 'contributor')
+    assert 'provisional_receipt.py' in capsys.readouterr().out
+    assert not launch.calls and not launch.out.exists()
+    assert not launcher.LOCK_PATH.exists()
+
+
+def test_provisional_completion_never_promotes_primary(launch, monkeypatch):
+    original = launch.receipt()
+    keys = (launch.root / 'test/gpu-proof-header-keys.json').read_bytes()
+    def run(command, **kwargs):
+        assert '--record' in command and '--receipts' not in command
+        output = launcher.Path(command[command.index('--record') + 1])
+        output.mkdir()
+        (output / 'provisional.json').write_text('{}')
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(launcher, 'run_driver', run)
+    launch.invoke('--execute', '--provisional', '--github-user', 'contributor')
+    assert launch.status()['status'] == 'provisional-complete'
+    assert launch.receipt() == original
+    assert (launch.root / 'test/gpu-proof-header-keys.json').read_bytes() == keys
+    assert not launch.calls
+
+
+def test_provisional_rejects_release_mode_before_side_effects(launch):
+    with pytest.raises(SystemExit):
+        launch.invoke('--execute', '--provisional', '--full', '--github-user', 'contributor')
+    assert not launch.calls and not launch.out.exists()
 
 
 def test_bounded_profile_is_explicit_and_persisted(launch):
@@ -242,6 +280,7 @@ def test_finalize_real_git_evidence_transition(tmp_path, monkeypatch):
     import subprocess
     root = tmp_path / 'repo'
     (root / 'test').mkdir(parents=True)
+    monkeypatch.setattr(launcher, 'installed_extension_problems', lambda: '')  # no package in this repo
     def git(*args):
         return subprocess.check_output(['git', *args], cwd=root, text=True).strip()
     git('init', '-q')

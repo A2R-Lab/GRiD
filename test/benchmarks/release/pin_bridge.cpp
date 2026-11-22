@@ -305,3 +305,55 @@ extern "C" int pin_release_pool_eval_f64(void *ptr, const double *qs, const doub
                                          int batch, double *output, int active) {
     return pool_eval(ptr, qs, vs, ts, batch, output, active);
 }
+
+// First consumer slice: ordinary scalar joints, iiwa14/go2 only (enforced by
+// the Python dispatcher). Per-call normalization/casts stay inside evaluation.
+struct PinConsumer {
+    ReleasePinPool *pool;
+    int batch, nq, nv, width, op, threads;
+    bool floating;
+    std::vector<double> q, v, a, result;
+    std::vector<float> qf, vf, af;
+};
+extern "C" void *pin_consumer_create(void *pool, int batch, int threads) {
+    if(!pool || batch<1 || threads<1) return nullptr;
+    auto *p=static_cast<ReleasePinPool*>(pool);
+    const auto &m=p->contexts[0]->model; const int op=p->contexts[0]->op;
+    if((op!=0 && op!=4 && op!=7) || (m.nq!=m.nv && m.nq!=m.nv+1)) return nullptr;
+    auto *c=new PinConsumer{p,batch,m.nq,m.nv,op==7?6:m.nv,op,threads,m.nq==m.nv+1};
+    c->q.resize(size_t(batch)*m.nq); c->v.resize(size_t(batch)*m.nv); c->a.resize(c->v.size());
+    c->result.resize(size_t(batch)*c->width);
+    c->qf.resize(c->q.size()); c->vf.resize(c->v.size()); c->af.resize(c->a.size());
+    return c;
+}
+extern "C" void pin_consumer_close(void *context) { delete static_cast<PinConsumer*>(context); }
+extern "C" int pin_consumer_eval(void *context, const float *input, float *out, int batch, bool device) {
+    if(!context || !input || !out || device) return -1;
+    auto &c=*static_cast<PinConsumer*>(context);
+    if(batch!=c.batch) return -1;
+    const bool dynamics=c.op!=7;      // inverse (0) and forward (4) dynamics read q, v and a third field
+    const int stride=c.nq+(dynamics?2*c.nv:0);
+    for(int b=0;b<batch;++b) {
+        for(int k=0;k<c.nq;++k) c.q[size_t(b)*c.nq+k]=input[size_t(b)*stride+k];
+        if(c.floating) {
+            double norm=0;
+            for(int k=3;k<7;++k) norm+=c.q[size_t(b)*c.nq+k]*c.q[size_t(b)*c.nq+k];
+            norm=std::sqrt(norm); if(!(norm>0)) return -2;
+            for(int k=3;k<7;++k) c.q[size_t(b)*c.nq+k]/=norm;
+        }
+        if(dynamics) for(int k=0;k<c.nv;++k) {
+            c.v[size_t(b)*c.nv+k]=input[size_t(b)*stride+c.nq+k];
+            c.a[size_t(b)*c.nv+k]=input[size_t(b)*stride+c.nq+c.nv+k];
+        }
+    }
+    int rc;
+    if(dynamics) {
+        std::copy(c.q.begin(),c.q.end(),c.qf.begin());
+        std::copy(c.v.begin(),c.v.end(),c.vf.begin());
+        std::copy(c.a.begin(),c.a.end(),c.af.begin());
+        rc=pool_eval(c.pool,c.qf.data(),c.vf.data(),c.af.data(),batch,c.result.data(),c.threads);
+    } else rc=pool_eval(c.pool,c.q.data(),c.v.data(),c.a.data(),batch,c.result.data(),c.threads);
+    if(rc) return rc;
+    std::copy(c.result.begin(),c.result.end(),out); // fp32 dense consumer contract
+    return 0;
+}

@@ -311,8 +311,9 @@ def test_binpack_uses_measured_durations():
     ids = _synthetic_ids()
     fast = {i: 1.0 for i in ids}  # everything measured trivially fast
     shards = rss.pack_cuda_shards(ids, fast, 120 * 60.0)
-    assert len(shards) == 1  # collapses to one shard once calibrated
-    assert sorted(shards[0].targets) == sorted(ids)
+    assert sorted(n for shard in shards for n in shard.targets) == sorted(ids)
+    # Module boundaries remain validation boundaries even with a warm cache.
+    assert all(len({n.split('::')[0] for n in s.targets}) == 1 for s in shards)
 
 
 def test_ledger_roundtrip_and_resume_filter(tmp_path):
@@ -375,6 +376,40 @@ def test_partition_persistence_roundtrip(tmp_path):
     loaded = rss.load_partition(tmp_path)
     assert loaded == shards
     assert rss.load_partition(tmp_path / "nope") is None
+
+
+def test_partition_map_pins_scope_labels_atoms_and_predecessors(tmp_path):
+    from dataclasses import replace
+    shards = rss.pack_cuda_shards(_synthetic_ids(), {}, 20 * 60.0)
+    label = shards[0].name
+    shards[0] = replace(shards[0], name='old_merge_name', display_label=label,
+                        predecessors=({'merge_identity': 'old_merge_name',
+                                       'node_ids': list(shards[0].targets)},))
+    rss.save_partition(tmp_path, shards)
+    data = json.loads((tmp_path / 'partition-map.json').read_text())
+    assert data['schema'] == 1
+    assert data['node_ids'] == sorted(_synthetic_ids())
+    row = data['shards'][0]
+    assert row['merge_identity'] == 'old_merge_name' and row['display_label'] == label
+    assert row['predecessors'] == list(shards[0].predecessors)
+    assert row['compile_atoms'] == [list(k) for k in sorted({rss._atom_key(n) for n in row['node_ids']})]
+    original = (tmp_path / 'partition-map.json').read_bytes()
+    rss.save_partition(tmp_path, rss.load_partition(tmp_path))
+    assert (tmp_path / 'partition-map.json').read_bytes() == original
+    data['shards'][0]['node_ids'].pop()
+    (tmp_path / 'partition-map.json').write_text(json.dumps(data))
+    with pytest.raises(ValueError, match='replay scope'):
+        rss.load_partition(tmp_path)
+
+
+def test_partition_map_refuses_overlap_and_legacy_resume(tmp_path):
+    shards = rss.pack_cuda_shards(_synthetic_ids(), {}, 20 * 60.0)
+    with pytest.raises(ValueError, match='disjoint'):
+        rss.partition_mapping(shards + shards[:1])
+    rss.save_partition(tmp_path, shards)
+    (tmp_path / 'partition-map.json').unlink()
+    with pytest.raises(ValueError, match='fresh full run'):
+        rss.load_partition(tmp_path)
 
 
 def test_live_collection_partition_is_complete():
@@ -570,7 +605,7 @@ def _plan(old, digest_fn):
                        "node_count": len(sh.get("node_ids") or [])})
     return {"receipt": rec, "shards": shards}
 
-def test_plan_refresh_stale_detection_and_repack(monkeypatch):
+def test_plan_refresh_stale_detection_and_repack(monkeypatch, capsys):
     import codegen_neutrality
     monkeypatch.setattr(codegen_neutrality, "cuda_carry_soundness",
                         lambda r: (True, "stubbed neutral"))
@@ -602,6 +637,25 @@ def test_plan_refresh_stale_detection_and_repack(monkeypatch):
     # (carry_forward has no "superseded" state — an unshadowed stale name
     # would be refused at merge time; the 2026-08-21 first-run lesson)
     assert {s.name for s in cuda_fresh} == {"cuda_01_stale"}
+    assert 'merge identity, not a scope label' in capsys.readouterr().out
+
+
+def test_refresh_fewer_shards_records_identity_fallback(tmp_path, capsys):
+    ids = [_fid('iiwa14', 'fixed', cell, 32) for cell in ('crba', 'aba')]
+    old = {'shards': [_mk_shard(f'old_{i}', [nid], ['test.py'], 'old')
+                      for i, nid in enumerate(ids)]}
+    assert len(rss.pack_cuda_shards(ids, {}, 1e9)) == 1
+    _, carried, _, fresh = rss.plan_refresh(old, ids, [], {}, 1e9,
+                                           _plan(old, lambda paths: 'changed'))
+    assert not carried
+    assert {s.name for s in fresh} == {'old_0', 'old_1'}
+    assert sorted(n for s in fresh for n in s.targets) == sorted(ids)
+    assert 'refresh partition fallback' in capsys.readouterr().out
+    assert all(s.display_label.startswith('refresh_fallback_') and s.predecessors for s in fresh)
+    rss.save_partition(tmp_path, fresh)
+    assert rss.load_partition(tmp_path) == fresh
+    rows = json.loads((tmp_path/'partition-map.json').read_text())['shards']
+    assert all(row['merge_identity'] in {p['merge_identity'] for p in row['predecessors']} for row in rows)
 
 
 def test_plan_refresh_edge_cases(monkeypatch):

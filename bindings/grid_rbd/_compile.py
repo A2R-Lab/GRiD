@@ -135,7 +135,8 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
 
     from grid_codegen import GRiDCodeGenerator
     from ._model import parse_model
-    robot = parse_model(urdf_path, floating_base=options.get("floating_base", False))
+    robot = parse_model(urdf_path, floating_base=options.get("floating_base", False),
+                        planar_base=bool(options.get("planar_base", False)))
 
     file_namespace = options.get("file_namespace", "grid")
     debug_mode = options.get("debug_mode", 0)
@@ -337,6 +338,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
             collision_spec=collision_spec,
             enable_floating_second_order=True,
             enable_mujoco_kernels=enable_mujoco_kernels,
+            assume_unit_quaternions=bool(options.get("assume_unit_quaternions", False)),
             # Defer the world-frame emission decision to gen_all_code's default
             # (None -> _idsva_so_use_world_frame): world-frame for floating,
             # spherical, OR high-DOF fixed-base (NV >= threshold). Hardcoding
@@ -367,6 +369,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # joint_names (index == joint id) + leaf_jids let the handle's runtime-target
     # list API resolve ee_joint_names -> jids (mirrors RBDReference
     # select_end_effector_joints) without a robot model on the Python side.
+    from grid_codegen.model_descriptor import planar_base_block
     descriptor = cg.model_descriptor
     if descriptor is None:
         raise RuntimeError('bindings generation requires a quaternion model descriptor')
@@ -384,6 +387,9 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         "num_ees": (1 if (fixed_target_name and fixed_target_name != "all")
                     else robot.get_total_leaf_nodes()),
         "floating_base": bool(robot.floating_base),
+        # Structural: true for the planar_base option and for a URDF that
+        # declares the planar_base_joint planar joint at its root.
+        "planar_base": planar_base_block(descriptor) is not None,
         # Canonical launch-config robot key (URDF stem -> tuned-JSON dir). Lets the
         # handle locate grid_assets/launch_configs/<key>/<gpu>.json for the E6 profile overlay.
         "launch_config_robot": launch_config_robot,
@@ -400,6 +406,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         "algorithm_list": list(algorithm_list),
         "generated_algorithms": sorted(cg.generated_algorithms),
         "enable_mujoco_kernels": bool(enable_mujoco_kernels),
+        "assume_unit_quaternions": bool(options.get("assume_unit_quaternions", False)),
     }
     meta["configuration_layout"] = [tuple(b[k] for k in ('kind', 'q_start', 'v_start', 'nq', 'nv'))
                                     for b in descriptor['configuration_layout']]

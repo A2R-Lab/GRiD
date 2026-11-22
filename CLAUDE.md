@@ -43,7 +43,7 @@ numpy oracle in `RBDReference` (validated against Pinocchio) and the generated C
 
 ```bash
 bash install/base_install.sh && source .venv/bin/activate      # single `pip install -e .` + `grid-generate` CLI
-grid-generate path/to/robot.urdf [-f] [-t EE_JOINT] [-n NAMESPACE] [-c] [-d]
+grid-generate path/to/robot.urdf [-f | -p] [-t EE_JOINT] [-n NAMESPACE] [-c] [-d]
 .venv/bin/python examples/codegen/generate_iiwa14.py             # fixed-base example
 .venv/bin/python examples/codegen/generate_go2_floating.py       # floating-base example
 ```
@@ -90,7 +90,8 @@ Prefer the crash-isolated split driver for full GPU passes:
 (`GRID_SPLIT_RESOURCE_PROFILE=serial`, one compile-pool worker, one GPU shard,
 and `GRID_RBD_BUILD_JOBS=2`, by default). Prewarm finishes before shards start, so inline
 compiles cannot overlap the pool. Admission reserves 14 GiB plus a predicted
-whole-process allowance of at least 16 GiB times 1.3; insufficient memory
+whole-process allowance from identity-qualified history and conservative class
+floors (6/8/12/16 GiB, plus the 1.3 margin; see `resource_history.py`); insufficient memory
 creates a resumable PAUSE, including for the first job. This is conservative
 admission, not a hard RSS limit or protection against later external pressure.
 Tests that deliberately exercise concurrent builds retain their internal
@@ -102,7 +103,8 @@ commits) until it prints "Recording complete" (use a worktree for side work).
 phase + one pytest subprocess per module — one module's abort can't eat the rest;
 `--changed-only` skips modules whose input fingerprint matches the last green run)
 and, with `--domains wrappers,cuda`, partitions `cuda_equivalents` into granular
-node-id shards bounded to ~2h each (bin-packed from rolling measured durations;
+node-id shards with module boundaries and robot/base units for the costly
+integrator, output-spill and kinematics modules (rolling duration estimates;
 never `-k` — explicit node-id lists with a set-equality completeness gate). Runs
 are pausable: `touch <out>/PAUSE` stops cleanly between shards, Ctrl-C/SIGTERM
 stops within one, and `--resume <out>` continues without re-running completed

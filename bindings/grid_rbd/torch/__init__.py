@@ -588,6 +588,8 @@ class TorchRobotHandle(BaseDelegateMixin):
     @property
     def floating_base(self) -> bool: return self._base.floating_base
     @property
+    def planar_base(self) -> bool: return self._base.planar_base
+    @property
     def max_batch(self) -> int:   return self._base.max_batch
 
     # ─── output convention (mjx parity) ──────────────────────────────────
@@ -1345,6 +1347,7 @@ def register_robot(
     *,
     urdf_string: str | None = None,
     floating_base: bool = False,
+    planar_base: bool = False,
     ee_joint_names: list[str] | tuple[str, ...] | None = None,
     max_batch_size: int = 256,
     cache_dir: str | Path | None = None,
@@ -1361,6 +1364,7 @@ def register_robot(
     enable_tool: bool = False,
     contact_frames: list[str] | tuple[str, ...] | None = None,
     enable_mujoco_kernels: bool = True,
+    assume_unit_quaternions: bool = False,
     dtype: str = "float32",
     friction_model: str = "sign",
     friction_width=None,
@@ -1380,7 +1384,7 @@ def register_robot(
     _require_torch()  # fail early with install guidance if torch is missing
     base = _grid_rbd.register_robot(
         name=name, urdf_path=urdf_path, urdf_string=urdf_string,
-        floating_base=floating_base, ee_joint_names=ee_joint_names,
+        floating_base=floating_base, planar_base=planar_base, ee_joint_names=ee_joint_names,
         max_batch_size=max_batch_size, cache_dir=cache_dir,
         force_rebuild=force_rebuild, cuda_arch=cuda_arch,
         algorithm_list=algorithm_list, use_joint_dynamics=use_joint_dynamics,  # C5
@@ -1392,6 +1396,7 @@ def register_robot(
         runtime_transform=runtime_transform,  # mutable joint-origin table (shared device global)
         enable_tool=enable_tool,  # tool welding: attach_tool/detach_tool/tool_fext surface
         contact_frames=contact_frames,  # multi-contact f_ext frames (baked); forwarded, never dropped
+        assume_unit_quaternions=assume_unit_quaternions,
         enable_mujoco_kernels=enable_mujoco_kernels,  # pin-only builds (RAM/compile-time)
         dtype=dtype,  # Wave 2a: fp64 .so carries an fp64 torch surface
         _profile_overlay="torch",  # E6 torch threads overlay

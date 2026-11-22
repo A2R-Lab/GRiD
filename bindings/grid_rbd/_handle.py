@@ -342,6 +342,14 @@ class RobotHandle:
         return bool(self._meta.get("floating_base", False))
 
     @property
+    def planar_base(self) -> bool:
+        """True when the first three coordinates are the planar base block
+        ``[px, py, theta]`` of a ``planar_base_joint`` at the root, whether it
+        came from ``register_robot(planar_base=True)`` or from the URDF. Such
+        a model is not a floating base."""
+        return bool(self._meta.get("planar_base", False))
+
+    @property
     def model_descriptor(self):
         """Nominal GRiD-native coordinates, irrespective of output_convention.
 
@@ -893,6 +901,12 @@ class RobotHandle:
         """True if registered with runtime_joint_dynamics=True (the mutable
         damping/friction table backing :py:meth:`set_joint_dynamics`)."""
         return bool(self._meta.get("runtime_joint_dynamics", False))
+
+    @property
+    def assume_unit_quaternions(self) -> bool:
+        """True if registered with assume_unit_quaternions=True: the generated code
+        does not normalise the floating base quaternion and the caller must."""
+        return bool(self._meta.get("assume_unit_quaternions", False))
 
     @property
     def runtime_armature(self) -> bool:

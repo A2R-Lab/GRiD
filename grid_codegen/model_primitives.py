@@ -7,6 +7,7 @@ import sympy as sp
 from .algorithms._eepose_gradient_hessian import (
     _ee_pose_inner_angle_expr, _ee_pose_root_fb_subst)
 from .helpers._topology_helpers import _xi_spherical_quat_subst
+from .helpers._expr_printer import expr_T
 
 
 def emit_joint_transforms(gen):
@@ -34,11 +35,11 @@ def emit_joint_transforms(gen):
                           '    const T s=sin(theta), c=cos(theta);', '    (void)s; (void)c;']
             for col in range(4):
                 for row in range(4):
-                    expression = sp.ccode(mats[jid][row, col])
+                    expression = expr_T(mats[jid][row, col])
                     if j['kind'] == 'floating':
                         expression = _ee_pose_root_fb_subst(expression)
                     elif j['kind'] == 'spherical':
-                        expression = _xi_spherical_quat_subst(gen, expression, jid, ccode=True)
+                        expression = _xi_spherical_quat_subst(gen, expression, jid)
                     else:
                         expression = expression.replace('sin(theta)', 's').replace('cos(theta)', 'c')
                     lines.append(f'    out[{row+4*col}]=static_cast<T>({expression});')
@@ -51,7 +52,7 @@ def emit_joint_transforms(gen):
 def emit_configuration_primitives(descriptor, namespace):
     """Compact/dense forms share GLASS Lie algebra and one coordinate partition.
 
-    Double internal small blocks avoid float cancellation near the identity.
+    Everything is computed in T.
     Matrix temporaries are at most 6x6, independent of model dimensions.
     """
     blocks = descriptor['configuration_layout']
@@ -69,44 +70,43 @@ def emit_configuration_primitives(descriptor, namespace):
 namespace configuration_detail {
 // Reference-first differences; independent quaternion sign representatives.
 template<class T> __device__ inline void block_difference(
-    const model::coordinate_block_record &b, const T *from, const T *to, double *e) {
-    if(b.kind==model::coordinate_kind::euclidean) { e[0]=double(to[b.q_start])-double(from[b.q_start]); return; }
-    double a[7],z[7];
-    for(int k=0;k<b.nq;++k) { a[k]=double(from[b.q_start+k]); z[k]=double(to[b.q_start+k]); }
+    const model::coordinate_block_record &b, const T *from, const T *to, T *e) {
+    if(b.kind==model::coordinate_kind::euclidean) { e[0]=to[b.q_start]-from[b.q_start]; return; }
+    const T *a=from+b.q_start, *z=to+b.q_start;
     if(b.kind==model::coordinate_kind::floating) {
-        glass::thread::se3_difference<double>(a,z,e,e+3);
+        glass::thread::se3_difference<T>(a,z,e,e+3);
     } else {
-        double conjugate[4],relative[4];
-        glass::thread::quat_conj<double>(a,conjugate);
-        glass::thread::quat_mul<double>(conjugate,z,relative);
-        glass::thread::quat_log<double>(relative,e);
+        T conjugate[4],relative[4];
+        glass::thread::quat_conj<T>(a,conjugate);
+        glass::thread::quat_mul<T>(conjugate,z,relative);
+        glass::thread::quat_log<T>(relative,e);
     }
 }
 // One nonlinear evaluation body prevents caller-dependent FMA contraction
 // from making dense and compact representations disagree in their last bits.
 template<class T> __device__ __noinline__ void nonlinear_block_jacobians(
     const model::coordinate_block_record &b, const T *from, const T *to, T *J1, T *J2) {
-    double e[6]; block_difference(b,from,to,e);
+    T e[6]; block_difference(b,from,to,e);
     if(b.kind==model::coordinate_kind::spherical) {
-        double A[9],B[9];
-        glass::thread::so3_left_jacobian_inv<double>(e,A);
-        glass::thread::so3_right_jacobian_inv<double>(e,B);
-        for(int k=0;k<9;++k) { J1[k]=T(-A[k]); J2[k]=T(B[k]); }
+        T A[9],B[9];
+        glass::thread::so3_left_jacobian_inv<T>(e,A);
+        glass::thread::so3_right_jacobian_inv<T>(e,B);
+        for(int k=0;k<9;++k) { J1[k]=-A[k]; J2[k]=B[k]; }
         return;
     }
     // Invert the upper-triangular SE(3) Jr: [A,Q;0,A]^-1.
-    double A[9],Q[9],AQ[9],C[9],inverse[36],base[36];
-    glass::thread::so3_right_jacobian_inv<double>(e+3,A);
-    glass::thread::se3_Q_block<double>(e,e+3,Q);
-    glass::thread::gemm<double,3,3,3>(1.,A,Q,0.,AQ);
-    glass::thread::gemm<double,3,3,3>(-1.,AQ,A,0.,C);
+    T A[9],Q[9],AQ[9],C[9],inverse[36],base[36];
+    glass::thread::so3_right_jacobian_inv<T>(e+3,A);
+    glass::thread::se3_Q_block<T>(e,e+3,Q);
+    glass::thread::gemm<T,3,3,3>(T(1),A,Q,T(0),AQ);
+    glass::thread::gemm<T,3,3,3>(T(-1),AQ,A,T(0),C);
     for(int c=0;c<6;++c) for(int r=0;r<6;++r)
         inverse[c*6+r]=(r<3 && c<3)?A[c*3+r]:
-            ((r>=3 && c>=3)?A[(c-3)*3+r-3]:((r<3 && c>=3)?C[(c-3)*3+r]:0.));
-    glass::thread::se3_retract_jacobian_q<double>(e,e+3,base);
+            ((r>=3 && c>=3)?A[(c-3)*3+r-3]:((r<3 && c>=3)?C[(c-3)*3+r]:T(0)));
+    glass::thread::se3_retract_jacobian_q<T>(e,e+3,base);
     for(int c=0;c<6;++c) for(int r=0;r<6;++r) {
-        double v=0.; for(int k=0;k<6;++k) v-=inverse[k*6+r]*base[c*6+k];
-        J1[c*6+r]=T(v); J2[c*6+r]=T(inverse[c*6+r]);
+        T v=T(0); for(int k=0;k<6;++k) v-=inverse[k*6+r]*base[c*6+k];
+        J1[c*6+r]=v; J2[c*6+r]=inverse[c*6+r];
     }
 }
 template<class T> __device__ inline void block_jacobians(
@@ -129,8 +129,8 @@ template<class T> __device__ inline void configuration_difference(
     const T *from, const T *to, T *delta) {
     for(int k=0;k<model::coordinate_block_count;++k) {
         model::coordinate_block_record b{}; model::coordinate_block(k,b);
-        double e[6]; configuration_detail::block_difference(b,from,to,e);
-        for(int i=0;i<b.nv;++i) delta[b.v_start+i]=T(e[i]);
+        T e[6]; configuration_detail::block_difference(b,from,to,e);
+        for(int i=0;i<b.nv;++i) delta[b.v_start+i]=e[i];
     }
 }
 template<class T> __device__ inline void configuration_difference_jacobians(

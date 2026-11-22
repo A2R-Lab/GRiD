@@ -15,9 +15,10 @@ np.set_printoptions(precision=4, suppress=True, linewidth=100)
 # ---------------------------------------------------------------------------
 
 def printUsage(NO_ARG_OPTION=False):
-    print("Usage is: script.py PATH_TO_URDF (-t FIXED_TARGET_NAMES) (-n FILE_NAMESPACE_NAME) (-d) (-f) (-c) (--collision-res RES) (--collision-native) (--algorithm-list LIST) (--no-mujoco-kernels) (-o OUTPUT)")
+    print("Usage is: script.py PATH_TO_URDF (-t FIXED_TARGET_NAMES) (-n FILE_NAMESPACE_NAME) (-d) (-f) (-p) (-c) (--collision-res RES) (--collision-native) (--algorithm-list LIST) (--no-mujoco-kernels) (-o OUTPUT)")
     print("                    where -d indicates full debug mode")
     print("                    where -f indicates floating base")
+    print("                    where -p adds a planar base (planar_base_joint, coordinates px py theta; not with -f)")
     print("                    where -c spherizes collision geometry and emits grid_collision (config_free)")
     print("                    where --collision-res sets the sphere spacing (comma-separated for a broad->fine cascade)")
     print("                    where --collision-native uses the URDF's native collision primitives (implies -c)")
@@ -55,6 +56,10 @@ def parseInputs(NO_ARG_OPTION=False):
                         help="Enable debug mode")
     parser.add_argument("-f", "--floating-base", default=False, action="store_true",
                         help="Add a floating base")
+    parser.add_argument("-p", "--planar-base", default=False, action="store_true",
+                        help="Attach the root link to the world through a planar joint named "
+                             "planar_base_joint (coordinates px, py, theta; plane normal +Z). "
+                             "Not a floating base; cannot be combined with -f")
     parser.add_argument("--plant", default=False, action="store_true",
                         help="Emit the grid_plant block even when the request carries no plant algorithm, "
                              "cost frames or contact frames (a kinematics-only header drops it by default)")
@@ -109,6 +114,8 @@ def parseInputs(NO_ARG_OPTION=False):
     # consumer's unpack).
     if args.spherized_urdf and args.collision_native:
         parser.error('--spherized-urdf and --collision-native select different geometry models')
+    if args.floating_base and args.planar_base:
+        parser.error('-f/--floating-base and -p/--planar-base are mutually exclusive')
     args.collision = args.collision or args.collision_native or bool(args.spherized_urdf)
     try:
         args.collision_res = [float(x) for x in str(args.collision_res).split(",") if x.strip()]
@@ -124,6 +131,8 @@ def parseInputs(NO_ARG_OPTION=False):
 
     print("Running with: DEBUG_MODE = " + str(args.debug))
     print("           FLOATING_BASE = " + str(args.floating_base))
+    if args.planar_base:
+        print("             PLANAR_BASE = True")
     print("                    URDF = " + args.urdf_path)
     print("      FIXED_TARGET_NAMES = " + args.fixed_target_names)
     print("               FILE_NAME = " + args.namespace)
@@ -172,7 +181,8 @@ def main():
     args = parseInputs()
     parser = URDFParser()
     try:
-        robot = parser.parse(args.urdf_path, floating_base=args.floating_base)
+        robot = parser.parse(args.urdf_path, floating_base=args.floating_base,
+                             planar_base=args.planar_base)
     except URDFParseError as exc:
         reportParseError(exc)
 

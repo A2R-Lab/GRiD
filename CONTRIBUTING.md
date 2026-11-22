@@ -40,9 +40,31 @@ GRiD has three stages. Each may be ahead of the next.
 | PyPI | a maintainer tags `main` | a fresh full receipt with no carried shards, and the installed-artifact gates of [`RELEASING.md`](RELEASING.md) |
 
 Open pull requests against `dev`. You do not need a GPU or a receipt for a
-pull request into `dev`: the receipt job runs only for `main`. If you have a
-GPU, run the tests that cover your change and say in the pull request which
-GPU you used and what passed.
+pull request into `dev`: historical receipts are checked for validity, while
+current primary freshness is required for `main`. If you have a GPU, you can
+add signed provisional evidence with your own GitHub SSH key:
+
+```bash
+make receipt-pr GITHUB_USER=your-login OUT=/tmp/grid-pr-new RECEIPT_BUDGET=30
+```
+
+Commit your source first and keep the checkout unchanged during the run.
+The command runs four mandatory smoke cases (fixed, floating, mimic and
+polynomial coupling) and admits additional small-robot compilation groups
+within a 30–60 minute budget. A started group finishes even if the estimate
+was low; the budget is not a hard deadline. Cold smoke can exceed it. Every
+executed test must pass: an optional failure or unfinished smoke prevents a
+successful receipt. No expected-skip baseline is learned from your machine.
+
+Copy the reported `provisional.json` to `receipts/provisional.json` and commit
+only that file after recording. CI verifies it using the base branch's code
+and policy and your PR-author GitHub keys. An absent receipt is neutral: the
+job succeeds with an explicit absence summary, not a GPU-validation claim.
+An unknown architecture can provide evidence without becoming a supported
+platform. Provisional evidence never replaces `gpu-proof.json`, a maintainer
+refresh, or a release receipt. Fork code never runs automatically on a lab GPU.
+The initial optional selection is conservatively all-stale; dependency-aware
+narrowing is not implemented.
 
 A maintainer reads the changes on `dev`, runs the stale-shard refresh on the
 primary GPU, commits the refreshed receipt and merges `dev` into `main` with a
@@ -75,7 +97,8 @@ bash install/base_install.sh && source .venv/bin/activate
 - Keep codegen byte-identical: a refactor that should not change emitted code
   must produce a byte-identical `grid.cuh` (regenerate before/after and
   `diff`). Never land a non-identical diff without a CUDA-equivalence sign-off.
-- Do not edit `gpu-proof.json` or the files under `receipts/`. The receipt
+- Do not edit `gpu-proof.json` or hardware receipts under `receipts/`
+  (the only contributor exception is `receipts/provisional.json`). The receipt
   is refreshed by a maintainer when `dev` is merged into `main`; the
   [CUDA validation guide](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/cuda_validation.html)
   explains the refresh.

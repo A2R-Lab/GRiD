@@ -1,0 +1,2 @@
+# Intentionally empty for ALL contributor architectures. Unsupported hardware
+# may submit a failed diagnostic, not automatically learn a passing baseline.

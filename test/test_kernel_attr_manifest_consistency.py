@@ -64,8 +64,6 @@ def test_manifest_registers_every_emitted_integrator_type():
             f"registered launches with cudaErrorInvalidValue once its dynamic shared "
             f"memory exceeds 48 KB at an unspilled tier (the TRAPEZOIDAL launch-cliff)."
         )
-
-
 def test_trapezoidal_is_registered():
     """Direct regression pin for the 2026-06-18 bug: TRAPEZOIDAL must be present
     in every non-mjx integrator family (it was historically omitted because the
