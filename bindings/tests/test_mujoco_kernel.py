@@ -39,11 +39,10 @@ def _has_cuda() -> bool:
 
 @pytest.fixture(scope="module")
 def go2_floating():
-    """Register go2-floating ONCE (force_rebuild to exercise freshly-generated
-    codegen, not a stale cache) and share it across the mjx-kernel checks."""
+    """Register go2-floating once and share it across the mjx-kernel checks.
+    The cache is keyed by the generated content, so a codegen change rebuilds."""
     from grid_rbd import register_robot
-    return register_robot("go2_mjx_kernel_test", str(_GO2),
-                          floating_base=True, force_rebuild=True)
+    return register_robot("go2_mjx_kernel_test", str(_GO2), floating_base=True)
 
 
 @pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")

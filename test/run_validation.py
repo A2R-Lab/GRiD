@@ -75,6 +75,16 @@ def verify_receipt(receipt_path, out, *, full=False):
         subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, check=True)
 
 
+TIER_TABLE = 'docs/source/user_guide/getting_started/receipt_tiers.inc'
+
+
+def tier_table_is_current():
+    """The generated tier table names the receipt's commit and date, so a new
+    primary receipt regenerates it in the evidence commit."""
+    from test.receipt_integrity import tier_table
+    return (ROOT / TIER_TABLE).read_text().split('\n\n', 1)[1] == tier_table(root=ROOT)
+
+
 def finalize(out):
     """Verify committed evidence only; never launch a driver or change source."""
     out = out.resolve()
@@ -86,10 +96,12 @@ def finalize(out):
         raise ValueError('Commit generated evidence before finalizing; tree must be clean')
     subprocess.run(['git', 'merge-base', '--is-ancestor', state['candidate'], 'HEAD'],
                    cwd=ROOT, check=True)
-    allowed = {'gpu-proof.json', 'test/gpu-proof-header-keys.json'}
+    allowed = {'gpu-proof.json', 'test/gpu-proof-header-keys.json', TIER_TABLE}
     changed = set(git('diff', '--name-only', state['candidate'], 'HEAD').splitlines())
     if changed - allowed:
         raise ValueError(f'Candidate changed outside evidence: {sorted(changed - allowed)}')
+    if TIER_TABLE in changed and not tier_table_is_current():
+        raise ValueError('Tier table was edited by hand; regenerate it from the receipt')
     for relative, expected in state['evidence_hashes'].items():
         if file_hash(ROOT / relative) != expected:
             raise ValueError(f'Generated evidence changed: {relative}')
