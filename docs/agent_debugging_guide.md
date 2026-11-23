@@ -4445,3 +4445,33 @@ the only tests that compare two layouts bit for bit. And the installed `grid_rbd
 built once by `pip install -e .`: a checkout that pulled the armature bindings without a
 rebuild failed 33 wrapper tests seven hours into a refresh. `test/installed_extension.py`
 now refuses that before the launcher starts; `make build` repairs it.
+
+### A float32 error that grows with distance from the world origin (2026-11-23)
+
+Second derivatives of a floating iiwa14 were 1925 times over the gate with the base 30 m
+from the origin, and the forward dynamics second derivative of an arm on a planar base was
+8% wrong at 30 m. It looked like a kernel bug. It was rounding. The test that tells the
+two apart: build the same generated kernel as float32 and float64 and compare each
+against its own output at 0 m. The float64 build was invariant to 1e-9 at 100 m, and the
+ratio of the two errors stayed near eps32/eps64 at every offset, which a logic error
+cannot do.
+
+The root's 6x6 spatial transform carries the base position in its lower-left block. A
+kernel that composes it down the tree (`idsva_so`, `fdsva_so`, `coriolis_matrix`) works
+about the world origin and cancels terms of size mass times distance squared. The
+centroidal sweep (`ccrba`, `dccrba`, `cmm_time_variation`) did the same through the world
+homogeneous transforms. Inverse and forward dynamics, CRBA, Minv and the first-order
+gradients never read the position and never moved.
+
+The outputs are body-frame quantities, so the position can be set to zero exactly.
+`_root_at_origin` in `_topology_helpers.py` does it for a floating root and for prismatic
+joints joined to the world through prismatic joints only, which is how the parser emits a
+planar or translation root. `_emit_world_transform_chainup(root_at_origin=True)` does it
+for the centroidal sweep, which then adds the base position back to the centre of mass.
+The homogeneous transforms used for poses and the integrator keep the true position.
+
+When you add a kernel that consumes the spatial transforms, nothing is needed. When you
+add one that builds world transforms and returns a quantity that does not depend on the
+base position, ask for `root_at_origin`. Add the kernel to
+`test/python_wrappers/test_floating_base_offset_invariance.py`, which requires the same
+bits at 0 m, 30 m and 1000 m.

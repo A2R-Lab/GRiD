@@ -42,6 +42,7 @@ _ALGORITHMS = [
     "inverse_dynamics_gradient", "forward_dynamics_gradient",
     "idsva_so_body_frame", "fdsva_so", "coriolis_matrix",
     "nonlinear_effects", "generalized_gravity", "integrator_gradient",
+    "ccrba", "dccrba", "cmm_time_variation",
     "end_effector_pose", "com",
 ]
 
@@ -94,6 +95,9 @@ _INVARIANT = {
     "nonlinear_effects": lambda h, q, s: h.nonlinear_effects(q, s["qd"]),
     "generalized_gravity": lambda h, q, s: h.generalized_gravity(q),
     "integrator_gradient": lambda h, q, s: h.integrator_gradient(q, s["qd"], s["u"], 0.01),
+    "ccrba": lambda h, q, s: h.ccrba(q, s["qd"]),
+    "dccrba": lambda h, q, s: h.dccrba(q),
+    "cmm_time_variation": lambda h, q, s: h.cmm_time_variation(q, s["qd"]),
 }
 
 
@@ -143,6 +147,7 @@ _PLANAR_ALGORITHMS = [
     "inverse_dynamics_gradient", "forward_dynamics_gradient",
     "idsva_so_body_frame", "fdsva_so", "coriolis_matrix",
     "nonlinear_effects", "generalized_gravity", "end_effector_pose",
+    "ccrba", "dccrba", "cmm_time_variation", "com",
 ]
 _PLANAR_OFFSETS = ((30.0, -20.0), (-400.0, 250.0))
 
@@ -171,7 +176,7 @@ def _planar_q(state, position):
 _PLANAR_INVARIANT = {name: _INVARIANT[name] for name in (
     "inverse_dynamics", "forward_dynamics", "crba", "minv", "inverse_dynamics_gradient",
     "forward_dynamics_gradient", "idsva_so", "fdsva_so", "coriolis_matrix",
-    "nonlinear_effects", "generalized_gravity")}
+    "nonlinear_effects", "generalized_gravity", "ccrba", "dccrba", "cmm_time_variation")}
 
 
 @pytest.mark.parametrize("kernel", sorted(_PLANAR_INVARIANT))
@@ -193,3 +198,11 @@ def test_planar_base_pose_still_follows_the_base(planar_model):
     pose_moved = _flat(handle.end_effector_pose(_planar_q(state, _PLANAR_OFFSETS[0])))
     np.testing.assert_allclose(
         (pose_moved - pose_origin)[:, :2], np.tile(_PLANAR_OFFSETS[0], (_B, 1)), rtol=0, atol=2e-4)
+
+
+def test_planar_base_com_still_follows_the_base(planar_model):
+    handle, state = planar_model
+    com_origin = np.asarray(handle.com(_planar_q(state, (0.0, 0.0)))[0]).reshape(_B, 3)
+    com_moved = np.asarray(handle.com(_planar_q(state, _PLANAR_OFFSETS[0]))[0]).reshape(_B, 3)
+    expected = np.tile((*_PLANAR_OFFSETS[0], 0.0), (_B, 1))
+    np.testing.assert_allclose(com_moved - com_origin, expected, rtol=0, atol=2e-4)

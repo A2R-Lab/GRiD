@@ -65,7 +65,54 @@ def _frame_jacobian_inner_temp_mem_size(self):
     return 16 * NJ
 
 
-def _emit_world_transform_chainup(self, declare_xworld = True, floating_root_at_origin = False):
+def _root_translation_chain(robot):
+    """The prismatic joints a planar or translation root is made of, with the
+    constants the centroidal sweep needs to run about the base position.
+
+    Returns a list of ``(joint id, origin, direction)``: ``origin`` is the world
+    position of the joint frame with every chain coordinate at zero and
+    ``direction`` is the constant world vector the joint moves the robot along,
+    so the base position is the sum of direction times coordinate over the list.
+    The list is empty unless the whole robot hangs off the chain as one rigid
+    arrangement: joint 0 is the only joint at the world, every chain joint is
+    prismatic, and every chain link before the last is massless with exactly
+    one child joint (what the parser emits for a planar or translation root; a
+    single prismatic root joint also qualifies). A branch or a mass on an
+    intermediate link would move relative to the rest of the robot, and the
+    centroidal quantities would then depend on the chain coordinates. Also
+    empty when a joint origin is a runtime symbol.
+    """
+    import sympy as sp
+    n = robot.get_num_joints()
+    if robot.floating_base or n == 0:
+        return []
+    children = {j: [c for c in range(n) if robot.get_parent_id(c) == j] for j in range(-1, n)}
+    if children[-1] != [0]:
+        return []
+    chain, world, jid = [], sp.eye(4), 0
+    while getattr(robot.get_joint_by_id(jid), "jtype", None) == "prismatic":
+        joint = robot.get_joint_by_id(jid)
+        local = sp.Matrix(joint.get_transformation_matrix_hom())
+        coords = local.free_symbols
+        if len(coords) != 1:
+            return []
+        theta = next(iter(coords))
+        full = world * local
+        at_zero = full.subs(theta, 0)
+        direction = full[:3, 3].diff(theta)
+        if at_zero.free_symbols or direction.free_symbols:
+            return []
+        chain.append((jid, [float(v) for v in at_zero[:3, 3]], [float(v) for v in direction]))
+        world = at_zero
+        link = robot.get_link_by_name(joint.get_child())
+        massless = link is not None and (link.is_dummy_link() or not link.mass)
+        if len(children[jid]) != 1 or not massless:
+            break
+        jid = children[jid][0]
+    return chain
+
+
+def _emit_world_transform_chainup(self, declare_xworld = True, root_at_origin = False):
     """Step 1: per-joint world homogeneous transforms by BFS level (chain-up of
     local s_Xhom into s_Xworld). The shared kinematics primitive behind
     frame_jacobian, the runtime-target ee-pose surfaces (_eepose_runtime), the
@@ -74,15 +121,17 @@ def _emit_world_transform_chainup(self, declare_xworld = True, floating_root_at_
     ``s_Xworld = &s_temp[0]`` alias; callers that place s_Xworld themselves pass
     False.
 
-    ``floating_root_at_origin`` is the homogeneous counterpart of
-    ``_floating_root_at_origin`` in the spatial-transform loader: on a floating
-    base the root is copied with its translation set to zero, so every
-    transform in s_Xworld is expressed about the base position instead of the
-    world origin. Only a caller whose result does not depend on the base
+    ``root_at_origin`` is the homogeneous counterpart of ``_root_at_origin`` in
+    the spatial-transform loader: a floating root is copied with its translation
+    set to zero, and the joints of a root translation chain
+    (``_root_translation_chain``) get their translation at coordinate zero, so
+    every transform in s_Xworld is expressed about the base position instead of
+    the world origin. Only a caller whose result does not depend on the base
     position, or that adds the position back itself, may ask for it. It has no
-    effect on a fixed base."""
+    effect on any other robot."""
+    chain = {jid: origin for jid, origin, _ in _root_translation_chain(self.robot)} if root_at_origin else {}
+    root_at_origin = root_at_origin and self.robot.floating_base
     n_bfs_levels = self.robot.get_max_bfs_level() + 1
-    root_at_origin = floating_root_at_origin and self.robot.floating_base
     if declare_xworld:
         self.gen_add_code_line("T *s_Xworld = &s_temp[0];")
     self.gen_add_code_line("// Step 1: world homogeneous transforms (chain-up of local s_Xhom)")
@@ -101,6 +150,16 @@ def _emit_world_transform_chainup(self, declare_xworld = True, floating_root_at_
                                                [("int", "jid", jid_list), ("int", "par", par_list)])
         else:
             self.gen_add_code_line("const int jid = " + jid_list[0] + "; const int par = " + par_list[0] + ";")
+        if njs == 1 and ids_at_level[0] in chain:
+            # the translation of a root chain joint, with the chain coordinates at zero
+            k = ["static_cast<T>(" + repr(v) + ")" for v in chain[ids_at_level[0]]]
+            general = ("s_Xhom[16*jid + ele]" if par_list[0] == "-1" else
+                       "dot_prod<T,4,4,1>(&s_Xworld[16*par + row], &s_Xhom[16*jid + 4*col])")
+            self.gen_add_code_line("s_Xworld[16*jid + ele] = (col == 3 && row < 3) ? (row == 0 ? " + k[0] +
+                                   " : (row == 1 ? " + k[1] + " : " + k[2] + ")) : " + general + ";")
+            self.gen_add_end_control_flow()
+            self.gen_add_sync()
+            continue
         if root_at_origin:
             # cells 12, 13, 14 of the root hold the base position
             self.gen_add_code_line("if (par == -1) { s_Xworld[16*jid + ele] = (col == 3 && row < 3) ? static_cast<T>(0) : s_Xhom[16*jid + ele]; }")
