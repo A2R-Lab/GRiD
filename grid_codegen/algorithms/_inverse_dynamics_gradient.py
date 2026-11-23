@@ -370,6 +370,10 @@ def gen_inverse_dynamics_gradient_inner(self):
     self.gen_add_code_line(func_def, True)
 
     if self.robot_has_mimic_joints() or self.robot.robot_has_skew_axis() or self.robot.robot_has_spherical():
+        # The dense fold has no selective band: it writes its whole pool
+        # through s_temp. A caller that composes this inner and shrinks s_temp
+        # by ID_DU_TEMP_SPILL_COUNT would write past it, so refuse the flag.
+        self.gen_add_code_line('static_assert(!USE_DA_DF_SPILL, "this robot uses the dense inverse_dynamics_gradient inner, which has no selective spill band (GRID_ID_DU_SELECTIVE_SPILL_AVAILABLE == 0); place the whole pool by passing a global pointer as s_temp");')
         # MIMIC (T3-finisher P3): the sparse NJ-indexed gradient assembly below
         # writes s_dc_du by raw body id and assumes NJ == NV, so it can't fold a
         # mimic model (NB > NV, shared v-slots). Emit instead a DENSE serial
