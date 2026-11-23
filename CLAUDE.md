@@ -130,7 +130,12 @@ fold into one serial job). `GRID_SPLIT_COMPILE_JOBS` sizes the pool (default 5;
 the conservative serial profile by default. Its opt-in `--resource-profile
 bounded-overlap` uses one shared memory-admission authority for two pool builds
 and one whole shard, including inline compilation, with two compiler units per
-build. Require a cold pilot before choosing it for a release. Pressure drains
+build. With that profile only, `--compile-slots N`, `--build-jobs N` and
+`--memory-cap GIB` change the slots, the units per build and a ceiling on held
+allowances (`GRID_SPLIT_MEMORY_CAP_GIB`; it lowers the budget, never raises it);
+resume must repeat them. `--print-resources` reports cores, memory, budget and
+both profiles' settings without compiling. Require a cold pilot before choosing
+bounded overlap, or any wider setting, for a release. Pressure drains
 owned work, never peers. Resume preserves the profile; serial fallback starts
 a fresh full run without carried outcomes. See `RELEASING.md` for admission,
 pause/resume and fallback provenance.

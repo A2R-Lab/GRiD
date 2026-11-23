@@ -351,10 +351,45 @@ process-tree peaks and headroom are logged in `memory-admission.jsonl`; short
 peaks between samples can still be missed. Admission is not a hard RSS limit.
 Pressure stops new work and drains owned compilers rather than killing peers.
 
+Three launcher options widen or narrow bounded overlap for the machine at hand.
+They are accepted only with `--resource-profile bounded-overlap`; with the
+serial profile they are an error, and without them bounded overlap keeps its
+two pool builds and two compiler units.
+
+- `--compile-slots N` sets the number of pool builds that may run at once
+  (`GRID_SPLIT_COMPILE_JOBS`).
+- `--build-jobs N` sets the compiler units per wrapper build
+  (`GRID_RBD_BUILD_JOBS`). Above two units every pool build is charged the
+  16 GiB class floor, 20.8 GiB with the margin, because the smaller floors were
+  measured at two units. Wider builds therefore admit fewer jobs at once.
+- `--memory-cap GIB` sets a ceiling on the memory allowances held at once by
+  pool builds and the shard together (`GRID_SPLIT_MEMORY_CAP_GIB`). The pool
+  budget becomes the smaller of its usual value and the cap, and the admission
+  authority refuses a reservation that would take the held allowances past the
+  cap. The cap never raises the budget and does not change the 14 GiB reserve
+  or the live `MemAvailable` check. The launcher rejects a cap below 20.8 GiB,
+  the largest single allowance, since such a run could only pause.
+
+Slots are a ceiling, not a promise: admission still decides how many builds
+run, so extra slots are used only when their allowances fit. The three values
+are recorded in `state.json` with the profile, and a resume must repeat them
+exactly. The one GPU shard at a time is not configurable.
+
+`test/run_validation.py --print-resources` reports what the current machine
+offers: cores, `MemTotal`, `MemAvailable`, the reserve, the resulting pool
+budget, how many largest-class allowances fit now, the largest compile peak in
+the resource history ledger when one exists, and the slots and units of both
+profiles. Add `--resource-profile bounded-overlap --memory-cap GIB` to see the
+capped budget. It reads `/proc/meminfo` and the ledger only. It starts no
+compiler, uses no GPU and takes no lock, and the figures describe that moment,
+not the memory available hours into a run.
+
 Select bounded overlap only after a cold-build, inline-cache-miss pilot on the
 same scope as serial demonstrates safe, useful throughput. This is validation
 throughput, not runtime performance evidence. A small pilot cannot certify the
-largest receipt models; those must still fit admission or stop. The resource
+largest receipt models; those must still fit admission or stop. Any setting
+wider than the default two slots and two units needs that same pilot at that
+setting on the machine that will record. The resource
 profile does not change collection, numerical checks or expected skips.
 Resume requires the recorded profile. To fall back, let the old run exit and
 use a new output directory with `--full --resource-profile serial
