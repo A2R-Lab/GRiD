@@ -129,6 +129,105 @@ def test_bounded_profile_is_explicit_and_persisted(launch):
         'XLA_PYTHON_CLIENT_PREALLOCATE': 'false'}
 
 
+def test_bounded_tuning_reaches_the_driver_and_the_state(launch, monkeypatch):
+    seen = []
+    monkeypatch.setattr(launcher, 'run_driver', lambda command, **kwargs: seen.append(kwargs) or
+                        launcher.subprocess.run(command))
+    launch.invoke('--execute', '--full', '--resource-profile', 'bounded-overlap',
+                  '--compile-slots', '4', '--build-jobs', '3', '--memory-cap', '40')
+    assert launch.status()['resource_profile'] == {
+        'GRID_SPLIT_RESOURCE_PROFILE': 'bounded-overlap', 'GRID_SPLIT_COMPILE_JOBS': '4',
+        'GRID_SPLIT_SHARD_JOBS': '1', 'GRID_RBD_BUILD_JOBS': '3',
+        'XLA_PYTHON_CLIENT_PREALLOCATE': 'false', 'GRID_SPLIT_MEMORY_CAP_GIB': '40'}
+    assert seen[0]['profile'] == 'bounded-overlap'
+    assert seen[0]['tuning'] == dict(compile_slots=4, build_jobs=3, memory_cap=40.0)
+    env = launcher.validation_env(seen[0]['profile'], **seen[0]['tuning'])
+    assert launch.status()['resource_profile'].items() <= env.items()
+
+
+@pytest.mark.parametrize('options', [
+    ['--compile-slots', '4'], ['--build-jobs', '4'], ['--memory-cap', '40'],
+    ['--memory-cap', '40', '--provisional', '--github-user', 'contributor'],
+    ['--resource-profile', 'bounded-overlap', '--compile-slots', '0'],
+    ['--resource-profile', 'bounded-overlap', '--compile-slots', '1.5'],
+    ['--resource-profile', 'bounded-overlap', '--build-jobs', '-2'],
+    ['--resource-profile', 'bounded-overlap', '--memory-cap', '0'],
+    ['--resource-profile', 'bounded-overlap', '--memory-cap', 'inf'],
+    ['--resource-profile', 'bounded-overlap', '--memory-cap', 'nan'],
+    # Below the largest single allowance (16 GiB x 1.3): could only pause.
+    ['--resource-profile', 'bounded-overlap', '--memory-cap', '20.7'],
+])
+def test_tuning_is_bounded_only_and_positive(launch, options):
+    with pytest.raises(SystemExit):
+        launch.invoke('--execute', '--full', *options)
+    assert not launch.calls and not launch.out.exists()
+    assert not launcher.LOCK_PATH.exists()
+
+
+def test_smallest_useful_memory_cap_is_accepted(launch):
+    launch.invoke('--execute', '--full', '--resource-profile', 'bounded-overlap', '--memory-cap', '20.8')
+    assert launch.status()['resource_profile']['GRID_SPLIT_MEMORY_CAP_GIB'] == '20.8'
+    assert launch.status()['resource_profile']['GRID_SPLIT_COMPILE_JOBS'] == '2'
+
+
+RECORDED = {'GRID_SPLIT_RESOURCE_PROFILE': 'bounded-overlap', 'GRID_SPLIT_COMPILE_JOBS': '4',
+            'GRID_RBD_BUILD_JOBS': '2', 'GRID_SPLIT_MEMORY_CAP_GIB': '40'}
+
+
+@pytest.mark.parametrize('options, changed', [
+    (['--compile-slots', '4', '--memory-cap', '40.0'], None),
+    (['--compile-slots', '4', '--build-jobs', '2', '--memory-cap', '40'], None),
+    (['--memory-cap', '40'], 'GRID_SPLIT_COMPILE_JOBS'),
+    (['--compile-slots', '3', '--memory-cap', '40'], 'GRID_SPLIT_COMPILE_JOBS'),
+    (['--compile-slots', '4', '--build-jobs', '4', '--memory-cap', '40'], 'GRID_RBD_BUILD_JOBS'),
+    (['--compile-slots', '4'], 'GRID_SPLIT_MEMORY_CAP_GIB'),
+    (['--compile-slots', '4', '--memory-cap', '48'], 'GRID_SPLIT_MEMORY_CAP_GIB'),
+])
+def test_resume_must_preserve_recorded_tuning(launch, options, changed):
+    original = launch.out.parent / 'original'
+    shards = original / 'shards'
+    shards.mkdir(parents=True)
+    (original / 'state.json').write_text(json.dumps(dict(
+        candidate='candidate', full=True, resource_profile=RECORDED)))
+    arguments = ['--execute', '--full', '--resume', str(shards),
+                 '--resource-profile', 'bounded-overlap', *options]
+    if changed is None:
+        launch.invoke(*arguments)
+        assert '--resume' in launch.calls[1]
+        assert launch.status()['resource_profile'].items() >= RECORDED.items()
+    else:
+        with pytest.raises(SystemExit, match=f'Resume must preserve {changed}'):
+            launch.invoke(*arguments)
+        assert not launch.calls and not launch.out.exists()
+
+
+def test_resume_of_a_state_without_tuning_keys_uses_profile_defaults(launch):
+    original = launch.out.parent / 'original'
+    shards = original / 'shards'
+    shards.mkdir(parents=True)
+    (original / 'state.json').write_text(json.dumps(dict(candidate='candidate', full=True,
+        resource_profile={'GRID_SPLIT_RESOURCE_PROFILE': 'bounded-overlap'})))
+    arguments = ['--execute', '--full', '--resume', str(shards), '--resource-profile', 'bounded-overlap']
+    with pytest.raises(SystemExit, match='Resume must preserve GRID_SPLIT_COMPILE_JOBS'):
+        launch.invoke(*arguments, '--compile-slots', '3')
+    assert not launch.calls
+    launch.invoke(*arguments)
+    assert launch.status()['resource_profile']['GRID_SPLIT_COMPILE_JOBS'] == '2'
+
+
+def test_print_resources_is_read_only(launch, monkeypatch, capsys):
+    from test import run_split_suite as driver
+    monkeypatch.setattr(driver, 'resource_report', lambda cap_kb=None: f'report cap={cap_kb}')
+    monkeypatch.setattr('sys.argv', ['run_validation', '--print-resources'])
+    launcher.main()
+    assert capsys.readouterr().out == 'report cap=None\n'
+    monkeypatch.setattr('sys.argv', ['run_validation', '--print-resources', '--resource-profile',
+                                     'bounded-overlap', '--memory-cap', '32'])
+    launcher.main()
+    assert capsys.readouterr().out == f'report cap={32 * 1024 * 1024}\n'
+    assert not launch.calls and not launch.out.exists() and not launcher.LOCK_PATH.exists()
+
+
 def test_resume_cannot_silently_switch_resource_profiles(launch):
     launch.out.mkdir()
     shards = launch.out / 'shards'
@@ -362,6 +461,25 @@ def test_validation_env_strips_overrides_and_sets_receipt_knobs(monkeypatch):
     assert env['GRID_RBD_BUILD_JOBS'] == '2'
     assert env['XLA_PYTHON_CLIENT_PREALLOCATE'] == 'false'
     assert 'GRID_CUDA_KIN_THREADS' not in env and 'PYTEST_ADDOPTS' not in env
+    assert 'GRID_SPLIT_MEMORY_CAP_GIB' not in env
+
+
+def test_validation_env_tuning_is_bounded_only_and_leaves_defaults_alone(monkeypatch):
+    monkeypatch.setenv('GRID_SPLIT_MEMORY_CAP_GIB', '1')
+    monkeypatch.setenv('GRID_SPLIT_COMPILE_JOBS', '9')
+    serial, bounded = launcher.validation_env('serial'), launcher.validation_env('bounded-overlap')
+    assert serial == launcher.validation_env()
+    assert {key: value for key, value in bounded.items() if serial.get(key) != value} == {
+        'GRID_SPLIT_RESOURCE_PROFILE': 'bounded-overlap', 'GRID_SPLIT_COMPILE_JOBS': '2'}
+    assert set(serial) == set(bounded) and 'GRID_SPLIT_MEMORY_CAP_GIB' not in serial
+    tuned = launcher.validation_env('bounded-overlap', compile_slots=4, build_jobs=3, memory_cap=37.5)
+    assert {key: value for key, value in tuned.items() if bounded.get(key) != value} == {
+        'GRID_SPLIT_COMPILE_JOBS': '4', 'GRID_RBD_BUILD_JOBS': '3',
+        'GRID_SPLIT_MEMORY_CAP_GIB': '37.5'}
+    assert tuned['GRID_SPLIT_SHARD_JOBS'] == '1'
+    for override in (dict(compile_slots=2), dict(build_jobs=2), dict(memory_cap=40)):
+        with pytest.raises(ValueError, match='serial'):
+            launcher.validation_env('serial', **override)
 
 
 # ─── receipts by architecture: the driver picks the path from the table ──────

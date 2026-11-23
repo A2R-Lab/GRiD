@@ -93,3 +93,91 @@ def test_class_floor_replaces_flat_default_but_not_larger_observation(tmp_path, 
     monkeypatch.setattr(sched, '_launch', launch)
     sched.run([compile_sched.Job('one', [], 'resource-v1:test', peak_floor_kb=30)])
     assert seen == [65]
+
+
+# --- measured classes (adaptive profile) ------------------------------------
+import json
+
+resource_history = history
+GIB = history.GIB_KB
+
+def test_class_history_charges_the_measurement_and_bounds_other_widths(tmp_path):
+    h = resource_history.ClassHistory(tmp_path / 'class.json')
+    floor = 16 * GIB
+    assert h.predict_kb('wrapper', 'go2', 'a', 4, floor) == floor   # nothing measured
+    h.record('wrapper', 'go2', 'a', 2, 4 * GIB, proc_kb=int(1.7 * GIB), secs=100)
+    assert h.predict_kb('wrapper', 'go2', 'a', 2, floor) == 4 * GIB
+    assert h.predict_kb('wrapper', 'go2', 'a', 1, floor) == 4 * GIB  # narrower cannot need more
+    # Wider and unmeasured: one driver plus four compilers of the largest size.
+    assert h.predict_kb('wrapper', 'go2', 'a', 4, floor) == 5 * int(1.7 * GIB)
+    h.record('wrapper', 'go2', 'a', 4, 7 * GIB, proc_kb=2 * GIB)
+    assert h.predict_kb('wrapper', 'go2', 'a', 4, floor) == 7 * GIB
+    # A measurement above the old floor is charged in full; a bound is not.
+    h.record('wrapper', 'go2', 'big', 2, 9 * GIB, proc_kb=7 * GIB)
+    assert h.predict_kb('wrapper', 'go2', 'big', 4, floor) == floor
+    h.record('wrapper', 'go2', 'big', 4, 20 * GIB)
+    assert h.predict_kb('wrapper', 'go2', 'big', 4, floor) == 20 * GIB
+    # Max over history, persisted; a smaller later sample changes nothing.
+    h.record('wrapper', 'go2', 'a', 4, 1 * GIB)
+    assert resource_history.ClassHistory(tmp_path / 'class.json').rows == h.rows
+    assert h.predict_kb('wrapper', 'go2', 'a', 4, floor) == 7 * GIB
+    h.record('native', 'go2', 'small', 1, GIB // 4)
+    assert h.predict_kb('native', 'go2', 'small', 1, floor) == GIB   # never under 1 GiB
+
+
+def test_unseen_class_uses_the_largest_peer_then_the_floor(tmp_path):
+    h = resource_history.ClassHistory(tmp_path / 'class.json')
+    h.record('wrapper', 'go2', 'a', 4, 7 * GIB)
+    h.record('wrapper', 'go2', 'b', 4, 9 * GIB)
+    assert h.predict_kb('wrapper', 'go2', 'new', 4, 16 * GIB) == 9 * GIB
+    assert h.predict_kb('wrapper', 'h1_2', 'new', 4, 16 * GIB) == 16 * GIB
+    assert h.predict_kb('native', 'go2', 'new', 4, 16 * GIB) == 16 * GIB
+    # A peer with no bound at this width leaves the floor in place.
+    h.record('wrapper', 'go2', 'c', 2, 3 * GIB)   # no process size recorded
+    assert h.predict_kb('wrapper', 'go2', 'new', 4, 16 * GIB) == 16 * GIB
+
+
+def test_only_real_builds_count_as_measurements():
+    assert resource_history.log_shows_build('[cuda-equivalence] generating header cache miss key=1')
+    assert resource_history.log_shows_build("BUILT go2,floating_base=True abc")
+    assert not resource_history.log_shows_build('HIT go2,floating_base=True abc\nWARMED x (1s)')
+
+
+def test_reserve_and_width_scale_with_the_machine(tmp_path):
+    reserve = resource_history.adaptive_reserve_kb
+    assert reserve(8 * GIB) == 4 * GIB and reserve(16 * GIB) == 4 * GIB
+    assert reserve(62 * GIB) == int(0.15 * 62 * GIB) and reserve(256 * GIB) == int(0.15 * 256 * GIB)
+    h = resource_history.ClassHistory(tmp_path / 'class.json')
+    h.record('wrapper', 'go2', 'a', 4, 7 * GIB, proc_kb=2 * GIB)
+    h.record('wrapper', 'go2', 'a', 2, 4 * GIB, proc_kb=2 * GIB)
+    h.record('wrapper', 'go2', 'a', 1, int(2.5 * GIB), proc_kb=2 * GIB)
+    plan = lambda budget, cores, **k: resource_history.plan_width(
+        budget_kb=budget * GIB, cores=cores, history=h, margin=1.3, **k)
+    assert plan(50, 24) == (24, 4, int(7 * GIB * 1.3))        # large box: full width
+    assert plan(12, 8) == (8, 4, int(7 * GIB * 1.3))          # 16 GiB box: still fits
+    assert plan(6, 6) == (6, 2, int(4 * GIB * 1.3))           # 8 GiB Jetson: two units
+    assert plan(4, 4)[1] == 1                                 # smaller still: one unit
+    assert plan(50, 24, units=2, slots=3)[:2] == (3, 2)       # stated values are upper bounds
+    assert plan(6, 6, units=8)[1] == 2
+
+
+def test_import_seeds_cold_builds_from_a_finished_run(tmp_path):
+    run = tmp_path / 'compile'
+    run.mkdir()
+    ident = lambda kind, robot, key: dict(key=key, kind=kind, recipe=dict(robot=robot),
+                                          environment=dict(GRID_RBD_BUILD_JOBS='2'))
+    (run / 'resource-identities.json').write_text(json.dumps(dict(
+        warm00_go2=ident('wrapper', 'go2', 'k1'), warm01_iiwa14=ident('wrapper', 'iiwa14', 'k2'),
+        prewarm_go2=ident('native', 'go2', 'k3'))))
+    (run / 'warm00_go2.log').write_text('BUILT go2 abc\n')
+    (run / 'warm00_go2.time').write_text('\tMaximum resident set size (kbytes): 1000\n')
+    (run / 'warm01_iiwa14.log').write_text('HIT iiwa14 abc\n')            # cache hit: skipped
+    (run / 'prewarm_go2.log').write_text('compiling runner arch=sm_120\n')
+    ledger = dict(k1=dict(peak_kb=4000, secs=9.0), k2=dict(peak_kb=10, secs=1.0),
+                  k3=dict(peak_kb=300, secs=5.0))
+    h = resource_history.ClassHistory(tmp_path / 'class.json')
+    assert resource_history.import_run(h, run, ledger) == 2
+    name = resource_history.recipe_name(dict(robot='go2'))
+    assert h.rows[f'wrapper|go2|{name}'] == {'2': dict(tree_kb=4000, proc_kb=1000, secs=9.0)}
+    assert list(h.rows[f'native|go2|{name}']) == ['1']
+    assert not any(key.startswith('wrapper|iiwa14') for key in h.rows)
