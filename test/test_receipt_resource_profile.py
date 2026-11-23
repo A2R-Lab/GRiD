@@ -260,3 +260,139 @@ def test_legacy_overlap_does_not_drain_pool_first(tmp_path, monkeypatch):
     monkeypatch.setattr(driver, 'phase_run', run)
     assert driver.run_phases(['a'], tmp_path, False, [], [],
         fake_pool(events, tmp_path), ['warm'], {}) == ([], False)
+
+
+@pytest.mark.parametrize('cap, expected', [(None, 180), (500, 180), (180, 180), (150, 150)])
+def test_memory_cap_lowers_but_never_raises_the_pool_budget(tmp_path, monkeypatch, cap, expected):
+    monkeypatch.setattr(compile_sched, 'mem_available_kb', lambda: 200)
+    scheduler = compile_sched.RamScheduler(compile_sched.Ledger(tmp_path/'rss.json'),
+        floor_kb=20, default_peak_kb=100, margin=1, strict_memory=True, cap_kb=cap)
+    assert scheduler.budget_kb == expected and scheduler.floor_kb == 20
+    assert compile_sched.pool_budget_kb(200, 20, 100, cap) == expected
+
+
+def test_capped_budget_refuses_what_the_uncapped_budget_admits(tmp_path, monkeypatch):
+    monkeypatch.setattr(compile_sched, 'mem_available_kb', lambda: 200)
+    ledger = compile_sched.Ledger(tmp_path/'rss.json')
+    def run(cap):
+        scheduler = compile_sched.RamScheduler(ledger, max_jobs=1, floor_kb=20,
+            default_peak_kb=100, margin=1, strict_memory=True, cap_kb=cap)
+        job = compile_sched.Job('a', [sys.executable, '-c', 'pass'], 'a', log_path=str(tmp_path/'a.log'))
+        return scheduler, scheduler.run([job])['a'].rc
+    scheduler, rc = run(99)
+    assert rc == -1 and 'budget 99 KiB' in scheduler.resource_blocked
+    assert not (tmp_path/'a.log').exists()
+    assert run(100)[1] == 0 and run(None)[1] == 0
+
+
+def test_cap_does_not_lift_the_live_backstop(tmp_path, monkeypatch):
+    # 119 available cannot hold a 100 KiB job above the 20 KiB floor, whatever the cap.
+    monkeypatch.setattr(compile_sched, 'mem_available_kb', lambda: 119)
+    monkeypatch.setattr(compile_sched.subprocess, 'Popen',
+                        lambda *a, **k: pytest.fail('a cap must not admit below the floor'))
+    scheduler = compile_sched.RamScheduler(compile_sched.Ledger(tmp_path/'rss.json'),
+        floor_kb=20, default_peak_kb=100, margin=1, strict_memory=True, cap_kb=10_000)
+    assert scheduler.budget_kb == 100
+    assert scheduler.run([compile_sched.Job('a', ['never'], 'a')])['a'].rc == -1
+
+
+def direct_environment(monkeypatch, profile, **env):
+    import os
+    monkeypatch.setenv('GRID_SPLIT_RESOURCE_PROFILE', profile)
+    keys = ('GRID_RBD_BUILD_JOBS', 'GRID_SPLIT_COMPILE_JOBS', 'GRID_SPLIT_SHARD_JOBS',
+            'GRID_SPLIT_MEMORY_CAP_GIB')
+    for key in keys:
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    observed = []
+    monkeypatch.setattr(sys, 'argv', ['run_split_suite', '--warm-one', 'not-executed.json'])
+    monkeypatch.setattr(driver, 'warm_one_worker', lambda path: observed.append(
+        tuple(os.environ.get(key) for key in keys)) or 0)
+    assert driver.main() == 0
+    return observed[0]
+
+
+def test_bounded_profile_defaults_and_stated_tuning_reach_workers(monkeypatch):
+    assert direct_environment(monkeypatch, 'bounded-overlap') == ('2', '2', '1', None)
+    assert direct_environment(monkeypatch, 'bounded-overlap', GRID_SPLIT_SHARD_JOBS='9',
+        GRID_SPLIT_COMPILE_JOBS='4', GRID_RBD_BUILD_JOBS='3',
+        GRID_SPLIT_MEMORY_CAP_GIB='40') == ('3', '4', '1', '40')
+    assert driver.memory_cap_kb() == 40 * 1024 * 1024
+
+
+def test_serial_profile_drops_a_stray_memory_cap(monkeypatch):
+    assert direct_environment(monkeypatch, 'serial', GRID_SPLIT_COMPILE_JOBS='4',
+        GRID_SPLIT_MEMORY_CAP_GIB='40') == ('2', '1', '1', None)
+    assert driver.memory_cap_kb() is None
+
+
+@pytest.mark.parametrize('key, value', [
+    ('GRID_SPLIT_COMPILE_JOBS', '0'), ('GRID_SPLIT_COMPILE_JOBS', 'many'),
+    ('GRID_RBD_BUILD_JOBS', '-1'), ('GRID_SPLIT_MEMORY_CAP_GIB', '0'),
+    ('GRID_SPLIT_MEMORY_CAP_GIB', 'nan'), ('GRID_SPLIT_MEMORY_CAP_GIB', 'inf'),
+    ('GRID_SPLIT_MEMORY_CAP_GIB', 'lots')])
+def test_bounded_profile_rejects_malformed_tuning_before_work(monkeypatch, key, value):
+    monkeypatch.setattr(driver, 'warm_one_worker', lambda path: pytest.fail('must not start work'))
+    with pytest.raises(SystemExit, match=key):
+        direct_environment(monkeypatch, 'bounded-overlap', **{key: value})
+
+
+@pytest.mark.parametrize('profile, cap', [('bounded-overlap', 40 * 1024 * 1024), ('serial', None)])
+def test_phases_give_the_cap_to_the_one_admission_authority(tmp_path, monkeypatch, capsys, profile, cap):
+    monkeypatch.setenv('GRID_SPLIT_RESOURCE_PROFILE', profile)
+    monkeypatch.setenv('GRID_SPLIT_MEMORY_CAP_GIB', '40')
+    monkeypatch.setenv('GRID_SPLIT_COMPILE_JOBS', '4')
+    monkeypatch.setenv('GRID_RBD_BUILD_JOBS', '3')
+    seen = []
+    monkeypatch.setattr(driver, 'phase_run', lambda *a, **k: seen.append(k['admission']) or ([], False))
+    class Pool(fake_pool([], tmp_path).__class__):
+        def run_async(self, jobs):
+            return SimpleNamespace(join=lambda timeout=None: None, is_alive=lambda: False)
+    pool = Pool()
+    driver.run_phases(['a'], tmp_path, False, [], [], pool, ['warm'], {})
+    assert seen[0].cap_kb == cap and pool.admission is seen[0]
+    assert seen[0].floor_kb == driver.GPU_PHASE_FLOOR_KB
+    out = capsys.readouterr().out
+    if cap:
+        assert 'at most 4 pool jobs / 1 shard / 3 units; memory cap 40 GiB' in out
+    else:
+        assert 'memory cap' not in out
+
+
+def test_bounded_profile_line_is_unchanged_without_tuning(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv('GRID_SPLIT_RESOURCE_PROFILE', 'bounded-overlap')
+    for key in ('GRID_SPLIT_MEMORY_CAP_GIB', 'GRID_SPLIT_COMPILE_JOBS', 'GRID_RBD_BUILD_JOBS'):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(driver, 'phase_run', lambda *a, **k: ([], False))
+    driver.run_phases(['a'], tmp_path, False, [], [], None, [], {})
+    assert ('Resource profile: bounded-overlap; at most 2 pool jobs / 1 shard / 2 units; '
+            'one reservation authority includes inline builds') in capsys.readouterr().out
+
+
+def test_resource_report_reads_meminfo_and_the_ledger_only(tmp_path, monkeypatch):
+    gib = 1024 * 1024
+    monkeypatch.setattr(compile_sched, 'mem_available_kb', lambda: 56 * gib)
+    monkeypatch.setattr(compile_sched, 'meminfo_kb', lambda field: {'MemTotal': 62 * gib}[field])
+    monkeypatch.setattr(driver.os, 'cpu_count', lambda: 24)
+    monkeypatch.setattr(driver.subprocess, 'Popen', lambda *a, **k: pytest.fail('no process'))
+    monkeypatch.setattr(driver.subprocess, 'run', lambda *a, **k: pytest.fail('no process'))
+    report = driver.resource_report().splitlines()
+    assert report[:5] == ['cores: 24', 'MemTotal: 62.0 GiB', 'MemAvailable: 56.0 GiB',
+                          'host reserve (floor): 14.0 GiB', 'pool budget: 42.0 GiB']
+    assert report[5].startswith('largest single allowance: 20.8 GiB') and '2 fit at once now' in report[5]
+    assert report[6].startswith('largest recorded compile peak: none recorded')
+    assert report[7] == 'serial: 1 compile slot, 2 units per build, 1 GPU shard'
+    assert report[8].startswith('bounded-overlap: 2 compile slots, 2 units per build, 1 GPU shard')
+    ledger = compile_sched.Ledger(tmp_path/'test/.split_suite/compile_rss.json')
+    ledger.record('small', gib // 2)
+    ledger.record('large', int(4.84 * gib))
+    before = sorted(p for p in tmp_path.rglob('*'))
+    capped = driver.resource_report(30 * gib).splitlines()
+    assert 'pool budget with --memory-cap 30: 30.0 GiB' in capped
+    assert any('1 fit at once now' in line for line in capped)
+    assert 'largest recorded compile peak: 4.84 GiB (2 ledger entries)' in capped
+    assert 'pool budget with --memory-cap 99: 42.0 GiB' in driver.resource_report(99 * gib)
+    assert sorted(p for p in tmp_path.rglob('*')) == before
+    monkeypatch.setattr(compile_sched, 'mem_available_kb', lambda: 30 * gib)
+    assert 'would be refused now' in driver.resource_report()

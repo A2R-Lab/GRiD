@@ -23,9 +23,19 @@ sys.path.insert(0, str(ROOT))
 from test.receipt_integrity import verify_header_keys, verify_manifest_scope
 
 
-def validation_env(profile='serial'):
+MEMORY_CAP_ENV = 'GRID_SPLIT_MEMORY_CAP_GIB'
+# Launcher option -> the environment value it sets for the split driver.
+TUNING = {'compile_slots': 'GRID_SPLIT_COMPILE_JOBS', 'build_jobs': 'GRID_RBD_BUILD_JOBS',
+          'memory_cap': MEMORY_CAP_ENV}
+
+
+def validation_env(profile='serial', *, compile_slots=None, build_jobs=None, memory_cap=None):
+    """memory_cap is in GiB. The three overrides exist for bounded overlap only."""
     if profile not in ('serial', 'bounded-overlap'):
         raise ValueError(f'Unsupported receipt profile: {profile}')
+    tuning = dict(compile_slots=compile_slots, build_jobs=build_jobs, memory_cap=memory_cap)
+    if profile == 'serial' and any(value is not None for value in tuning.values()):
+        raise ValueError('The serial profile takes no slot, unit or memory-cap override')
     env = dict(os.environ)
     # Scope/numerical/cache overrides belong in a reviewed test configuration,
     # not inherited accidentally from an unrelated experiment.
@@ -43,7 +53,20 @@ def validation_env(profile='serial'):
                GRID_SPLIT_RESOURCE_PROFILE=profile,
                GRID_SPLIT_COMPILE_JOBS='1' if profile == 'serial' else '2', GRID_SPLIT_SHARD_JOBS='1',
                GRID_RBD_BUILD_JOBS='2')
+    for name, value in tuning.items():
+        if value is not None:
+            env[TUNING[name]] = f'{value:g}' if name == 'memory_cap' else str(value)
     return env
+
+
+def positive(kind):
+    def parse(text):
+        value = kind(text)
+        if not 0 < value < float('inf'):
+            raise argparse.ArgumentTypeError(f'must be a positive {kind.__name__}, got {text!r}')
+        return value
+    parse.__name__ = kind.__name__  # argparse names the type in its own error
+    return parse
 
 
 def validation_command(shard_dir, resume=False, full=False):
@@ -104,7 +127,7 @@ def finalize(out):
     print('Receipt verified; no collection or compilation was started.')
 
 
-def run_driver(command, *, log, lock, profile='serial'):
+def run_driver(command, *, log, lock, profile='serial', tuning=None):
     """Forward cancellation to our isolated driver, keeping its lock until exit."""
     previous = signal.getsignal(signal.SIGTERM)
     def interrupt(signum, frame):
@@ -112,7 +135,7 @@ def run_driver(command, *, log, lock, profile='serial'):
     signal.signal(signal.SIGTERM, interrupt)
     process = None
     try:
-        process = subprocess.Popen(command, cwd=ROOT, env=validation_env(profile),
+        process = subprocess.Popen(command, cwd=ROOT, env=validation_env(profile, **(tuning or {})),
                                    stdout=log, stderr=subprocess.STDOUT,
                                    start_new_session=True, pass_fds=(lock.fileno(),))
         return subprocess.CompletedProcess(command, process.wait())
@@ -148,10 +171,32 @@ def main():
     parser.add_argument('--github-user', help='Contributor signer (their own GitHub account)')
     parser.add_argument('--budget-minutes', type=int, default=30)
     parser.add_argument('--resource-profile', choices=('serial', 'bounded-overlap'), default='serial')
+    parser.add_argument('--compile-slots', type=positive(int), metavar='N',
+                        help='bounded-overlap only: compile pool slots (default 2)')
+    parser.add_argument('--build-jobs', type=positive(int), metavar='N',
+                        help='bounded-overlap only: nvcc units per wrapper build (default 2)')
+    parser.add_argument('--memory-cap', type=positive(float), metavar='GIB',
+                        help='bounded-overlap only: ceiling on memory allowances held at once; '
+                             'lowers the pool budget, never raises it')
+    parser.add_argument('--print-resources', action='store_true',
+                        help='Print what this host offers the profiles and exit; no GPU, compile or lock')
     parser.add_argument('--fallback-from', type=Path,
                         help='Prior failed/paused launcher directory; start a fresh full SERIAL run with no carries')
     parser.add_argument('--finalize', type=Path, help='Verify an existing run after committing its generated evidence; no GPU work')
     args = parser.parse_args()
+    tuning = {name: getattr(args, name) for name in TUNING if getattr(args, name) is not None}
+    if tuning and args.resource_profile != 'bounded-overlap':
+        parser.error('--compile-slots, --build-jobs and --memory-cap require '
+                     '--resource-profile bounded-overlap')
+    if tuning or args.print_resources:
+        from test import run_split_suite as driver
+        cap_kb = int(args.memory_cap * 1024 * 1024) if args.memory_cap else None
+        if cap_kb is not None and cap_kb < driver.LARGEST_ALLOWANCE_KB:
+            parser.error(f'--memory-cap must be at least {driver.LARGEST_ALLOWANCE_KB / 1024 / 1024:.1f} GiB, '
+                         'the largest single job allowance; a smaller cap can only pause the run')
+    if args.print_resources:
+        print(driver.resource_report(cap_kb))
+        return
     if args.provisional and (args.full or args.resume or args.finalize or args.fallback_from or
                              args.resource_profile != 'serial' or not args.github_user or
                              not 30 <= args.budget_minutes <= 60):
@@ -183,6 +228,7 @@ def main():
     stale = installed_extension_problems()
     if stale:
         raise SystemExit('Installed grid_rbd does not match this checkout:\n' + stale)
+    env = validation_env(args.resource_profile, **tuning)
     if args.resume:
         prior_state_path = shard_dir.parent / 'state.json'
         if not prior_state_path.is_file():
@@ -192,9 +238,16 @@ def main():
             raise SystemExit('Resume must preserve the original full/refresh mode')
         if prior_state.get('candidate') != candidate:
             raise SystemExit('Resume candidate differs from the original run; freeze and plan a new refresh.')
-        original_profile = prior_state.get('resource_profile', {}).get('GRID_SPLIT_RESOURCE_PROFILE', 'serial')
+        recorded = prior_state.get('resource_profile', {})
+        original_profile = recorded.get('GRID_SPLIT_RESOURCE_PROFILE', 'serial')
         if original_profile != args.resource_profile:
             raise SystemExit('Resume must preserve resource profile; use a fresh full serial fallback instead')
+        # A state written before these options existed ran the profile defaults.
+        defaults = validation_env(original_profile)
+        for key in TUNING.values():
+            original = recorded.get(key, defaults.get(key))
+            if original != env.get(key):
+                raise SystemExit(f'Resume must preserve {key}: recorded {original}, requested {env.get(key)}')
     fallback = None
     if args.fallback_from:
         if not args.full or args.resume or args.resource_profile != 'serial':
@@ -207,12 +260,11 @@ def main():
     keys_path = ROOT / 'test/gpu-proof-header-keys.json'
     before = json.loads(keys_path.read_text())
     (out / 'header-keys.before.json').write_text(json.dumps(before, indent=2) + '\n')
-    env = validation_env(args.resource_profile)
     state = {'candidate': candidate, 'command': command, 'shard_dir': str(shard_dir), 'full': args.full,
              'resource_profile': {key: env[key] for key in (
                  'GRID_SPLIT_RESOURCE_PROFILE', 'GRID_SPLIT_COMPILE_JOBS',
                  'GRID_SPLIT_SHARD_JOBS', 'GRID_RBD_BUILD_JOBS',
-                 'XLA_PYTHON_CLIENT_PREALLOCATE')},
+                 'XLA_PYTHON_CLIENT_PREALLOCATE', MEMORY_CAP_ENV) if key in env},
              'status': 'waiting-for-lock'}
     if fallback is not None:
         state['fallback'] = {'from': str(args.fallback_from.resolve()),
@@ -233,7 +285,8 @@ def main():
                         cwd=ROOT, env=env, stdout=collection_log,
                         stderr=subprocess.STDOUT, check=True)
             with (out / 'driver.log').open('x') as log:
-                result = run_driver(command, log=log, lock=lock, profile=args.resource_profile)
+                result = run_driver(command, log=log, lock=lock, profile=args.resource_profile,
+                                    tuning=tuning)
             state['driver_rc'] = result.returncode
             if result.returncode:
                 if result.returncode == 3 and (shard_dir / 'PAUSE').exists():

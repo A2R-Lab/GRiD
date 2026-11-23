@@ -31,6 +31,32 @@ def test_reservations_are_atomic_and_do_not_double_count_rss(tmp_path):
     assert [e["event"] for e in events] == ["admit", "admit", "release", "release"]
 
 
+def test_memory_cap_is_an_extra_refusal_and_never_relaxes_the_reserve():
+    free, rss = [1000], {}
+    capped = MemoryAdmission(floor_kb=20, available=lambda: free[0],
+                             rss=lambda pid: rss.get(pid, 0), cap_kb=100)
+    assert capped.reserve("a", 60)
+    capped.attach("a", 1)
+    assert not capped.reserve("b", 41) and "memory cap 100 KiB" in capped.refusal
+    assert capped.reserve("b", 40)
+    capped.attach("b", 2)
+    # Resident pages still count against the cap; growth past an allowance counts in full.
+    free[0], rss[1], rss[2] = 900, 60, 40
+    assert not capped.reserve("c", 1)
+    rss[1] = 80
+    capped.release("b")
+    assert not capped.reserve("c", 21) and capped.reserve("c", 20)
+    capped.release("a"); capped.release("c")
+    # A cap above the live headroom changes nothing: the reserve still refuses.
+    free[0] = 100
+    loose = MemoryAdmission(floor_kb=20, available=lambda: free[0], rss=lambda pid: 0, cap_kb=10_000)
+    plain = budget(free)
+    for b in (loose, plain):
+        assert not b.reserve("big", 81) and "reserve 20 KiB" in b.refusal
+        assert b.reserve("fits", 80) and not b.reserve("extra", 1)
+    assert capped.blocked is None and loose.blocked is None
+
+
 def test_competing_admissions_cannot_spend_the_same_headroom():
     b = budget([100])
     barrier = threading.Barrier(3)

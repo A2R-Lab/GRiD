@@ -1496,6 +1496,72 @@ def bounded_overlap_profile() -> bool:
     return os.environ.get("GRID_SPLIT_RESOURCE_PROFILE") == "bounded-overlap"
 
 
+MEMORY_CAP_ENV = "GRID_SPLIT_MEMORY_CAP_GIB"
+# Largest single allowance either tracked profile can request (an unpiloted
+# class before history exists). A cap below it could never admit that job.
+LARGEST_ALLOWANCE_KB = int(SERIAL_PEAK_KB * SERIAL_MARGIN)
+
+
+def positive_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name) or str(default)
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value < 1:
+        raise SystemExit(f"{name} must be a positive integer, got {raw!r}")
+    return value
+
+
+def memory_cap_kb() -> int | None:
+    """Operator ceiling on allowances held at once, or None. It only lowers the
+    pool budget and adds an admission refusal; the reserve is unchanged."""
+    raw = os.environ.get(MEMORY_CAP_ENV)
+    if not raw:
+        return None
+    try:
+        gib = float(raw)
+    except ValueError:
+        gib = 0.0
+    if not 0 < gib < math.inf:
+        raise SystemExit(f"{MEMORY_CAP_ENV} must be a positive number of GiB, got {raw!r}")
+    return int(gib * 1024 * 1024)
+
+
+def resource_report(cap_kb: int | None = None) -> str:
+    """What this host offers the receipt profiles now. Reads /proc and the
+    compile history ledger only: no GPU, no compiler, no lock."""
+    import compile_sched
+    gib = 1024 * 1024
+    available = compile_sched.mem_available_kb()
+    budget = compile_sched.pool_budget_kb(available, GPU_PHASE_FLOOR_KB, SERIAL_PEAK_KB)
+    lines = [f"cores: {os.cpu_count()}",
+             f"MemTotal: {compile_sched.meminfo_kb('MemTotal') / gib:.1f} GiB",
+             f"MemAvailable: {available / gib:.1f} GiB",
+             f"host reserve (floor): {GPU_PHASE_FLOOR_KB / gib:.1f} GiB",
+             f"pool budget: {budget / gib:.1f} GiB"]
+    if available - GPU_PHASE_FLOOR_KB < LARGEST_ALLOWANCE_KB:
+        lines.append("  MemAvailable minus the reserve is below the largest allowance: "
+                     "that job would be refused now")
+    if cap_kb is not None:
+        capped = compile_sched.pool_budget_kb(available, GPU_PHASE_FLOOR_KB, SERIAL_PEAK_KB, cap_kb)
+        lines.append(f"pool budget with --memory-cap {cap_kb / gib:g}: {capped / gib:.1f} GiB")
+        budget = capped
+    lines.append(f"largest single allowance: {LARGEST_ALLOWANCE_KB / gib:.1f} GiB "
+                 f"({SERIAL_PEAK_KB // gib} GiB class floor x {SERIAL_MARGIN}); "
+                 f"{max(0, min(budget, available - GPU_PHASE_FLOOR_KB)) // LARGEST_ALLOWANCE_KB} "
+                 "fit at once now")
+    ledger_path = REPO_ROOT / "test" / ".split_suite" / "compile_rss.json"
+    peaks = [row["peak_kb"] for row in compile_sched.Ledger(ledger_path).data.values()]
+    lines.append(f"largest recorded compile peak: {max(peaks) / gib:.2f} GiB "
+                 f"({len(peaks)} ledger entries)" if peaks
+                 else f"largest recorded compile peak: none recorded ({ledger_path})")
+    lines += ["serial: 1 compile slot, 2 units per build, 1 GPU shard",
+              "bounded-overlap: 2 compile slots, 2 units per build, 1 GPU shard "
+              "(--compile-slots, --build-jobs and --memory-cap change these)"]
+    return "\n".join(lines)
+
+
 def resource_environment() -> dict:
     """Snapshot once per driver, including actual generator and toolchain identity."""
     import resource_history
@@ -1576,14 +1642,19 @@ def run_phases(shards, out_dir, receipts, extra_args, prior, pool, pool_jobs, pr
     if bounded_overlap_profile() or serial_resource_profile():
         import compile_sched
         from resource_admission import MemoryAdmission
+        # The cap applies to bounded overlap only; serial ignores the variable.
+        cap_kb = memory_cap_kb() if bounded_overlap_profile() else None
         admission = MemoryAdmission(floor_kb=GPU_PHASE_FLOOR_KB,
             available=compile_sched.mem_available_kb, rss=compile_sched.session_tree_rss_kb,
-            log_path=out_dir / "memory-admission.jsonl")
+            log_path=out_dir / "memory-admission.jsonl", cap_kb=cap_kb)
         if pool is not None:
             pool.admission = admission
         if bounded_overlap_profile():
-            print("Resource profile: bounded-overlap; at most 2 pool jobs / 1 shard / 2 units; "
-                  "one reservation authority includes inline builds", flush=True)
+            slots = positive_int_env("GRID_SPLIT_COMPILE_JOBS", 2)
+            units = positive_int_env("GRID_RBD_BUILD_JOBS", 2)
+            cap = "" if cap_kb is None else f"; memory cap {cap_kb / (1024 * 1024):g} GiB"
+            print(f"Resource profile: bounded-overlap; at most {slots} pool jobs / 1 shard / "
+                  f"{units} units{cap}; one reservation authority includes inline builds", flush=True)
     if pool is not None:
         thread = pool.run_async(pool_jobs)
         if serial_resource_profile() and finish_compile_phase(pool, thread, out_dir):
@@ -1729,10 +1800,16 @@ def build_compile_pool(out_dir: Path, *, warm: bool, cuda_shards: list,
         print(f"  compile ledger: schema {compile_sched.LEDGER_SCHEMA} (process-tree "
               f"peaks); {ledger.dropped_legacy} legacy ru_maxrss entries dropped — "
               f"unmeasured jobs predict {compile_sched.DEFAULT_PEAK_KB >> 20} GB until re-measured")
-    options = (dict(max_jobs=1 if serial_resource_profile() else 2, floor_kb=GPU_PHASE_FLOOR_KB,
-                    default_peak_kb=SERIAL_PEAK_KB, margin=SERIAL_MARGIN,
-                    strict_memory=True) if serial_resource_profile() or bounded_overlap_profile()
-               else dict(max_jobs=max_jobs))
+    if serial_resource_profile():
+        options = dict(max_jobs=1)
+    elif bounded_overlap_profile():
+        options = dict(max_jobs=positive_int_env("GRID_SPLIT_COMPILE_JOBS", 2),
+                       cap_kb=memory_cap_kb())
+    else:
+        options = dict(max_jobs=max_jobs, cap_kb=memory_cap_kb())
+    if serial_resource_profile() or bounded_overlap_profile():
+        options.update(floor_kb=GPU_PHASE_FLOOR_KB, default_peak_kb=SERIAL_PEAK_KB,
+                       margin=SERIAL_MARGIN, strict_memory=True)
     pool = compile_sched.RamScheduler(ledger, label="pool", **options)
     # Unblock earlier shards before warming unrelated robots alphabetically;
     # within a consumer, heaviest (ledger wall time) first.
@@ -2132,11 +2209,19 @@ def main() -> int:
             print(f"Manifest matches all {len(ids)} scheduled IDs")
         return 0
 
-    if serial_resource_profile() or bounded_overlap_profile():
+    if serial_resource_profile():
         # The profile is authoritative even for direct driver invocations.
         os.environ['GRID_RBD_BUILD_JOBS'] = '2'
-        os.environ['GRID_SPLIT_COMPILE_JOBS'] = '1' if serial_resource_profile() else '2'
+        os.environ['GRID_SPLIT_COMPILE_JOBS'] = '1'
         os.environ['GRID_SPLIT_SHARD_JOBS'] = '1'
+        os.environ.pop(MEMORY_CAP_ENV, None)
+    elif bounded_overlap_profile():
+        # Two slots and two units unless the launcher (or a direct caller)
+        # states otherwise; one shard always. Pool workers inherit these.
+        for key in ('GRID_SPLIT_COMPILE_JOBS', 'GRID_RBD_BUILD_JOBS'):
+            os.environ[key] = str(positive_int_env(key, 2))
+        os.environ['GRID_SPLIT_SHARD_JOBS'] = '1'
+        memory_cap_kb()  # reject a malformed cap before any work
 
     if args.warm_one:
         return warm_one_worker(args.warm_one)
@@ -2396,9 +2481,11 @@ def main() -> int:
             schedule = ("finishes before GPU shards" if serial_resource_profile()
                         else "overlaps GPU shard execution")
             print(f"=== compile pool: {len(pool_jobs)} job(s), "
-                  f"{pool_jobs_n} slots, budget "
-                  f"{pool.budget_kb // (1024 * 1024)} GiB "
-                  f"({schedule}) ===")
+                  f"{pool.max_jobs} slots, budget "
+                  f"{pool.budget_kb // (1024 * 1024)} GiB"
+                  + (f", memory cap {pool.cap_kb / (1024 * 1024):g} GiB"
+                     if pool.cap_kb is not None else "")
+                  + f" ({schedule}) ===")
 
     import signal
 

@@ -87,12 +87,23 @@ DEFAULT_MARGIN = 1.3
 DEFAULT_MAX_JOBS = 5
 
 
-def mem_available_kb() -> int:
+def meminfo_kb(field: str) -> int:
     with open("/proc/meminfo") as f:
         for line in f:
-            if line.startswith("MemAvailable:"):
+            if line.startswith(field + ":"):
                 return int(line.split()[1])
     return 0
+
+
+def mem_available_kb() -> int:
+    return meminfo_kb("MemAvailable")
+
+
+def pool_budget_kb(available_kb: int, floor_kb: int, default_peak_kb: int,
+                   cap_kb: int | None = None) -> int:
+    """Static pool budget. An operator cap can lower it and never raises it."""
+    budget = max(available_kb - floor_kb, default_peak_kb)
+    return budget if cap_kb is None else min(budget, int(cap_kb))
 
 
 @dataclass
@@ -190,6 +201,7 @@ class RamScheduler:
         label: str = "compile",
         strict_memory: bool = False,
         admission=None,
+        cap_kb: int | None = None,
     ):
         self.ledger = ledger
         self.max_jobs = max(1, int(max_jobs))
@@ -202,7 +214,10 @@ class RamScheduler:
         self.resource_blocked: str | None = None
         # Static pool sized at construction; the live MemAvailable backstop at
         # each admission covers external memory pressure appearing later.
-        self.budget_kb = max(mem_available_kb() - floor_kb, default_peak_kb)
+        # An operator cap (cap_kb) only lowers it; the floor and the backstop
+        # are unchanged by a cap.
+        self.cap_kb = cap_kb
+        self.budget_kb = pool_budget_kb(mem_available_kb(), floor_kb, default_peak_kb, cap_kb)
         self.results: dict[str, JobResult] = {}
         self.done_events: dict[str, threading.Event] = {}
         self._procs: dict[str, subprocess.Popen] = {}
