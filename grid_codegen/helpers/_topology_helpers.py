@@ -642,6 +642,26 @@ def _runtime_transform_xfixed_offset(self):
         return 3 * self.robot.get_num_joints()
     return 2 * self.robot.get_num_pos()
 
+def _floating_root_at_origin(val):
+    """The floating root's spatial transform with the base position set to zero.
+
+    Every kernel fed by the 6x6 transforms returns quantities that do not depend
+    on where the base is: velocities, forces and their derivatives are expressed
+    in body frames. The transform itself carries the position in its lower-left
+    block, and kernels that compose it down the tree (the second-order
+    derivatives) then work about the world origin, where terms of size
+    mass times distance squared cancel. In float32 that cancellation costs
+    accuracy with the square of the distance from the origin. Evaluating with
+    the position at zero gives the same result in exact arithmetic and removes
+    the large terms. The homogeneous transforms, which give world positions, and
+    the integrator's position update keep the true position.
+    """
+    if not hasattr(val, "free_symbols"):
+        return val
+    position = {s: 0 for s in val.free_symbols if s.name in ("x_fb", "y_fb", "z_fb")}
+    return val.subs(position) if position else val
+
+
 def _config_symbol_subst(self, str_val, ind, spherical):
     """Substitute the configuration symbols of body `ind`'s transform cell string
     (hygiene 11, 2026-09-24: ONE copy of the chain the XImats and XmatsHom loaders
@@ -1125,6 +1145,8 @@ def gen_load_update_XImats_helpers(self, include_base_inertia = False, include_h
         for col in range(3): # TL and BR are identical so only update TL and BL serially
             for row in range(6):
                 val = Xmats_serial[ind][row,col]
+                if wrap_skip:
+                    val = _floating_root_at_origin(val)
                 if not self.custom_is_constant(val):
                     # parse the symbolic value into the appropriate array access
                     str_val = expr_T(val)
