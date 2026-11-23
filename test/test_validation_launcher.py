@@ -428,6 +428,18 @@ def test_finalize_real_git_evidence_transition(tmp_path, monkeypatch):
     launcher.finalize(out)
     assert calls == ['driver', 'verify']
     assert json.loads((out / 'state.json').read_text())['status'] == 'verified'
+    # The evidence commit may also carry the regenerated tier table, and only that.
+    table = root / launcher.TIER_TABLE
+    table.parent.mkdir(parents=True)
+    table.write_text('header\n\nrows\n')
+    git('add', launcher.TIER_TABLE); git('commit', '-qm', 'Tier table')
+    current = [False]
+    monkeypatch.setattr(launcher, 'tier_table_is_current', lambda: current[0])
+    with pytest.raises(ValueError, match='Tier table'):
+        launcher.finalize(out)
+    current[0] = True
+    launcher.finalize(out)
+    calls.pop()
     # A clean source edit still must not pass the finalization gate.
     (root / 'source.py').write_text('changed\n')
     git('add', 'source.py'); git('commit', '-qm', 'Changed source')
