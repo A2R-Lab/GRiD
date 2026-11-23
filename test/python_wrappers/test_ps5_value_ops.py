@@ -63,7 +63,6 @@ def _register(name, urdf):
         urdf_path=str(urdf_path),
         floating_base=False,
         max_batch_size=8,
-        force_rebuild=True,   # recompile the .so with the new wrapper
     )
 
 

@@ -421,7 +421,7 @@ def test_inertia_poke_seen_across_surfaces():
         pytest.skip("CUDA device not available for torch")
     common = dict(urdf_path=str(_IIWA), floating_base=False, max_batch_size=8,
                   runtime_inertia=True)
-    hn = _grid_rbd.register_robot(name="iiwa14_rti_ffi_pytest", force_rebuild=True, **common)
+    hn = _grid_rbd.register_robot(name="iiwa14_rti_ffi_pytest", **common)
     hj = gj.register_robot(name="iiwa14_rti_ffi_pytest", **common)
     ht = gt.register_robot(name="iiwa14_rti_ffi_pytest", **common)
     nj = hn.num_joints
