@@ -396,3 +396,71 @@ def test_resource_report_reads_meminfo_and_the_ledger_only(tmp_path, monkeypatch
     assert sorted(p for p in tmp_path.rglob('*')) == before
     monkeypatch.setattr(compile_sched, 'mem_available_kb', lambda: 30 * gib)
     assert 'would be refused now' in driver.resource_report()
+
+
+# --- adaptive profile --------------------------------------------------------
+
+def test_adaptive_plan_scales_with_the_machine_and_the_cap(tmp_path, monkeypatch):
+    gib = 1024 * 1024
+    monkeypatch.setattr(driver, 'REPO_ROOT', tmp_path)
+    monkeypatch.setenv('GRID_SPLIT_RESOURCE_PROFILE', 'adaptive')
+    for key in ('GRID_SPLIT_COMPILE_JOBS', 'GRID_RBD_BUILD_JOBS', driver.MEMORY_CAP_ENV,
+                driver.MEMORY_RESERVE_ENV):
+        monkeypatch.delenv(key, raising=False)
+    history = driver.class_history()
+    history.record('wrapper', 'go2', 'a', 4, 7 * gib, proc_kb=2 * gib)
+    history.record('wrapper', 'go2', 'a', 2, 4 * gib, proc_kb=2 * gib)
+    total = [62 * gib]
+    monkeypatch.setattr(compile_sched, 'meminfo_kb', lambda field: total[0])
+    monkeypatch.setattr(driver.os, 'cpu_count', lambda: 24)
+    assert driver.host_reserve_kb() == int(0.15 * 62 * gib)
+    slots, units, largest, budget = driver.plan_adaptive()
+    assert (slots, units, largest) == (24, 4, int(7 * gib * 1.3)) and budget == 62 * gib - driver.host_reserve_kb()
+    monkeypatch.setenv(driver.MEMORY_CAP_ENV, '50')
+    assert driver.plan_adaptive()[3] == 50 * gib
+    monkeypatch.setenv(driver.MEMORY_CAP_ENV, '6')            # a small machine by decree
+    assert driver.plan_adaptive()[1:3] == (2, int(4 * gib * 1.3))
+    monkeypatch.delenv(driver.MEMORY_CAP_ENV)
+    total[0] = 8 * gib                                         # a small machine in fact
+    assert driver.host_reserve_kb() == 4 * gib and driver.plan_adaptive()[1] == 1
+    monkeypatch.setenv(driver.MEMORY_RESERVE_ENV, '1')
+    assert driver.host_reserve_kb() == gib and driver.plan_adaptive()[1] == 2
+    # The tracked profiles keep the fixed reserve whatever the variable says.
+    monkeypatch.setenv('GRID_SPLIT_RESOURCE_PROFILE', 'bounded-overlap')
+    assert driver.host_reserve_kb() == driver.GPU_PHASE_FLOOR_KB
+
+
+def test_adaptive_launcher_environment_and_option_scope():
+    from test import run_validation as launcher
+    env = launcher.validation_env('adaptive', memory_cap=50.0, memory_reserve=8.0, pressure_wait=10)
+    assert env['GRID_SPLIT_RESOURCE_PROFILE'] == 'adaptive'
+    assert 'GRID_SPLIT_COMPILE_JOBS' not in env and 'GRID_RBD_BUILD_JOBS' not in env
+    assert (env['GRID_SPLIT_MEMORY_CAP_GIB'], env['GRID_SPLIT_MEMORY_RESERVE_GIB'],
+            env['GRID_SPLIT_PRESSURE_WAIT_MIN'], env['GRID_SPLIT_SHARD_JOBS']) == ('50', '8', '10', '1')
+    assert launcher.validation_env('adaptive', build_jobs=2)['GRID_RBD_BUILD_JOBS'] == '2'
+    with pytest.raises(ValueError):
+        launcher.validation_env('bounded-overlap', memory_reserve=8.0)
+    with pytest.raises(ValueError):
+        launcher.validation_env('serial', pressure_wait=5)
+    # The tracked profiles are unchanged.
+    assert launcher.validation_env('serial')['GRID_SPLIT_COMPILE_JOBS'] == '1'
+    assert launcher.validation_env('bounded-overlap')['GRID_RBD_BUILD_JOBS'] == '2'
+
+
+def test_adaptive_phases_use_an_unlatched_admission_with_the_scaled_reserve(tmp_path, monkeypatch, capsys):
+    gib = 1024 * 1024
+    monkeypatch.setenv('GRID_SPLIT_RESOURCE_PROFILE', 'adaptive')
+    monkeypatch.setenv(driver.MEMORY_CAP_ENV, '50')
+    monkeypatch.setenv(driver.PRESSURE_WAIT_ENV, '7')
+    monkeypatch.delenv(driver.MEMORY_RESERVE_ENV, raising=False)
+    monkeypatch.setattr(compile_sched, 'meminfo_kb', lambda field: 62 * gib)
+    seen = {}
+    def phase(shards, out, receipts, extra, prior, **kwargs):
+        seen.update(kwargs)
+        return list(prior), False
+    monkeypatch.setattr(driver, 'phase_run', phase)
+    driver.run_phases([], tmp_path, False, [], [], None, [], {})
+    admission = seen['admission']
+    assert not admission.latch and admission.patience_s == 420
+    assert admission.floor_kb == int(0.15 * 62 * gib) and admission.cap_kb == 50 * gib
+    assert 'Resource profile: adaptive; reserve 9.3 GiB; memory cap 50 GiB' in capsys.readouterr().out

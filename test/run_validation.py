@@ -26,16 +26,25 @@ from test.receipt_integrity import verify_header_keys, verify_manifest_scope
 MEMORY_CAP_ENV = 'GRID_SPLIT_MEMORY_CAP_GIB'
 # Launcher option -> the environment value it sets for the split driver.
 TUNING = {'compile_slots': 'GRID_SPLIT_COMPILE_JOBS', 'build_jobs': 'GRID_RBD_BUILD_JOBS',
-          'memory_cap': MEMORY_CAP_ENV}
+          'memory_cap': MEMORY_CAP_ENV, 'memory_reserve': 'GRID_SPLIT_MEMORY_RESERVE_GIB',
+          'pressure_wait': 'GRID_SPLIT_PRESSURE_WAIT_MIN'}
+ADAPTIVE_ONLY = ('memory_reserve', 'pressure_wait')
+PROFILES = ('serial', 'bounded-overlap', 'adaptive')
 
 
-def validation_env(profile='serial', *, compile_slots=None, build_jobs=None, memory_cap=None):
-    """memory_cap is in GiB. The three overrides exist for bounded overlap only."""
-    if profile not in ('serial', 'bounded-overlap'):
+def validation_env(profile='serial', *, compile_slots=None, build_jobs=None, memory_cap=None,
+                   memory_reserve=None, pressure_wait=None):
+    """memory_cap and memory_reserve are in GiB, pressure_wait in minutes. Serial
+    takes no override. Adaptive picks slots and units itself; stated ones are
+    upper bounds."""
+    if profile not in PROFILES:
         raise ValueError(f'Unsupported receipt profile: {profile}')
-    tuning = dict(compile_slots=compile_slots, build_jobs=build_jobs, memory_cap=memory_cap)
+    tuning = dict(compile_slots=compile_slots, build_jobs=build_jobs, memory_cap=memory_cap,
+                  memory_reserve=memory_reserve, pressure_wait=pressure_wait)
     if profile == 'serial' and any(value is not None for value in tuning.values()):
         raise ValueError('The serial profile takes no slot, unit or memory-cap override')
+    if profile != 'adaptive' and any(tuning[name] is not None for name in ADAPTIVE_ONLY):
+        raise ValueError('The reserve and pressure-wait overrides are for the adaptive profile')
     env = dict(os.environ)
     # Scope/numerical/cache overrides belong in a reviewed test configuration,
     # not inherited accidentally from an unrelated experiment.
@@ -53,9 +62,12 @@ def validation_env(profile='serial', *, compile_slots=None, build_jobs=None, mem
                GRID_SPLIT_RESOURCE_PROFILE=profile,
                GRID_SPLIT_COMPILE_JOBS='1' if profile == 'serial' else '2', GRID_SPLIT_SHARD_JOBS='1',
                GRID_RBD_BUILD_JOBS='2')
+    if profile == 'adaptive':
+        # The driver plans slots and units from the machine and its history.
+        del env['GRID_SPLIT_COMPILE_JOBS'], env['GRID_RBD_BUILD_JOBS']
     for name, value in tuning.items():
         if value is not None:
-            env[TUNING[name]] = f'{value:g}' if name == 'memory_cap' else str(value)
+            env[TUNING[name]] = f'{value:g}' if isinstance(value, float) else str(value)
     return env
 
 
@@ -170,14 +182,21 @@ def main():
     parser.add_argument('--provisional', action='store_true', help='Separate bounded contributor evidence, never a full receipt')
     parser.add_argument('--github-user', help='Contributor signer (their own GitHub account)')
     parser.add_argument('--budget-minutes', type=int, default=30)
-    parser.add_argument('--resource-profile', choices=('serial', 'bounded-overlap'), default='serial')
+    parser.add_argument('--resource-profile', choices=PROFILES, default='serial')
     parser.add_argument('--compile-slots', type=positive(int), metavar='N',
-                        help='bounded-overlap only: compile pool slots (default 2)')
+                        help='bounded-overlap: compile pool slots (default 2); adaptive: upper bound')
     parser.add_argument('--build-jobs', type=positive(int), metavar='N',
-                        help='bounded-overlap only: nvcc units per wrapper build (default 2)')
+                        help='bounded-overlap: nvcc units per wrapper build (default 2); '
+                             'adaptive: upper bound (default 4, halved until the largest build fits)')
     parser.add_argument('--memory-cap', type=positive(float), metavar='GIB',
-                        help='bounded-overlap only: ceiling on memory allowances held at once; '
-                             'lowers the pool budget, never raises it')
+                        help='bounded-overlap and adaptive: ceiling on memory allowances held at once; '
+                             'lowers the budget, never raises it')
+    parser.add_argument('--memory-reserve', type=positive(float), metavar='GIB',
+                        help='adaptive only: memory left to the rest of the machine '
+                             '(default 15%% of RAM, at least 4 GiB)')
+    parser.add_argument('--pressure-wait', type=positive(int), metavar='MIN',
+                        help='adaptive only: minutes to wait for memory with nothing running '
+                             'before a resumable pause (default 30)')
     parser.add_argument('--print-resources', action='store_true',
                         help='Print what this host offers the profiles and exit; no GPU, compile or lock')
     parser.add_argument('--fallback-from', type=Path,
@@ -185,17 +204,22 @@ def main():
     parser.add_argument('--finalize', type=Path, help='Verify an existing run after committing its generated evidence; no GPU work')
     args = parser.parse_args()
     tuning = {name: getattr(args, name) for name in TUNING if getattr(args, name) is not None}
-    if tuning and args.resource_profile != 'bounded-overlap':
+    if tuning and args.resource_profile == 'serial':
         parser.error('--compile-slots, --build-jobs and --memory-cap require '
-                     '--resource-profile bounded-overlap')
+                     '--resource-profile bounded-overlap or adaptive')
+    if any(name in tuning for name in ADAPTIVE_ONLY) and args.resource_profile != 'adaptive':
+        parser.error('--memory-reserve and --pressure-wait require --resource-profile adaptive')
     if tuning or args.print_resources:
         from test import run_split_suite as driver
         cap_kb = int(args.memory_cap * 1024 * 1024) if args.memory_cap else None
-        if cap_kb is not None and cap_kb < driver.LARGEST_ALLOWANCE_KB:
+        # Adaptive charges measured peaks, so a small cap is a small machine, not an error.
+        if (cap_kb is not None and cap_kb < driver.LARGEST_ALLOWANCE_KB
+                and args.resource_profile != 'adaptive'):
             parser.error(f'--memory-cap must be at least {driver.LARGEST_ALLOWANCE_KB / 1024 / 1024:.1f} GiB, '
                          'the largest single job allowance; a smaller cap can only pause the run')
     if args.print_resources:
-        print(driver.resource_report(cap_kb))
+        reserve = ([int(args.memory_reserve * 1024 * 1024)] if args.memory_reserve else [])
+        print(driver.resource_report(cap_kb, *reserve))
         return
     if args.provisional and (args.full or args.resume or args.finalize or args.fallback_from or
                              args.resource_profile != 'serial' or not args.github_user or
@@ -264,7 +288,7 @@ def main():
              'resource_profile': {key: env[key] for key in (
                  'GRID_SPLIT_RESOURCE_PROFILE', 'GRID_SPLIT_COMPILE_JOBS',
                  'GRID_SPLIT_SHARD_JOBS', 'GRID_RBD_BUILD_JOBS',
-                 'XLA_PYTHON_CLIENT_PREALLOCATE', MEMORY_CAP_ENV) if key in env},
+                 'XLA_PYTHON_CLIENT_PREALLOCATE', *TUNING.values()) if key in env},
              'status': 'waiting-for-lock'}
     if fallback is not None:
         state['fallback'] = {'from': str(args.fallback_from.resolve()),

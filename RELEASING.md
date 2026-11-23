@@ -384,6 +384,38 @@ capped budget. It reads `/proc/meminfo` and the ledger only. It starts no
 compiler, uses no GPU and takes no lock, and the figures describe that moment,
 not the memory available hours into a run.
 
+`--resource-profile adaptive` is a third, experimental profile that sizes
+itself to the machine. It has not recorded a receipt and needs the same cold
+pilot before a release uses it. It differs from bounded overlap in four ways.
+
+- Charges are measured. Each real compile records the peak of its process tree
+  and its largest single process in `test/.split_suite/compile_class.json`
+  under a class: wrapper or native build, robot, build options and compiler
+  units. The class does not include the source bytes, so the history survives
+  a code change. A job is charged its class peak times the 1.3 margin. A width
+  never measured is charged one driver plus that many compilers of the largest
+  recorded size, and never more than the class floor. A class never built is
+  charged the largest measured class of its kind and robot, or the class floor
+  for a new robot. A cache hit is not a measurement.
+  `python test/resource_history.py --import-run <run>/shards/compile` seeds the
+  history from a finished serial or bounded-overlap run.
+- The reserve scales. It is 15% of RAM and at least 4 GiB, or
+  `--memory-reserve GIB`. The budget is RAM minus the reserve, or
+  `--memory-cap GIB` when that is smaller, so a 50 GiB cap on a 62 GiB machine
+  is usable and a cap of 6 GiB describes a small machine.
+- Width is planned. Builds start at four compiler units (or `--build-jobs`)
+  and the count halves until the largest recorded build fits the budget. Pool
+  slots default to one per core (or `--compile-slots`); a build counts its
+  compiler units as cores, and load from other users of the machine is
+  subtracted at each admission. One job always runs.
+- Pressure is a wait. Every admission reads live `MemAvailable`, so fewer jobs
+  run while other work holds memory and more run when it is released. Running
+  builds are never killed. When nothing of the run's own is in flight and
+  memory has not returned for `--pressure-wait MIN` minutes (default 30), the
+  run pauses and is resumable as in the other profiles.
+
+`--print-resources` shows the adaptive plan for the current machine.
+
 Select bounded overlap only after a cold-build, inline-cache-miss pilot on the
 same scope as serial demonstrates safe, useful throughput. This is validation
 throughput, not runtime performance evidence. A small pilot cannot certify the

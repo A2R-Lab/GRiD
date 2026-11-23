@@ -1418,12 +1418,15 @@ class _ShardRun:
         self._last_progress = self.t0
         self._last_size = -1
         self.compile_owners = lambda: []
+        self.saw_compiler = False
 
     def poll(self):
         rc = self.proc.poll()
         if rc is not None:
             return rc
         now = time.monotonic()
+        if adaptive_profile() and not self.saw_compiler:
+            self.saw_compiler = _compiler_child_alive(self.proc.pid)
         try:
             size = self.log_path.stat().st_size
         except OSError:
@@ -1456,7 +1459,7 @@ def shard_jobs() -> int:
     shard's INLINE nvcc builds are NOT pool-admitted. The primary receipt
     therefore selects the serial resource profile: one shard, no overlap with
     prewarming, and a separate memory admission before each shard."""
-    if serial_resource_profile() or bounded_overlap_profile():
+    if admitted_profile():
         return 1
     raw = os.environ.get("GRID_SPLIT_SHARD_JOBS", "1")
     try:
@@ -1487,13 +1490,77 @@ SERIAL_MARGIN = 1.3
 
 def serial_resource_profile() -> bool:
     profile = os.environ.get("GRID_SPLIT_RESOURCE_PROFILE", "overlap")
-    if profile not in ("serial", "overlap", "bounded-overlap"):
+    if profile not in ("serial", "overlap", "bounded-overlap", "adaptive"):
         raise SystemExit(f"Unknown GRID_SPLIT_RESOURCE_PROFILE: {profile!r}")
     return profile == "serial"
 
 
 def bounded_overlap_profile() -> bool:
     return os.environ.get("GRID_SPLIT_RESOURCE_PROFILE") == "bounded-overlap"
+
+
+def adaptive_profile() -> bool:
+    """Measured charges, a reserve that scales with the machine, width chosen
+    from the budget, and waiting instead of stopping under pressure."""
+    return os.environ.get("GRID_SPLIT_RESOURCE_PROFILE") == "adaptive"
+
+
+def admitted_profile() -> bool:
+    return serial_resource_profile() or bounded_overlap_profile() or adaptive_profile()
+
+
+MEMORY_RESERVE_ENV = "GRID_SPLIT_MEMORY_RESERVE_GIB"
+PRESSURE_WAIT_ENV = "GRID_SPLIT_PRESSURE_WAIT_MIN"
+
+
+def _positive_gib_env(name: str) -> int | None:
+    raw = os.environ.get(name)
+    if not raw:
+        return None
+    try:
+        gib = float(raw)
+    except ValueError:
+        gib = 0.0
+    if not 0 < gib < math.inf:
+        raise SystemExit(f"{name} must be a positive number of GiB, got {raw!r}")
+    return int(gib * 1024 * 1024)
+
+
+def host_reserve_kb() -> int:
+    """Memory admission leaves to the rest of the machine. Fixed for the
+    tracked profiles; scaled to the machine (or stated) under adaptive."""
+    if not adaptive_profile():
+        return GPU_PHASE_FLOOR_KB
+    import compile_sched
+    import resource_history
+    return (_positive_gib_env(MEMORY_RESERVE_ENV)
+            or resource_history.adaptive_reserve_kb(compile_sched.meminfo_kb("MemTotal")))
+
+
+def class_history():
+    import resource_history
+    path = REPO_ROOT / "test" / ".split_suite" / "compile_class.json"
+    if getattr(class_history, "_path", None) != path:
+        class_history._path, class_history._history = path, resource_history.ClassHistory(path)
+    return class_history._history
+
+
+def plan_adaptive() -> tuple[int, int, int, int]:
+    """(slots, units, largest allowance, budget) for this machine. A stated
+    slot or unit count is an upper bound; units still halve to fit."""
+    import compile_sched
+    import resource_history
+    budget = compile_sched.meminfo_kb("MemTotal") - host_reserve_kb()
+    cap = memory_cap_kb()
+    if cap is not None:
+        budget = min(budget, cap)
+    stated = {key: positive_int_env(key, 1) if os.environ.get(key) else None
+              for key in ("GRID_SPLIT_COMPILE_JOBS", "GRID_RBD_BUILD_JOBS")}
+    slots, units, largest = resource_history.plan_width(
+        budget_kb=budget, cores=os.cpu_count() or 1, history=class_history(),
+        margin=SERIAL_MARGIN, units=stated["GRID_RBD_BUILD_JOBS"],
+        slots=stated["GRID_SPLIT_COMPILE_JOBS"])
+    return slots, units, largest, budget
 
 
 MEMORY_CAP_ENV = "GRID_SPLIT_MEMORY_CAP_GIB"
@@ -1516,19 +1583,10 @@ def positive_int_env(name: str, default: int) -> int:
 def memory_cap_kb() -> int | None:
     """Operator ceiling on allowances held at once, or None. It only lowers the
     pool budget and adds an admission refusal; the reserve is unchanged."""
-    raw = os.environ.get(MEMORY_CAP_ENV)
-    if not raw:
-        return None
-    try:
-        gib = float(raw)
-    except ValueError:
-        gib = 0.0
-    if not 0 < gib < math.inf:
-        raise SystemExit(f"{MEMORY_CAP_ENV} must be a positive number of GiB, got {raw!r}")
-    return int(gib * 1024 * 1024)
+    return _positive_gib_env(MEMORY_CAP_ENV)
 
 
-def resource_report(cap_kb: int | None = None) -> str:
+def resource_report(cap_kb: int | None = None, reserve_kb: int | None = None) -> str:
     """What this host offers the receipt profiles now. Reads /proc and the
     compile history ledger only: no GPU, no compiler, no lock."""
     import compile_sched
@@ -1559,6 +1617,18 @@ def resource_report(cap_kb: int | None = None) -> str:
     lines += ["serial: 1 compile slot, 2 units per build, 1 GPU shard",
               "bounded-overlap: 2 compile slots, 2 units per build, 1 GPU shard "
               "(--compile-slots, --build-jobs and --memory-cap change these)"]
+    import resource_history
+    history, cores = class_history(), os.cpu_count() or 1
+    total = compile_sched.meminfo_kb("MemTotal")
+    reserve = reserve_kb or resource_history.adaptive_reserve_kb(total)
+    plan_budget = min(total - reserve, cap_kb or total)
+    slots, units, largest = resource_history.plan_width(
+        budget_kb=plan_budget, cores=cores, history=history, margin=SERIAL_MARGIN)
+    live = max(0, min(plan_budget, available - reserve))
+    lines.append(f"adaptive: reserve {reserve / gib:.1f} GiB, budget {plan_budget / gib:.1f} GiB "
+                 f"({live / gib:.1f} GiB free of it now), {units} units per build, up to {slots} "
+                 f"pool jobs, largest single charge {largest / gib:.1f} GiB "
+                 f"({len(history.rows)} measured classes)")
     return "\n".join(lines)
 
 
@@ -1601,6 +1671,15 @@ def shard_resource_key(spec, extra_args):
         resource_environment())
 
 
+def shard_class(spec) -> tuple[str, str, str, int]:
+    """Measured class of a whole shard: its test files and the build width,
+    not its bytes or its position in the partition."""
+    import resource_history
+    files = sorted({target.split('::', 1)[0] for target in spec.targets})
+    return ('shard', '', resource_history.recipe_name(files),
+            positive_int_env('GRID_RBD_BUILD_JOBS', 2))
+
+
 def pause_for_resources(out_dir: Path, reason: str) -> None:
     """Persist a non-successful, resumable stop; never manufacture test rows."""
     (out_dir / "resource-blocked.json").write_text(json.dumps({"reason": reason}, indent=2) + "\n")
@@ -1639,14 +1718,21 @@ def run_phases(shards, out_dir, receipts, extra_args, prior, pool, pool_jobs, pr
         print("Resource profile: serial prewarm then serial shards; two wrapper compiler units; "
               "strict memory admission (no first-job bypass)", flush=True)
     admission = None
-    if bounded_overlap_profile() or serial_resource_profile():
+    if admitted_profile():
         import compile_sched
         from resource_admission import MemoryAdmission
-        # The cap applies to bounded overlap only; serial ignores the variable.
-        cap_kb = memory_cap_kb() if bounded_overlap_profile() else None
-        admission = MemoryAdmission(floor_kb=GPU_PHASE_FLOOR_KB,
+        # The cap applies to bounded overlap and adaptive; serial ignores the variable.
+        cap_kb = None if serial_resource_profile() else memory_cap_kb()
+        admission = MemoryAdmission(floor_kb=host_reserve_kb(),
             available=compile_sched.mem_available_kb, rss=compile_sched.session_tree_rss_kb,
-            log_path=out_dir / "memory-admission.jsonl", cap_kb=cap_kb)
+            log_path=out_dir / "memory-admission.jsonl", cap_kb=cap_kb,
+            latch=not adaptive_profile(),
+            patience_s=60.0 * positive_int_env(PRESSURE_WAIT_ENV, 30))
+        if adaptive_profile():
+            print(f"Resource profile: adaptive; reserve {host_reserve_kb() / (1024 * 1024):.1f} GiB"
+                  + ("" if cap_kb is None else f"; memory cap {cap_kb / (1024 * 1024):g} GiB")
+                  + f"; measured charges; under pressure admissions wait up to "
+                  f"{admission.patience_s / 60:g} min before a resumable pause", flush=True)
         if pool is not None:
             pool.admission = admission
         if bounded_overlap_profile():
@@ -1663,7 +1749,7 @@ def run_phases(shards, out_dir, receipts, extra_args, prior, pool, pool_jobs, pr
     if admission is not None:
         kwargs['admission'] = admission
     result = phase_run(shards, out_dir, receipts, extra_args, prior, **kwargs)
-    if bounded_overlap_profile() and pool is not None:
+    if (bounded_overlap_profile() or adaptive_profile()) and pool is not None:
         # Pressure is drain-only. Do not let main's emergency cleanup kill a
         # healthy owned compiler merely because no further shard can start.
         pool.stop()
@@ -1769,7 +1855,7 @@ def build_compile_pool(out_dir: Path, *, warm: bool, cuda_shards: list,
 
     if not jobs:
         return None, [], {}
-    if serial_resource_profile() or bounded_overlap_profile():
+    if admitted_profile():
         import resource_history
         env = resource_environment()
         units = int(env['GRID_RBD_BUILD_JOBS'])
@@ -1791,6 +1877,12 @@ def build_compile_pool(out_dir: Path, *, warm: bool, cuda_shards: list,
             job.ledger_key = resource_history.identity(REPO_ROOT, paths, recipe, job_env)
             job.peak_floor_kb = resource_history.compile_floor_kb(kind, robot, units, recipe)
             job.record_history = True
+            if adaptive_profile():
+                # A native job runs one compiler at a time at any width.
+                width = units if kind == 'wrapper' else 1
+                job.klass = (kind, robot, resource_history.recipe_name(recipe), width)
+                job.cpus = width
+                job.peak_floor_kb = resource_history.compile_floor_kb(kind, robot, width, recipe)
             identities[job.name] = dict(key=job.ledger_key, floor_kb=job.peak_floor_kb,
                                         kind=kind, recipe=recipe, environment=job_env, paths=paths)
         (cdir / 'resource-identities.json').write_text(json.dumps(identities, indent=2))
@@ -1805,10 +1897,14 @@ def build_compile_pool(out_dir: Path, *, warm: bool, cuda_shards: list,
     elif bounded_overlap_profile():
         options = dict(max_jobs=positive_int_env("GRID_SPLIT_COMPILE_JOBS", 2),
                        cap_kb=memory_cap_kb())
+    elif adaptive_profile():
+        options = dict(max_jobs=positive_int_env("GRID_SPLIT_COMPILE_JOBS", os.cpu_count() or 1),
+                       cap_kb=memory_cap_kb(), class_history=class_history(),
+                       cpu_budget=os.cpu_count() or 1)
     else:
         options = dict(max_jobs=max_jobs, cap_kb=memory_cap_kb())
-    if serial_resource_profile() or bounded_overlap_profile():
-        options.update(floor_kb=GPU_PHASE_FLOOR_KB, default_peak_kb=SERIAL_PEAK_KB,
+    if admitted_profile():
+        options.update(floor_kb=host_reserve_kb(), default_peak_kb=SERIAL_PEAK_KB,
                        margin=SERIAL_MARGIN, strict_memory=True)
     pool = compile_sched.RamScheduler(ledger, label="pool", **options)
     # Unblock earlier shards before warming unrelated robots alphabetically;
@@ -2010,7 +2106,7 @@ def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
     if pool is not None:
         # GPU shards need host RAM too — tighten the pool's live floor for the
         # rest of the run (admissions only; running compiles finish).
-        pool.raise_floor(GPU_PHASE_FLOOR_KB)
+        pool.raise_floor(host_reserve_kb())
     pending = list(shards)
     prereqs = prereqs or {}
     jobs = shard_jobs()
@@ -2019,7 +2115,7 @@ def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
     waiting = False
     paused = False
     resource_ledger = None
-    if serial_resource_profile() or bounded_overlap_profile():
+    if admitted_profile():
         import compile_sched
         import resource_history
         resource_ledger = compile_sched.Ledger(REPO_ROOT / 'test/.split_suite/shard_rss.json')
@@ -2048,6 +2144,9 @@ def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
                     floor = resource_history.shard_floor_kb(spec.targets)
                     predicted = max(int(floor * SERIAL_MARGIN), resource_ledger.predict_kb(
                         resource_keys[spec.name], floor, SERIAL_MARGIN))
+                    if adaptive_profile():
+                        predicted = int(class_history().predict_kb(
+                            *shard_class(spec), floor) * SERIAL_MARGIN)
                 if serial_resource_profile():
                     import compile_sched
                     available = compile_sched.mem_available_kb()
@@ -2060,7 +2159,7 @@ def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
                 token = "shard:" + spec.name
                 if admission is not None:
                     if not admission.reserve(token, predicted):
-                        if not admission.active:
+                        if not admission.active and admission.give_up():
                             pause_for_resources(out_dir, admission.refusal)
                             paused = True
                             if pool is not None:
@@ -2110,6 +2209,11 @@ def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
                     if resource_ledger is not None:
                         resource_ledger.record(resource_keys[run.spec.name], peak,
                                                time.monotonic() - run.t0)
+                    if adaptive_profile() and rc == 0 and getattr(run, 'saw_compiler', False):
+                        # Only a shard that compiled inline measures a cold shard.
+                        kind, robot, name, units = shard_class(run.spec)
+                        class_history().record(kind, robot, name, units, peak,
+                                               secs=time.monotonic() - run.t0)
                 _finish_shard(run, rc, results, out_dir)
             if not finished:
                 time.sleep(5)
@@ -2222,6 +2326,17 @@ def main() -> int:
             os.environ[key] = str(positive_int_env(key, 2))
         os.environ['GRID_SPLIT_SHARD_JOBS'] = '1'
         memory_cap_kb()  # reject a malformed cap before any work
+    elif adaptive_profile():
+        slots, units, largest, budget = plan_adaptive()
+        os.environ['GRID_SPLIT_COMPILE_JOBS'] = str(slots)
+        os.environ['GRID_RBD_BUILD_JOBS'] = str(units)
+        os.environ['GRID_SPLIT_SHARD_JOBS'] = '1'
+        gib = 1024 * 1024
+        print(f"Adaptive plan: budget {budget / gib:.1f} GiB, {units} units per build, "
+              f"up to {slots} pool jobs, largest single charge {largest / gib:.1f} GiB", flush=True)
+        if largest > budget:
+            print("  the largest recorded build does not fit this budget at one unit; "
+                  "it will wait and then pause", flush=True)
 
     if args.warm_one:
         return warm_one_worker(args.warm_one)

@@ -134,7 +134,9 @@ build. With that profile only, `--compile-slots N`, `--build-jobs N` and
 `--memory-cap GIB` change the slots, the units per build and a ceiling on held
 allowances (`GRID_SPLIT_MEMORY_CAP_GIB`; it lowers the budget, never raises it);
 resume must repeat them. `--print-resources` reports cores, memory, budget and
-both profiles' settings without compiling. Require a cold pilot before choosing
+both profiles' settings without compiling. An experimental third profile,
+`adaptive`, charges measured per-class peaks, scales the reserve and the build
+width to the machine and waits under memory pressure (`RELEASING.md`). Require a cold pilot before choosing
 bounded overlap, or any wider setting, for a release. Pressure drains
 owned work, never peers. Resume preserves the profile; serial fallback starts
 a fresh full run without carried outcomes. See `RELEASING.md` for admission,
