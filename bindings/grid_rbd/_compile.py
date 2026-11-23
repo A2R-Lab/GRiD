@@ -39,17 +39,19 @@ from ._store import publish_object
 _log = logging.getLogger("grid_rbd")
 
 
-_NVCC_DEFAULT_FLAGS = [
-    "-std=c++17",
-    "-O3",
-    "-ftz=true",
-    "-prec-div=false",
-    "-prec-sqrt=false",
-    # (no --shared here: units are compiled with -c and host-linked into the .so)
-    "--compiler-options=-fPIC",
-    # We INTENTIONALLY do NOT set -fvisibility=hidden here — the
-    # Runner dlsym's our `extern "C"` symbols, which must be exported.
-]
+# Flags only the wrapper build needs, appended to the shared list.
+# (no --shared here: units are compiled with -c and host-linked into the .so)
+# We INTENTIONALLY do NOT set -fvisibility=hidden here — the
+# Runner dlsym's our `extern "C"` symbols, which must be exported.
+_NVCC_WRAPPER_FLAGS = ["--compiler-options=-fPIC"]
+
+
+def _nvcc_default_flags() -> list[str]:
+    """The shared kernel flags (grid_codegen/nvcc_flags.py, the list the native
+    tests and the examples also compile with) followed by the wrapper-only
+    flags. Read at build time so GRID_NVCC_FP_FLAGS applies to this build."""
+    from grid_codegen.nvcc_flags import kernel_flags
+    return kernel_flags() + _NVCC_WRAPPER_FLAGS
 
 
 def _resolve_launch_config_robot(urdf_path: str) -> str:
@@ -655,7 +657,7 @@ def compile_so(
     gencode_archs = archs if archs is not None else [cuda_arch]
     arch = "+".join(f"sm_{a}" for a in gencode_archs)
     core_flags: list[str] = []   # flags only the core unit is compiled with
-    cmd = [nvcc] + _NVCC_DEFAULT_FLAGS + [
+    cmd = [nvcc] + _nvcc_default_flags() + [
         f"-gencode=arch=compute_{a},code=sm_{a}" for a in gencode_archs
     ] + [
         f"-DGRID_RBD_MAX_BATCH={max_batch}",
@@ -724,7 +726,8 @@ def compile_so(
     if tflags is not None:
         cmd.append("-DGRID_RBD_WITH_TORCH=1")
         std = _required_cxx_std(tflags["includes"])
-        cmd[:] = [f"-std={std}" if f == "-std=c++17" else f for f in cmd]
+        from grid_codegen.nvcc_flags import CXX_STANDARD_FLAG
+        cmd[:] = [f"-std={std}" if f == CXX_STANDARD_FLAG else f for f in cmd]
         for inc in tflags["includes"]:
             cmd.append(f"-I{inc}")
         for ld in tflags["libdirs"]:

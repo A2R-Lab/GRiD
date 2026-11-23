@@ -1,4 +1,5 @@
 """Constant-body transport and floating-coordinate ownership against locked models."""
+from grid_codegen.nvcc_flags import kernel_flags
 from pathlib import Path
 import subprocess
 
@@ -54,7 +55,7 @@ def dynamics_probe(request, tmp_path_factory):
     runner.write_text(Path(__file__).with_name('cuda_constant_dynamics_audit_runner.cu')
                       .read_text().replace('BODY_OUTPUT_REPAIR', gen.code_str))
     exe, _ = cached_nvcc_executable([runner], [
-        '-std=c++17', '-O2', '-lineinfo', f'-arch=sm_{_detect_cuda_arch()}', f'-DDTYPE={precision}',
+        *kernel_flags(), '-lineinfo', f'-arch=sm_{_detect_cuda_arch()}', f'-DDTYPE={precision}',
         f'-DID_TEMP={gen.gen_inverse_dynamics_gradient_inner_temp_mem_size()}',
         f'-DCRBA_TEMP={gen.gen_crba_inner_temp_mem_size()}',
         f'-DBODY_TEMP={gen.gen_idsva_so_body_frame_inner_temp_mem_size()}',

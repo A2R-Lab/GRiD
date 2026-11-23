@@ -47,7 +47,7 @@ from ._cache import (_KEY_SCHEMA, _arch_loadable, _sweep_dead_staging_dirs, cano
                      default_cache_dir, detect_cuda_arch, effective_cuda_archs, keymap_lookup,
                      keymap_record, package_version, read_build_inputs, stale_hit_reasons,
                      write_build_inputs)
-from ._compile import _NVCC_DEFAULT_FLAGS, _build_jobs, find_nvcc, generate_grid_cuh
+from ._compile import _nvcc_default_flags, _build_jobs, find_nvcc, generate_grid_cuh
 from ._store import entry_metadata, publish_entry, publish_object, staging_dir
 from ._consumer_toolchain import resolve_consumer_toolchain
 from ._consumer_dependencies import discover_dependencies
@@ -147,6 +147,8 @@ def artifact_identity(cuda_arch: int) -> dict[str, Any]:
         "artifacts_py": _artifact_module_hash(),
         "grid_rbd": package_version(),
         "generation_env": _cache._generation_env(),
+        # The resolved shared nvcc list, so a GRID_NVCC_FP_FLAGS override re-keys the request.
+        "nvcc_kernel_flags": _cache._nvcc_kernel_flags(),
     }
     archs = effective_cuda_archs(cuda_arch)
     if archs is not None:
@@ -417,7 +419,7 @@ def _compile_command(gen_dir: Path, cuda_arch: int, include_dirs: list[Path], de
     nvcc = find_nvcc()
     archs = effective_cuda_archs(cuda_arch)
     gencode_archs = archs if archs is not None else [cuda_arch]
-    cmd = [nvcc] + toolchain.prepend + list(_NVCC_DEFAULT_FLAGS)
+    cmd = [nvcc] + toolchain.prepend + _nvcc_default_flags()
     cmd += [f"-gencode=arch=compute_{a},code=sm_{a}" for a in gencode_archs]
     cmd.append(f"-I{gen_dir}")
     cmd.append(f"-I{_collision_include_dir()}")

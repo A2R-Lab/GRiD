@@ -15,6 +15,7 @@ import pytest
 
 from grid_codegen import GRiDCodeGenerator
 from grid_codegen.env_knobs import generation_env
+from grid_codegen.nvcc_flags import CXX_STANDARD_FLAG, kernel_flags
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import (
     iter_robot_cases,
@@ -502,7 +503,7 @@ def _linalg_backend_compile_flags(arch: str) -> tuple[str, list[str], str]:
     function keeps the (cxx_standard, flags, note) tuple shape so callers
     don't need updating."""
     del arch  # unused; sm/arch is handled by the outer compile harness
-    return "-std=c++17", ["-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS"], "glass"
+    return CXX_STANDARD_FLAG, ["-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS"], "glass"
 
 
 def _parse_const_ints(header_path: Path) -> dict[str, int]:
@@ -784,7 +785,12 @@ def _compile_runner(
     nvcc_version = _nvcc_version_text()
     _cache_verbose(config, "nvcc version: " + nvcc_version.splitlines()[-1])
     cxx_standard, linalg_flags, linalg_backend_note = _linalg_backend_compile_flags(arch)
-    compile_flags = [cxx_standard, "-O0", *linalg_flags]
+    # The shared list (grid_codegen/nvcc_flags.py): the runner is compiled the way
+    # the Python wrapper compiles a robot library. It is part of the runner key
+    # below, so a GRID_NVCC_FP_FLAGS override builds its own executable.
+    shared_flags = kernel_flags()
+    assert shared_flags[0] == cxx_standard
+    compile_flags = [*shared_flags, *linalg_flags]
     l2_persisting = os.environ.get("GRID_CUDA_ENABLE_L2_PERSISTING")
     l2_define = int(l2_persisting) if l2_persisting is not None else 0
     enable_floating_eepose_hessian = int(
@@ -869,8 +875,7 @@ def _compile_runner(
 
         cmd = [
             nvcc,
-            cxx_standard,
-            "-O0",
+            *shared_flags,
             *defines,
             *linalg_flags,
             "-gencode",

@@ -14,6 +14,7 @@ Runs by default on every manifest robot, floating and fixed base (widened
 GRID_CUDA_IDSVA_SO_WORLD_FRAME_BASES=floating.
 """
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -162,8 +163,7 @@ def _compile_world_frame_runner(build_dir: Path):
     executable = build_dir / "cuda_idsva_so_world_frame_smoke_runner.exe"
     cmd = [
         nvcc,
-        "-std=c++17",
-        "-O0",
+        *kernel_flags(),
         "-gencode",
         f"arch=compute_{arch},code=sm_{arch}",
         "-gencode",

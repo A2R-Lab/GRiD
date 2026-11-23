@@ -26,6 +26,7 @@ near-gimbal |pitch|->pi/2 configuration is rejected at sample time, since rpy is
 ill-conditioned there). A benign rest-ish q with a non-degenerate quaternion is
 used; an fp64 spot-check runs alongside the fp32 default.
 """
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -84,7 +85,7 @@ def _compile_runner(build_dir, gridT="float"):
     arch = _detect_cuda_arch()
     exe = build_dir / "cuda_spherical_kinematics_runner.exe"
     cmd = [
-        nvcc, "-std=c++17", "-O0",
+        nvcc, *kernel_flags(),
         "-DGRID_CUDA_FLOATING_BASE=0",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",

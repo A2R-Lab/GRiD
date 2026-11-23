@@ -12,7 +12,7 @@
 // thread-invariance check). Any read of the still-live spilled arena, or a
 // missing write-before-read barrier around the reuse, breaks bit-identity.
 //
-// Build: nvcc -arch=sm_120 -O2 -DMJX_ALGO_FDSVA={0,1} runner.cu (needs a mjx
+// Build: nvcc -arch=sm_120 $(python -m grid_codegen.nvcc_flags) -DMJX_ALGO_FDSVA={0,1} runner.cu (needs a mjx
 // header: enable_mujoco_kernels=True, floating go2). Prints "RESULT: PASS/FAIL".
 #include <cstdio>
 #include <cmath>

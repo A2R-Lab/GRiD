@@ -41,6 +41,7 @@ alpha-accumulate and RBDReference.frame_jacobian's `scale = mimic_scale(j)`).
 
 from __future__ import annotations
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -189,7 +190,7 @@ def _compile_runner(build_dir):
     executable = build_dir / "cuda_frame_jacobian_smoke_runner.exe"
     glass_inc = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
     cmd = [
-        nvcc, "-std=c++17", "-O0",
+        nvcc, *kernel_flags(),
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
         f"-I{glass_inc}", "-o", str(executable), str(runner_copy),
     ]

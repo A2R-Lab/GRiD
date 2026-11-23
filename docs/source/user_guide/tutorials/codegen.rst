@@ -155,7 +155,20 @@ you fuse GRiD dynamics into an MPC, RL or controls kernel:
 
 .. code-block:: shell
 
-   nvcc -arch=sm_90 -std=c++17 my_kernel.cu -o my_kernel   # pick your GPU's arch
+   nvcc -arch=sm_90 $(python -m grid_codegen.nvcc_flags) my_kernel.cu -o my_kernel   # pick your GPU's arch
+
+``python -m grid_codegen.nvcc_flags`` (also ``grid-generate --print-nvcc-flags``)
+prints the one flag list GRiD compiles generated headers with:
+``-std=c++17 -O3 -ftz=true -prec-div=false -prec-sqrt=false -fmad=true``. The
+Python wrapper, the CUDA equivalence tests and the examples all build from it
+(``grid_codegen/nvcc_flags.py``), so a kernel compiled with this command uses the
+floating-point settings the tests validate. ``-ftz``, ``-prec-div``,
+``-prec-sqrt`` and ``-fmad`` change device-code floating point; the ``-O`` level
+only reaches host code. For experiments, the environment variable
+``GRID_NVCC_FP_FLAGS`` replaces the four floating-point flags: ``ieee`` selects
+``-ftz=false -prec-div=true -prec-sqrt=true -fmad=true``, and an explicit
+space-separated list sets individual flags. Every compiled-binary cache keys on
+the resolved list.
 
 Initialising the header: aggregate or per algorithm
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

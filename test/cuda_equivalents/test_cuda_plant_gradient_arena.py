@@ -1,4 +1,5 @@
 """Full-shared plant allocation must not borrow a spilled integrator sizer."""
+from grid_codegen.nvcc_flags import kernel_flags
 import json
 import subprocess
 from pathlib import Path
@@ -24,7 +25,7 @@ def test_exact_gradient_with_topology(tmp_path, name, floating):
         enable_mujoco_kernels=False, output_path=str(tmp_path / 'grid.cuh'))
     exe, _ = cached_nvcc_executable(
         [Path(__file__).with_name('cuda_plant_gradient_arena_runner.cu')],
-        ['-std=c++17', '-O2', '-lineinfo', f'-arch=sm_{_detect_cuda_arch()}'],
+        [*kernel_flags(), '-lineinfo', f'-arch=sm_{_detect_cuda_arch()}'],
         exe_name='exact_gradient', fallback_dir=tmp_path, include_dirs=[tmp_path],
         what='standalone exact gradient arena')
     rng = np.random.default_rng(723)
@@ -111,7 +112,7 @@ int main() {
 '''.replace('DTYPE', dtype).replace('WRITES', writes).replace('NFIELDS', str(len(fields)))
     runner = tmp_path / 'probe.cu'
     runner.write_text(source)
-    exe, _ = cached_nvcc_executable([runner], ['-std=c++17', '-O2', '-DGRID_CUDA_DEBUG_LAYOUT',
+    exe, _ = cached_nvcc_executable([runner], [*kernel_flags(), '-DGRID_CUDA_DEBUG_LAYOUT',
                                                f'-arch=sm_{_detect_cuda_arch()}'],
                                     exe_name='probe', fallback_dir=tmp_path, include_dirs=[tmp_path],
                                     what='plant gradient arena probe')

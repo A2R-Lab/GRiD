@@ -14,6 +14,7 @@ is not on the handle; it is driven as the existing complete-collision gate
 drives it, through grid-generate (with -p for the option variant) and the
 shared runner, against the oracle's sphere positions.
 """
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import io
 import subprocess
@@ -229,7 +230,7 @@ def collision(request, directory):
     arch = _detect_cuda_arch()
     exe, _ = cached_nvcc_executable(
         [ROOT / "test/cuda_equivalents/cuda_collision_complete_runner.cu", out / "grid.cuh"],
-        ["-std=c++17", "-O2", "-gencode", f"arch=compute_{arch},code=sm_{arch}"],
+        [*kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}"],
         exe_name="planar_root_collision.exe", fallback_dir=out,
         include_dirs=[ROOT / "grid_codegen/collision"], what="planar root collision model")
     return exe, RBDReference(robot), spec, (out / "grid.cuh").read_bytes()

@@ -10,6 +10,7 @@ that destruction releases the four device lists, probed per pointer so a sibling
 the same GPU cannot disturb the verdict (cuda_collision_environment_runner.cu).
 """
 from __future__ import annotations
+from grid_codegen.nvcc_flags import kernel_flags
 import re
 import shutil
 import subprocess
@@ -37,7 +38,7 @@ def _compile(build_dir):
     shutil.copyfile(RUNNER_SOURCE, runner_copy)
     arch = _detect_cuda_arch()
     exe = build_dir / (RUNNER_SOURCE.stem + ".exe")
-    cmd = [nvcc, "-std=c++17", "-O2", "-gencode", f"arch=compute_{arch},code=sm_{arch}",
+    cmd = [nvcc, *kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}",
            "-I", str(build_dir), "-I", str(COLLISION_INCLUDE), "-o", str(exe), str(runner_copy)]
     result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:

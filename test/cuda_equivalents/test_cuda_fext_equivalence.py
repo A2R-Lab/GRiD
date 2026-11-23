@@ -14,6 +14,7 @@ the gate, and every robot runs all three legs (2026-10-20: the pinocchio oracle
 maps a wrench on every body, mimic-driven bodies included, and the tolerance
 keys are RBDReference's own). Narrow with GRID_CUDA_FEXT_ROBOTS="iiwa14:fixed,g1:floating".
 """
+from grid_codegen.nvcc_flags import kernel_flags
 import os
 import subprocess
 from pathlib import Path
@@ -94,7 +95,7 @@ def _gen_and_compile(proj, build_dir, floating_base, *, inspect_only=False):
         )
     arch = _detect_cuda_arch()
     flags = [
-        "-std=c++17", "-O0",
+        *kernel_flags(),
         f"-DGRID_CUDA_FLOATING_BASE={1 if floating_base else 0}",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",

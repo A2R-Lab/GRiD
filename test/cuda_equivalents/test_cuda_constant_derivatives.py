@@ -1,4 +1,5 @@
 """Constant-joint derivatives, including genuinely empty coordinate buffers."""
+from grid_codegen.nvcc_flags import kernel_flags
 from pathlib import Path
 import subprocess
 
@@ -26,7 +27,7 @@ def derivative_probe(request, tmp_path_factory):
                      algorithm_list=['inverse_dynamics_gradient', 'frame_jacobian', 'frame_jacobian_dot'],
                      include_homogenous_transforms=True, enable_mujoco_kernels=False)
     source = Path(__file__).with_name('cuda_constant_derivatives_runner.cu')
-    exe, _ = cached_nvcc_executable([source], ['-std=c++17', '-O2', f'-arch=sm_{_detect_cuda_arch()}',
+    exe, _ = cached_nvcc_executable([source], [*kernel_flags(), f'-arch=sm_{_detect_cuda_arch()}',
                                               f'-DDTYPE={precision}',
                                               f'-DID_TEMP={gen.gen_inverse_dynamics_gradient_inner_temp_mem_size()}'],
                                     exe_name='probe', fallback_dir=path, include_dirs=[path],

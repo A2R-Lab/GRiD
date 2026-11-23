@@ -34,6 +34,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 from grid_assets import robot_urdf
+from grid_codegen.nvcc_flags import kernel_flags
 
 URDF_DIR = Path.home() / ".cache/robot_descriptions"
 ROBOTS = [
@@ -155,10 +156,9 @@ def compile_with_bounds(grid_cuh: Path, label: str, launch_bounds_override: int 
 
     obj = build_dir / f"batch_{label}.o"
     cmd = [
-        NVCC, "-std=c++17", "-c", "-o", str(obj), str(BATCH_CU),
+        NVCC, *kernel_flags(), "-c", "-o", str(obj), str(BATCH_CU),
         f"-DGRID_HEADER_FILE=\"{active_cuh}\"",
         f"-gencode=arch=compute_{ARCH},code=sm_{ARCH}",
-        "-O3", "-ftz=true", "-prec-div=false", "-prec-sqrt=false",
         f"-I{BATCH_CU.parent}",
         f"-I{BENCH_GRID_DIR}",   # timeGRiD_common.h (the solo TU #includes it)
         f"-I{active_cuh.parent}",
@@ -236,10 +236,10 @@ def dump_smem_bytes(grid_cuh: Path, emitted_labels: set[str], build_dir: Path) -
     src.write_text(source)
 
     binary = build_dir / "smem_dump"
-    cmd = [NVCC, "-std=c++17", "-o", str(binary), str(src),
+    cmd = [NVCC, *kernel_flags(), "-o", str(binary), str(src),
            f"-I{grid_cuh.parent}",
            f"-gencode=arch=compute_{ARCH},code=sm_{ARCH}",
-           "-O0", "-Wno-deprecated-gpu-targets"]
+           "-Wno-deprecated-gpu-targets"]
     rc = subprocess.run(cmd, capture_output=True, text=True)
     (build_dir / "compile.log").write_text(rc.stderr)
     if rc.returncode != 0:

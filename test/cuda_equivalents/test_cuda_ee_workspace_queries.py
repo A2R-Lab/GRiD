@@ -3,6 +3,7 @@
 Numerical equality alone missed a widened LDS.128 overlapping the other pose
 bank. Keep the optimized build and racecheck; debug/-O0 builds hide that hazard.
 """
+from grid_codegen.nvcc_flags import kernel_flags
 import shutil
 import subprocess
 import numpy as np
@@ -92,7 +93,7 @@ def test_exact_target_scratch(tmp_path,name,target,scalar):
     (tmp_path/'probe.cu').write_text(SOURCE)
     kernel='end_effector_pose_kernel'+('_'+target if target else '')
     exe,_=cached_nvcc_executable([tmp_path/'probe.cu'],
-        ['-std=c++17','-O2','-lineinfo','-arch=sm_'+_detect_cuda_arch(),'-DTEST_SCALAR='+scalar,
+        [*kernel_flags(),'-lineinfo','-arch=sm_'+_detect_cuda_arch(),'-DTEST_SCALAR='+scalar,
          '-DPOSE_KERNEL='+kernel,'-DGRID_CUDA_DEBUG_LAYOUT'],
         exe_name='probe',fallback_dir=tmp_path,include_dirs=[tmp_path],what='exact target scratch probe')
     dtype=np.float32 if scalar=='float' else np.float64

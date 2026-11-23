@@ -24,6 +24,7 @@ matching the RBDReference adapter's inverse_dynamics default -9.81 -- both sides
 convention, the pairing every CUDA dynamics equivalence test relies on.
 """
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -140,7 +141,7 @@ def _compile_runner(build_dir, floating=False):
     arch = _detect_cuda_arch()
     exe = build_dir / "cuda_continuous_joint_runner.exe"
     cmd = [
-        nvcc, "-std=c++17", "-O0",
+        nvcc, *kernel_flags(),
         f"-DGRID_CUDA_FLOATING_BASE={1 if floating else 0}",
         # gen3 exercises id / crba / ee_pose only; skip the gradient and
         # ee-pose-gradient runner sections so we don't need the heavy gradient /

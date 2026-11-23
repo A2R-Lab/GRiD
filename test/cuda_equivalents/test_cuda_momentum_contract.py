@@ -6,6 +6,7 @@ per-block cap at both (dtype, tier) points: at most 75440 bytes in float at
 TIER_SHARED and 37312 bytes in double at TIER_MINIMAL, both on h1_2-floating).
 Narrow with GRID_CUDA_MOMENTUM_ROBOTS="iiwa14:fixed,go2:floating".
 """
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 from pathlib import Path
@@ -56,7 +57,7 @@ def test_full_momentum_contract(tmp_path, robot, base, dtype, tier):
     source = Path(__file__).with_name("cuda_momentum_contract_runner.cu")
     exe = tmp_path / "momentum.exe"
     arch = _detect_cuda_arch()
-    cmd = [nvcc, "-std=c++17", "-O0", f"-arch=sm_{arch}", f"-DTEST_SCALAR={dtype}",
+    cmd = [nvcc, *kernel_flags(), f"-arch=sm_{arch}", f"-DTEST_SCALAR={dtype}",
            f"-DTEST_TIER=grid::{tier}", f"-I{tmp_path}", f"-I{ROOT / 'external/GLASS/include'}",
            str(source), "-o", str(exe)]
     compiled = subprocess.run(cmd, capture_output=True, text=True)

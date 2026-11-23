@@ -16,6 +16,7 @@ to override the integration timesteps (default 0.001,0.01,0.1).
 
 from __future__ import annotations
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import dataclasses
 import os
@@ -227,7 +228,7 @@ def _generate_header(project_model, build_dir: Path) -> Path:
 def _compile_runner(build_dir: Path, tier: str | None = None, *, inspect_only=False):
     arch = _detect_cuda_arch()
     glass_inc = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
-    flags = ["-std=c++17", "-O0", "-gencode", f"arch=compute_{arch},code=sm_{arch}"]
+    flags = [*kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}"]
     # Tier override so the suite exercises the LITE/MINIMAL SPILL path (the
     # integrator gradient's FD-grad inner s_temp / s_D_qdd_stage band routes to
     # d_workspace / d_temp_spill) in addition to PERF. The math is tier-independent,

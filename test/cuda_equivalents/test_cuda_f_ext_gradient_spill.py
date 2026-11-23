@@ -33,6 +33,7 @@ Narrow the bit-equality robots with GRID_CUDA_FEG_SPILL_ROBOTS="g1:floating,iiwa
 
 from __future__ import annotations
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -107,7 +108,7 @@ def _compile(build_dir, arch, floating):
     shutil.copyfile(_RUNNER, build_dir / "runner.cu")
     repo = Path(__file__).resolve().parents[2]
     exe = build_dir / "runner.exe"
-    cmd = [nvcc, "-std=c++17", "-O0", "-gencode", f"arch=compute_{arch},code=sm_{arch}",
+    cmd = [nvcc, *kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}",
            f"-DGRID_CUDA_FLOATING_BASE={1 if floating else 0}",
            "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
            f"-I{repo}", f"-I{build_dir}", "-o", str(exe), str(build_dir / "runner.cu")]

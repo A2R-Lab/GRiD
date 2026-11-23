@@ -3,6 +3,7 @@
 Batch four with fewer blocks also catches offsetting by blockIdx instead of k.
 These bounded, torque-conditioned states use the existing integrator tolerances.
 """
+from grid_codegen.nvcc_flags import kernel_flags
 from pathlib import Path
 import subprocess
 
@@ -29,7 +30,7 @@ def test_integrator_batch_forces(tmp_path, robot, base):
     arch = _detect_cuda_arch()
     exe, cmd = cached_nvcc_executable(
         [RUNNER_SOURCE, tmp_path / "grid.cuh"],
-        ["-std=c++17", "-O0", "-gencode", f"arch=compute_{arch},code=sm_{arch}"],
+        [*kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}"],
         exe_name="integrator_batch_forces.exe", fallback_dir=tmp_path,
         include_dirs=[Path(__file__).resolve().parents[2] / "external/GLASS/include"],
     )

@@ -60,8 +60,11 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 BIN="$TMP/fused_control_step"
 
-echo ">> [2/3] compiling with nvcc ($ARCH)"
-"$NVCC" -arch="$ARCH" -std=c++17 -O2 -I "$(dirname "$HEADER")" \
+# The nvcc flags GRiD compiles generated headers with (the Python wrapper and
+# the tests use the same list). Print them with: python -m grid_codegen.nvcc_flags
+read -r -a GRID_NVCC_FLAGS <<< "$("$PY" -m grid_codegen.nvcc_flags)"
+echo ">> [2/3] compiling with nvcc ($ARCH ${GRID_NVCC_FLAGS[*]})"
+"$NVCC" -arch="$ARCH" "${GRID_NVCC_FLAGS[@]}" -I "$(dirname "$HEADER")" \
     "$EX_DIR/fused_control_step.cu" -o "$BIN"
 
 echo ">> [3/3] running: batch=$BATCH repeats=$REPEATS threads=$THREADS"

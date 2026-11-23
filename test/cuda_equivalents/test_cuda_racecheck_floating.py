@@ -9,6 +9,7 @@ __syncwarp), never something to allow-list. Local gate policy: go2 floating.
 """
 from __future__ import annotations
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import io
 import shutil
@@ -50,7 +51,7 @@ def test_go2_floating_composition_is_racecheck_clean(tmp_path):
     runner = tmp_path / RUNNER_SOURCE.name
     shutil.copyfile(RUNNER_SOURCE, runner)
     exe = tmp_path / "runner.exe"
-    r = subprocess.run(["nvcc", "-std=c++17", "-O2", "-lineinfo", f"-arch=sm_{_detect_cuda_arch()}",
+    r = subprocess.run(["nvcc", *kernel_flags(), "-lineinfo", f"-arch=sm_{_detect_cuda_arch()}",
                         "-I", str(tmp_path), "-o", str(exe), str(runner)], capture_output=True, text=True)
     assert r.returncode == 0, f"runner compilation failed:\n{r.stderr[-4000:]}"
     for threads in (32, 256):

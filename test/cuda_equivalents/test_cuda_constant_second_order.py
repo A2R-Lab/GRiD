@@ -1,4 +1,5 @@
 """Constant-body second-order folds and Coriolis projection, including nv=0."""
+from grid_codegen.nvcc_flags import kernel_flags
 from pathlib import Path
 import subprocess
 
@@ -25,7 +26,7 @@ def second_probe(request, tmp_path_factory):
                      enable_idsva_so_world_frame=True, enable_idsva_so_body_frame=True,
                      enable_mujoco_kernels=False)
     exe, _ = cached_nvcc_executable([Path(__file__).with_name('cuda_constant_second_order_runner.cu')], [
-        '-std=c++17', '-O2', f'-arch=sm_{_detect_cuda_arch()}', f'-DDTYPE={precision}',
+        *kernel_flags(), f'-arch=sm_{_detect_cuda_arch()}', f'-DDTYPE={precision}',
         f'-DBODY_TEMP={gen.gen_idsva_so_body_frame_inner_temp_mem_size()}',
         f'-DWORLD_TEMP={gen.gen_idsva_so_world_frame_temp_mem_size()}'],
         exe_name='probe', fallback_dir=path, include_dirs=[path], what='constant second order runner')
