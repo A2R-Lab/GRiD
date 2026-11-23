@@ -18,10 +18,11 @@ inventory; primary evidence cannot be waived.
   different architecture is refused at context creation with a clear error.
   The model, the API and the generated code carry over between machines; the
   binary does not.
-* The 0.7.0 primary GPU test receipt and the release timing ran on Linux x86-64
-  with CUDA toolkit 13.2 and one RTX 5090 (sm_120). A secondary receipt of the
-  same 2056 tests at the same commit ran on a Jetson AGX Orin (sm_87, aarch64,
-  CUDA toolkit 13.2); the table below lists both environments. CUDA 12
+* The 0.7.2 primary GPU test receipt (2309 tests) ran on Linux x86-64 with CUDA
+  toolkit 13.2 and one RTX 5090 (sm_120); the release timing on that machine
+  predates it. A secondary receipt of the 2056 tests of 0.7.0 ran at the 0.7.0
+  commit on a Jetson AGX Orin (sm_87, aarch64, CUDA toolkit 13.2); the table
+  below lists both environments. CUDA 12
   toolkits and other GPUs are untested. The Xavier (sm_72) ran the header-only
   example and has no receipt.
 * The host compiler standard is C++17 for the code generator, benchmarks and a
@@ -40,21 +41,21 @@ inventory; primary evidence cannot be waived.
 What we ran
 -----------
 
-The RTX 5090 produced the primary evidence for 0.7.0: the full test
-receipt (``gpu-proof.json``, verified by CI), the release timing on the
-:doc:`release measurements <../../release_measurements>` page, and the
-installed-wheel check of the release playbook. The Jetson AGX Orin recorded
-the secondary receipt ``receipts/gpu-proof-sm87.json``, the same collection
-at the same commit, which ``make verify-all`` checks against its own
-expected-skips baseline. Everything validated ran in
+The RTX 5090 produced the primary evidence for 0.7.2: the full test
+receipt (``gpu-proof.json``, verified by CI) and the installed-wheel check of
+the release playbook. The release timing on the
+:doc:`release measurements <../../release_measurements>` page was measured on
+the same machine for an earlier release and was not repeated. The Jetson AGX
+Orin recorded the secondary receipt ``receipts/gpu-proof-sm87.json`` at the
+0.7.0 commit, which ``make verify-all`` checks against its own expected-skips
+baseline. Everything validated ran in
 fp32, the default compute precision; the fp64 tier (``dtype="float64"``) is
 an alpha feature outside the receipt.
 
-The table below records that historical qualification, not a qualification of
-changed 0.7.1 code. The 0.7.1 candidate has additional local correctness and
-installed-artifact gates; its fresh full primary receipt is a separate release
-gate. The Orin receipt remains tied to the 0.7.0 source and does not attest the
-new armature, allocation or free-body repairs. No new Orin qualification is
+The primary receipt is one fresh full pass at the 0.7.2 release commit: 2309
+tests, all passed, none skipped. The Orin receipt remains tied to the 0.7.0
+source and does not attest anything added since, including armature, the planar
+base and the single-precision changes of 0.7.2. No new Orin qualification is
 claimed. Strict verification of a historical receipt against changed inputs
 may fail; preserve that evidence and verify it at its recorded source revision,
 rather than weakening policy or relabeling it as current.
@@ -76,15 +77,16 @@ rather than weakening policy or relabeling it as current.
    * - sm_120 (compute capability 12.0)
      - NVIDIA GeForce RTX 5090, 32 GB
      - 13.2 (V13.2.86)
-     - 615.71.09
+     - 620.70.06
      - CPython 3.12.3
      - 2.12.0.dev20260408+cu128 (CUDA 12.8 runtime)
      - jax 0.10.0 with jax-cuda12-plugin 0.10.0
-     - Ubuntu 24.04.5, Linux 7.0.0-38, x86-64
-     - full receipt; release timing; install check (a fresh venv with
-       torch 2.11.0+cu128 and jax 0.11.2 from PyPI)
-     - receipt 2026-11-01; timing 2026-09-27 to 2026-10-07; install check
-       2026-10-15
+     - Ubuntu 24.04.5, Linux 7.0.0-43, x86-64
+     - full receipt at the 0.7.2 commit aca99e3 (2309 tests, 187 shards);
+       release timing (earlier release); install check (a fresh venv with
+       torch 2.11.0+cu128 and jax 0.12.1 from PyPI)
+     - receipt 2026-11-22; timing 2026-09-27 to 2026-10-07; install check
+       2026-11-21
    * - sm_87 (compute capability 8.7)
      - NVIDIA Jetson AGX Orin, 64 GB
      - 13.2 (V13.2.78)
