@@ -1,4 +1,5 @@
 """Repair audit of already-emitted fixed-spherical plant second derivatives."""
+from grid_codegen.nvcc_flags import kernel_flags
 from pathlib import Path
 import subprocess
 
@@ -41,7 +42,7 @@ def test_spherical_plant_hessian(tmp_path,name,precision,scheme,tier):
     gen.gen_all_code(algorithm_list=['fdsva_so','integrator_gradient'],emit_plant=True,
         enable_mujoco_kernels=False,output_path=str(tmp_path/'grid.cuh'))
     exe,_=cached_nvcc_executable([Path(__file__).with_name('cuda_spherical_plant_hessian_runner.cu')],
-        ['-std=c++17','-O2','-lineinfo','-Xptxas=-v','-arch=sm_'+_detect_cuda_arch(),'-DTEST_SCALAR='+precision,
+        [*kernel_flags(),'-lineinfo','-Xptxas=-v','-arch=sm_'+_detect_cuda_arch(),'-DTEST_SCALAR='+precision,
          '-DTEST_INTEGRATOR='+scheme.upper(),'-DTEST_TIER='+str(tier)],
         exe_name='probe',fallback_dir=tmp_path,include_dirs=[tmp_path],what='spherical plant Hessian runner')
     dtype=np.float32 if precision=='float' else np.float64

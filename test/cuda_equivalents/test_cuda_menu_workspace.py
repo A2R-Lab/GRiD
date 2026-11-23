@@ -1,4 +1,5 @@
 """Menu dimensions, alignment, poison and repeated B=2 composition."""
+from grid_codegen.nvcc_flags import kernel_flags
 from pathlib import Path
 import subprocess
 import numpy as np
@@ -25,7 +26,7 @@ def menu_case(request,tmp_path_factory):
     gen.gen_all_code(algorithm_list=['integrator','frame_jacobian'],emit_plant=True,
                      enable_mujoco_kernels=False,output_path=str(path/'grid.cuh'))
     exe,_=cached_nvcc_executable([Path(__file__).with_name('cuda_menu_workspace_runner.cu')],
-        ['-std=c++17','-O2','-lineinfo','-arch=sm_'+_detect_cuda_arch(),'-Xptxas=-v','-DTEST_SCALAR='+scalar],
+        [*kernel_flags(),'-lineinfo','-arch=sm_'+_detect_cuda_arch(),'-Xptxas=-v','-DTEST_SCALAR='+scalar],
         exe_name='probe',fallback_dir=path,include_dirs=[path],what='menu workspace runner')
     return path,exe,robot,np.float32 if scalar=='float' else np.float64
 

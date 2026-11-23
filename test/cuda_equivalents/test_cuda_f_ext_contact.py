@@ -21,6 +21,7 @@ See cuda_f_ext_contact_runner.cu.
 """
 from __future__ import annotations
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -73,7 +74,7 @@ def test_f_ext_contact_frame_map_fd(tmp_path):
     shutil.copyfile(RUNNER_SOURCE, runner_copy)
     arch = _detect_cuda_arch()
     exe = build_dir / "cuda_f_ext_contact_runner.exe"
-    cmd = [nvcc, "-std=c++17", "-O2", "-gencode", f"arch=compute_{arch},code=sm_{arch}",
+    cmd = [nvcc, *kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}",
            "-I", str(build_dir), "-I", str(REPO_ROOT), "-o", str(exe), str(runner_copy)]
     build = subprocess.run(cmd, capture_output=True, text=True)
     assert build.returncode == 0, f"nvcc build failed:\n{build.stderr}"

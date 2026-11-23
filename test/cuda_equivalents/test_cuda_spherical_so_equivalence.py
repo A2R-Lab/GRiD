@@ -40,6 +40,7 @@ every downstream q/v offset AND is where the body frame is wrong).
 NOTE: a SEPARATE runner (cuda_spherical_so_runner.cu) from the dynamics-suite
 cuda_spherical_runner.cu, to avoid SO-smem entanglement with that runner.
 """
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -105,7 +106,7 @@ def _compile_runner(build_dir):
     arch = _detect_cuda_arch()
     exe = build_dir / "cuda_spherical_so_runner.exe"
     cmd = [
-        nvcc, "-std=c++17", "-O0",
+        nvcc, *kernel_flags(),
         "-DGRID_CUDA_FLOATING_BASE=0",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",

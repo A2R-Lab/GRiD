@@ -9,6 +9,7 @@ composition + the cost assembly. See cuda_collision_cost_runner.cu.
 """
 from __future__ import annotations
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -57,7 +58,7 @@ def test_collision_cost_fd(tmp_path):
     shutil.copyfile(RUNNER_SOURCE, runner_copy)
     arch = _detect_cuda_arch()
     exe = build_dir / "cuda_collision_cost_runner.exe"
-    cmd = [nvcc, "-std=c++17", "-O2", "-gencode", f"arch=compute_{arch},code=sm_{arch}",
+    cmd = [nvcc, *kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}",
            "-I", str(build_dir), "-I", str(COLLISION_INCLUDE), "-o", str(exe), str(runner_copy)]
     result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:

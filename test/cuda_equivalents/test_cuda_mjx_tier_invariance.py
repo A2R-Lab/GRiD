@@ -18,6 +18,7 @@ twins). mjx is enabled explicitly (the cuda_equivalence conftest defaults pin-on
 
 from __future__ import annotations
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -71,7 +72,7 @@ def _compile(build_dir: Path, fdsva: int) -> Path:
     shutil.copyfile(_RUNNER, build_dir / "runner.cu")
     glass = _ROOT / "external" / "GLASS" / "include"
     exe = build_dir / f"runner_{'fdsva' if fdsva else 'idsva'}.exe"
-    cmd = [nvcc, "-std=c++17", "-O2", "-arch", f"sm_{_arch()}",
+    cmd = [nvcc, *kernel_flags(), "-arch", f"sm_{_arch()}",
            f"-DMJX_ALGO_FDSVA={fdsva}", "-diag-suppress", "177", "-diag-suppress", "174",
            f"-I{glass}", f"-I{build_dir}", "-o", str(exe), str(build_dir / "runner.cu")]
     res = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)

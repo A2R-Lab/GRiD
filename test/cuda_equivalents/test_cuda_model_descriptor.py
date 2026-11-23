@@ -1,4 +1,5 @@
 """Public metadata device access and single-pose frame composition, no timing."""
+from grid_codegen.nvcc_flags import kernel_flags
 from pathlib import Path
 import subprocess
 
@@ -29,7 +30,7 @@ def case(request, tmp_path_factory):
     descriptor=descriptor_from_robot(robot, runtime_transform=request.param=='runtime')
     (path/'metadata.cuh').write_text(emit_model_metadata(descriptor))
     exe,_=cached_nvcc_executable([Path(__file__).with_name('cuda_model_descriptor_runner.cu')],
-        ['-std=c++17','-O2','-arch=sm_'+_detect_cuda_arch()],
+        [*kernel_flags(),'-arch=sm_'+_detect_cuda_arch()],
         exe_name='probe',fallback_dir=path,include_dirs=[path],what='model descriptor runner')
     return descriptor,exe
 

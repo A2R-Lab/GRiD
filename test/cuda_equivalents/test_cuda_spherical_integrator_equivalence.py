@@ -28,6 +28,7 @@ the downstream revolute q-slots follow the selected full-state scheme.
 Fixtures: spherical_arm (root spherical + revolute) and mixed_spherical_arm
 (revolute -> spherical -> revolute, the mid-chain §1e case).
 """
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -97,7 +98,7 @@ def _compile_runner(build_dir, equiv_t):
     arch = _detect_cuda_arch()
     exe = build_dir / f"cuda_spherical_integrator_runner_{equiv_t}.exe"
     cmd = [
-        nvcc, "-std=c++17", "-O0",
+        nvcc, *kernel_flags(),
         "-DGRID_CUDA_FLOATING_BASE=0",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",

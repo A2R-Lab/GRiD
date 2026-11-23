@@ -1,4 +1,5 @@
 """Native full-force plant values and complete first derivatives, not timing."""
+from grid_codegen.nvcc_flags import kernel_flags
 from pathlib import Path
 import shutil
 import subprocess
@@ -23,7 +24,7 @@ def free_body(request, tmp_path_factory):
                      enable_mujoco_kernels=False, output_path=str(path/'grid.cuh'))
     exe, _ = cached_nvcc_executable(
         [Path(__file__).with_name('cuda_base_force_runner.cu')],
-        ['-std=c++17','-O2','-lineinfo','-DGRID_CUDA_DEBUG_LAYOUT',
+        [*kernel_flags(),'-lineinfo','-DGRID_CUDA_DEBUG_LAYOUT',
          '-DTEST_SCALAR='+scalar,'-arch=sm_'+_detect_cuda_arch(),'-Xptxas=-v'],
         exe_name='base_force', fallback_dir=path, include_dirs=[path], what='base-force contract')
     dtype = np.float32 if scalar=='float' else np.float64

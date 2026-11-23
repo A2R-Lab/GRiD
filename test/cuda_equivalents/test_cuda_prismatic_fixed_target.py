@@ -1,4 +1,5 @@
 """G13 numerical gate: all-prismatic fixed tool, block and warp/thread FK."""
+from grid_codegen.nvcc_flags import kernel_flags
 from pathlib import Path
 import subprocess
 
@@ -25,7 +26,7 @@ def test_prismatic_fixed_tool_values_and_thread_invariance(tmp_path, mimic):
                      include_homogenous_transforms=True, fixed_target_name="tool",
                      enable_mujoco_kernels=False)
     runner = Path(__file__).with_name("cuda_prismatic_fixed_target_runner.cu")
-    exe, _ = cached_nvcc_executable([runner], ["-std=c++17", "-O2", f"-arch=sm_{_detect_cuda_arch()}"],
+    exe, _ = cached_nvcc_executable([runner], [*kernel_flags(), f"-arch=sm_{_detect_cuda_arch()}"],
                                     exe_name="slider.exe", fallback_dir=tmp_path, include_dirs=[tmp_path],
                                     what="prismatic fixed target runner")
     r = Rotation.from_euler("xyz", [0.3, 0.2, 0.1])

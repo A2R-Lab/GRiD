@@ -1,4 +1,5 @@
 """Constant follower FK/Jacobian: block, thread and warp, both precisions."""
+from grid_codegen.nvcc_flags import kernel_flags
 from pathlib import Path
 import subprocess
 import numpy as np
@@ -28,7 +29,7 @@ def test_constant_mimic_kinematics(tmp_path, kind, precision):
                      include_homogenous_transforms=True, fixed_target_name='tool',
                      enable_mujoco_kernels=False)
     runner = Path(__file__).with_name('cuda_prismatic_fixed_target_runner.cu')
-    flags = ['-std=c++17', '-O2', f'-arch=sm_{_detect_cuda_arch()}'] + (['-DUSE_DOUBLE'] if precision == 'double' else [])
+    flags = [*kernel_flags(), f'-arch=sm_{_detect_cuda_arch()}'] + (['-DUSE_DOUBLE'] if precision == 'double' else [])
     exe, _ = cached_nvcc_executable([runner], flags, exe_name='constant.exe', fallback_dir=tmp_path,
                                     include_dirs=[tmp_path], what='constant mimic runner')
     axis = np.array([.6, 0., .8])

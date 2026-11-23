@@ -27,6 +27,7 @@ Narrow with GRID_CUDA_FD_DU_SPILL_ROBOTS="iiwa14:fixed,go2:floating".
 
 from __future__ import annotations
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import re
@@ -115,7 +116,7 @@ def _compile(build_dir, arch, floating):
     # section, whose NUM_JOINTS^2 framing over-reads the 2*NV*NV-written h_df_du
     # (nq>nv) into unwritten allocation tail — nondeterministic garbage in the
     # "qd" block whenever the fresh allocation isn't zero.
-    cmd = [nvcc, "-std=c++17", "-O0", "-gencode", f"arch=compute_{arch},code=sm_{arch}",
+    cmd = [nvcc, *kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}",
            f"-DGRID_CUDA_FLOATING_BASE={1 if floating else 0}",
            "-DGRID_RUNNER_SKIP_GRADIENTS=0", "-DGRID_RUNNER_SKIP_EEPOSE_GRADIENTS=1",
            f"-I{glass}", f"-I{build_dir}", "-o", str(exe), str(build_dir / "runner.cu")]

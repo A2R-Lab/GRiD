@@ -27,6 +27,7 @@ Surfaces exercised (mirrors test_cuda_spherical_kinematics_equivalence.py):
     end_effector_pose_hessian<T> over a 4-timestep trajectory (nq-stride path);
   * the hessian device's co-computed gradient must equal the gradient device's.
 """
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -83,7 +84,7 @@ def _compile_runner(build_dir, gridT="float"):
     arch = _detect_cuda_arch()
     exe = build_dir / "cuda_spherical_eepose_grad_hess_runner.exe"
     cmd = [
-        nvcc, "-std=c++17", "-O0",
+        nvcc, *kernel_flags(),
         "-DGRID_CUDA_FLOATING_BASE=0",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",

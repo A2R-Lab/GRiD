@@ -4,6 +4,7 @@ Use actual generated inners, poisoned exact-capacity pools at every alignment
 residue, independent oracles and optimized strict sanitizer runs. This covers
 serial, branched/floating and mimic topologies, not just the original pose case.
 """
+from grid_codegen.nvcc_flags import kernel_flags
 import shutil
 import subprocess
 from pathlib import Path
@@ -30,7 +31,7 @@ def test_adjacent_transform_scratch(tmp_path,name,floating,scalar):
                      enable_mujoco_kernels=False,output_path=str(tmp_path/'grid.cuh'))
     target=robot.get_leaf_nodes()[0]
     exe,_=cached_nvcc_executable([Path(__file__).with_name('cuda_transform_scratch_runner.cu')],
-        ['-std=c++17','-O2','-lineinfo','-arch=sm_'+_detect_cuda_arch(),'-DTEST_SCALAR='+scalar,
+        [*kernel_flags(),'-lineinfo','-arch=sm_'+_detect_cuda_arch(),'-DTEST_SCALAR='+scalar,
          f'-DHESS_SCRATCH={gen.gen_end_effector_pose_hessian_inner_temp_mem_size()}',
          f'-DFRAME_SCRATCH={16*robot.get_num_joints()}',f'-DTARGET_JID={target}'],
         exe_name='probe',fallback_dir=tmp_path,include_dirs=[tmp_path],what='adjacent transform scratch')

@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from grid_codegen import GRiDCodeGenerator
+from grid_codegen.nvcc_flags import kernel_flags
 from test.cuda_equivalents.test_cuda_contact_frame_positions import _robot, _q_for, _retract
 from RBDReference import RBDReference
 
@@ -27,15 +28,15 @@ def build(directory, scalar, *, compile_only=False):
             enable_mujoco_kernels=False, output_path=str(directory / 'grid.cuh'))
     exe = directory / 'registration'
     # The standalone compiler check never queries a GPU; runtime coverage uses
-    # the same optimization and native architecture as its multi-target sibling.
+    # the native architecture. Both use the shared nvcc flag list.
     compiler = shutil.which('nvcc') or '/usr/local/cuda/bin/nvcc'
     if compile_only:
-        flags = ['-O1', '-arch=compute_80']
+        flags = ['-arch=compute_80']
     else:
         from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
         arch = _detect_cuda_arch()
-        flags = ['-O2', '-gencode', f'arch=compute_{arch},code=sm_{arch}']
-    command = [compiler, '-std=c++17', *flags,
+        flags = ['-gencode', f'arch=compute_{arch},code=sm_{arch}']
+    command = [compiler, *kernel_flags(), *flags,
                '-DSCALAR=' + scalar, '-I' + str(directory), str(RUNNER), '-o', str(exe)]
     result = subprocess.run(command, text=True, capture_output=True)
     assert result.returncode == 0, result.stdout + result.stderr
