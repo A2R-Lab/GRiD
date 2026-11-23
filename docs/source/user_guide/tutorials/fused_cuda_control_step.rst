@@ -229,7 +229,8 @@ From the repository root:
    bash examples/cuda/fused_control_step/build_and_time.sh --batch 256 --repeats 200
 
 The script generates the header, compiles ``fused_control_step.cu`` with
-``nvcc -arch=sm_XX -std=c++17 -O2`` (the architecture from ``GRID_CUDA_ARCH``,
+``nvcc -arch=sm_XX`` and the shared flag list printed by
+``python -m grid_codegen.nvcc_flags`` (the architecture from ``GRID_CUDA_ARCH``,
 else ``nvidia-smi``, else the generator's default; see
 ``grid_codegen/cuda_env.py``), and runs the binary. The binary first computes
 the step both ways on the same deterministic batch and compares the three

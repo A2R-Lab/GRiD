@@ -225,7 +225,9 @@ cp "${REPO_ROOT}/examples/cuda/inverse_dynamics_kernel_example.cu" \
 cd "${WORK}/examples/cuda"
 "${VENV}/bin/grid-generate" "${WORK}/grid_assets/robots/iiwa14.urdf" \
     --algorithm-list inverse_dynamics -o "${WORK}/examples/cuda/grid.cuh" | tail -1
-nvcc -arch="${ARCH}" -std=c++17 -I "${WORK}/examples/cuda" \
+# The installed package's own flag list (what the wrapper and the tests compile with).
+read -r -a GRID_NVCC_FLAGS <<< "$("${VENV}/bin/grid-generate" --print-nvcc-flags)"
+nvcc -arch="${ARCH}" "${GRID_NVCC_FLAGS[@]}" -I "${WORK}/examples/cuda" \
     "${WORK}/examples/cuda/inverse_dynamics_kernel_example.cu" -o "${WORK}/examples/cuda/id_example"
 "${WORK}/examples/cuda/id_example" > "${WORK}/examples/cuda/id_example.out"
 "${VPY}" -I "${WORK}/examples/cuda/validate.py" < "${WORK}/examples/cuda/id_example.out"

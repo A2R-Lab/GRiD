@@ -16,7 +16,7 @@
 # cache across containers (Docker seeds an empty named volume with the image's
 # store, so the fat iiwa14 binary comes along). The baked header
 # /opt/grid/iiwa14/grid.cuh serves the header-only path directly:
-#   nvcc -arch=sm_90 -std=c++17 -I /opt/grid/iiwa14 my_kernel.cu
+#   nvcc -arch=sm_90 $(python -m grid_codegen.nvcc_flags) -I /opt/grid/iiwa14 my_kernel.cu
 #
 # The base is the CUDA 13.2 toolkit the release was built and tested with
 # (compatibility page); the cu128 torch wheel and the cuda12 JAX plugin carry

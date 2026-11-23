@@ -57,7 +57,12 @@ kernel. No per-robot ``.so``, no NumPy/JAX/PyTorch and no Python at runtime.
 
    pip install grid-rbd
    grid-generate robot.urdf -o grid.cuh      # -f for a floating base
-   nvcc -arch=sm_90 -std=c++17 my_kernel.cu  # GLASS linear algebra is vendored into the header
+   nvcc -arch=sm_90 $(python -m grid_codegen.nvcc_flags) my_kernel.cu  # GLASS linear algebra is vendored into the header
+
+``python -m grid_codegen.nvcc_flags`` (or ``grid-generate --print-nvcc-flags``)
+prints the nvcc flags the Python wrapper and the tests compile generated
+headers with (``-std=c++17 -O3 -ftz=true -prec-div=false -prec-sqrt=false
+-fmad=true``); see :doc:`../tutorials/codegen`.
 
 See :doc:`../tutorials/codegen` for a minimal kernel and the validated
 example under ``examples/cuda/``.
@@ -307,7 +312,7 @@ GPU with the image's ``nvcc`` and caches under ``GRID_RBD_CACHE_DIR``
 (``/var/cache/grid-rbd``). Mount that directory as a named volume, as above,
 to keep the cache across containers; Docker seeds an empty named volume with
 the image's store. The header-only path needs no compile
-step: ``nvcc -arch=sm_90 -std=c++17 -I /opt/grid/iiwa14 my_kernel.cu``
+step: ``nvcc -arch=sm_90 $(python -m grid_codegen.nvcc_flags) -I /opt/grid/iiwa14 my_kernel.cu``
 builds against the baked header. Build the image yourself from the
 repository root with
 ``docker build -f install/docker/Dockerfile --build-arg GRID_RBD_VERSION=0.7.0 -t grid:0.5.3 .``;
