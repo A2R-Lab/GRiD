@@ -19,9 +19,10 @@ This suite covers, for the JAX surface:
   (3) The subset ``.so`` is meaningfully smaller than the default build.
   (4) A default (no algorithm_list) register stays an instant cache hit (no rekey).
 
-Every subset/default fixture passes ``force_rebuild=True`` to exercise the real
-codegen+nvcc path (the build cache is content-addressed on inputs, NOT on the
-generated CUDA — see docs/agent_debugging_guide.md §7).
+Every subset/default fixture builds into an isolated, initially empty
+``cache_dir``, so each one runs the real codegen+nvcc path without
+``force_rebuild`` (the wrapper cache is content-keyed; see
+docs/agent_debugging_guide.md).
 
 Run with:
     pytest test/python_wrappers/test_subset_build_jax.py -m python_wrappers -v
@@ -66,22 +67,23 @@ _TOL = 5e-3  # float32 vs float64 cross-precision
 
 @pytest.fixture(scope="module")
 def cache_dir(tmp_path_factory):
-    # Isolated cache so these (force_rebuild) builds never collide with the shared
-    # ~/.cache/grid-rbd/ entries used by the other suites.
+    # Isolated, initially empty cache: every fixture build is a real codegen+nvcc
+    # build (the second may link unit objects the first compiled with identical
+    # inputs), and none touches the shared ~/.cache/grid-rbd/ entries used by the
+    # other suites.
     return tmp_path_factory.mktemp("subset_build_jax_cache")
 
 
 @pytest.fixture(scope="module")
 def default_handle(cache_dir):
     """The full default profile (algorithm_list=None) — must stay fully working
-    on the JAX surface. force_rebuild to exercise the real codegen+nvcc path."""
+    on the JAX surface. The empty isolated cache makes this a real codegen+nvcc build."""
     return _grid_rbd_jax.register_robot(
         name="iiwa14_subset_jax_default",
         urdf_path=str(_URDF),
         floating_base=False,
         max_batch_size=8,
         cache_dir=str(cache_dir),
-        force_rebuild=True,
     )
 
 
@@ -99,7 +101,6 @@ def subset_handle(cache_dir):
         floating_base=False,
         max_batch_size=8,
         cache_dir=str(cache_dir),
-        force_rebuild=True,
         algorithm_list=["inverse_dynamics", "forward_dynamics",
                         "forward_dynamics_gradient"],
     )

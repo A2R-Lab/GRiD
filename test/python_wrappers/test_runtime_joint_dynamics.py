@@ -74,10 +74,10 @@ def _samples(nj, seed=0):
 def iiwa_builds():
     common = dict(urdf_path=str(_IIWA), floating_base=False, max_batch_size=8)
     h_rt = _grid_rbd.register_robot(name="iiwa14_rtjd_pytest", use_joint_dynamics=True,
-                                    runtime_joint_dynamics=True, force_rebuild=True, **common)
+                                    runtime_joint_dynamics=True, **common)
     h_baked = _grid_rbd.register_robot(name="iiwa14_baked_jd_pytest", use_joint_dynamics=True,
-                                       force_rebuild=True, **common)
-    h_bare = _grid_rbd.register_robot(name="iiwa14_bare_jd_pytest", force_rebuild=True, **common)
+                                       **common)
+    h_bare = _grid_rbd.register_robot(name="iiwa14_bare_jd_pytest", **common)
     return h_rt, h_baked, h_bare
 
 
@@ -215,7 +215,7 @@ def test_poke_seen_across_surfaces():
         pytest.skip("CUDA device not available for torch")
     common = dict(urdf_path=str(_IIWA), floating_base=False, max_batch_size=8,
                   use_joint_dynamics=True, runtime_joint_dynamics=True)
-    hn = _grid_rbd.register_robot(name="iiwa14_rtjd_ffi_pytest", force_rebuild=True, **common)
+    hn = _grid_rbd.register_robot(name="iiwa14_rtjd_ffi_pytest", **common)
     hj = gj.register_robot(name="iiwa14_rtjd_ffi_pytest", **common)
     ht = gt.register_robot(name="iiwa14_rtjd_ffi_pytest", **common)
     nv = hn.num_vel
@@ -245,10 +245,10 @@ def test_fr3_mimic_untouched_equals_baked_and_zero_toggles():
     several jids into one v-slot; covered by the numpy test_joint_dynamics oracle)."""
     common = dict(urdf_path=str(_FR3), floating_base=False, max_batch_size=8)
     h_rt = _grid_rbd.register_robot(name="fr3_rtjd_pytest", use_joint_dynamics=True,
-                                    runtime_joint_dynamics=True, force_rebuild=True, **common)
+                                    runtime_joint_dynamics=True, **common)
     h_baked = _grid_rbd.register_robot(name="fr3_baked_jd_pytest", use_joint_dynamics=True,
-                                       force_rebuild=True, **common)
-    h_bare = _grid_rbd.register_robot(name="fr3_bare_jd_pytest", force_rebuild=True, **common)
+                                       **common)
+    h_bare = _grid_rbd.register_robot(name="fr3_bare_jd_pytest", **common)
     nj = h_rt.num_joints
     nv = h_rt.num_vel
     q, qd, u = _samples(nj, seed=21)
@@ -293,10 +293,10 @@ def test_fr3_tanh_width_row_pokes_and_matches_analytic(iiwa_builds):
     common = dict(urdf_path=str(_FR3), floating_base=False, max_batch_size=8,
                   use_joint_dynamics=True, friction_model="tanh")
     h_rt = _grid_rbd.register_robot(name="fr3_rtjd_tanh_pytest", runtime_joint_dynamics=True,
-                                    force_rebuild=True, **common)
-    h_baked = _grid_rbd.register_robot(name="fr3_baked_jd_tanh_pytest", force_rebuild=True, **common)
+                                    **common)
+    h_baked = _grid_rbd.register_robot(name="fr3_baked_jd_tanh_pytest", **common)
     h_bare = _grid_rbd.register_robot(name="fr3_bare_jd_tanh_pytest", urdf_path=str(_FR3),
-                                      floating_base=False, max_batch_size=8, force_rebuild=True)
+                                      floating_base=False, max_batch_size=8)
     nj = h_rt.num_joints
     nv = h_rt.num_vel
     assert h_rt.friction_model == "tanh" and h_baked.friction_model == "tanh"

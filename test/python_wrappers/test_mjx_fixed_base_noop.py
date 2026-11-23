@@ -41,7 +41,7 @@ def test_fixed_base_mujoco_convention_is_noop():
                   algorithm_list=["inverse_dynamics"], max_batch_size=8)
     # (1) accepted (no ValueError) even paired with enable_mujoco_kernels=False on a fixed base
     h_mjx = register_robot(name="iiwa14_fixed_mjx_noop", output_convention="mujoco",
-                           enable_mujoco_kernels=False, force_rebuild=True, **common)
+                           enable_mujoco_kernels=False, **common)
     assert h_mjx.output_convention == "mujoco"
     assert not h_mjx.floating_base
 

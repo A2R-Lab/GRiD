@@ -74,8 +74,11 @@ Notes:
 - The conftest SUITE FLOOR turns env-guard skips into rc=1 per invocation; the
   aggregator reconciles "rc!=0 but zero XML failures" as FLOOR rows rather than
   casualties.
-- Modules with ``force_rebuild=True`` registrations recompile in Phase B by
-  design (that is what those tests exercise); they are warm-exempt here.
+- No wrapper module passes ``force_rebuild=True`` to avoid a stale build: the
+  wrapper cache is content-keyed, so a module that is not pre-warmed builds in
+  Phase B only what the cache lacks. A module whose tests exercise the forced
+  rebuild path itself would recompile in Phase B by design; the drift guard
+  keeps exempting such a module.
 """
 from __future__ import annotations
 
@@ -142,7 +145,8 @@ class ShardSpec:
 # module -> list of warm_robot kwarg dicts (cache-key-relevant kwargs only).
 # URDFs resolve through grid_assets.robot_urdf at runtime. Modules NOT listed (or
 # listed with []) still run in Phase B — they are just not pre-warmed:
-#   * force_rebuild=True modules rebuild in-test regardless;
+#   * a module that tests the forced rebuild path (force_rebuild=True)
+#     rebuilds in-test regardless (none does today);
 #   * test_subset_build* use isolated tmp cache_dirs;
 #   * test_any_thread_count / test_ee_named_target_* use robot_descriptions /
 #     per-test inline registrations.
