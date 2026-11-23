@@ -20,6 +20,9 @@ results; the default already matches.
 from __future__ import annotations
 
 import functools
+import mmap
+import os
+import re
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -209,6 +212,51 @@ class _MujocoView(MujocoDerivativeViewMixin, MujocoViewBase):
 
 
 
+# Torch operator namespaces registered by artifacts loaded in this process:
+# namespace -> real path of the artifact that registered it. An entry is never
+# removed, because the image stays loaded through its registration after the
+# last handle closes.
+_TORCH_NAMESPACE_OWNERS: dict[bytes, str] = {}
+# The key is "k" plus twelve hex characters of the content key, or "default".
+_TORCH_NAMESPACE_RE = re.compile(rb"grid_rbd_torch_(?:k[0-9a-f]{12}|default)")
+
+
+def _check_torch_namespace(so_path: str):
+    """Refuse a second artifact that registers an operator namespace this
+    process already holds from another file. Returns the claim to record once
+    the artifact has loaded.
+
+    The namespace is named after the model key, so two builds of one model in
+    two cache directories carry the same name. PyTorch aborts the process when
+    the second one registers. Raise before the load instead. The same file may
+    be loaded any number of times: that shares one image.
+    """
+    real = os.path.realpath(so_path)
+    try:
+        with open(real, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as image:
+            names = set(_TORCH_NAMESPACE_RE.findall(image))
+    except (OSError, ValueError):
+        return None   # the loader reports an unreadable or empty artifact
+    for name in sorted(names):
+        owner = _TORCH_NAMESPACE_OWNERS.get(name)
+        if owner is not None and owner != real:
+            raise RuntimeError(
+                f"This process already loaded the same model from another cache:\n"
+                f"  loaded:    {owner}\n  requested: {real}\n"
+                f"Both register the PyTorch operator namespace {name.decode()!r}, and PyTorch "
+                "aborts the process on a second registration. The first artifact stays loaded "
+                "after its handles close. Use one cache directory per process for a given "
+                "model, or load the second artifact in a new process.")
+    return real, names
+
+
+def _record_torch_namespace(claim) -> None:
+    if claim is not None:
+        real, names = claim
+        for name in names:
+            _TORCH_NAMESPACE_OWNERS[name] = real
+
+
 class RobotHandle:
     """Opaque handle to a compiled per-robot GRiD library.
 
@@ -265,12 +313,14 @@ class RobotHandle:
         # (default / pre-Phase-8 meta lacking a dtype field) uses Runner. _dt is
         # the host-side numpy element dtype every method casts inputs to.
         self._dtype = str(meta.get("dtype", "float32"))
+        claim = _check_torch_namespace(self._so_path)
         if self._dtype == "float64":
             self._dt = np.float64
             self._runner = _core.RunnerF64(so_path)
         else:
             self._dt = np.float32
             self._runner = _core.Runner(so_path)
+        _record_torch_namespace(claim)
         # Output convention: "pinocchio" (default, native) or "mujoco" (mjx parity).
         # Only affects FLOATING-base robots; a no-op (byte-identical) on fixed base.
         self._output_convention = "pinocchio"
