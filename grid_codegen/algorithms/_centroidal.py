@@ -280,7 +280,16 @@ def gen_id_bias(self, gravity_only):
 #   s_A    (6 x NUM_VEL, column-major)  -- Pinocchio CMM [linear; angular] @ CoM
 #   s_com  (3)                          -- world CoM position
 #   s_extra[0] = M_total                -- total mass
-#   s_extra[1..3] = world first moment IW first-moment (m*c) (unused downstream)
+#   s_extra[1..3] = CoM relative to the base position (floating base only; the
+#                   shift the dCCRBA assembly applies to the scratch below)
+#
+# Floating base: the sweep runs with the base position at zero, so s_Xworld,
+# s_J, s_Iw, s_A0 and s_IW are expressed about the base position, not the world
+# origin. s_A, the mass and everything derived from the scratch (kinetic
+# energy, dCCRBA, Adot) do not depend on the base position; formed about the
+# world origin they cancel terms of size mass times distance, which costs
+# float32 accuracy as the base moves away. s_com is the only world quantity and
+# gets the base position added at the end.
 #
 # Scratch layout in s_temp:
 #   s_Xworld : 16 * NJ   (world homogeneous transform per joint)
@@ -316,7 +325,9 @@ def gen_centroidal_inner(self):
         "s_A is the output 6 x NUM_VEL CMM (column-major, [linear; angular] @ CoM, world-aligned)",
         "s_com is the output 3-vector world CoM",
         "s_extra holds [M_total] (s_extra[0])",
-        "s_q is the vector of joint positions (unused; q is baked into s_Xhom)",
+        ("s_q is the vector of joint positions (the base position is read from it to return the world CoM)"
+         if self.robot.floating_base else
+         "s_q is the vector of joint positions (unused; q is baked into s_Xhom)"),
         "s_Xhom is the per-joint LOCAL homogeneous transforms",
         "d_robotModel is the GPU model helpers (for the constant body inertias)",
         "s_temp is scratch of size " + str(_centroidal_inner_temp_mem_size(self)),
@@ -365,7 +376,7 @@ def gen_centroidal_inner(self):
     self.gen_add_end_control_flow()
 
     # ---- Step 1: world homogeneous transforms by BFS level (chain-up) ----
-    _emit_world_transform_chainup(self, declare_xworld = False)
+    _emit_world_transform_chainup(self, declare_xworld = False, floating_root_at_origin = True)
 
     # ---- Step 2: per-body world spatial inertia Iw = Xpx^{-T} Ibw Xpx^{-1} ----
     # We assemble the world inertia in angular-first [ang; lin] order directly
@@ -557,6 +568,11 @@ def gen_centroidal_inner(self):
     self.gen_add_code_line("s_A[0 + 6*vi] = f0; s_A[1 + 6*vi] = f1; s_A[2 + 6*vi] = f2;")
     self.gen_add_code_line("s_A[3 + 6*vi] = nc0; s_A[4 + 6*vi] = nc1; s_A[5 + 6*vi] = nc2;")
     self.gen_add_end_control_flow()
+    if self.robot.floating_base:
+        # The sweep ran about the base position: keep that CoM for the dCCRBA
+        # assembly, which shifts the same scratch, and return the world CoM.
+        self.gen_add_code_line("s_extra[1] = cx; s_extra[2] = cy; s_extra[3] = cz;")
+        self.gen_add_code_line("s_com[0] = cx + s_q[0]; s_com[1] = cy + s_q[1]; s_com[2] = cz + s_q[2];")
     self.gen_add_end_control_flow()  # serial
     self.gen_add_sync()
     self.gen_add_end_function()

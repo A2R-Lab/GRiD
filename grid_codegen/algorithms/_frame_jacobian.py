@@ -65,15 +65,24 @@ def _frame_jacobian_inner_temp_mem_size(self):
     return 16 * NJ
 
 
-def _emit_world_transform_chainup(self, declare_xworld = True):
+def _emit_world_transform_chainup(self, declare_xworld = True, floating_root_at_origin = False):
     """Step 1: per-joint world homogeneous transforms by BFS level (chain-up of
     local s_Xhom into s_Xworld). The shared kinematics primitive behind
     frame_jacobian, the runtime-target ee-pose surfaces (_eepose_runtime), the
     centroidal inner and the potential-energy regressor (hygiene 12, 2026-09-24:
     the latter two carried verbatim copies). ``declare_xworld`` emits the
     ``s_Xworld = &s_temp[0]`` alias; callers that place s_Xworld themselves pass
-    False."""
+    False.
+
+    ``floating_root_at_origin`` is the homogeneous counterpart of
+    ``_floating_root_at_origin`` in the spatial-transform loader: on a floating
+    base the root is copied with its translation set to zero, so every
+    transform in s_Xworld is expressed about the base position instead of the
+    world origin. Only a caller whose result does not depend on the base
+    position, or that adds the position back itself, may ask for it. It has no
+    effect on a fixed base."""
     n_bfs_levels = self.robot.get_max_bfs_level() + 1
+    root_at_origin = floating_root_at_origin and self.robot.floating_base
     if declare_xworld:
         self.gen_add_code_line("T *s_Xworld = &s_temp[0];")
     self.gen_add_code_line("// Step 1: world homogeneous transforms (chain-up of local s_Xhom)")
@@ -92,7 +101,11 @@ def _emit_world_transform_chainup(self, declare_xworld = True):
                                                [("int", "jid", jid_list), ("int", "par", par_list)])
         else:
             self.gen_add_code_line("const int jid = " + jid_list[0] + "; const int par = " + par_list[0] + ";")
-        self.gen_add_code_line("if (par == -1) { s_Xworld[16*jid + ele] = s_Xhom[16*jid + ele]; }")
+        if root_at_origin:
+            # cells 12, 13, 14 of the root hold the base position
+            self.gen_add_code_line("if (par == -1) { s_Xworld[16*jid + ele] = (col == 3 && row < 3) ? static_cast<T>(0) : s_Xhom[16*jid + ele]; }")
+        else:
+            self.gen_add_code_line("if (par == -1) { s_Xworld[16*jid + ele] = s_Xhom[16*jid + ele]; }")
         self.gen_add_code_line("else { s_Xworld[16*jid + ele] = dot_prod<T,4,4,1>(&s_Xworld[16*par + row], &s_Xhom[16*jid + 4*col]); }")
         self.gen_add_end_control_flow()
         self.gen_add_sync()
