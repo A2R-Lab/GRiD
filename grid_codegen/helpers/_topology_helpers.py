@@ -642,23 +642,49 @@ def _runtime_transform_xfixed_offset(self):
         return 3 * self.robot.get_num_joints()
     return 2 * self.robot.get_num_pos()
 
-def _floating_root_at_origin(val):
-    """The floating root's spatial transform with the base position set to zero.
+_ROOT_POSITION_SYMBOLS = ("x_fb", "y_fb", "z_fb")
+
+
+def _root_translation_joints(robot, n):
+    """Prismatic joints joined to the world through prismatic joints only.
+
+    Such a joint translates its whole subtree without rotating it, so its
+    coordinate is a base position in the sense of _root_at_origin. A planar or
+    translation root, which the parser emits as a chain of prismatic joints
+    followed by the rest of the robot, is the usual case; a robot on a rail at
+    the world is another.
+    """
+    found = set()
+    for ind in range(n):
+        if getattr(robot.get_joint_by_id(ind), "jtype", None) != "prismatic":
+            continue
+        parent = robot.get_parent_id(ind)
+        if parent == -1 or parent in found:
+            found.add(ind)
+    return found
+
+
+def _root_at_origin(val, prismatic=False):
+    """A floating root's or a root translation joint's spatial transform with the
+    base position set to zero (``prismatic`` selects the joint coordinate).
 
     Every kernel fed by the 6x6 transforms returns quantities that do not depend
     on where the base is: velocities, forces and their derivatives are expressed
-    in body frames. The transform itself carries the position in its lower-left
-    block, and kernels that compose it down the tree (the second-order
-    derivatives) then work about the world origin, where terms of size
-    mass times distance squared cancel. In float32 that cancellation costs
-    accuracy with the square of the distance from the origin. Evaluating with
-    the position at zero gives the same result in exact arithmetic and removes
-    the large terms. The homogeneous transforms, which give world positions, and
-    the integrator's position update keep the true position.
+    in body frames (the planar root's linear velocity is a world-frame vector,
+    which a translation does not change either). The transform itself carries
+    the position in its lower-left block, and kernels that compose it down the
+    tree (the second-order derivatives) then work about the world origin, where
+    terms of size mass times distance squared cancel. In float32 that
+    cancellation costs accuracy with the square of the distance from the origin.
+    Evaluating with the position at zero gives the same result in exact
+    arithmetic and removes the large terms. The homogeneous transforms, which
+    give world positions, and the integrator's position update keep the true
+    position.
     """
     if not hasattr(val, "free_symbols"):
         return val
-    position = {s: 0 for s in val.free_symbols if s.name in ("x_fb", "y_fb", "z_fb")}
+    names = _ROOT_POSITION_SYMBOLS + (("theta",) if prismatic else ())
+    position = {s: 0 for s in val.free_symbols if s.name in names}
     return val.subs(position) if position else val
 
 
@@ -1131,6 +1157,7 @@ def gen_load_update_XImats_helpers(self, include_base_inertia = False, include_h
     else:
         Xmats_serial = Xmats
     self.gen_add_serial_ops()
+    root_translation_joints = _root_translation_joints(self.robot, n)
     for ind in range(n):
         # A.3 lever: skip the floating-base root X[0] block under
         # SKIP_FLOATING_BASE_X. The quat->rot expansion below is the bulk of
@@ -1139,14 +1166,16 @@ def gen_load_update_XImats_helpers(self, include_base_inertia = False, include_h
         # CRBA doesn't request hom transforms anyway, and skipping them all
         # together keeps the elision a single contiguous if-constexpr block.
         wrap_skip = self.robot.floating_base and ind == 0
+        # A floating or planar root translates the whole robot: see _root_at_origin.
+        root_position_free = wrap_skip or ind in root_translation_joints
         if wrap_skip:
             self.gen_add_code_line("if constexpr (!SKIP_FLOATING_BASE_X) {", True)
         self.gen_add_code_line("// X[" + str(ind) + "]")
         for col in range(3): # TL and BR are identical so only update TL and BL serially
             for row in range(6):
                 val = Xmats_serial[ind][row,col]
-                if wrap_skip:
-                    val = _floating_root_at_origin(val)
+                if root_position_free:
+                    val = _root_at_origin(val, prismatic=not wrap_skip)
                 if not self.custom_is_constant(val):
                     # parse the symbolic value into the appropriate array access
                     str_val = expr_T(val)

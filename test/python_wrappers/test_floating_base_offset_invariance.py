@@ -136,3 +136,60 @@ def test_integrator_carries_the_true_position(model):
     next1 = np.asarray(out1[0] if isinstance(out1, (tuple, list)) else out1).reshape(_B, -1)
     np.testing.assert_allclose(next1[:, :3] - next0[:, :3], np.tile(position, (_B, 1)), rtol=0, atol=2e-4)
     np.testing.assert_array_equal(next1[:, 3:handle.nq], next0[:, 3:handle.nq])
+
+
+_PLANAR_ALGORITHMS = [
+    "inverse_dynamics", "forward_dynamics", "crba", "minv",
+    "inverse_dynamics_gradient", "forward_dynamics_gradient",
+    "idsva_so_body_frame", "fdsva_so", "coriolis_matrix",
+    "nonlinear_effects", "generalized_gravity", "end_effector_pose",
+]
+_PLANAR_OFFSETS = ((30.0, -20.0), (-400.0, 250.0))
+
+
+@pytest.fixture(scope="module")
+def planar_model():
+    """iiwa14 on a planar base: the parser emits the base as two prismatic
+    joints and a rotation, so the base position is two joint coordinates."""
+    handle = grid_rbd.register_robot(
+        "iiwa14_planar_offset_invariance_pytest", str(robot_urdf("iiwa14")), planar_base=True,
+        max_batch_size=_B, algorithm_list=_PLANAR_ALGORITHMS, enable_mujoco_kernels=False)
+    rng = np.random.default_rng(6)
+    state = dict(
+        rest=rng.uniform(-1.0, 1.0, (_B, handle.nq - 2)),
+        qd=rng.uniform(-1.0, 1.0, (_B, handle.nv)).astype(np.float32),
+        qdd=rng.uniform(-1.0, 1.0, (_B, handle.nv)).astype(np.float32),
+        u=rng.uniform(-5.0, 5.0, (_B, handle.nv)).astype(np.float32))
+    return handle, state
+
+
+def _planar_q(state, position):
+    base = np.tile(np.asarray(position, dtype=np.float64), (_B, 1))
+    return np.concatenate([base, state["rest"]], axis=1).astype(np.float32)
+
+
+_PLANAR_INVARIANT = {name: _INVARIANT[name] for name in (
+    "inverse_dynamics", "forward_dynamics", "crba", "minv", "inverse_dynamics_gradient",
+    "forward_dynamics_gradient", "idsva_so", "fdsva_so", "coriolis_matrix",
+    "nonlinear_effects", "generalized_gravity")}
+
+
+@pytest.mark.parametrize("kernel", sorted(_PLANAR_INVARIANT))
+def test_planar_base_dynamics_output_is_bit_identical_at_any_base_position(planar_model, kernel):
+    handle, state = planar_model
+    call = _PLANAR_INVARIANT[kernel]
+    at_origin = _flat(call(handle, _planar_q(state, (0.0, 0.0)), state))
+    assert np.all(np.isfinite(at_origin))
+    for position in _PLANAR_OFFSETS:
+        moved = _flat(call(handle, _planar_q(state, position), state))
+        assert np.array_equal(moved, at_origin), (
+            f"{kernel} changed with the planar base at {position}: "
+            f"max abs difference {np.max(np.abs(moved.astype(np.float64) - at_origin.astype(np.float64))):.3e}")
+
+
+def test_planar_base_pose_still_follows_the_base(planar_model):
+    handle, state = planar_model
+    pose_origin = _flat(handle.end_effector_pose(_planar_q(state, (0.0, 0.0))))
+    pose_moved = _flat(handle.end_effector_pose(_planar_q(state, _PLANAR_OFFSETS[0])))
+    np.testing.assert_allclose(
+        (pose_moved - pose_origin)[:, :2], np.tile(_PLANAR_OFFSETS[0], (_B, 1)), rtol=0, atol=2e-4)
