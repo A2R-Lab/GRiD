@@ -36,6 +36,15 @@ BINDINGS_ENV_KNOBS = (
 )
 
 
+# Compile-time knob: read by grid_codegen/nvcc_flags.py (through this name, since it
+# does not change the emitted header bytes and so is not a generation knob). It
+# replaces the floating-point flags of the shared nvcc list, for experiments. Every
+# cache of a compiled binary keys on the resolved list (nvcc_flags.kernel_flags()).
+COMPILE_ENV_KNOBS = (
+    "GRID_NVCC_FP_FLAGS",
+)
+
+
 def generation_env() -> dict[str, str | None]:
     """The current value of every generation-time knob (None = unset), for cache keys."""
     return {k: os.environ.get(k) for k in GENERATION_ENV_KNOBS}

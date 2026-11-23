@@ -236,7 +236,7 @@ class GridAdapter:
         glass = ROOT / "external" / "GLASS"
         # The wrapper's flags compile units with -c and host-link them; this one-file
         # bridge is compiled and linked in one nvcc call, so it names --shared itself.
-        flags = [f for f in _compile._NVCC_DEFAULT_FLAGS] + ["--shared",
+        flags = _compile._nvcc_default_flags() + ["--shared",
             f"-gencode=arch=compute_{arch},code=sm_{arch}", f"-DGRID_RBD_ARCH={arch}",
             f"-DGRID_KERNEL_MAX_BATCH={int(meta['max_batch'])}", f"-DGRID_KERNEL_NUM_EES={int(meta.get('num_ees', 1))}",
             f"-I{store}", f"-I{glass}", f"-I{glass / 'src'}",
