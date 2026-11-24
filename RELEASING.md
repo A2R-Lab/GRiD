@@ -399,12 +399,18 @@ pilot before a release uses it. It differs from bounded overlap in four ways.
   for a new robot. A cache hit is not a measurement.
   `python test/resource_history.py --import-run <run>/shards/compile` seeds the
   history from a finished serial or bounded-overlap run.
+  A write merges the stored peaks under a file lock, so two writers keep the
+  larger figure. A malformed class in the file is dropped with a message and
+  charged as a class never built. A history that cannot be stored is reported
+  and does not fail the job it describes.
 - The reserve scales. It is 15% of RAM and at least 4 GiB, or
   `--memory-reserve GIB`. The budget is RAM minus the reserve, or
   `--memory-cap GIB` when that is smaller, so a 50 GiB cap on a 62 GiB machine
   is usable and a cap of 6 GiB describes a small machine.
 - Width is planned. Builds start at four compiler units (or `--build-jobs`)
-  and the count halves until the largest recorded build fits the budget. Pool
+  and the count halves until the largest recorded build fits the budget, by
+  the charge admission applies (a measurement above the class floor counts in
+  full). Pool
   slots default to one per core (or `--compile-slots`); a build counts its
   compiler units as cores, and load from other users of the machine is
   subtracted at each admission. One job always runs.
