@@ -23,6 +23,7 @@ import functools
 import mmap
 import os
 import re
+import threading
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -223,8 +224,7 @@ _TORCH_NAMESPACE_RE = re.compile(rb"grid_rbd_torch_(?:k[0-9a-f]{12}|default)")
 
 def _check_torch_namespace(so_path: str):
     """Refuse a second artifact that registers an operator namespace this
-    process already holds from another file. Returns the claim to record once
-    the artifact has loaded.
+    process already holds from another file. Returns the claim to record.
 
     The namespace is named after the model key, so two builds of one model in
     two cache directories carry the same name. PyTorch aborts the process when
@@ -255,6 +255,45 @@ def _record_torch_namespace(claim) -> None:
         real, names = claim
         for name in names:
             _TORCH_NAMESPACE_OWNERS[name] = real
+
+
+# One load at a time in a process: the check, the native load and the record
+# are one step, so two threads cannot both pass the check for one namespace.
+_ARTIFACT_LOAD_LOCK = threading.Lock()
+
+
+def _fresh_load_lock_in_child() -> None:
+    # A lock held by another thread at fork would stay held in the child. The
+    # owners stay as they are: the child inherits the loaded images.
+    global _ARTIFACT_LOAD_LOCK
+    _ARTIFACT_LOAD_LOCK = threading.Lock()
+
+
+os.register_at_fork(after_in_child=_fresh_load_lock_in_child)
+
+
+def _load_artifact(so_path: str, runner_type):
+    """Construct the native runner for an artifact under the namespace check.
+
+    The namespaces are claimed before the loader runs and given back only when
+    the open itself failed. An interrupt, or a fork taken while the loader is
+    running, therefore leaves a claim and never an unclaimed registration.
+    """
+    with _ARTIFACT_LOAD_LOCK:
+        claim = _check_torch_namespace(so_path)
+        fresh = () if claim is None else [n for n in claim[1] if n not in _TORCH_NAMESPACE_OWNERS]
+        _record_torch_namespace(claim)
+        try:
+            return runner_type(so_path)
+        except Exception as exc:
+            # The loader opens the image before it looks up its symbols. Only
+            # a failed open is known to leave nothing registered; after any
+            # other failure the image and its registration remain. A claim
+            # that an earlier load established is never given back.
+            if str(exc).startswith("dlopen failed"):
+                for name in fresh:
+                    _TORCH_NAMESPACE_OWNERS.pop(name, None)
+            raise
 
 
 class RobotHandle:
@@ -313,14 +352,12 @@ class RobotHandle:
         # (default / pre-Phase-8 meta lacking a dtype field) uses Runner. _dt is
         # the host-side numpy element dtype every method casts inputs to.
         self._dtype = str(meta.get("dtype", "float32"))
-        claim = _check_torch_namespace(self._so_path)
         if self._dtype == "float64":
             self._dt = np.float64
-            self._runner = _core.RunnerF64(so_path)
+            self._runner = _load_artifact(self._so_path, _core.RunnerF64)
         else:
             self._dt = np.float32
-            self._runner = _core.Runner(so_path)
-        _record_torch_namespace(claim)
+            self._runner = _load_artifact(self._so_path, _core.Runner)
         # Output convention: "pinocchio" (default, native) or "mujoco" (mjx parity).
         # Only affects FLOATING-base robots; a no-op (byte-identical) on fixed base.
         self._output_convention = "pinocchio"

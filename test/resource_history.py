@@ -5,9 +5,14 @@ unsafe concurrency; a source/toolchain/options change gives a new ledger key.
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
+import math
 import os
+import sys
+import tempfile
+import threading
 from pathlib import Path
 
 GIB_KB = 1024 * 1024
@@ -93,45 +98,108 @@ def adaptive_reserve_kb(total_kb: int) -> int:
     return max(4 * GIB_KB, int(0.15 * total_kb))
 
 
+def _valid_classes(raw: object, source: Path) -> dict[str, dict[str, dict]]:
+    """The well-formed part of a stored history. A malformed class is dropped
+    whole, so it is charged as an unmeasured class, never as a small one."""
+    if not isinstance(raw, dict) or raw.get('schema') != CLASS_SCHEMA:
+        return {}
+    classes = raw.get('classes') or {}
+    if not isinstance(classes, dict):
+        print(f'[resource-history] {source}: classes is not a mapping; ignoring the file',
+              file=sys.stderr)
+        return {}
+
+    def number(value, least):
+        return (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and math.isfinite(value) and value >= least)
+
+    def width(text):
+        # One spelling per width: ASCII digits, no sign, no leading zero.
+        return isinstance(text, str) and text.isascii() and text.isdigit() and text[0] != '0'
+
+    rows = {}
+    for key, row in classes.items():
+        ok = isinstance(key, str) and isinstance(row, dict) and bool(row) and all(
+            width(u) and isinstance(v, dict)
+            and number(v.get('tree_kb'), 1) and number(v.get('proc_kb', 0), 0)
+            and number(v.get('secs', 0.0), 0) for u, v in row.items())
+        if not ok:
+            print(f'[resource-history] {source}: dropping malformed class {key!r}', file=sys.stderr)
+            continue
+        rows[key] = {u: dict(tree_kb=int(v['tree_kb']), proc_kb=int(v.get('proc_kb', 0)),
+                             secs=float(v.get('secs', 0.0))) for u, v in row.items()}
+    return rows
+
+
 class ClassHistory:
     """Max-over-history cold peaks: {kind|robot|name: {units: {tree_kb, proc_kb, secs}}}.
 
     tree_kb is the peak of the whole process tree, proc_kb the largest single
     process in it. A build at u units runs one driver and at most u compilers,
     so (u + 1) * proc_kb bounds its tree and gives a figure for a width that
-    was never measured."""
+    was never measured.
+
+    The pool thread and the shard loop share one object, and a second launcher
+    may hold another: reads and writes take a thread lock, and a write merges
+    the stored maxima under a file lock before it replaces the file."""
 
     shows_build = staticmethod(log_shows_build)
 
     def __init__(self, path: Path):
         self.path = Path(path)
-        self.rows: dict[str, dict[str, dict]] = {}
+        self._lock = threading.RLock()
+        self.rows: dict[str, dict[str, dict]] = self._stored()
+
+    def _stored(self) -> dict[str, dict[str, dict]]:
         try:
             raw = json.loads(self.path.read_text())
         except (OSError, ValueError):
-            raw = {}
-        if isinstance(raw, dict) and raw.get('schema') == CLASS_SCHEMA:
-            self.rows = raw.get('classes') or {}
+            return {}
+        return _valid_classes(raw, self.path)
 
     @staticmethod
     def key(kind: str, robot: str, name: str) -> str:
         return f'{kind}|{robot}|{name}'
 
+    @staticmethod
+    def _merge(rows: dict, key: str, units: str, sample: dict) -> None:
+        cur = rows.setdefault(key, {}).get(units, dict(tree_kb=0, proc_kb=0, secs=0.0))
+        rows[key][units] = {f: max(cur[f], sample[f]) for f in ('tree_kb', 'proc_kb', 'secs')}
+
     def record(self, kind, robot, name, units, tree_kb, proc_kb=0, secs=0.0) -> None:
         if tree_kb <= 0:
             return
-        row = self.rows.setdefault(self.key(kind, robot, name), {})
-        cur = row.get(str(units), dict(tree_kb=0, proc_kb=0, secs=0.0))
-        new = dict(tree_kb=max(cur['tree_kb'], int(tree_kb)),
-                   proc_kb=max(cur['proc_kb'], int(proc_kb)),
-                   secs=max(cur['secs'], float(secs)))
-        if new != cur:
-            row[str(units)] = new
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(f'.{os.getpid()}.tmp')
-            tmp.write_text(json.dumps(dict(schema=CLASS_SCHEMA, classes=self.rows),
-                                      indent=0, sort_keys=True))
-            tmp.replace(self.path)
+        sample = dict(tree_kb=int(tree_kb), proc_kb=max(0, int(proc_kb)), secs=max(0.0, float(secs)))
+        with self._lock:
+            self._merge(self.rows, self.key(kind, robot, name), str(int(units)), sample)
+            try:
+                self._publish()
+            except OSError as exc:
+                # A hint that cannot be stored must not fail the job it describes.
+                print(f'[resource-history] {self.path}: not stored ({exc})', file=sys.stderr)
+
+    def _publish(self) -> None:
+        """Fold what other writers stored into this object, then replace the
+        file when it would change. Caller holds the thread lock."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.path.with_name(self.path.name + '.lock'), 'a') as guard:
+            fcntl.flock(guard, fcntl.LOCK_EX)
+            stored = self._stored()
+            for key, row in stored.items():
+                for units, sample in row.items():
+                    self._merge(self.rows, key, units, sample)
+            if self.rows == stored:
+                return
+            fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=self.path.name + '.',
+                                       suffix='.tmp')
+            try:
+                with os.fdopen(fd, 'w') as out:
+                    json.dump(dict(schema=CLASS_SCHEMA, classes=self.rows), out,
+                              indent=0, sort_keys=True)
+                os.replace(tmp, self.path)
+            except BaseException:
+                Path(tmp).unlink(missing_ok=True)
+                raise
 
     @staticmethod
     def _at(row: dict, units: int):
@@ -145,28 +213,40 @@ class ClassHistory:
                   for v in row.values() if v['proc_kb'] > 0]
         return min(bounds) if bounds else None
 
+    @classmethod
+    def _charge(cls, row: dict, units: int, floor_kb: int):
+        """What admission charges a recorded class before margin, or None when
+        nothing bounds it. A measurement at this width is charged in full; a
+        bound from another width never exceeds the floor it replaces."""
+        peak = cls._at(row, units)
+        if peak is None:
+            return None
+        # Small jobs vary by more than the margin: never charge under 1 GiB.
+        return max(GIB_KB, peak if str(units) in row else min(peak, floor_kb))
+
     def predict_kb(self, kind, robot, name, units, floor_kb: int) -> int:
         """Charge before margin. The class itself when it was measured, else the
-        largest measured class of the same kind and robot, else the class floor.
-        A bound from another width never exceeds the floor it replaces."""
-        row = self.rows.get(self.key(kind, robot, name))
-        if row:
-            peak = self._at(row, units)
-            if peak is not None:
-                # Small jobs vary by more than the margin: never charge under 1 GiB.
-                return max(GIB_KB, peak if str(units) in row else min(peak, floor_kb))
-        prefix = f'{kind}|{robot}|'
-        peers = [self._at(r, units) for k, r in self.rows.items() if k.startswith(prefix)]
-        if peers and all(p is not None for p in peers):
-            return max(GIB_KB, min(max(peers), floor_kb))
-        return floor_kb
+        largest measured class of the same kind and robot, else the class floor."""
+        with self._lock:
+            row = self.rows.get(self.key(kind, robot, name))
+            if row:
+                charge = self._charge(row, units, floor_kb)
+                if charge is not None:
+                    return charge
+            prefix = f'{kind}|{robot}|'
+            peers = [self._at(r, units) for k, r in self.rows.items() if k.startswith(prefix)]
+            if peers and all(p is not None for p in peers):
+                return max(GIB_KB, min(max(peers), floor_kb))
+            return floor_kb
 
     def largest_kb(self, units: int, floor_kb: int) -> int:
-        """Largest single charge at this width over every recorded class."""
-        peaks = [self._at(row, units) for row in self.rows.values()]
-        if not peaks or any(p is None for p in peaks):
+        """Largest single charge at this width over every recorded class, by
+        the rule predict_kb applies: a class with no bound is charged the floor."""
+        with self._lock:
+            charges = [self._charge(row, units, floor_kb) for row in self.rows.values()]
+        if not charges:
             return floor_kb
-        return min(max(peaks), floor_kb)
+        return max(floor_kb if c is None else c for c in charges)
 
 
 def plan_width(*, budget_kb: int, cores: int, history: 'ClassHistory', margin: float,

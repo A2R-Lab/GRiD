@@ -4502,3 +4502,40 @@ Reported by GATO: `computeABADerivatives` is wrong on a
 own `aba`). Three separate joints PX, PY, RZ, or `JointModelPlanar`, give correct
 derivatives. GRiD's planar oracles use `JointModelPlanar`. Do not build an oracle on
 the composite root.
+
+### A check before a load and a record after it are three steps, not one (2026-11-24)
+
+Two faults of the same shape came out of an independent review of work that had
+passed a full receipt.
+
+The Torch namespace guard checked the artifact, loaded it, then recorded the
+owner. Two threads loading two cache files of one model could both pass the
+check before either recorded, and both reached the native loader. The three
+steps now run under one process lock (`_load_artifact` in
+`bindings/grid_rbd/_handle.py`). The lock is replaced in a forked child, where
+the parent's holder does not exist; the owners are kept, because the child
+inherits the loaded images. The native loader opens the image before it looks
+up its symbols, so a load that fails after the open still holds the namespace.
+
+The lock alone left a second gap, found on re-review: the owner was recorded
+after the loader returned, so an interrupt at that point, or a fork taken by
+another thread while the loader ran, left a registered image with no owner.
+The claim is now made before the loader runs and given back only when the open
+itself failed, and only for a namespace this call claimed. When a state cannot
+be told apart from "registered", the record has to say registered.
+
+The class history wrote through one temporary name per process, and the pool
+thread and the shard loop share the object. Two writes at once lost one rename
+with `FileNotFoundError`. Two objects on one file each wrote their own
+snapshot, so the later, smaller one replaced a larger stored peak. A unique
+temporary name fixes the first and not the second: the write has to reload and
+merge the maxima under a file lock.
+
+The tests for both called the helpers in sequence, which cannot show either
+fault. A guard of this kind needs a test that holds one caller inside the
+middle step while a second arrives.
+
+A related rule from the same review: a planner and the admission it plans for
+must compute the charge with one function. `largest_kb` capped a measured peak
+at the class floor and `predict_kb` did not, so the planner could choose a
+width that admission would never accept.
