@@ -1,4 +1,5 @@
 """Complete bundled meshes -> bounded spheres -> explicit CLI -> CUDA vs CPU FK."""
+from grid_codegen.nvcc_flags import kernel_flags
 import subprocess
 import sys
 from pathlib import Path
@@ -31,7 +32,7 @@ def complete_model(tmp_path_factory):
     root = Path(__file__).resolve().parents[2]
     exe, _ = cached_nvcc_executable(
         [Path(__file__).with_name('cuda_collision_complete_runner.cu'), directory / 'grid.cuh'],
-        ['-std=c++17', '-O2', '-gencode', f'arch=compute_{arch},code=sm_{arch}'],
+        [*kernel_flags(), '-gencode', f'arch=compute_{arch},code=sm_{arch}'],
         exe_name='complete_collision.exe', fallback_dir=directory,
         include_dirs=[root / 'grid_codegen/collision'], what='complete collision model')
     return exe, robot, RBDReference(robot), spec

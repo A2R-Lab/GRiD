@@ -25,6 +25,7 @@ def printUsage(NO_ARG_OPTION=False):
     print("                    where --algorithm-list subsets the emitted algorithms/profiles (comma-separated; shrinks big-robot builds)")
     print("                    where --no-mujoco-kernels skips the mjx twins (the dominant humanoid build cost)")
     print("                    where -o sets the output header path (default grid.cuh)")
+    print("                    where --print-nvcc-flags prints the nvcc flags to compile the header with and exits")
     if NO_ARG_OPTION:
         print("Alternative usage assuming grid.cuh is already generated: script.py")
 
@@ -94,6 +95,10 @@ def parseInputs(NO_ARG_OPTION=False):
                              "The pin-convention kernels are unaffected.")
     parser.add_argument("-o", "--output", default="grid.cuh", type=str,
                         help="Output header path (default grid.cuh in the current directory)")
+    parser.add_argument("--print-nvcc-flags", default=False, action="store_true",
+                        help="Print the nvcc flags to compile a generated header with "
+                             "(the list the Python wrapper and the tests use) and exit; "
+                             "needs no URDF")
     args = parser.parse_args()
 
     if args.urdf_path is None:
@@ -174,6 +179,12 @@ def reportParseError(exc):
 
 def main():
     """Entry point for the ``grid-generate`` CLI command."""
+    # Handled before argument parsing: it needs no URDF. Prints the nvcc flags
+    # to compile a generated header with (grid_codegen/nvcc_flags.py).
+    if "--print-nvcc-flags" in sys.argv[1:]:
+        from grid_codegen.nvcc_flags import kernel_flags
+        print(" ".join(kernel_flags()))
+        return
     from URDFParser import URDFParser, URDFParseError
     from grid_codegen import GRiDCodeGenerator
     from grid_codegen._algo_profiles import normalize_codegen_algorithms

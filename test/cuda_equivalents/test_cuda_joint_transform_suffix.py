@@ -1,4 +1,5 @@
 """Scalar transforms in a composed divergent suffix, not only in isolation."""
+from grid_codegen.nvcc_flags import kernel_flags
 from pathlib import Path
 import subprocess
 import numpy as np
@@ -45,7 +46,7 @@ def test_scalar_transform_composed_suffix(tmp_path,n,general,precision):
     np.asarray(inputs,dtype).tofile(tmp_path/'input.bin')
     for legacy in (True,False):
         name='legacy' if legacy else 'probe'
-        flags=['-O3','-std=c++17','-lineinfo','-Xptxas=-v','-arch=sm_'+_detect_cuda_arch(),
+        flags=[*kernel_flags(),'-lineinfo','-Xptxas=-v','-arch=sm_'+_detect_cuda_arch(),
             '-DTEST_SCALAR='+precision,'-DTEST_FRAME='+str(frame)]+(['-DTEST_LEGACY'] if legacy else [])
         exe,_=cached_nvcc_executable([Path(__file__).with_name('cuda_joint_transform_suffix_runner.cu')],flags,
             exe_name=name,fallback_dir=tmp_path,include_dirs=[tmp_path],what='joint transform suffix runner')

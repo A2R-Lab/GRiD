@@ -12,6 +12,7 @@ against pinocchio's native JointModelPlanar / JointModelTranslation in
 This closes the CUDA gap for the decomposition: it proves the dummy-link chain
 emits and runs correctly through the full GRiD kernel pipeline.
 """
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -63,7 +64,7 @@ def _compile_runner(build_dir):
     arch = _detect_cuda_arch()
     exe = build_dir / "cuda_planar_translation_runner.exe"
     cmd = [
-        nvcc, "-std=c++17", "-O0",
+        nvcc, *kernel_flags(),
         "-DGRID_CUDA_FLOATING_BASE=0",
         "-DGRID_RUNNER_SKIP_GRADIENTS=1",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",

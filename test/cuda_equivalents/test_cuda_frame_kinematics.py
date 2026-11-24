@@ -19,6 +19,7 @@ GRID_CUDA_FRAME_KIN_ROBOTS="iiwa14:fixed,go2:floating".
 """
 from __future__ import annotations
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -86,7 +87,7 @@ def _build_case(project_model, tmp_path, robot_id, base_mode, *, inspect_only=Fa
     arch = _detect_cuda_arch()
     return cached_nvcc_executable(
         sources=[RUNNER_SOURCE, build_dir / "grid.cuh"],
-        flags=["-std=c++17", "-O0", "-gencode", f"arch=compute_{arch},code=sm_{arch}", f"-I{glass_inc}"],
+        flags=[*kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}", f"-I{glass_inc}"],
         exe_name="cuda_frame_kinematics_smoke_runner", fallback_dir=build_dir, include_dirs=[build_dir],
         what=f"frame kinematics runner {robot_id}-{base_mode}", inspect_only=inspect_only)
 

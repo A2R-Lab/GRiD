@@ -1,4 +1,5 @@
 """Thread-scope transforms and compact/dense manifold differences."""
+from grid_codegen.nvcc_flags import kernel_flags
 from pathlib import Path
 import subprocess
 
@@ -37,7 +38,7 @@ def test_model_primitives(tmp_path,name,floating,runtime,precision):
     gen.gen_all_code(algorithm_list=['integrator'],emit_plant=False,runtime_transform=runtime,
         include_homogenous_transforms=True,enable_mujoco_kernels=False,output_path=str(tmp_path/'grid.cuh'))
     exe,_=cached_nvcc_executable([Path(__file__).with_name('cuda_model_primitives_runner.cu')],
-        ['-std=c++17','-O2','-lineinfo','-Xptxas=-v','-arch=sm_'+_detect_cuda_arch(),'-DTEST_SCALAR='+precision],
+        [*kernel_flags(),'-lineinfo','-Xptxas=-v','-arch=sm_'+_detect_cuda_arch(),'-DTEST_SCALAR='+precision],
         exe_name='probe',fallback_dir=tmp_path,include_dirs=[tmp_path],what='model primitives runner')
     dtype=np.float32 if precision=='float' else np.float64
     inputs=[];expected=[];N=d['nv'];Q=d['nq']

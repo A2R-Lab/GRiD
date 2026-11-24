@@ -26,6 +26,7 @@ authoritative for the mimic robots.
 
 from __future__ import annotations
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -115,7 +116,7 @@ def _compile_runner(build_dir, scalar='float'):
     executable = build_dir / "cuda_eepose_runtime_smoke_runner.exe"
     glass_inc = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
     cmd = [
-        nvcc, "-std=c++17", "-O0",
+        nvcc, *kernel_flags(),
         f"-DGRID_CUDA_EEPOSE_RT_SCALAR={scalar}",
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
         f"-I{glass_inc}", "-o", str(executable), str(runner_copy),

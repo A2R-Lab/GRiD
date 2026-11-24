@@ -15,6 +15,7 @@ follow-up) and constexpr shared-memory sizers.
 """
 from __future__ import annotations
 
+from grid_codegen.nvcc_flags import kernel_flags
 import os
 import re
 import shutil
@@ -90,7 +91,7 @@ def test_vendor_glass_false_compiles_against_top_level_glass_and_runs(tmp_path):
         "int main(){ return 0; }\n")
     arch = _detect_cuda_arch()
     for src, exe in ((RUNNER.name, "runner.exe"), ("sizers.cu", "sizers.exe")):
-        r = subprocess.run(["nvcc", "-std=c++17", "-O1", f"-arch=sm_{arch}", "-I", str(build),
+        r = subprocess.run(["nvcc", *kernel_flags(), f"-arch=sm_{arch}", "-I", str(build),
                             "-I", str(GLASS_ROOT), f"-DGRID_TEST_XI_SIZE={xi.group(1)}",
                             f"-DGRID_TEST_JL_SIZE={jl.group(1)}", "-o", str(build / exe), str(build / src)],
                            capture_output=True, text=True)

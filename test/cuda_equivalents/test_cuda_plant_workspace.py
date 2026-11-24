@@ -1,4 +1,5 @@
 """Bounded public binder acceptance, not timing or downstream acceptance."""
+from grid_codegen.nvcc_flags import kernel_flags
 from pathlib import Path
 import subprocess
 
@@ -36,7 +37,7 @@ def workspace_case(request,tmp_path_factory):
                      enable_mujoco_kernels=False,fixed_target_name='iiwa_joint_ee' if name=='iiwa14' else '',
                      runtime_transform=runtime,output_path=str(path/'grid.cuh'))
     exe,_=cached_nvcc_executable([Path(__file__).with_name('cuda_plant_workspace_runner.cu')],
-        ['-std=c++17','-O3','-lineinfo','-arch=sm_'+_detect_cuda_arch(),'-Xptxas=-v',
+        [*kernel_flags(),'-lineinfo','-arch=sm_'+_detect_cuda_arch(),'-Xptxas=-v',
          '-DTEST_INTEGRATOR='+integrator.upper(),'-DTEST_RUNTIME_TRANSFORM='+str(int(runtime)),
          '-DTEST_CROSS_KERNEL_ROUNDOFF='+str(int(name=='branching' and scalar=='double' and runtime)),
          '-DTEST_SCALAR='+scalar],

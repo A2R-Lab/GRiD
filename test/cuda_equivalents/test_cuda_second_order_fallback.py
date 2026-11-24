@@ -1,3 +1,4 @@
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 from dataclasses import replace
 import os
@@ -179,7 +180,7 @@ def _second_order_thread_count() -> int:
 def _compile_second_order_runner(build_dir: Path, *, enable_fdsva=True, inspect_only=False):
     arch = _detect_cuda_arch()
     flags = [
-        "-std=c++17", "-O0",
+        *kernel_flags(),
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
         "-gencode", f"arch=compute_{arch},code=compute_{arch}",
         f"-DGRID_CUDA_SECOND_ORDER_ENABLE_FDSVA={int(enable_fdsva)}",

@@ -1,6 +1,6 @@
 """Comprehensive jax + torch mjx parity: every wired mjx method's jax.mujoco.X and
 torch.mujoco.X must match the proven numpy ref.mujoco.X oracle (fp32 tolerance).
-Builds go2-floating ONCE (force_rebuild) so the .so carries all new mjx handlers."""
+Builds go2-floating once; the content-keyed cache rebuilds on any codegen change."""
 import sys
 import numpy as np
 from pathlib import Path
@@ -40,7 +40,7 @@ def main():
     import jax.numpy as jnp
 
     jh = gjax.register_robot("go2_mjx_all_val", str(_GO2), floating_base=True,
-                             force_rebuild=True, output_convention="mujoco")
+                             output_convention="mujoco")
     # NOTE: nothing is skipped here. fdsva_so mjx was un-skipped 2026-06-21 (jax+torch match
     # the numpy mujoco oracle on go2-floating, max |Δ| ~9e-5 fp32). The old ">48KB opt-in gap"
     # reason was stale (go2-floating fdsva_so uses 85KB smem and launches fine via

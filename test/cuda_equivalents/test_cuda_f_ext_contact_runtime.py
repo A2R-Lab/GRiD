@@ -8,6 +8,7 @@ deliberate (branched + floating -> the §1s/§1t surface).
 """
 from __future__ import annotations
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -61,7 +62,7 @@ def test_f_ext_contact_runtime_map_fd(tmp_path):
     shutil.copyfile(RUNNER_SOURCE, runner_copy)
     arch = _detect_cuda_arch()
     exe = build_dir / "cuda_f_ext_contact_runtime_runner.exe"
-    cmd = [nvcc, "-std=c++17", "-O2", "-gencode", f"arch=compute_{arch},code=sm_{arch}",
+    cmd = [nvcc, *kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}",
            f"-DTOOL_JID={int(tjid)}",
            f"-DTOOL_RC0={rc[0]:.10g}", f"-DTOOL_RC1={rc[1]:.10g}", f"-DTOOL_RC2={rc[2]:.10g}",
            "-I", str(build_dir), "-I", str(REPO_ROOT), "-o", str(exe), str(runner_copy)]

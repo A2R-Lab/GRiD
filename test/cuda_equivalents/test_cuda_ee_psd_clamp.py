@@ -18,6 +18,7 @@ no timing (the GPU is shared). Override the robot set with GRID_CUDA_PSD_ROBOTS.
 
 from __future__ import annotations
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -69,7 +70,7 @@ def _compile_runner(build_dir):
     arch = _detect_cuda_arch()
     executable = build_dir / "cuda_ee_psd_clamp_runner.exe"
     cmd = [
-        nvcc, "-std=c++17", "-O2",
+        nvcc, *kernel_flags(),
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
         "-I", str(build_dir), "-o", str(executable), str(runner_copy),
     ]

@@ -62,8 +62,10 @@ Generate one self-contained `grid.cuh` and `#include` it in your own kernels. Th
 ```shell
 pip install grid-rbd
 grid-generate robot.urdf -o grid.cuh        # -f floating base, --algorithm-list to trim
-nvcc -arch=sm_90 -std=c++17 my_kernel.cu    # the header vendors its GLASS linear algebra
+nvcc -arch=sm_90 $(python -m grid_codegen.nvcc_flags) my_kernel.cu   # the header vendors its GLASS linear algebra
 ```
+`python -m grid_codegen.nvcc_flags` (or `grid-generate --print-nvcc-flags`) prints the flags the Python
+wrapper and the tests compile with: `-std=c++17 -O3 -ftz=true -prec-div=false -prec-sqrt=false -fmad=true`.
 See [Generate CUDA for a robot](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/codegen.html) and
 [`examples/cuda/`](https://github.com/A2R-Lab/GRiD/tree/main/examples/cuda).
 Deep tutorial: [fuse dynamics into your own kernel](https://a2r-lab.org/GRiD/docs/user_guide/tutorials/fused_cuda_control_step.html)

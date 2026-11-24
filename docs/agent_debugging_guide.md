@@ -1255,16 +1255,23 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   equivalence), and quarantine the perf sweep to its own isolated phase at the end. "No concurrent heavy
   GPU builds" applies to TIMING, not to correctness builds. See [[feedback_parallel_equivalence_testing]],
   [[feedback_safe_dev_and_timing_methodology]].
-- **A test that validates a CODEGEN EMIT must `force_rebuild=True`.** grid-rbd's build cache is
-  content-addressed on build INPUTS (urdf + flags + arch + grid_rbd_version + wrapper_template_hash) —
-  NOT on the generated CUDA source, and NOT on the GCG codegen version. So after a codegen change, a
-  `register_robot(...)` with the same inputs silently returns a STALE `.so` built by the OLD codegen.
-  This burned a damping-gradient test: the robots were cached before the gradient emit existed, so
-  `inverse_dynamics_gradient` came out identical on-vs-off (the new term was in the source but not the
-  cached binary) — looking exactly like a "missing emit" bug when the emit was correct. Fix: any pytest
-  asserting on generated-code behavior must pass `force_rebuild=True` to `register_robot` (or clear
-  `~/.cache/grid-rbd`). Same root cause as "clear GCG `__pycache__` after codegen edits" — the cache
-  key doesn't track the codegen, so the human/test must force regeneration.
+- A test must not pass `force_rebuild=True` to avoid a stale build (updated 2026-11-23). The wrapper cache is
+  content-keyed in three places in `bindings/grid_rbd/_cache.py` and `_compile.py`: the stage-1 input key hashes
+  the URDF bytes, the options, the arch, the package version, the wrapper template, the `grid_codegen` and
+  `URDFParser` sources and the build identity (toolchain, GLASS content, env knobs); the content key hashes the
+  generated `grid.cuh`, `wrapper.cu` and `wrapper_common.cuh` bytes with the compile flags and compiler; the
+  per-unit object key hashes each unit's compile inputs. A codegen, option, flag or compiler change therefore
+  rebuilds exactly the units it affects, and an unchanged build is a cache hit. `force_rebuild=True` adds nothing
+  to that except a recompile of every nvcc unit and a replaced store entry: in the last release receipt
+  `test_joint_dynamics` and `test_joint_dynamics_ffi` took 1,453 s each because of it. The robot name is not part
+  of any key. It is a manifest label that is rebound to the current content key on every registration
+  (`manifest_register`), so two registrations that share a name and differ in options load two different
+  binaries. An earlier version of this entry said the opposite ("a test that validates a codegen emit must
+  force_rebuild"); it was written 2026-06-11, when the key covered only the build inputs, and it is why the flag
+  spread to 26 wrapper test sites, all removed on 2026-11-23. Keep `force_rebuild=True` only in a test whose
+  subject is the forced rebuild itself (`test/test_unit_object_cache.py`, `test/test_consumer_dependencies.py`).
+  A test that needs a real codegen and nvcc build regardless of the shared cache should pass an empty temporary
+  `cache_dir`, as the `test_subset_build*` modules do.
 - **VENDORED dependency content is a codegen INPUT — the cache key must track it (GLASS bump, 2026-06-18).**
   The CUDA-equivalence header cache (`test_cuda_executable_equivalence._header_cache_key`) hashed
   `_hash_tree(GRiDCodeGenerator, ".py")` but NOT the GLASS submodule commit — yet GLASS sources are vendored
@@ -4445,6 +4452,36 @@ the only tests that compare two layouts bit for bit. And the installed `grid_rbd
 built once by `pip install -e .`: a checkout that pulled the armature bindings without a
 rebuild failed 33 wrapper tests seven hours into a refresh. `test/installed_extension.py`
 now refuses that before the launcher starts; `make build` repairs it.
+
+### A float32 error that grows with distance from the world origin (2026-11-23)
+
+Second derivatives of a floating iiwa14 were 1925 times over the gate with the base 30 m
+from the origin, and the forward dynamics second derivative of an arm on a planar base was
+8% wrong at 30 m. It looked like a kernel bug. It was rounding. The test that tells the
+two apart: build the same generated kernel as float32 and float64 and compare each
+against its own output at 0 m. The float64 build was invariant to 1e-9 at 100 m, and the
+ratio of the two errors stayed near eps32/eps64 at every offset, which a logic error
+cannot do.
+
+The root's 6x6 spatial transform carries the base position in its lower-left block. A
+kernel that composes it down the tree (`idsva_so`, `fdsva_so`, `coriolis_matrix`) works
+about the world origin and cancels terms of size mass times distance squared. The
+centroidal sweep (`ccrba`, `dccrba`, `cmm_time_variation`) did the same through the world
+homogeneous transforms. Inverse and forward dynamics, CRBA, Minv and the first-order
+gradients never read the position and never moved.
+
+The outputs are body-frame quantities, so the position can be set to zero exactly.
+`_root_at_origin` in `_topology_helpers.py` does it for a floating root and for prismatic
+joints joined to the world through prismatic joints only, which is how the parser emits a
+planar or translation root. `_emit_world_transform_chainup(root_at_origin=True)` does it
+for the centroidal sweep, which then adds the base position back to the centre of mass.
+The homogeneous transforms used for poses and the integrator keep the true position.
+
+When you add a kernel that consumes the spatial transforms, nothing is needed. When you
+add one that builds world transforms and returns a quantity that does not depend on the
+base position, ask for `root_at_origin`. Add the kernel to
+`test/python_wrappers/test_floating_base_offset_invariance.py`, which requires the same
+bits at 0 m, 30 m and 1000 m.
 
 ### A consumer that composes the inners must check which gradient layout it has (2026-11-23)
 

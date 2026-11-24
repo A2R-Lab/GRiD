@@ -1,4 +1,5 @@
 """Armature composed with mutable inertia, friction, integration and curvature."""
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import io
 from pathlib import Path
@@ -114,7 +115,7 @@ def test_native_energy_device_uses_live_tables(composed, tmp_path):
     h,ref,a,q,v,u=composed
     root=Path(__file__).resolve().parents[2]
     binary=tmp_path/"native_energy"
-    cmd=["nvcc","-std=c++17","-O3","-arch=sm_%d%d" % torch.cuda.get_device_capability(),
+    cmd=["nvcc",*kernel_flags(),"-arch=sm_%d%d" % torch.cuda.get_device_capability(),
          "-I"+str(Path(h._so_path).parent),"-I"+str(root/"external/GLASS"),
          "-I"+str(root/"external/GLASS/src"),
          str(root/"test/cuda_equivalents/cuda_runtime_energy_runner.cu"),"-o",str(binary)]

@@ -28,6 +28,7 @@ float: the largest arenas are h1_2-floating at 75440 (dccrba) and 76704
 (cmm_time_variation) bytes against the 101376-byte per-block cap (see _cases).
 """
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -128,7 +129,7 @@ def _compile_runner(build_dir: Path, floating_base: bool):
     arch = _detect_cuda_arch()
     executable = build_dir / "cuda_dccrba_runner.exe"
     cmd = [
-        nvcc, "-std=c++17", "-O0",
+        nvcc, *kernel_flags(),
         f"-DGRID_CUDA_FLOATING_BASE={1 if floating_base else 0}",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",

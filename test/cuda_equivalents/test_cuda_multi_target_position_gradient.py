@@ -18,6 +18,7 @@ Fixed-base non-mimic (so vi == qi), correctness only. Override with GRID_CUDA_MU
 
 from __future__ import annotations
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -81,7 +82,7 @@ def _compile_runner(build_dir):
     arch = _detect_cuda_arch()
     executable = build_dir / "cuda_multi_target_position_gradient_runner.exe"
     cmd = [
-        nvcc, "-std=c++17", "-O2",
+        nvcc, *kernel_flags(),
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
         "-I", str(build_dir), "-o", str(executable), str(runner_copy),
     ]

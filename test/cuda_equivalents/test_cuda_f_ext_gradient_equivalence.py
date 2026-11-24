@@ -24,6 +24,7 @@ vs analytic at ~5e-3). The pinocchio cross-check stays self.integrate(q, dv) FD-
 Every manifest robot on both bases (widened 2026-10-15), iiwa14 fixed first.
 Narrow with GRID_CUDA_FEG_ROBOTS="iiwa14:fixed,go2:floating".
 """
+from grid_codegen.nvcc_flags import kernel_flags
 import os
 import shutil
 import subprocess
@@ -114,7 +115,7 @@ def _gen_and_compile(proj, build_dir, floating_base, codegen_profile="all"):
     shutil.copyfile(RUNNER_SOURCE, runner_copy)
     exe = build_dir / "cuda_f_ext_gradient_runner.exe"
     cmd = [
-        nvcc, "-std=c++17", "-O0",
+        nvcc, *kernel_flags(),
         f"-DGRID_CUDA_FLOATING_BASE={1 if floating_base else 0}",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
         "-I", str(Path(__file__).resolve().parents[2]),

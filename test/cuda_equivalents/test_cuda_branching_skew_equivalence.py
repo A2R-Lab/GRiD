@@ -18,6 +18,7 @@ JointModelRevoluteUnaligned / JointModelPrismaticUnaligned in GRiD joint order
 The serial skew fixture (skew_axis_arm.urdf) is also generated through the same
 path as a no-regression guard on the single-joint-per-level case.
 """
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -75,7 +76,7 @@ def _compile_runner(build_dir):
     arch = _detect_cuda_arch()
     exe = build_dir / "cuda_branching_skew_runner.exe"
     cmd = [
-        nvcc, "-std=c++17", "-O0",
+        nvcc, *kernel_flags(),
         "-DGRID_CUDA_FLOATING_BASE=0",
         "-DGRID_RUNNER_SKIP_GRADIENTS=1",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",

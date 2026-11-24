@@ -28,6 +28,7 @@ Fixtures: spherical_arm (root spherical + revolute) and mixed_spherical_arm
 (revolute -> spherical -> revolute, the mid-chain case that shifts every
 downstream q/v offset).
 """
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -124,7 +125,7 @@ def _compile_runner(build_dir, run_tokens=None):
         split_defines.append("-DGRID_RUN_SPLIT")
         split_defines.extend(f"-D{tok}=1" for tok in sorted(run_tokens))
     cmd = [
-        nvcc, "-std=c++17", "-O0",
+        nvcc, *kernel_flags(),
         "-DGRID_CUDA_FLOATING_BASE=0",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
         *split_defines,

@@ -10,6 +10,9 @@ PY="${PYTHON:-.venv/bin/python}"
 NVCC="${NVCC:-/usr/local/cuda/bin/nvcc}"
 ARCH="${GRID_SM_ARCH:-sm_120}"          # RTX 5090; override for your GPU
 EX_DIR="examples/cuda"
+# The nvcc flags GRiD compiles generated headers with (the Python wrapper and
+# the tests use the same list). Print them with: python -m grid_codegen.nvcc_flags
+read -r -a GRID_NVCC_FLAGS <<< "$("$PY" -m grid_codegen.nvcc_flags)"
 HEADER="$EX_DIR/grid.cuh"
 BIN="$(mktemp -u /tmp/grid_id_example.XXXXXX)"
 OUT="$(mktemp -u /tmp/grid_id_out.XXXXXX)"
@@ -19,7 +22,7 @@ echo ">> [1/4] generating $HEADER (inverse_dynamics only)"
 "$PY" "$EX_DIR/gen_iiwa14_header.py" --output "$HEADER" >/dev/null
 
 echo ">> [2/4] compiling with nvcc ($ARCH)"
-"$NVCC" -arch="$ARCH" -std=c++17 -I "$EX_DIR" -I external/GLASS -I external/GLASS/src \
+"$NVCC" -arch="$ARCH" "${GRID_NVCC_FLAGS[@]}" -I "$EX_DIR" -I external/GLASS -I external/GLASS/src \
     "$EX_DIR/inverse_dynamics_kernel_example.cu" -o "$BIN"
 
 echo ">> [3/4] running"
@@ -47,7 +50,7 @@ GRiDCodeGenerator(robot, FILE_NAMESPACE="grid").gen_all_code(
 PYGEN
 
 echo ">> [2/4] compiling with nvcc ($ARCH)"
-"$NVCC" -arch="$ARCH" -std=c++17 -I "$EX_DIR" -I external/GLASS -I external/GLASS/src \
+"$NVCC" -arch="$ARCH" "${GRID_NVCC_FLAGS[@]}" -I "$EX_DIR" -I external/GLASS -I external/GLASS/src \
     "$EX_DIR/idsva_so_host_example.cu" -o "$SO_BIN"
 
 echo ">> [3/4] running"

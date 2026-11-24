@@ -13,6 +13,7 @@ dIntegrate (spherical branch pinned against pinocchio's ARG0/ARG1 semantics by
 the RBDReference test suite). Compared at fp32 + fp64, thread counts
 {1, 32, 256} (thread-count invariance), on both spherical fixtures.
 """
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -78,7 +79,7 @@ def _compile_runner(build_dir, equiv_t):
     arch = _detect_cuda_arch()
     exe = build_dir / f"cuda_spherical_integrator_gradient_runner_{equiv_t}.exe"
     cmd = [
-        nvcc, "-std=c++17", "-O0",
+        nvcc, *kernel_flags(),
         "-DGRID_CUDA_FLOATING_BASE=0",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",

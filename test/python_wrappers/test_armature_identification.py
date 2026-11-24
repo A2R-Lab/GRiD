@@ -1,4 +1,5 @@
 """Independent parameter finite differences and native/backend ownership."""
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import io
 from pathlib import Path
@@ -115,7 +116,7 @@ def test_native_collectives(case, tmp_path):
     source = root / "test/cuda_equivalents/cuda_armature_identification_runner.cu"
     binary = tmp_path / "native_identification"
     arch = "sm_%d%d" % torch.cuda.get_device_capability()
-    cmd = ["nvcc", "-std=c++17", "-O3", "-arch="+arch, "-I"+str(Path(h._so_path).parent),
+    cmd = ["nvcc", *kernel_flags(), "-arch="+arch, "-I"+str(Path(h._so_path).parent),
            "-I"+str(root/"external/GLASS"), "-I"+str(root/"external/GLASS/src"),
            str(source), "-o", str(binary)]
     if h.dtype == "float64":

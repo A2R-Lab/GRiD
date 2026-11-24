@@ -82,7 +82,7 @@ def _relerr(a, b):
 
 @pytest.fixture(scope="module")
 def rt():
-    return _reg("iiwa_rt_xform_pytest", runtime_transform=True, force_rebuild=True)
+    return _reg("iiwa_rt_xform_pytest", runtime_transform=True)
 
 
 @pytest.fixture(scope="module")
@@ -138,7 +138,7 @@ def recodegen(rt, perturbed):
         with contextlib.redirect_stdout(io.StringIO()):
             handle = _grid_rbd.register_robot(
                 name="iiwa_recodegen_pert_pytest", urdf_path=pert_urdf,
-                floating_base=False, max_batch_size=8, force_rebuild=True)
+                floating_base=False, max_batch_size=8)
         yield handle
     finally:
         Path(pert_urdf).unlink(missing_ok=True)

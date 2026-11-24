@@ -17,6 +17,7 @@ from pathlib import Path
 from URDFParser import URDFParser
 from grid_codegen import GRiDCodeGenerator
 from grid_codegen.cli import parseInputs, validateRobot
+from grid_codegen.nvcc_flags import kernel_flags
 
 
 from grid_codegen.cuda_env import detect_cuda_arch as _detect_cuda_arch  # noqa: E402
@@ -68,7 +69,7 @@ def main():
         result = subprocess.run(
             [
                 "nvcc",
-                "-std=c++17",
+                *kernel_flags(),  # the list the wrapper and the tests use: python -m grid_codegen.nvcc_flags
                 "-o",
                 "printGRiD.exe",
                 "printGRiD.cu",

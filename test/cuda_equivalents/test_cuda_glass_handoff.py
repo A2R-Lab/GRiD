@@ -1,4 +1,5 @@
 """Independent numerical checks of embedded cooperative handoffs, not timing."""
+from grid_codegen.nvcc_flags import kernel_flags
 import subprocess
 from pathlib import Path
 
@@ -20,7 +21,7 @@ def test_embedded_glass_restricted_handoffs(tmp_path, scalar, atol, rtol):
     GRiDCodeGenerator(robot, FILE_NAMESPACE="grid").gen_all_code(
         codegen_profile="kinematics", output_path=str(tmp_path / "grid.cuh"))
     exe, _ = cached_nvcc_executable([Path(__file__).with_name("cuda_glass_handoff_runner.cu")],
-                                    ["-std=c++17", "-O3", "-Xptxas=-v", f"-DTEST_SCALAR={scalar}",
+                                    [*kernel_flags(), "-Xptxas=-v", f"-DTEST_SCALAR={scalar}",
                                      f"-arch=sm_{_detect_cuda_arch()}"],
                                     exe_name="handoff.exe", fallback_dir=tmp_path, include_dirs=[tmp_path],
                                     what="GLASS handoff runner")

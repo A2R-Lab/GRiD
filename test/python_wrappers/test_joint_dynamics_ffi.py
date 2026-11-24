@@ -102,11 +102,11 @@ def handles(request):
     common = dict(urdf_path=str(urdf), floating_base=False, max_batch_size=8)
     damped = dict(use_joint_dynamics=True, friction_model=model,
                   friction_width=(_WIDTH if model == "tanh" else None))
-    hn = _grid_rbd.register_robot(name=f"{name}_jd_ffi{tag}_pytest", force_rebuild=True,
+    hn = _grid_rbd.register_robot(name=f"{name}_jd_ffi{tag}_pytest",
                                   **damped, **common)
     hj = _gj.register_robot(name=f"{name}_jd_ffi{tag}_pytest", **damped, **common)
     ht = _gt.register_robot(name=f"{name}_jd_ffi{tag}_pytest", **damped, **common)
-    hbare = _grid_rbd.register_robot(name=f"{name}_jd_ffi_bare_pytest", force_rebuild=True, **common)
+    hbare = _grid_rbd.register_robot(name=f"{name}_jd_ffi_bare_pytest", **common)
     assert hn.friction_model == model and hj.friction_model == model and ht.friction_model == model
     return name, hn, hj, ht, hbare, model
 

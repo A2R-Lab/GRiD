@@ -29,6 +29,7 @@ import numpy as np
 import pytest
 
 from grid_codegen import GRiDCodeGenerator
+from grid_codegen.nvcc_flags import kernel_flags
 from test.cuda_equivalents.cuda_harness import (
     _build_cuda_samples,
     _detect_cuda_arch,
@@ -94,7 +95,7 @@ def _compile_runner(build_dir, defines):
     executable = build_dir / "cuda_frame_jacobian_host_runner.exe"
     glass_inc = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
     cmd = [
-        nvcc, "-std=c++17", "-O0",
+        nvcc, *kernel_flags(),
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
         f"-I{glass_inc}", "-o", str(executable), str(runner_copy),
     ] + [f"-D{d}" for d in defines]

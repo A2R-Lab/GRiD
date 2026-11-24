@@ -3,6 +3,7 @@
 This exercises the generated allocator, not a Python reimplementation. Invalid
 requests must neither advance the cursor nor return a usable pointer.
 """
+from grid_codegen.nvcc_flags import kernel_flags
 from pathlib import Path
 import subprocess
 
@@ -59,7 +60,7 @@ int main() {
 }
 ''')
     exe, _ = cached_nvcc_executable(
-        [source], ['-std=c++17', '-O2', '-arch=sm_' + _detect_cuda_arch()],
+        [source], [*kernel_flags(), '-arch=sm_' + _detect_cuda_arch()],
         exe_name='pool', fallback_dir=tmp_path, include_dirs=[tmp_path],
         what='device pool alignment contract')
     result = subprocess.run([str(exe)], capture_output=True, text=True)

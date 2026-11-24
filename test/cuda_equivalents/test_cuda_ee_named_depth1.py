@@ -18,6 +18,7 @@ base-relative imu offset and fail immediately.
 
 from __future__ import annotations
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -83,7 +84,7 @@ def test_cuda_ee_named_depth1_pose_matches_reference(tmp_path, robot_id, base_mo
     executable = build_dir / "cuda_ee_named_depth1_runner.exe"
     glass_inc = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
     cmd = [
-        nvcc, "-std=c++17", "-O0",
+        nvcc, *kernel_flags(),
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
         f"-I{glass_inc}", "-o", str(executable), str(runner_copy),
     ]

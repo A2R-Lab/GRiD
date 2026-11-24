@@ -18,6 +18,7 @@ joint-dynamics ownership paths), so the ledger covers every nested member.
 """
 from __future__ import annotations
 
+from grid_codegen.nvcc_flags import kernel_flags
 import re
 import shutil
 import subprocess
@@ -64,7 +65,7 @@ def _build(name, floating, options, build_dir):
     exes = {}
     for tag, extra in (("default", []), ("noexit", ["-DGRID_GPUERRCHK_NO_EXIT"])):
         exe = build_dir / f"runner_{tag}.exe"
-        cmd = ["nvcc", "-std=c++17", "-O1", f"-arch=sm_{arch}", "-I", str(build_dir),
+        cmd = ["nvcc", *kernel_flags(), f"-arch=sm_{arch}", "-I", str(build_dir),
                f"-DGRID_TEST_XI_SIZE={xi.group(1)}", f"-DGRID_TEST_JL_SIZE={jl.group(1)}",
                *extra, "-o", str(exe), str(runner)]
         r = subprocess.run(cmd, capture_output=True, text=True)

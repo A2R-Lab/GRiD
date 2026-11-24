@@ -21,6 +21,7 @@ hd_data->h_coriolis directly. Narrow with GRID_CUDA_CORIOLIS_ROBOTS=
 "iiwa14:fixed,go2:floating".
 """
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -106,7 +107,7 @@ def _compile_runner(build_dir: Path, floating_base: bool):
     arch = _detect_cuda_arch()
     executable = build_dir / "cuda_coriolis_runner.exe"
     cmd = [
-        nvcc, "-std=c++17", "-O0",
+        nvcc, *kernel_flags(),
         f"-DGRID_CUDA_FLOATING_BASE={1 if floating_base else 0}",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",

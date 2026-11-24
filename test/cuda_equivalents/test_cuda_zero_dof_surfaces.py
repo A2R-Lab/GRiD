@@ -1,4 +1,5 @@
 """Empty outputs must not turn constant-body placeholders into device accesses."""
+from grid_codegen.nvcc_flags import kernel_flags
 import subprocess
 
 import numpy as np
@@ -73,7 +74,7 @@ int main(int argc,char **argv){
         source = source.replace(old, new)
     runner = tmp_path / 'probe.cu'
     runner.write_text(source)
-    exe, _ = cached_nvcc_executable([runner], ['-std=c++17', '-O2', '-lineinfo', f'-arch=sm_{_detect_cuda_arch()}'],
+    exe, _ = cached_nvcc_executable([runner], [*kernel_flags(), '-lineinfo', f'-arch=sm_{_detect_cuda_arch()}'],
                                     exe_name='probe', fallback_dir=tmp_path, include_dirs=[tmp_path],
                                     what='zero dof surfaces probe')
     expected = np.array([123, 456])

@@ -24,6 +24,7 @@ GRID_CUDA_OSC_SPILL_ROBOTS="g1:floating,iiwa14:fixed".
 
 from __future__ import annotations
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import re
@@ -100,7 +101,7 @@ def _compile(build_dir, arch):
     shutil.copyfile(_RUNNER, build_dir / "runner.cu")
     glass = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
     exe = build_dir / "runner.exe"
-    cmd = [nvcc, "-std=c++17", "-O0", "-gencode", f"arch=compute_{arch},code=sm_{arch}",
+    cmd = [nvcc, *kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}",
            f"-I{glass}", f"-I{build_dir}", "-o", str(exe), str(build_dir / "runner.cu")]
     res = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
     if res.returncode != 0:

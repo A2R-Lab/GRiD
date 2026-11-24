@@ -15,6 +15,7 @@ fold), the floating cells (dense-per-jid staging band). Narrow with
 GRID_CUDA_REGRESSOR_GRADIENT_ROBOTS="iiwa14:fixed,fr3:fixed,go2:floating".
 """
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -74,7 +75,7 @@ def _compile_runner(build_dir: Path, floating_base: bool):
     executable = build_dir / "cuda_regressor_gradient_runner.exe"
     thread_count = _random_thread_count()
     cmd = [
-        nvcc, "-std=c++17", "-O0",
+        nvcc, *kernel_flags(),
         f"-DGRID_CUDA_FLOATING_BASE={1 if floating_base else 0}",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
         f"-DGRID_CUDA_REGRESSOR_GRADIENT_TEST_THREADS={thread_count}",

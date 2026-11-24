@@ -26,6 +26,7 @@ with GRID_CUDA_PLANT_ROBOTS.
 
 from __future__ import annotations
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -175,7 +176,7 @@ def _compile_runner(build_dir):
     glass_inc = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
     return cached_nvcc_executable(
         [RUNNER_SOURCE, build_dir / "grid.cuh"],
-        ["-std=c++17", "-O0", "-gencode", f"arch=compute_{arch},code=sm_{arch}"],
+        [*kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}"],
         exe_name="cuda_plant_smoke_runner.exe", fallback_dir=build_dir,
         include_dirs=[glass_inc], what="CUDA plant smoke runner",
     )

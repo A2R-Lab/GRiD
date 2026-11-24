@@ -1,4 +1,5 @@
 """A constant branch must not read another branch's velocity placeholder."""
+from grid_codegen.nvcc_flags import kernel_flags
 import subprocess
 
 import numpy as np
@@ -66,7 +67,7 @@ int main(int argc,char **argv) {
 '''.replace('DTYPE', precision)
     runner = tmp_path / 'probe.cu'
     runner.write_text(source)
-    exe, _ = cached_nvcc_executable([runner], ['-std=c++17', '-O2', f'-arch=sm_{_detect_cuda_arch()}'],
+    exe, _ = cached_nvcc_executable([runner], [*kernel_flags(), f'-arch=sm_{_detect_cuda_arch()}'],
                                     exe_name='probe', fallback_dir=tmp_path, include_dirs=[tmp_path],
                                     what='constant velocity probe')
     ref = RBDReference(robot)

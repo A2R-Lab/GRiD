@@ -7,6 +7,7 @@ inverse dynamics, CRBA, Minv, forward dynamics and ABA read alpha and alpha'
 at runtime (the acceleration gains alpha' qd_l^2). Both bases; the outputs
 must be thread-count invariant.
 """
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import io
 
@@ -122,7 +123,7 @@ def test_polynomial_coupling_frame_kinematics_match_projection(tmp_path, floatin
                          enable_mujoco_kernels=False)
     glass_inc = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
     arch = _detect_cuda_arch()
-    flags = ["-std=c++17", "-O0", "-gencode", f"arch=compute_{arch},code=sm_{arch}", f"-I{glass_inc}"]
+    flags = [*kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}", f"-I{glass_inc}"]
     here = Path(__file__).resolve().parent
     kin_exe, kin_cmd = cached_nvcc_executable(
         sources=[here / "cuda_frame_kinematics_smoke_runner.cu", tmp_path / "grid.cuh"], flags=flags,
@@ -207,7 +208,7 @@ def test_polynomial_coupling_integrators_match_projection(tmp_path, floating):
     arch = _detect_cuda_arch()
     exe, cmd = cached_nvcc_executable(
         [Path(__file__).with_name("cuda_integrator_smoke_runner.cu"), tmp_path / "grid.cuh"],
-        ["-std=c++17", "-O0", "-gencode", f"arch=compute_{arch},code=sm_{arch}"],
+        [*kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}"],
         exe_name="cuda_integrator_smoke_runner.exe", fallback_dir=tmp_path, include_dirs=[glass_inc],
         what=f"integrator runner, polynomial chain floating={floating}")
     ref = RBDReference(robot)
@@ -265,7 +266,7 @@ def test_polynomial_coupling_regressor_and_centroidal_match_projection(tmp_path,
                          include_homogenous_transforms=True, enable_mujoco_kernels=False)
     reg_exe, reg_cmd = cached_nvcc_executable(
         [here / "cuda_regressor_smoke_runner.cu", reg_dir / "grid.cuh"],
-        ["-std=c++17", "-O0", f"-DGRID_CUDA_FLOATING_BASE={1 if floating else 0}",
+        [*kernel_flags(), f"-DGRID_CUDA_FLOATING_BASE={1 if floating else 0}",
          "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS", "-DGRID_CUDA_REGRESSOR_TEST_THREADS=64",
          "-gencode", f"arch=compute_{arch},code=sm_{arch}"],
         exe_name="cuda_regressor_smoke_runner.exe", fallback_dir=reg_dir, include_dirs=[glass_inc, reg_dir],
@@ -279,7 +280,7 @@ def test_polynomial_coupling_regressor_and_centroidal_match_projection(tmp_path,
                          enable_mujoco_kernels=False)
     cen_exe, cen_cmd = cached_nvcc_executable(
         [here / "cuda_centroidal_mimic_smoke_runner.cu", cen_dir / "grid.cuh"],
-        ["-std=c++17", "-O0", "-gencode", f"arch=compute_{arch},code=sm_{arch}", f"-I{glass_inc}"],
+        [*kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}", f"-I{glass_inc}"],
         exe_name="cuda_centroidal_mimic_smoke_runner.exe", fallback_dir=cen_dir, include_dirs=[cen_dir],
         what=f"centroidal runner, polynomial chain floating={floating}")
     ref = RBDReference(robot)
@@ -343,7 +344,7 @@ def test_polynomial_coupling_runtime_pose_match_projection(tmp_path, floating):
     arch = _detect_cuda_arch()
     exe, cmd = cached_nvcc_executable(
         [Path(__file__).with_name("cuda_eepose_runtime_smoke_runner.cu"), tmp_path / "grid.cuh"],
-        ["-std=c++17", "-O0", "-DGRID_CUDA_EEPOSE_RT_SCALAR=float", "-gencode", f"arch=compute_{arch},code=sm_{arch}",
+        [*kernel_flags(), "-DGRID_CUDA_EEPOSE_RT_SCALAR=float", "-gencode", f"arch=compute_{arch},code=sm_{arch}",
          f"-I{glass_inc}"],
         exe_name="cuda_eepose_runtime_smoke_runner.exe", fallback_dir=tmp_path, include_dirs=[tmp_path],
         what=f"runtime pose runner, polynomial chain floating={floating}")

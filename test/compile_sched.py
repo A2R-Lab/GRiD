@@ -87,12 +87,23 @@ DEFAULT_MARGIN = 1.3
 DEFAULT_MAX_JOBS = 5
 
 
-def mem_available_kb() -> int:
+def meminfo_kb(field: str) -> int:
     with open("/proc/meminfo") as f:
         for line in f:
-            if line.startswith("MemAvailable:"):
+            if line.startswith(field + ":"):
                 return int(line.split()[1])
     return 0
+
+
+def mem_available_kb() -> int:
+    return meminfo_kb("MemAvailable")
+
+
+def pool_budget_kb(available_kb: int, floor_kb: int, default_peak_kb: int,
+                   cap_kb: int | None = None) -> int:
+    """Static pool budget. An operator cap can lower it and never raises it."""
+    budget = max(available_kb - floor_kb, default_peak_kb)
+    return budget if cap_kb is None else min(budget, int(cap_kb))
 
 
 @dataclass
@@ -105,6 +116,8 @@ class Job:
     log_path: str | None = None   # worker stdout+stderr destination
     peak_floor_kb: int | None = None  # measured-class cold floor, before margin
     record_history: bool = False  # identity-qualified key; persist on completion
+    klass: tuple | None = None    # (kind, robot, name, units): measured-class charge
+    cpus: int = 1                 # compiler processes it runs at once
 
 
 @dataclass
@@ -114,6 +127,7 @@ class JobResult:
     secs: float
     peak_kb: int                  # max(sampled process-tree peak, ru_maxrss); 0 if neither
     stdout_tail: str = ""
+    proc_kb: int = 0              # largest single process (ru_maxrss); 0 if unknown
 
 
 class Ledger:
@@ -190,8 +204,19 @@ class RamScheduler:
         label: str = "compile",
         strict_memory: bool = False,
         admission=None,
+        cap_kb: int | None = None,
+        class_history=None,
+        cpu_budget: int | None = None,
+        loadavg=lambda: os.getloadavg()[0],
     ):
+        # Adaptive profile: cores this pool may use. Load from other users of
+        # the machine is subtracted at each admission; one job always runs.
+        self.cpu_budget = cpu_budget
+        self.loadavg = loadavg
         self.ledger = ledger
+        # Adaptive profile: charge the measured peak of the job's class
+        # (resource_history.ClassHistory) and record real compiles into it.
+        self.class_history = class_history
         self.max_jobs = max(1, int(max_jobs))
         self.floor_kb = floor_kb
         self.margin = margin
@@ -202,7 +227,10 @@ class RamScheduler:
         self.resource_blocked: str | None = None
         # Static pool sized at construction; the live MemAvailable backstop at
         # each admission covers external memory pressure appearing later.
-        self.budget_kb = max(mem_available_kb() - floor_kb, default_peak_kb)
+        # An operator cap (cap_kb) only lowers it; the floor and the backstop
+        # are unchanged by a cap.
+        self.cap_kb = cap_kb
+        self.budget_kb = pool_budget_kb(mem_available_kb(), floor_kb, default_peak_kb, cap_kb)
         self.results: dict[str, JobResult] = {}
         self.done_events: dict[str, threading.Event] = {}
         self._procs: dict[str, subprocess.Popen] = {}
@@ -327,6 +355,7 @@ class RamScheduler:
                         # Max-only updates cannot erase an earlier cold peak.
                         # The cold class floor still applies to a first cache hit.
                         self.ledger.record(job.ledger_key, result.peak_kb, result.secs)
+                    self._record_class(job, self.results[name])
                 finally:
                     if self.admission is not None:
                         self.admission.release("compile:" + name)
@@ -344,9 +373,18 @@ class RamScheduler:
                         break
                     if job.group and job.group in busy_groups:
                         continue
+                    if self.cpu_budget is not None and running:
+                        used = sum(entry[0].cpus for entry in running.values())
+                        others = max(0.0, self.loadavg() - used)
+                        if used + job.cpus > self.cpu_budget - others:
+                            continue
                     default = job.peak_floor_kb if job.peak_floor_kb is not None else self.default_peak_kb
                     pred = self.ledger.predict_kb(job.ledger_key, default, self.margin)
-                    if job.peak_floor_kb is not None:
+                    if self.class_history is not None and job.klass is not None:
+                        kind, robot, name, units = job.klass
+                        pred = int(self.class_history.predict_kb(
+                            kind, robot, name, units, default) * self.margin)
+                    elif job.peak_floor_kb is not None:
                         pred = max(pred, int(job.peak_floor_kb * self.margin))
                     elif self.strict_memory:
                         # Shared admission may use measured cold-build peaks,
@@ -363,7 +401,7 @@ class RamScheduler:
                     if self.admission is not None:
                         fits = self.admission.reserve(token, pred)
                         if not fits:
-                            if self.admission.active:
+                            if self.admission.active or not self.admission.give_up():
                                 continue  # a shard may still own the headroom
                             self.resource_blocked = self.admission.refusal
                             self.stop()
@@ -408,6 +446,18 @@ class RamScheduler:
                       if self.resource_blocked else "not attempted (stopped)")
             self.results[job.name] = JobResult(job.name, -1, 0.0, 0, reason)
             self.done_events[job.name].set()
+
+    def _record_class(self, job: Job, result: JobResult) -> None:
+        if self.class_history is None or job.klass is None or result.rc != 0 or not job.log_path:
+            return
+        try:
+            text = Path(job.log_path).read_text(errors="replace")
+        except OSError:
+            return
+        if self.class_history.shows_build(text):   # a cache hit measures a relink
+            kind, robot, name, units = job.klass
+            self.class_history.record(kind, robot, name, units, result.peak_kb,
+                                      result.proc_kb, result.secs)
 
     def _launch(self, job: Job, pred_kb: int, running: dict, busy_groups: set) -> bool:
         env = dict(os.environ)
@@ -474,6 +524,7 @@ class RamScheduler:
                 tail = log_text[-800:]
         except OSError:
             pass
+        proc_kb = peak_kb
         peak_kb = max(peak_kb, int(tree_peak_kb))
         rc = proc.returncode
         # /usr/bin/time exits 127/126 if the command couldn't start; otherwise
@@ -483,4 +534,4 @@ class RamScheduler:
             f"(tree) {secs:.0f}s",
             flush=True,
         )
-        return JobResult(job.name, rc, secs, peak_kb, tail)
+        return JobResult(job.name, rc, secs, peak_kb, tail, proc_kb)

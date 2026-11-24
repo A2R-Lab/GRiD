@@ -99,7 +99,10 @@ job's compiler processes. The low-level driver honors
 ``GRID_SPLIT_COMPILE_JOBS`` (for example, 2) and
 ``GRID_RBD_BUILD_JOBS``. The tracked receipt launcher sets its own profile;
 inspect that profile instead of assuming inherited environment overrides
-take effect. Check current free RAM and disk before an approved run. A
+take effect. Its ``--print-resources`` option reports the cores, memory and
+pool budget of the current machine without compiling, and its
+``--compile-slots``, ``--build-jobs`` and ``--memory-cap`` options adjust the
+bounded-overlap profile. Check current free RAM and disk before an approved run. A
 historical successful pool size is not a guarantee for a cold cache or a
 larger robot.
 

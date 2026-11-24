@@ -59,6 +59,7 @@ from ._coriolis import _emit_crm_cm, _emit_crf_cm, _coriolis_int_array as _dccrb
 from grid_codegen.helpers._code_generation_helpers import host_q_input_transfer_lines, gen_emit_host_result_transfer, _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_q_qd_input_transfer_lines, mangle_host_func_defs, wrap_host_single_call_timing
 from grid_codegen.helpers._code_generation_helpers import gen_host_wrapper_head
 from ._centroidal import _centroidal_inner_temp_mem_size
+from ._frame_jacobian import _root_translation_chain
 
 
 def _dccrba_metadata(self):
@@ -260,7 +261,12 @@ def _emit_dccrba_assembly(self, out_name, contract_qd, part_name=None):
     self.gen_add_sync()
 
     # ---- com + Jcom (Jcom[:,m] = dc_A0[lin row, m]/mass) ----
-    self.gen_add_code_line("T dc_cx = s_com[0], dc_cy = s_com[1], dc_cz = s_com[2];")
+    if self.robot.floating_base or _root_translation_chain(self.robot):
+        # centroidal_inner ran about the base position; s_extra[1..3] is the CoM
+        # in that frame (s_com is the world CoM)
+        self.gen_add_code_line("T dc_cx = s_extra[1], dc_cy = s_extra[2], dc_cz = s_extra[3];")
+    else:
+        self.gen_add_code_line("T dc_cx = s_com[0], dc_cy = s_com[1], dc_cz = s_com[2];")
     self.gen_add_code_line("T dc_inv_m = static_cast<T>(1)/s_extra[0];")
 
     # (contract_qd no longer pre-zeros: the deterministic k-major fan below writes

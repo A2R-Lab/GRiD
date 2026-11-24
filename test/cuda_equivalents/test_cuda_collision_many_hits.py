@@ -1,4 +1,5 @@
 """Collision flags/debug output: many writers, both tiers, repeated clear/hit calls."""
+from grid_codegen.nvcc_flags import kernel_flags
 import subprocess
 from pathlib import Path
 
@@ -34,7 +35,7 @@ def many_hits_executable(request, tmp_path_factory):
     arch = _detect_cuda_arch()
     exe, _ = cached_nvcc_executable(
         [Path(__file__).with_name('cuda_collision_many_hits_runner.cu'), header],
-        ['-std=c++17', '-O2', '-gencode', f'arch=compute_{arch},code=sm_{arch}',
+        [*kernel_flags(), '-gencode', f'arch=compute_{arch},code=sm_{arch}',
          f'-DTWO_TIERS={int(two)}', f'-DSELF_HITS={int(self_hits)}'],
         exe_name='many_hits.exe', fallback_dir=directory,
         include_dirs=[collision_include_dir()], what='adversarial collision flags')

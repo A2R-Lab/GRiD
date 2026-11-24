@@ -18,6 +18,7 @@ the grid, or workspace state leaks between a block's grid-stride timesteps.
 
 from __future__ import annotations
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import os
 import shutil
@@ -82,7 +83,7 @@ def _compile_runner(build_dir):
     executable = build_dir / "cuda_workspace_slots.exe"
     glass_inc = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
     cmd = [
-        nvcc, "-std=c++17", "-O0",
+        nvcc, *kernel_flags(),
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
         f"-DGRID_BATCH={_BATCH}",
         f"-I{glass_inc}", "-o", str(executable), str(runner_copy),

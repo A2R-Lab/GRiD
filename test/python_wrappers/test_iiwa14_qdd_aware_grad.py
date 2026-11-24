@@ -63,7 +63,7 @@ def numpy_handle():
     # The numpy register also compiles the shared .so the jax/torch handles reuse.
     return _grid_rbd.register_robot(
         name=_ROBOT, urdf_path=str(_URDF),
-        floating_base=False, max_batch_size=16, force_rebuild=True)
+        floating_base=False, max_batch_size=16)
 
 
 @pytest.fixture(scope="module")

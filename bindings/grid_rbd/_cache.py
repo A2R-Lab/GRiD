@@ -33,7 +33,9 @@ Two keys (see the "two-stage content-addressed store" section below):
     artifact but is not a caller option: cuda_arch, nvcc path+version, host
     C++ compiler, the CONTENT of the GLASS headers the generator vendors (not
     the submodule commit — a dirty checkout must re-key), the compile-flag
-    module (_compile.py), wrapper_template.cu, torch/jax ABI tags, the
+    module (_compile.py), the resolved shared nvcc flag list
+    (grid_codegen/nvcc_flags.py, with its GRID_NVCC_FP_FLAGS override),
+    wrapper_template.cu, torch/jax ABI tags, the
     generation-time env knobs (GRID_CUDA_TARGET_SHARED_MEM_BYTES,
     GRID_CUDA_TARGET_LITE_SHARED_MEM_BYTES, GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES,
     GRID_NO_LICM_BARRIER, GRID_FDSVA_SO_MINV_TILE) and a key-schema number. `build_identity()` returns
@@ -511,6 +513,11 @@ def _generation_env() -> dict[str, str | None]:
     return {k: os.environ.get(k) for k in (*GENERATION_ENV_KNOBS, *BINDINGS_ENV_KNOBS)}
 
 
+def _nvcc_kernel_flags() -> list[str]:
+    from grid_codegen.nvcc_flags import kernel_flags
+    return kernel_flags()
+
+
 def build_identity(cuda_arch: int) -> dict[str, Any]:
     """Every artifact-shaping input that is NOT a caller option, as a readable
     dict (persisted beside each store entry as build_inputs.json). Folded into
@@ -527,6 +534,10 @@ def build_identity(cuda_arch: int) -> dict[str, Any]:
         "torch_abi": _torch_abi_tag(),
         "jax_ffi": _jax_ffi_tag(),
         "generation_env": _generation_env(),
+        # The resolved shared nvcc list (grid_codegen/nvcc_flags.py), so a
+        # GRID_NVCC_FP_FLAGS override never honours a pointer recorded under
+        # another flag set.
+        "nvcc_kernel_flags": _nvcc_kernel_flags(),
     }
     # Multi-arch (opt-in): recorded only when set so the single-arch identity
     # (and every key derived from it) is unchanged. `cuda_arch` stays the arch
@@ -629,6 +640,10 @@ def compute_content_key(source_dir: Path, options: dict[str, Any],
               "runtime_joint_dynamics", "runtime_armature"):
         h.update(f"{k}={options.get(k)!r};".encode())
     h.update(f"compile={_compile_source_hash()}".encode())
+    # The flag list lives in grid_codegen/nvcc_flags.py and takes an environment
+    # override, so the hash of _compile.py no longer covers it: fold the
+    # resolved list.
+    h.update(f"nvcc_kernel_flags={' '.join(_nvcc_kernel_flags())};".encode())
     # Opt-in per-unit nvcc knobs change the SASS (register allocation), so a
     # .so built under one setting must never be handed back under another.
     h.update(f"split_compile={os.environ.get('GRID_RBD_SPLIT_COMPILE', '0')};"

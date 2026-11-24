@@ -17,6 +17,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 from grid_assets import robot_urdf
+from grid_codegen.nvcc_flags import kernel_flags
 
 NVCC = "/usr/local/cuda/bin/nvcc"
 ARCH = "120"
@@ -185,10 +186,10 @@ def compile_all_tiers(grid_cuh: Path, emitted: list[str], build_dir: Path) -> di
     )
     obj = build_dir / "force_inst.o"
     rc = subprocess.run(
-        [NVCC, "-std=c++17", "-c", "-o", str(obj), str(src),
+        [NVCC, *kernel_flags(), "-c", "-o", str(obj), str(src),
          f"-I{grid_cuh.parent}",
          f"-gencode=arch=compute_{ARCH},code=sm_{ARCH}",
-         "-O3", "-Xptxas", "-v", "-Wno-deprecated-gpu-targets"],
+         "-Xptxas", "-v", "-Wno-deprecated-gpu-targets"],
         capture_output=True, text=True,
     )
     (build_dir / "stderr.log").write_text(rc.stderr)

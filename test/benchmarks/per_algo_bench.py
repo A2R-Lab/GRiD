@@ -46,6 +46,7 @@ sys.path.insert(0, str(THIS_DIR))
 
 # Reuse the SINGLE source of truth + header generation from the existing harness -- do NOT duplicate.
 from baselines.grid import run as gridrun  # noqa: E402
+from grid_codegen.nvcc_flags import kernel_flags  # noqa: E402
 from timing_parser import parse_grid_output, build_metadata, fill_nulls, ALL_ALGOS  # noqa: E402
 
 # Autotune mode reuses run.py's picker VERBATIM (schema-2 algo_picks, tie-breaks, SASS tier-dedup,
@@ -228,7 +229,7 @@ def _nvcc_cmd(src: Path, exe: Path, header_file: Path, arch: str, tier: str | No
               alloc_gate_algo: str | None = None) -> list[str]:
     nvcc = shutil.which("nvcc") or "nvcc"
     cmd = [
-        nvcc, "-std=c++17", "-O3", f"-arch=sm_{arch}",
+        nvcc, *kernel_flags(), f"-arch=sm_{arch}",   # the list the wheel compiles with
         "-I", str(header_file.parent), "-I", str(REPO_ROOT), "-I", str(THIS_DIR / "baselines" / "grid"),
         "-DGRID_HEADER_FILE=" + f'"{header_file}"',   # generate_header names it <robot>_<base>.cuh, not grid.cuh
     ]
@@ -268,6 +269,7 @@ def _compile_one(algo: str, build_dir: Path, header_file: Path, arch: str,
         (src_txt + "\0" + str(_TIER_MACRO.get(tier)) + "\0"
          + " ".join(_alloc_gate_flags(gate_algo)) + "\0"
          + os.environ.get("GRID_BENCH_EXTRA_NVCC_FLAGS", "") + "\0"
+         + " ".join(kernel_flags()) + "\0"
          + header_file.read_text()).encode()
     ).hexdigest()
     if exe.exists() and stamp.exists() and stamp.read_text().strip() == key:

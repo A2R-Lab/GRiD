@@ -16,6 +16,7 @@ algorithm), proving the family is self-contained.
 """
 from __future__ import annotations
 
+from grid_codegen.nvcc_flags import kernel_flags
 import contextlib
 import io
 import os
@@ -101,7 +102,7 @@ def _build(robot, contacts, build_dir):
     shutil.copyfile(RUNNER_SOURCE, runner)
     exe = build_dir / "runner.exe"
     arch = _detect_cuda_arch()
-    r = subprocess.run(["nvcc", "-std=c++17", "-O2", f"-arch=sm_{arch}", "-I", str(build_dir),
+    r = subprocess.run(["nvcc", *kernel_flags(), f"-arch=sm_{arch}", "-I", str(build_dir),
                         "-o", str(exe), str(runner)], capture_output=True, text=True)
     assert r.returncode == 0, f"runner compilation failed:\n{r.stderr[-4000:]}"
     return exe
