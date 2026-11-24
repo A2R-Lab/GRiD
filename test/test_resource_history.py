@@ -240,6 +240,8 @@ def test_a_history_that_cannot_be_stored_does_not_fail_the_job(tmp_path, capsys)
     {'wrapper|go2|r': {'\u00b2': {'tree_kb': 4 * GIB}}},
     {'wrapper|go2|r': {'4': {'tree_kb': 20 * GIB}, '04': {'tree_kb': 30 * GIB}}},
     {'wrapper|go2|r': {'0': {'tree_kb': 4 * GIB}}},
+    {'wrapper|go2|r': {'2': {'tree_kb': 10 ** 400}}},
+    {'wrapper|go2|r': {'2': {'tree_kb': 4 * GIB, 'secs': 10 ** 400}}},
     {'wrapper|go2|r': {'2': {'tree_kb': 4 * GIB}, '-4': {'tree_kb': 4 * GIB}}},
 ])
 def test_a_malformed_class_is_charged_as_unmeasured(tmp_path, capsys, classes):
