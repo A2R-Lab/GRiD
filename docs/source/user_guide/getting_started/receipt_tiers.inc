@@ -10,8 +10,8 @@
      - Waivers / retirement
    * - sm_120 (RTX 5090)
      - primary
-     - 0.7.2 (aca99e3)
-     - 2026-11-22
+     - 0.7.2 (671f2fc)
+     - 2026-11-24
      - none
    * - sm_87 (Jetson Orin)
      - minor
