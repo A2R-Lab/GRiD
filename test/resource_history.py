@@ -110,8 +110,10 @@ def _valid_classes(raw: object, source: Path) -> dict[str, dict[str, dict]]:
         return {}
 
     def number(value, least):
+        # The bound (2**63 KiB) also keeps an integer too large for a float
+        # out of isfinite, which would raise on it.
         return (isinstance(value, (int, float)) and not isinstance(value, bool)
-                and math.isfinite(value) and value >= least)
+                and least <= value < 2 ** 63 and math.isfinite(value))
 
     def width(text):
         # One spelling per width: ASCII digits, no sign, no leading zero.
