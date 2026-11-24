@@ -4516,7 +4516,13 @@ steps now run under one process lock (`_load_artifact` in
 the parent's holder does not exist; the owners are kept, because the child
 inherits the loaded images. The native loader opens the image before it looks
 up its symbols, so a load that fails after the open still holds the namespace.
-Only a failed open records nothing.
+
+The lock alone left a second gap, found on re-review: the owner was recorded
+after the loader returned, so an interrupt at that point, or a fork taken by
+another thread while the loader ran, left a registered image with no owner.
+The claim is now made before the loader runs and given back only when the open
+itself failed, and only for a namespace this call claimed. When a state cannot
+be told apart from "registered", the record has to say registered.
 
 The class history wrote through one temporary name per process, and the pool
 thread and the shard loop share the object. Two writes at once lost one rename

@@ -385,8 +385,8 @@ compiler, uses no GPU and takes no lock, and the figures describe that moment,
 not the memory available hours into a run.
 
 `--resource-profile adaptive` is a third, experimental profile that sizes
-itself to the machine. It has not recorded a receipt and needs the same cold
-pilot before a release uses it. It differs from bounded overlap in four ways.
+itself to the machine. It recorded the full receipt at `671f2fce`. Its use for
+a release remains a separate decision and needs the same cold pilot. It differs from bounded overlap in four ways.
 
 - Charges are measured. Each real compile records the peak of its process tree
   and its largest single process in `test/.split_suite/compile_class.json`
@@ -402,7 +402,8 @@ pilot before a release uses it. It differs from bounded overlap in four ways.
   A write merges the stored peaks under a file lock, so two writers keep the
   larger figure. A malformed class in the file is dropped with a message and
   charged as a class never built. A history that cannot be stored is reported
-  and does not fail the job it describes.
+  and does not fail the job it describes. The lock coordinates writers that
+  take it, on a local file system.
 - The reserve scales. It is 15% of RAM and at least 4 GiB, or
   `--memory-reserve GIB`. The budget is RAM minus the reserve, or
   `--memory-cap GIB` when that is smaller, so a 50 GiB cap on a 62 GiB machine
