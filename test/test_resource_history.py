@@ -234,10 +234,18 @@ def test_a_history_that_cannot_be_stored_does_not_fail_the_job(tmp_path, capsys)
     {'wrapper|go2|r': {'2': {'tree_kb': -GIB, 'proc_kb': 0, 'secs': 0}}},
     {'wrapper|go2|r': {'two': {'tree_kb': GIB}}},
     {'wrapper|go2|r': {'2': {'tree_kb': 4 * GIB}, '4': {'tree_kb': True}}},
+    {'wrapper|go2|r': {'2': {'tree_kb': float('inf')}}},
+    {'wrapper|go2|r': {'2': {'tree_kb': 4 * GIB, 'proc_kb': float('inf')}}},
+    {'wrapper|go2|r': {'2': {'tree_kb': 4 * GIB, 'secs': float('nan')}}},
+    {'wrapper|go2|r': {'\u00b2': {'tree_kb': 4 * GIB}}},
+    {'wrapper|go2|r': {'4': {'tree_kb': 20 * GIB}, '04': {'tree_kb': 30 * GIB}}},
+    {'wrapper|go2|r': {'0': {'tree_kb': 4 * GIB}}},
+    {'wrapper|go2|r': {'2': {'tree_kb': 4 * GIB}, '-4': {'tree_kb': 4 * GIB}}},
 ])
 def test_a_malformed_class_is_charged_as_unmeasured(tmp_path, capsys, classes):
     path = tmp_path / 'class.json'
-    path.write_text(json.dumps(dict(schema=1, classes=classes)))
+    # 1e309 is how a file spells a number that decodes to infinity.
+    path.write_text(json.dumps(dict(schema=1, classes=classes)).replace('Infinity', '1e309'))
     h = resource_history.ClassHistory(path)
     assert h.rows == {} and capsys.readouterr().err
     assert h.predict_kb('wrapper', 'go2', 'r', 2, 16 * GIB) == 16 * GIB

@@ -8,6 +8,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import math
 import os
 import sys
 import tempfile
@@ -109,12 +110,17 @@ def _valid_classes(raw: object, source: Path) -> dict[str, dict[str, dict]]:
         return {}
 
     def number(value, least):
-        return isinstance(value, (int, float)) and not isinstance(value, bool) and value >= least
+        return (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and math.isfinite(value) and value >= least)
+
+    def width(text):
+        # One spelling per width: ASCII digits, no sign, no leading zero.
+        return isinstance(text, str) and text.isascii() and text.isdigit() and text[0] != '0'
 
     rows = {}
     for key, row in classes.items():
         ok = isinstance(key, str) and isinstance(row, dict) and bool(row) and all(
-            isinstance(u, str) and u.isdigit() and int(u) >= 1 and isinstance(v, dict)
+            width(u) and isinstance(v, dict)
             and number(v.get('tree_kb'), 1) and number(v.get('proc_kb', 0), 0)
             and number(v.get('secs', 0.0), 0) for u, v in row.items())
         if not ok:
