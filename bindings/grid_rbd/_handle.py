@@ -23,6 +23,7 @@ import functools
 import mmap
 import os
 import re
+import threading
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -257,6 +258,38 @@ def _record_torch_namespace(claim) -> None:
             _TORCH_NAMESPACE_OWNERS[name] = real
 
 
+# One load at a time in a process: the check, the native load and the record
+# are one step, so two threads cannot both pass the check for one namespace.
+_ARTIFACT_LOAD_LOCK = threading.Lock()
+
+
+def _fresh_load_lock_in_child() -> None:
+    # A lock held by another thread at fork would stay held in the child. The
+    # owners stay as they are: the child inherits the loaded images.
+    global _ARTIFACT_LOAD_LOCK
+    _ARTIFACT_LOAD_LOCK = threading.Lock()
+
+
+os.register_at_fork(after_in_child=_fresh_load_lock_in_child)
+
+
+def _load_artifact(so_path: str, runner_type):
+    """Construct the native runner for an artifact under the namespace check."""
+    with _ARTIFACT_LOAD_LOCK:
+        claim = _check_torch_namespace(so_path)
+        try:
+            runner = runner_type(so_path)
+        except Exception as exc:
+            # The loader opens the image before it looks up its symbols. Only
+            # a failed open is known to leave nothing registered; after any
+            # other failure the image and its registration remain.
+            if not str(exc).startswith("dlopen failed"):
+                _record_torch_namespace(claim)
+            raise
+        _record_torch_namespace(claim)
+        return runner
+
+
 class RobotHandle:
     """Opaque handle to a compiled per-robot GRiD library.
 
@@ -313,14 +346,12 @@ class RobotHandle:
         # (default / pre-Phase-8 meta lacking a dtype field) uses Runner. _dt is
         # the host-side numpy element dtype every method casts inputs to.
         self._dtype = str(meta.get("dtype", "float32"))
-        claim = _check_torch_namespace(self._so_path)
         if self._dtype == "float64":
             self._dt = np.float64
-            self._runner = _core.RunnerF64(so_path)
+            self._runner = _load_artifact(self._so_path, _core.RunnerF64)
         else:
             self._dt = np.float32
-            self._runner = _core.Runner(so_path)
-        _record_torch_namespace(claim)
+            self._runner = _load_artifact(self._so_path, _core.Runner)
         # Output convention: "pinocchio" (default, native) or "mujoco" (mjx parity).
         # Only affects FLOATING-base robots; a no-op (byte-identical) on fixed base.
         self._output_convention = "pinocchio"
