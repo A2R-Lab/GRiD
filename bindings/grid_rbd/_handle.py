@@ -224,8 +224,7 @@ _TORCH_NAMESPACE_RE = re.compile(rb"grid_rbd_torch_(?:k[0-9a-f]{12}|default)")
 
 def _check_torch_namespace(so_path: str):
     """Refuse a second artifact that registers an operator namespace this
-    process already holds from another file. Returns the claim to record once
-    the artifact has loaded.
+    process already holds from another file. Returns the claim to record.
 
     The namespace is named after the model key, so two builds of one model in
     two cache directories carry the same name. PyTorch aborts the process when
@@ -274,20 +273,27 @@ os.register_at_fork(after_in_child=_fresh_load_lock_in_child)
 
 
 def _load_artifact(so_path: str, runner_type):
-    """Construct the native runner for an artifact under the namespace check."""
+    """Construct the native runner for an artifact under the namespace check.
+
+    The namespaces are claimed before the loader runs and given back only when
+    the open itself failed. An interrupt, or a fork taken while the loader is
+    running, therefore leaves a claim and never an unclaimed registration.
+    """
     with _ARTIFACT_LOAD_LOCK:
         claim = _check_torch_namespace(so_path)
+        fresh = () if claim is None else [n for n in claim[1] if n not in _TORCH_NAMESPACE_OWNERS]
+        _record_torch_namespace(claim)
         try:
-            runner = runner_type(so_path)
+            return runner_type(so_path)
         except Exception as exc:
             # The loader opens the image before it looks up its symbols. Only
             # a failed open is known to leave nothing registered; after any
-            # other failure the image and its registration remain.
-            if not str(exc).startswith("dlopen failed"):
-                _record_torch_namespace(claim)
+            # other failure the image and its registration remain. A claim
+            # that an earlier load established is never given back.
+            if str(exc).startswith("dlopen failed"):
+                for name in fresh:
+                    _TORCH_NAMESPACE_OWNERS.pop(name, None)
             raise
-        _record_torch_namespace(claim)
-        return runner
 
 
 class RobotHandle:

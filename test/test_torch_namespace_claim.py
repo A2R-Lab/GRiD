@@ -121,6 +121,74 @@ def test_only_a_failed_open_leaves_the_namespace_free(tmp_path):
         _handle._load_artifact(b, _Loader())
 
 
+def test_an_interrupt_after_the_native_load_leaves_the_claim(tmp_path):
+    # The image registered and the constructor returned, then the caller was
+    # interrupted before anything else ran. The namespace must stay claimed.
+    a = _artifact(tmp_path / "a/robot.so", b"grid_rbd_torch_k94404b389d0a")
+    b = _artifact(tmp_path / "b/robot.so", b"grid_rbd_torch_k94404b389d0a")
+    loader = _Loader()
+
+    def interrupted(path):
+        loader(path)
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        _handle._load_artifact(a, interrupted)
+    assert loader.registered
+    with pytest.raises(RuntimeError, match="another cache"):
+        _handle._load_artifact(b, loader)
+    assert loader.opened == [a]
+    _handle._load_artifact(a, loader.__class__())          # the same file still loads
+
+
+def test_a_failed_repeat_open_keeps_the_earlier_claim(tmp_path):
+    a = _artifact(tmp_path / "a/robot.so", b"grid_rbd_torch_k94404b389d0a")
+    b = _artifact(tmp_path / "b/robot.so", b"grid_rbd_torch_k94404b389d0a")
+    _handle._load_artifact(a, _Loader())
+    with pytest.raises(RuntimeError, match="dlopen failed"):
+        _handle._load_artifact(a, _Loader(fail="open"))
+    with pytest.raises(RuntimeError, match="another cache"):
+        _handle._load_artifact(b, _Loader())
+
+
+@pytest.mark.skipif(not hasattr(__import__("os"), "fork"), reason="needs fork")
+def test_a_fork_during_a_load_carries_the_claim_into_the_child(tmp_path):
+    # One thread is inside the native loader, registered and not yet returned,
+    # when another thread forks. The child inherits the image and must know it.
+    import os
+    import threading
+    import warnings
+    a = _artifact(tmp_path / "a/robot.so", b"grid_rbd_torch_k94404b389d0a")
+    b = _artifact(tmp_path / "b/robot.so", b"grid_rbd_torch_k94404b389d0a")
+    registered, release = threading.Event(), threading.Event()
+
+    def slow(path):
+        registered.set()
+        release.wait(10)
+        return object()
+
+    loading = threading.Thread(target=_handle._load_artifact, args=(a, slow))
+    loading.start()
+    try:
+        assert registered.wait(5)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)   # fork with a live thread
+            pid = os.fork()
+        if pid == 0:
+            code = 1
+            try:
+                try:
+                    _handle._load_artifact(b, _Loader())           # not blocked, and refused
+                except RuntimeError as exc:
+                    code = 0 if "another cache" in str(exc) else 2
+            finally:
+                os._exit(code)
+        assert os.waitpid(pid, 0)[1] == 0
+    finally:
+        release.set()
+        loading.join(5)
+
+
 def test_the_handle_constructor_loads_through_the_guard():
     import inspect
     source = inspect.getsource(_handle.RobotHandle.__init__)
