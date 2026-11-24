@@ -1079,6 +1079,9 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              "const int ID_DU_TEMP_SPILL_START = " + str(inverse_dynamics_gradient_temp_layout["spill_start"]) + ";", \
                              "const int ID_DU_TEMP_SPILL_END = " + str(inverse_dynamics_gradient_temp_layout["spill_end"]) + ";", \
                              "const int ID_DU_TEMP_SPILL_COUNT = " + str(inverse_dynamics_gradient_temp_layout["spill_count"]) + ";", \
+                             # 1 when the inverse_dynamics_gradient inner honours USE_DA_DF_SPILL (the sparse
+                             # layout); 0 for the dense fold (mimic, skew axis, spherical), which refuses it.
+                             "const int GRID_ID_DU_SELECTIVE_SPILL_AVAILABLE = " + str(0 if (self.robot_has_mimic_joints() or self.robot.robot_has_skew_axis() or self.robot.robot_has_spherical()) else 1) + ";", \
                              "const int INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_COUNT = " + str(legacy_arena_count(id_t_count)) + ";", \
                              "const int MINV_DYNAMIC_SHARED_MEM_COUNT = " + str(legacy_arena_count(minv_t_count)) + ";", \
                              "const int FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_COUNT = " + str(legacy_arena_count(fd_t_count)) + ";", \

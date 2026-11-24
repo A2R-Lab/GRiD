@@ -4482,3 +4482,23 @@ add one that builds world transforms and returns a quantity that does not depend
 base position, ask for `root_at_origin`. Add the kernel to
 `test/python_wrappers/test_floating_base_offset_invariance.py`, which requires the same
 bits at 0 m, 30 m and 1000 m.
+
+### A consumer that composes the inners must check which gradient layout it has (2026-11-23)
+
+GATO passed `USE_DA_DF_SPILL = true` to `inverse_dynamics_gradient_inner` on a robot
+with mimic joints and shrank `s_temp` by `ID_DU_TEMP_SPILL_COUNT`. The dense inner
+(mimic joints, skew axes, spherical joints) has no selective band and writes its whole
+pool through `s_temp`, so it wrote past the shared arena (813 memcheck errors). GRiD's
+own kernels never choose that rung for a dense robot; a consumer had no way to know.
+The dense inner now carries `static_assert(!USE_DA_DF_SPILL)` and the header emits
+`GRID_ID_DU_SELECTIVE_SPILL_AVAILABLE` (1 sparse, 0 dense). A new template flag on an
+inner that only one layout honours needs the same pair: a constant that says so and an
+assertion in the layout that ignores it.
+
+### Pinocchio 4.1.0 derivatives on a composite planar root (2026-11-23)
+
+Reported by GATO: `computeABADerivatives` is wrong on a
+`JointModelComposite(PX, PY, RZ)` root (it disagrees with central differences of its
+own `aba`). Three separate joints PX, PY, RZ, or `JointModelPlanar`, give correct
+derivatives. GRiD's planar oracles use `JointModelPlanar`. Do not build an oracle on
+the composite root.
