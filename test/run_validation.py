@@ -120,6 +120,14 @@ def tier_table_is_current():
     return (ROOT / TIER_TABLE).read_text().split('\n\n', 1)[1] == tier_table(root=ROOT)
 
 
+def write_tier_table():
+    """Regenerate the tier table from the receipt now in the tree. The table is
+    part of the evidence commit, so the launcher writes it with the receipt."""
+    from test.receipt_integrity import tier_table
+    path = ROOT / TIER_TABLE
+    path.write_text(path.read_text().split('\n\n', 1)[0] + '\n\n' + tier_table(root=ROOT))
+
+
 def finalize(out):
     """Verify committed evidence only; never launch a driver or change source."""
     out = out.resolve()
@@ -353,10 +361,11 @@ def main():
                 if any(line.strip()[2:] != 'test/gpu-proof-header-keys.json' for line in dirty):
                     raise RuntimeError('Unexpected dirty input after recording')
                 shutil.copyfile(merged, ROOT / 'gpu-proof.json')
+                write_tier_table()
                 state['evidence_hashes'] = {p: file_hash(ROOT / p) for p in
-                    ('gpu-proof.json', 'test/gpu-proof-header-keys.json')}
+                    ('gpu-proof.json', 'test/gpu-proof-header-keys.json', TIER_TABLE)}
                 state['status'] = 'awaiting-evidence-commit'; save()
-                print('Recording complete. Commit gpu-proof.json and test/gpu-proof-header-keys.json, '
+                print(f'Recording complete. Commit gpu-proof.json, test/gpu-proof-header-keys.json and {TIER_TABLE}, '
                       f'then run {sys.executable} test/run_validation.py --finalize {out}', flush=True)
             else:
                 if args.full:
