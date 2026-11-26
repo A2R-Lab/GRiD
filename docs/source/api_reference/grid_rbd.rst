@@ -31,6 +31,23 @@ prepared-artifact identity.
 
 .. autofunction:: grid_rbd.describe_model
 
+Coordinate conventions
+----------------------
+
+See :doc:`../user_guide/concepts/coordinate_conventions` for the conventions
+of GRiD, Pinocchio and MuJoCo and the maps between them.
+
+.. autoclass:: grid_rbd.conventions.PinocchioMap
+   :members:
+
+.. autofunction:: grid_rbd.conventions.q_to_mujoco
+
+.. autofunction:: grid_rbd.conventions.q_from_mujoco
+
+.. autofunction:: grid_rbd.conventions.v_to_mujoco
+
+.. autofunction:: grid_rbd.conventions.v_from_mujoco
+
 Registration
 ------------
 
