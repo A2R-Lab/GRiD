@@ -114,6 +114,36 @@ def test_dynamics_output_is_bit_identical_at_any_base_position(model, kernel):
             f"max abs difference {np.max(np.abs(moved.astype(np.float64) - at_origin.astype(np.float64))):.3e}")
 
 
+_WITH_WRENCH = {
+    "inverse_dynamics": lambda h, q, s, w: h.inverse_dynamics(q, s["qd"], s["qdd"], f_ext=w),
+    "forward_dynamics": lambda h, q, s, w: h.forward_dynamics(q, s["qd"], s["u"], f_ext=w),
+    "aba": lambda h, q, s, w: h.aba(q, s["qd"], s["u"], f_ext=w),
+    "inverse_dynamics_gradient": lambda h, q, s, w: h.inverse_dynamics_gradient(
+        q, s["qd"], s["qdd"], f_ext=w),
+    "forward_dynamics_gradient": lambda h, q, s, w: h.forward_dynamics_gradient(
+        q, s["qd"], s["u"], f_ext=w),
+}
+
+
+@pytest.mark.parametrize("kernel", sorted(_WITH_WRENCH))
+def test_dynamics_with_a_local_wrench_is_bit_identical_at_any_base_position(model, kernel):
+    """An external wrench is given in each body's own frame, so it does not
+    change with the base position either."""
+    handle, state = model
+    wrench = np.random.default_rng(7).uniform(
+        -5.0, 5.0, (_B, 6 * handle.num_bodies)).astype(np.float32)
+    call = _WITH_WRENCH[kernel]
+    at_origin = _flat(call(handle, _q(state, (0.0, 0.0, 0.0)), state, wrench))
+    assert np.all(np.isfinite(at_origin))
+    without = _flat(_INVARIANT[kernel](handle, _q(state, (0.0, 0.0, 0.0)), state))
+    assert np.max(np.abs(at_origin - without)) > 1e-2      # the wrench is not being dropped
+    for position in _OFFSETS:
+        moved = _flat(call(handle, _q(state, position), state, wrench))
+        assert np.array_equal(moved, at_origin), (
+            f"{kernel} with f_ext changed with the base at {position}: max abs difference "
+            f"{np.max(np.abs(moved.astype(np.float64) - at_origin.astype(np.float64))):.3e}")
+
+
 def test_world_quantities_still_follow_the_base(model):
     """The pose and the centre of mass are world quantities and must move with
     the base; the dynamics change must not have zeroed the position for them."""
