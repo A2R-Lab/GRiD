@@ -32,6 +32,7 @@ import numpy as np
 import pytest
 
 from grid_codegen import GRiDCodeGenerator
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import (
     _build_cuda_samples,
     _detect_cuda_arch,
@@ -114,7 +115,7 @@ def _compile_runner(build_dir: Path, floating_base: bool):
         "-gencode", f"arch=compute_{arch},code=compute_{arch}",
         "-o", str(executable), str(runner_copy),
     ]
-    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    result = cached_nvcc_run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(
             "CUDA coriolis runner compilation failed.\n"

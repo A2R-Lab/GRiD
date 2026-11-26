@@ -28,6 +28,7 @@ import pytest
 
 from grid_codegen import GRiDCodeGenerator
 from URDFParser import URDFParser
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 
 REPO = Path(__file__).resolve().parents[2]
@@ -68,7 +69,7 @@ def _build(name, floating, options, build_dir):
         cmd = ["nvcc", *kernel_flags(), f"-arch=sm_{arch}", "-I", str(build_dir),
                f"-DGRID_TEST_XI_SIZE={xi.group(1)}", f"-DGRID_TEST_JL_SIZE={jl.group(1)}",
                *extra, "-o", str(exe), str(runner)]
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = cached_nvcc_run(cmd, capture_output=True, text=True)
         assert r.returncode == 0, f"runner compilation ({tag}) failed:\n{r.stderr[-4000:]}"
         exes[tag] = exe
     return exes

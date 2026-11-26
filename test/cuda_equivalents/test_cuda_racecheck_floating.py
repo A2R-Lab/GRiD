@@ -20,6 +20,7 @@ import pytest
 
 from grid_codegen import GRiDCodeGenerator
 from URDFParser import URDFParser
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 
 REPO = Path(__file__).resolve().parents[2]
@@ -51,7 +52,7 @@ def test_go2_floating_composition_is_racecheck_clean(tmp_path):
     runner = tmp_path / RUNNER_SOURCE.name
     shutil.copyfile(RUNNER_SOURCE, runner)
     exe = tmp_path / "runner.exe"
-    r = subprocess.run(["nvcc", *kernel_flags(), "-lineinfo", f"-arch=sm_{_detect_cuda_arch()}",
+    r = cached_nvcc_run(["nvcc", *kernel_flags(), "-lineinfo", f"-arch=sm_{_detect_cuda_arch()}",
                         "-I", str(tmp_path), "-o", str(exe), str(runner)], capture_output=True, text=True)
     assert r.returncode == 0, f"runner compilation failed:\n{r.stderr[-4000:]}"
     for threads in (32, 256):

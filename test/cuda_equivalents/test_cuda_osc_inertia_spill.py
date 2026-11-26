@@ -39,6 +39,7 @@ from grid_codegen import GRiDCodeGenerator
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec
 from RBDReference.equivalents.reference_backend import build_project_adapter
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch, _build_cuda_samples
 from test.cuda_equivalents.test_cuda_frame_jacobian import (
     check_osc_inertia,
@@ -103,7 +104,7 @@ def _compile(build_dir, arch):
     exe = build_dir / "runner.exe"
     cmd = [nvcc, *kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}",
            f"-I{glass}", f"-I{build_dir}", "-o", str(exe), str(build_dir / "runner.cu")]
-    res = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    res = cached_nvcc_run(cmd, cwd=build_dir, capture_output=True, text=True)
     if res.returncode != 0:
         pytest.fail(f"osc_inertia spill runner compile failed.\n{' '.join(cmd)}\n{res.stderr[-3000:]}")
     return exe

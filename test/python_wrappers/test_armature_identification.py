@@ -1,5 +1,6 @@
 """Independent parameter finite differences and native/backend ownership."""
 from grid_codegen.nvcc_flags import kernel_flags
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 import contextlib
 import io
 from pathlib import Path
@@ -121,7 +122,7 @@ def test_native_collectives(case, tmp_path):
            str(source), "-o", str(binary)]
     if h.dtype == "float64":
         cmd.append("-DTEST_DOUBLE")
-    built = subprocess.run(cmd, text=True, capture_output=True, timeout=180)
+    built = cached_nvcc_run(cmd, text=True, capture_output=True, timeout=180)
     assert built.returncode == 0, built.stdout+built.stderr
     for k in range(len(q)):
         data = " ".join(map(str,np.concatenate([q[k],v[k],u[k],acc[k],fe[k]])))

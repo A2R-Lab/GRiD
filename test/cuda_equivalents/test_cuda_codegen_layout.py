@@ -13,6 +13,7 @@ from grid_codegen.nvcc_flags import kernel_flags
 from grid_codegen.algorithms._idsva_so import (
     idsva_so_parent_topology_needs_reference_order_output_repair,
 )
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import (
@@ -184,7 +185,7 @@ def _compile_header_consumer(
     if extra_flags:
         cmd.extend(extra_flags)
     cmd.append(str(source_path))
-    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    result = cached_nvcc_run(cmd, cwd=build_dir, capture_output=True, text=True)
     combined = f"{result.stdout}\n{result.stderr}"
     if expect_success and result.returncode != 0:
         pytest.fail(
@@ -1021,7 +1022,7 @@ def test_joint_limits_land_at_true_q_offsets(tmp_path):
                   'template float* grid::init_joint_limits<float>();\n'
                   'int main() { return 0; }\n')
     arch = _detect_cuda_arch()
-    proc = subprocess.run([nvcc, *kernel_flags(), f"-arch=sm_{arch}", f"-I{tmp_path}",
+    proc = cached_nvcc_run([nvcc, *kernel_flags(), f"-arch=sm_{arch}", f"-I{tmp_path}",
                            "-c", str(tu), "-o", str(tu.with_suffix(".o"))],
                           capture_output=True, text=True, timeout=1200)
     assert proc.returncode == 0, f"go2 limits TU failed to compile:\n{proc.stderr[-3000:]}"
@@ -1084,7 +1085,7 @@ __global__ void fc_probe(T *out, const T *x, const T *u, const grid::robotModel<
 int main() { return 0; }
 ''')
     arch = _detect_cuda_arch()
-    proc = _sp.run([nvcc, *kernel_flags(), f"-arch=sm_{arch}", f"-I{fc_header.parent}",
+    proc = cached_nvcc_run([nvcc, *kernel_flags(), f"-arch=sm_{arch}", f"-I{fc_header.parent}",
                     "-c", str(tu), "-o", str(tu.with_suffix(".o"))],
                    capture_output=True, text=True, timeout=1200)
     assert proc.returncode == 0, f"fc TU failed to compile:\n{proc.stderr[-3000:]}"

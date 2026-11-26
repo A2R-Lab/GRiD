@@ -30,6 +30,7 @@ import pytest
 
 from grid_codegen import GRiDCodeGenerator
 from grid_codegen.nvcc_flags import kernel_flags
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import (
     _build_cuda_samples,
     _detect_cuda_arch,
@@ -99,7 +100,7 @@ def _compile_runner(build_dir, defines):
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
         f"-I{glass_inc}", "-o", str(executable), str(runner_copy),
     ] + [f"-D{d}" for d in defines]
-    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    result = cached_nvcc_run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(
             "CUDA frame_jacobian host runner compilation failed.\n"

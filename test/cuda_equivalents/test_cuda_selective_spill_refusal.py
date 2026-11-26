@@ -23,6 +23,7 @@ from URDFParser import URDFParser
 
 from grid_codegen import GRiDCodeGenerator
 from grid_codegen.nvcc_flags import kernel_flags
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 
 pytestmark = [pytest.mark.cuda_equivalence, pytest.mark.robot_smoke]
@@ -57,7 +58,7 @@ def _compile(folder, spill: bool, extra=()):
     if nvcc is None:
         pytest.skip("nvcc was not found; install CUDA Toolkit to run CUDA tests.")
     name = "spill" if spill else "plain"
-    return subprocess.run(
+    return cached_nvcc_run(
         [nvcc, *kernel_flags(), "-arch=sm_" + _detect_cuda_arch(), f"-I{folder}",
          f"-DPROBE_SPILL={'true' if spill else 'false'}", *extra,
          "-c", str(folder / "probe.cu"), "-o", str(folder / f"probe_{name}.o")],

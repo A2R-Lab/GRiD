@@ -26,6 +26,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 
 _HERE = Path(__file__).resolve().parent
 _ROOT = _HERE.parents[1]
@@ -75,7 +76,7 @@ def _compile(build_dir: Path, fdsva: int) -> Path:
     cmd = [nvcc, *kernel_flags(), "-arch", f"sm_{_arch()}",
            f"-DMJX_ALGO_FDSVA={fdsva}", "-diag-suppress", "177", "-diag-suppress", "174",
            f"-I{glass}", f"-I{build_dir}", "-o", str(exe), str(build_dir / "runner.cu")]
-    res = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    res = cached_nvcc_run(cmd, cwd=build_dir, capture_output=True, text=True)
     if res.returncode != 0:
         pytest.fail(f"mjx tier-invariance runner compile failed (fdsva={fdsva}).\n"
                     f"{' '.join(cmd)}\n{res.stderr[-3000:]}")

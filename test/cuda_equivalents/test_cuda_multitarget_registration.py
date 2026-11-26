@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 from grid_codegen import GRiDCodeGenerator
 from grid_codegen.nvcc_flags import kernel_flags
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.test_cuda_contact_frame_positions import _robot, _q_for, _retract
 from RBDReference import RBDReference
 
@@ -38,7 +39,7 @@ def build(directory, scalar, *, compile_only=False):
         flags = ['-gencode', f'arch=compute_{arch},code=sm_{arch}']
     command = [compiler, *kernel_flags(), *flags,
                '-DSCALAR=' + scalar, '-I' + str(directory), str(RUNNER), '-o', str(exe)]
-    result = subprocess.run(command, text=True, capture_output=True)
+    result = cached_nvcc_run(command, text=True, capture_output=True)
     assert result.returncode == 0, result.stdout + result.stderr
     return robot, targets, exe
 

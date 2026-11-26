@@ -31,6 +31,7 @@ from grid_codegen import GRiDCodeGenerator
 from grid_codegen.algorithms._f_ext_contact import contact_frames_from_urdf
 from RBDReference import RBDReference
 from URDFParser import URDFParser
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 
 REPO = Path(__file__).resolve().parents[2]
@@ -102,7 +103,7 @@ def _build(robot, contacts, build_dir):
     shutil.copyfile(RUNNER_SOURCE, runner)
     exe = build_dir / "runner.exe"
     arch = _detect_cuda_arch()
-    r = subprocess.run(["nvcc", *kernel_flags(), f"-arch=sm_{arch}", "-I", str(build_dir),
+    r = cached_nvcc_run(["nvcc", *kernel_flags(), f"-arch=sm_{arch}", "-I", str(build_dir),
                         "-o", str(exe), str(runner)], capture_output=True, text=True)
     assert r.returncode == 0, f"runner compilation failed:\n{r.stderr[-4000:]}"
     return exe

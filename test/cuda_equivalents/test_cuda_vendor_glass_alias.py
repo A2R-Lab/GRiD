@@ -27,6 +27,7 @@ import pytest
 from grid_codegen import GRiDCodeGenerator
 from grid_codegen.helpers._lin_alg_helpers import _glass_git_head
 from URDFParser import URDFParser
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 
 REPO = Path(__file__).resolve().parents[2]
@@ -91,7 +92,7 @@ def test_vendor_glass_false_compiles_against_top_level_glass_and_runs(tmp_path):
         "int main(){ return 0; }\n")
     arch = _detect_cuda_arch()
     for src, exe in ((RUNNER.name, "runner.exe"), ("sizers.cu", "sizers.exe")):
-        r = subprocess.run(["nvcc", *kernel_flags(), f"-arch=sm_{arch}", "-I", str(build),
+        r = cached_nvcc_run(["nvcc", *kernel_flags(), f"-arch=sm_{arch}", "-I", str(build),
                             "-I", str(GLASS_ROOT), f"-DGRID_TEST_XI_SIZE={xi.group(1)}",
                             f"-DGRID_TEST_JL_SIZE={jl.group(1)}", "-o", str(build / exe), str(build / src)],
                            capture_output=True, text=True)
