@@ -103,23 +103,46 @@ Floating base, GRiD to MuJoCo
 Fixed-base robots built from revolute joints with limits and prismatic
 joints need no conversion in any direction.
 
-Where the maps are implemented
-------------------------------
+Converting in code
+------------------
 
-- Floating base, GRiD and MuJoCo. The generated kernels have MuJoCo-convention
-  twins, selected with ``handle.mujoco`` or ``output_convention="mujoco"``.
-  This is public API and needs no conversion in user code.
-- Continuous joints and mimic joints, GRiD and Pinocchio.
-  ``RBDReference.equivalents.conventions`` holds the expand, collapse and
-  Jacobian functions (``normalize_project_q_for_pin``,
-  ``collapse_pin_q_to_project``, ``project_q_to_pin_q_jacobian``). The
-  validation suite uses them to compare against Pinocchio. They are test
-  support today and their signatures may change.
-- Floating base, values, gradients and second derivatives, as numpy
-  functions. ``RBDReference.equivalents.mujoco_convention``. Also test
-  support.
-- Planar joints, GRiD and Pinocchio. The map above is used by the planar
-  validation tests and has no library function yet.
+``grid_rbd.conventions`` holds the maps as numpy functions. It needs no GPU
+and no compiler, and it imports neither Pinocchio nor MuJoCo.
+
+.. code-block:: python
+
+   import pinocchio as pin
+   from grid_rbd import conventions, describe_model
+
+   descriptor = describe_model("robot.urdf", floating_base=True)
+   pin_model = pin.buildModelFromUrdf("robot.urdf", pin.JointModelFreeFlyer())
+   to_pin = conventions.PinocchioMap(descriptor, pin_model)
+
+   q_pin = to_pin.q_to_pinocchio(q)
+   v_pin = to_pin.v_to_pinocchio(q, v)
+   tau = to_pin.tau_from_pinocchio(q, pin.rnea(pin_model, pin_model.createData(), q_pin, v_pin, a_pin))
+
+``PinocchioMap`` pairs the joints of the two models by name, so the libraries
+may order them differently. It pairs a GRiD floating base with a Pinocchio
+free-flyer root and a GRiD planar base with a Pinocchio planar root, and it
+refuses two models that are not the same robot. It provides the
+configuration, velocity, acceleration and generalized force maps in both
+directions, the velocity matrix ``P(q)`` with ``v_pin = P v``, and the
+Jacobian of the configuration map. A handle's ``model_descriptor`` property
+works in place of ``describe_model``.
+
+For MuJoCo, ``q_to_mujoco``, ``q_from_mujoco``, ``v_to_mujoco`` and
+``v_from_mujoco`` convert the floating base block of one state. To get
+GRiD's outputs in the MuJoCo convention, use ``handle.mujoco`` or
+``output_convention="mujoco"`` instead: the generated kernels have
+MuJoCo-convention twins and need no conversion in user code
+(:doc:`mjx_convention`).
+
+Two cases are outside these functions. A mimic follower owns no GRiD
+coordinate, so a force cannot be converted from GRiD to a Pinocchio model
+that keeps the follower as its own joint. A planar or floating joint that is
+not the root is split into scalar joints by GRiD and cannot be paired with a
+Pinocchio joint.
 
 Why the conventions differ
 --------------------------
