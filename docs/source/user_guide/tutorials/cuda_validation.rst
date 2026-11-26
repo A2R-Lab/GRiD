@@ -28,12 +28,13 @@ Add ``--execute`` only on a clean committed candidate in a coordinated quiet
 window. The launcher holds ``/tmp/a2rlab-timing.lock`` throughout the run,
 records logs, validates fresh/carried header-key provenance, verifies the
 merged receipt under the everyday policy (exact test manifest, expected-skip
-baseline, fingerprint, signature) and stages the generated receipt and header
-manifest. Its ``awaiting-evidence-commit`` state is successful recording, not
+baseline, fingerprint, signature) and stages the generated receipt, the header
+manifest and the tier table that names the receipt. Its ``awaiting-evidence-commit`` state is successful recording, not
 a failed GPU run. Commit only those generated evidence files, then verify the
 clean descendant without rerunning any tests::
 
-   git add gpu-proof.json test/gpu-proof-header-keys.json
+   git add gpu-proof.json test/gpu-proof-header-keys.json \\
+       docs/source/user_guide/getting_started/receipt_tiers.inc
    git commit -m "Record GPU correctness evidence"
    .venv/bin/python test/run_validation.py --finalize validation-runs/next
 
