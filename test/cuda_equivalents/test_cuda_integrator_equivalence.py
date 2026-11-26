@@ -357,20 +357,29 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode,
     # Sweep block thread counts (one warp + multi-warp + a session-random count)
     # to catch thread-count-dependent races; the kernel is compiled once and the
     # thread count is passed to the runner via argv.
+    # The reference does not depend on the block thread count, and for a
+    # humanoid its gradient costs more than the kernel launch. Compute each
+    # expected value once and compare every thread count against it.
+    expected_values, expected_gradients = {}, {}
+
+    def reference(cache, compute, sample, dt, integrator_type):
+        key = (sample.name, dt, integrator_type)
+        if key not in cache:
+            # The third vector of each sample is the control torque u (see _torque_driven).
+            cache[key] = compute(sample.q, sample.qd, sample.qdd, dt, integrator_type=integrator_type)
+        return cache[key]
+
+    assert len({sample.name for sample in samples}) == len(samples), "sample names must be distinct"
     for num_threads in _thread_counts():
       for dt in dts:
         for sample in samples:
-            # The third vector of each sample is the control torque u (see
-            # _torque_driven).
             actual = _run_sample(executable, compile_cmd, sample, dt, num_threads=num_threads)
-            u = sample.qdd
             for prefix, integrator_type, has_gradient, fixed_base_only in _INTEGRATORS:
                 # Retain the per-row scope flag for future restricted schemes.
                 if fixed_base_only and base_mode != "fixed":
                     continue
-                expected_x_kp1 = project_model.integrator(
-                    sample.q, sample.qd, u, dt, integrator_type=integrator_type,
-                )
+                expected_x_kp1 = reference(
+                    expected_values, project_model.integrator, sample, dt, integrator_type)
                 x_kp1_block = np.asarray(actual[prefix + "_x_kp1"], dtype=np.float64).reshape(-1)
                 assert x_kp1_block.shape == (nq + nv,), (
                     f"{prefix} x_kp1 shape {x_kp1_block.shape} (expected {(nq + nv,)})"
@@ -383,9 +392,8 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode,
                 if not has_gradient:
                     continue
 
-                expected_dAB = project_model.integrator_gradient(
-                    sample.q, sample.qd, u, dt, integrator_type=integrator_type,
-                )
+                expected_dAB = reference(
+                    expected_gradients, project_model.integrator_gradient, sample, dt, integrator_type)
                 dAB_block = np.asarray(actual[prefix + "_dAB"], dtype=np.float64)
                 x_kp1_with_block = np.asarray(actual[prefix + "_x_kp1_with_dAB"], dtype=np.float64).reshape(-1)
                 dAB_with_block = np.asarray(actual[prefix + "_dAB_with_x_kp1"], dtype=np.float64)
