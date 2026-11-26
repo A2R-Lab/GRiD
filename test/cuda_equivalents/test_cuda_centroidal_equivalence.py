@@ -44,6 +44,7 @@ import numpy as np
 import pytest
 
 from grid_codegen import GRiDCodeGenerator
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import (
     _build_cuda_samples,
     _detect_cuda_arch,
@@ -121,7 +122,7 @@ def _compile_runner(build_dir):
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
         f"-I{glass_inc}", "-o", str(executable), str(runner_copy),
     ]
-    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    result = cached_nvcc_run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(
             "CUDA centroidal smoke runner compilation failed.\n"
@@ -200,7 +201,7 @@ def _compile_mimic_runner(build_dir):
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
         f"-I{glass_inc}", "-o", str(executable), str(runner_copy),
     ]
-    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    result = cached_nvcc_run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(
             "CUDA centroidal mimic smoke runner compilation failed.\n"

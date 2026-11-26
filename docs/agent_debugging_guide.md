@@ -4539,3 +4539,42 @@ A related rule from the same review: a planner and the admission it plans for
 must compute the charge with one function. `largest_kb` capped a measured peak
 at the class floor and `predict_kb` did not, so the planner could choose a
 width that admission would never accept.
+
+## A test that compiles its own program pays for it on every run unless the build is keyed (2026-11-26)
+
+The full receipt at `671f2fce` took 8.2 h. The compile pool was done in the
+first hour, and the single GPU shard chain ran alone for the next 7.3 h. Much
+of that chain was compiling. Two kinds of test built inside their shard.
+
+About 55 native test modules each carried their own copy of a direct
+`subprocess.run([nvcc, ...])` into the test's temporary directory. No cache
+saw these builds, so a run with every other cache present compiled them all
+again: the output-spill module alone took 49 minutes of every run. They now
+call `cached_nvcc_run` (`test/cuda_equivalents/command_cache.py`) with the
+same command. The key is every source and header the compiler reads from the
+repository, the flags and the toolkit, with paths left out. A hit returns the
+stored compiler messages, so a test that reads warnings sees them. A failed
+command is never stored.
+
+33 wrapper modules registered robots the driver's hand-kept warm list did not
+name, so their libraries were built in the shard. The list cannot keep up: the
+options are computed in the tests and several models are written to temporary
+files. The driver now records each module's build requests during a clean
+shard (`test/build_ledger.py`) and hands them to the pool on the next run.
+
+When a run is slow, sum the junit times per module before assuming the tests
+are slow. A handful of tests taking minutes each in a module of small programs
+is a compile, and the first question is which cache should have had it.
+
+A cache only helps a build whose command is the same on the next run. Five
+of the converted modules drew a thread count per run and passed it as a `-D`
+flag, so every run had a new key and compiled again. The first warm run showed
+it: 90 of 501 commands missed, all from those five modules. The count now
+reaches the runner as its first argument, as the second-order runner already
+did. A value that varies per run belongs at run time. Read the hit and miss
+lines of a second run before trusting a cache, and
+`test/test_command_cache.py` refuses a thread count in a compile flag.
+
+Not every slow module is a compile. The kinematics thread-invariance module
+starts one process per sample and thread count (1792 launches at batch 256),
+and each launch creates a CUDA context. Its time is execution.

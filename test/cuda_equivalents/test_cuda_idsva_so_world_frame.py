@@ -25,6 +25,7 @@ import numpy as np
 import pytest
 
 from grid_codegen import GRiDCodeGenerator
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import (
     _build_cuda_samples,
     _detect_cuda_arch,
@@ -152,6 +153,28 @@ def _generate_world_frame_header(project_model, build_dir: Path, target_shared_b
     return header_path
 
 
+def _world_frame_thread_count() -> int:
+    """The block thread count for one case, passed to the runner at run time.
+
+    As a -D flag it gave the build a new cache key on every run."""
+    threads = os.environ.get("GRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS")
+    if threads:
+        try:
+            thread_count = int(threads)
+        except ValueError:
+            pytest.fail(
+                "GRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS must be an integer when set."
+            )
+        if thread_count <= 0:
+            pytest.fail("GRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS must be positive when set.")
+    else:
+        # Session-random multi-warp count (non-multiple of 32) so the SO kernels
+        # are probed across warp counts over time, catching thread-count races
+        # that a fixed block size hides. Override with the env var to reproduce.
+        thread_count = _random_thread_count()
+    return thread_count
+
+
 def _compile_world_frame_runner(build_dir: Path):
     nvcc = shutil.which("nvcc")
     if nvcc is None:
@@ -172,23 +195,7 @@ def _compile_world_frame_runner(build_dir: Path):
         str(executable),
         str(runner_copy),
     ]
-    threads = os.environ.get("GRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS")
-    if threads:
-        try:
-            thread_count = int(threads)
-        except ValueError:
-            pytest.fail(
-                "GRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS must be an integer when set."
-            )
-        if thread_count <= 0:
-            pytest.fail("GRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS must be positive when set.")
-    else:
-        # Session-random multi-warp count (non-multiple of 32) so the SO kernels
-        # are probed across warp counts over time, catching thread-count races
-        # that a fixed block size hides. Override with the env var to reproduce.
-        thread_count = _random_thread_count()
-    cmd.insert(-1, f"-DGRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS={thread_count}")
-    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    result = cached_nvcc_run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(
             "CUDA world-frame smoke runner compilation failed.\n"
@@ -206,12 +213,12 @@ def _build_world_frame_case(project_model, tmp_path, label, target_shared_bytes)
     return _compile_world_frame_runner(build_dir)
 
 
-def _run_world_frame_sample(executable, compile_cmd, sample):
-    stdout = _run_runner(executable, _sample_to_stdin(sample), compile_cmd)
+def _run_world_frame_sample(executable, compile_cmd, sample, thread_count):
+    stdout = _run_runner(executable, _sample_to_stdin(sample), compile_cmd, num_threads=thread_count)
     # Run-to-run determinism (Inc6 class): the mimic NV^3 fold used to atomicAdd
     # in warp order (fixed 2026-07-31 → fixed-order gather). Byte-identical stdout
     # on an identical re-run keeps it honest at ULP level.
-    stdout_repeat = _run_runner(executable, _sample_to_stdin(sample), compile_cmd)
+    stdout_repeat = _run_runner(executable, _sample_to_stdin(sample), compile_cmd, num_threads=thread_count)
     assert stdout_repeat == stdout, (
         "world-frame SO runner is NON-DETERMINISTIC run-to-run "
         "(identical input, two launches differ) — warp-order-dependent reduction"
@@ -290,9 +297,12 @@ def test_cuda_world_frame_matches_python_reference(tmp_path, robot_id, base_mode
         project_model, tmp_path, f"{robot_id}_cuda_world_frame", target_shared_bytes
     )
     samples = _world_frame_samples(project_model)
+    thread_count = _world_frame_thread_count()
+    print(f"[world-frame] {robot_id}-{base_mode} thread_count={thread_count} "
+          "(reproduce: GRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS)")
 
     for sample in samples:
-        actual = _run_world_frame_sample(executable, compile_cmd, sample)
+        actual = _run_world_frame_sample(executable, compile_cmd, sample, thread_count)
         config = actual["world_frame_config"][0]
         np.testing.assert_allclose(
             config[3:8],

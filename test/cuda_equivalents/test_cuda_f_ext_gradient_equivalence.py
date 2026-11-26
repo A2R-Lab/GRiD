@@ -42,6 +42,7 @@ from RBDReference.tests.tolerances import get_tolerance
 
 from grid_codegen import GRiDCodeGenerator
 
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import (
     _detect_cuda_arch,
     _parse_runner_output,
@@ -123,7 +124,7 @@ def _gen_and_compile(proj, build_dir, floating_base, codegen_profile="all"):
         "-gencode", f"arch=compute_{arch},code=compute_{arch}",
         "-o", str(exe), str(runner_copy),
     ]
-    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    result = cached_nvcc_run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(f"compile failed:\n{' '.join(cmd)}\n{result.stdout}\n{result.stderr}")
     return exe

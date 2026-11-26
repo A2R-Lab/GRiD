@@ -21,6 +21,7 @@ import pytest
 
 from grid_codegen import GRiDCodeGenerator
 from grid_codegen.algorithms._collision import multi_tier_collision_spec_from_urdf
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -62,7 +63,7 @@ def test_collision_two_tier_matches_fine(tmp_path):
     exe = build_dir / "cuda_collision_two_tier_runner.exe"
     cmd = [nvcc, *kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}",
            "-I", str(build_dir), "-I", str(COLLISION_INCLUDE), "-o", str(exe), str(runner_copy)]
-    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    result = cached_nvcc_run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(f"two-tier runner compile FAILED.\ncmd: {' '.join(cmd)}\nstderr:\n{result.stderr}")
     run = subprocess.run([str(exe)], capture_output=True, text=True)

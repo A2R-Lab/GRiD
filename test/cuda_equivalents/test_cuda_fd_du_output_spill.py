@@ -42,6 +42,7 @@ from grid_codegen import GRiDCodeGenerator
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec
 from RBDReference.equivalents.reference_backend import build_project_adapter
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 
 # fd_du needs these (+ its id/minv/fd composition); crba/aba/end_effector_pose are
@@ -120,7 +121,7 @@ def _compile(build_dir, arch, floating):
            f"-DGRID_CUDA_FLOATING_BASE={1 if floating else 0}",
            "-DGRID_RUNNER_SKIP_GRADIENTS=0", "-DGRID_RUNNER_SKIP_EEPOSE_GRADIENTS=1",
            f"-I{glass}", f"-I{build_dir}", "-o", str(exe), str(build_dir / "runner.cu")]
-    res = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    res = cached_nvcc_run(cmd, cwd=build_dir, capture_output=True, text=True)
     if res.returncode != 0:
         pytest.fail(f"fd_du spill runner compile failed.\n{' '.join(cmd)}\n{res.stderr[-3000:]}")
     return exe

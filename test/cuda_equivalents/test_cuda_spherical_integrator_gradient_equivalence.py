@@ -26,6 +26,7 @@ import pytest
 from URDFParser import URDFParser
 from RBDReference import RBDReference
 from grid_codegen import GRiDCodeGenerator
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import (
     _detect_cuda_arch,
     _parse_runner_output,
@@ -86,7 +87,7 @@ def _compile_runner(build_dir, equiv_t):
         "-gencode", f"arch=compute_{arch},code=compute_{arch}",
         "-o", str(exe), str(runner_copy),
     ]
-    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    result = cached_nvcc_run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(
             "CUDA spherical integrator gradient runner compilation failed.\n"

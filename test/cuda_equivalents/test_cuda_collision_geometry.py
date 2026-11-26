@@ -26,6 +26,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -46,7 +47,7 @@ def _compile_runner(build_dir):
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
         "-I", str(COLLISION_INCLUDE), "-o", str(executable), str(runner_copy),
     ]
-    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    result = cached_nvcc_run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(
             "cuda_collision_geometry_runner compilation failed.\n"

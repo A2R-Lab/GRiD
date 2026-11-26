@@ -1,5 +1,6 @@
 """Armature composed with mutable inertia, friction, integration and curvature."""
 from grid_codegen.nvcc_flags import kernel_flags
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 import contextlib
 import io
 from pathlib import Path
@@ -121,7 +122,7 @@ def test_native_energy_device_uses_live_tables(composed, tmp_path):
          str(root/"test/cuda_equivalents/cuda_runtime_energy_runner.cu"),"-o",str(binary)]
     if h.dtype=="float64":
         cmd.append("-DTEST_DOUBLE")
-    built=subprocess.run(cmd,text=True,capture_output=True,timeout=180)
+    built=cached_nvcc_run(cmd,text=True,capture_output=True,timeout=180)
     assert built.returncode==0,built.stdout+built.stderr
     pi=np.asarray(ref.robot.get_inertia_params_ordered_by_id()[1:]).ravel()
     for qr,vr in zip(q,v):

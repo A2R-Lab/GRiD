@@ -37,6 +37,7 @@ from grid_codegen import GRiDCodeGenerator
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec
 from RBDReference.equivalents.reference_backend import build_project_adapter
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 
 _RUNNER = Path(__file__).with_name("cuda_coriolis_smoke_runner.cu")
@@ -97,7 +98,7 @@ def _compile(build_dir, arch):
     cmd = [nvcc, *kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}",
            "-DGRID_CUDA_CORIOLIS_TEST_THREADS=64", f"-I{glass}", f"-I{build_dir}",
            "-o", str(exe), str(build_dir / "runner.cu")]
-    res = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    res = cached_nvcc_run(cmd, cwd=build_dir, capture_output=True, text=True)
     if res.returncode != 0:
         pytest.fail(f"coriolis spill runner compile failed.\n{' '.join(cmd)}\n{res.stderr[-3000:]}")
     return exe

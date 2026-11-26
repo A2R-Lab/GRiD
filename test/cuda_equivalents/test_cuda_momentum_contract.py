@@ -19,6 +19,7 @@ import pytest
 from grid_codegen import GRiDCodeGenerator
 from RBDReference.equivalents.reference_backend import build_project_adapter
 from RBDReference.tests.model_sources import resolve_robot_spec
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch, _build_cuda_samples
 from test.cuda_equivalents.test_cuda_integrator_equivalence import _robot_spec
 
@@ -60,7 +61,7 @@ def test_full_momentum_contract(tmp_path, robot, base, dtype, tier):
     cmd = [nvcc, *kernel_flags(), f"-arch=sm_{arch}", f"-DTEST_SCALAR={dtype}",
            f"-DTEST_TIER=grid::{tier}", f"-I{tmp_path}", f"-I{ROOT / 'external/GLASS/include'}",
            str(source), "-o", str(exe)]
-    compiled = subprocess.run(cmd, capture_output=True, text=True)
+    compiled = cached_nvcc_run(cmd, capture_output=True, text=True)
     assert compiled.returncode == 0, compiled.stderr
     h_des = np.array([0.2, -0.3, 0.7, -0.4, 0.6, -0.1])
     weights = np.array([0.5, 1.0, 2.0, 0.8, 1.7, 1.2])

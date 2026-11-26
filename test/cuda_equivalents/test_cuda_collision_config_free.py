@@ -25,6 +25,7 @@ import pytest
 
 from grid_codegen import GRiDCodeGenerator
 from grid_codegen.algorithms._collision import build_self_cc_ranges
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from RBDReference.tests.model_sources import resolve_robot_spec, iter_robot_cases
 from RBDReference.tests import MANIFEST_PATH
@@ -98,7 +99,7 @@ def _compile_and_run(build_dir, runner_source, extra_args=None):
     exe = build_dir / (runner_source.stem + ".exe")
     cmd = [nvcc, *kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}",
            "-I", str(build_dir), "-I", str(COLLISION_INCLUDE), "-o", str(exe), str(runner_copy)]
-    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    result = cached_nvcc_run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(f"{runner_source.name} compile FAILED.\ncmd: {' '.join(cmd)}\n"
                     f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")

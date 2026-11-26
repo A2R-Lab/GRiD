@@ -125,7 +125,12 @@ launches first — conservative default + margin + MemAvailable floor). Direct
 driver invocations retain the historical overlap profile by default; a shard only waits for its own compile
 jobs, so the pool is the sole writer of a cache key until that shard starts (the
 unlocked cache writers are never raced; a mimic robot's cells share one header and
-fold into one serial job). `GRID_SPLIT_COMPILE_JOBS` sizes the pool (default 5;
+fold into one serial job). A wrapper module's robots reach the pool from the
+driver's `WARM_MANIFEST` or from the build requests recorded on the module's last clean
+shard (`test/build_ledger.py`, stored in `test/.split_suite/wrapper_builds.json`), and a
+native test that compiles its own program does it through `cached_nvcc_run`
+(`test/cuda_equivalents/command_cache.py`), never a bare `subprocess.run([nvcc, ...])`.
+`GRID_SPLIT_COMPILE_JOBS` sizes the pool (default 5;
 `0` = legacy serial inline warm). The tracked primary receipt launcher selects
 the conservative serial profile by default. Its opt-in `--resource-profile
 bounded-overlap` uses one shared memory-admission authority for two pool builds

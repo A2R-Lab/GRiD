@@ -121,3 +121,17 @@ def pytest_sessionfinish(session, exitstatus):
             f"or a vendored asset is broken, and a green run would be testing NOTHING. Fix the breakage "
             f"(or set GRID_TEST_NO_FLOOR=1 for a deliberate partial run):\n  {shown}{more}"
         )
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _no_machine_build_record(tmp_path_factory):
+    """Tests of the split driver must not read this machine's record of past
+    wrapper builds (test/build_ledger.py): point it at an empty place."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import build_ledger
+    original = build_ledger.LEDGER_PATH
+    build_ledger.LEDGER_PATH = tmp_path_factory.mktemp("build_ledger") / "wrapper_builds.json"
+    yield
+    build_ledger.LEDGER_PATH = original

@@ -50,6 +50,7 @@ from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec
 from RBDReference.equivalents.reference_backend import build_project_adapter
 from RBDReference.tests.state_sampling import build_dynamics_samples
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from test.cuda_equivalents.test_cuda_f_ext_gradient_equivalence import _parse_runner_output
 
@@ -112,7 +113,7 @@ def _compile(build_dir, arch, floating):
            f"-DGRID_CUDA_FLOATING_BASE={1 if floating else 0}",
            "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
            f"-I{repo}", f"-I{build_dir}", "-o", str(exe), str(build_dir / "runner.cu")]
-    res = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    res = cached_nvcc_run(cmd, cwd=build_dir, capture_output=True, text=True)
     if res.returncode != 0:
         pytest.fail(f"f_ext spill runner compile failed.\n{' '.join(cmd)}\n{res.stderr[-3000:]}")
     return exe

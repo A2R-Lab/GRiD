@@ -26,6 +26,7 @@ import numpy as np
 import pytest
 
 from grid_codegen import GRiDCodeGenerator
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import (
     _build_cuda_samples,
     _detect_cuda_arch,
@@ -73,17 +74,15 @@ def _compile_runner(build_dir: Path, floating_base: bool):
     shutil.copyfile(RUNNER_SOURCE, runner_copy)
     arch = _detect_cuda_arch()
     executable = build_dir / "cuda_regressor_gradient_runner.exe"
-    thread_count = _random_thread_count()
     cmd = [
         nvcc, *kernel_flags(),
         f"-DGRID_CUDA_FLOATING_BASE={1 if floating_base else 0}",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
-        f"-DGRID_CUDA_REGRESSOR_GRADIENT_TEST_THREADS={thread_count}",
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
         "-gencode", f"arch=compute_{arch},code=compute_{arch}",
         "-o", str(executable), str(runner_copy),
     ]
-    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    result = cached_nvcc_run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(
             "CUDA regressor-gradient runner compilation failed.\n"
@@ -113,6 +112,10 @@ def test_cuda_regressor_gradient_matches_reference(robot_id, base_mode, tmp_path
 
     _generate_header(project_model, tmp_path)
     executable, compile_cmd = _compile_runner(tmp_path, base_mode == "floating")
+    # Passed to the runner at run time, never as a -D flag: a flag would give
+    # the build a new cache key on every run.
+    thread_count = _random_thread_count()
+    print(f"[regressor-gradient] {robot_id}-{base_mode} thread_count={thread_count}")
     pi = _project_pi(robot)
 
     samples = _build_cuda_samples(project_model, random_count=2)
@@ -121,7 +124,7 @@ def test_cuda_regressor_gradient_matches_reference(robot_id, base_mode, tmp_path
     for sample in samples:
         q, qd, qdd = sample.q, sample.qd, sample.qdd
         try:
-            stdout = _run_runner(executable, _sample_to_stdin(sample), compile_cmd)
+            stdout = _run_runner(executable, _sample_to_stdin(sample), compile_cmd, num_threads=thread_count)
         except Exception as exc:  # noqa: BLE001
             combined = str(exc).lower()
             if any(p in combined for p in GPU_UNAVAILABLE_PATTERNS):

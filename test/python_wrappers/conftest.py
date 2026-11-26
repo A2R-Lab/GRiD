@@ -28,6 +28,17 @@ from pathlib import Path
 import pytest
 
 
+def pytest_configure(config):
+    """Under the split driver: record this module's build requests so the compile
+    pool can make them ahead of the shard next time (test/build_ledger.py)."""
+    record = os.environ.get("GRID_SPLIT_BUILD_RECORD")
+    if record:
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        import build_ledger
+        build_ledger.install_recorder(record)
+
+
 @pytest.fixture(autouse=True, scope="module")
 def _close_module_handles():
     if os.environ.get("GRID_TEST_NO_CLOSE") == "1":

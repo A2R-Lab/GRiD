@@ -28,6 +28,7 @@ import pytest
 
 from grid_codegen import GRiDCodeGenerator
 from grid_codegen.algorithms._collision import collision_spec_from_urdf
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -68,7 +69,7 @@ def test_self_collision_rows_fd(tmp_path):
     cmd = [nvcc, *kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}",
            "-I", str(build_dir), "-I", str(COLLISION_INCLUDE), "-I", str(REPO_ROOT),
            "-o", str(exe), str(runner_copy)]
-    build = subprocess.run(cmd, capture_output=True, text=True)
+    build = cached_nvcc_run(cmd, capture_output=True, text=True)
     assert build.returncode == 0, f"nvcc build failed:\n{build.stderr}"
 
     run = subprocess.run([str(exe)], capture_output=True, text=True, timeout=600)

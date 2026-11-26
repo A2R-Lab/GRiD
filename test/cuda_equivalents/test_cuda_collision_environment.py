@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from test.cuda_equivalents.command_cache import cached_nvcc_run
 from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from test.cuda_equivalents.test_cuda_collision_config_free import _robot, _gen_header
 from test.cuda_equivalents.test_cuda_collision_warp import _mixed_spec, _two_tier_spec
@@ -40,7 +41,7 @@ def _compile(build_dir):
     exe = build_dir / (RUNNER_SOURCE.stem + ".exe")
     cmd = [nvcc, *kernel_flags(), "-gencode", f"arch=compute_{arch},code=sm_{arch}",
            "-I", str(build_dir), "-I", str(COLLISION_INCLUDE), "-o", str(exe), str(runner_copy)]
-    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    result = cached_nvcc_run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(f"{RUNNER_SOURCE.name} compile FAILED.\ncmd: {' '.join(cmd)}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
     return exe

@@ -18,6 +18,10 @@ def launch(tmp_path, monkeypatch):
     (root / 'gpu-proof.json').write_text(json.dumps(original))
     (root / 'test/gpu-proof-header-keys.json').write_text(json.dumps(before))
     (root / 'test/gpu-proof-tests.txt').write_text('required\n')
+    (root / launcher.TIER_TABLE).parent.mkdir(parents=True)
+    (root / launcher.TIER_TABLE).write_text('.. generated\n\ntable for original\n')
+    monkeypatch.setattr('test.receipt_integrity.tier_table', lambda table=None, *, root:
+                        'table for ' + json.loads((root / 'gpu-proof.json').read_text())['identity'] + '\n')
     monkeypatch.setattr(launcher, 'ROOT', root)
     monkeypatch.setattr(launcher, 'LOCK_PATH', tmp_path / 'lock')
     state = SimpleNamespace(root=root, out=tmp_path / 'run', calls=[],
@@ -305,7 +309,11 @@ def test_recording_preserves_fresh_headers_and_awaits_evidence_commit(launch):
     keys = json.loads((launch.root / 'test/gpu-proof-header-keys.json').read_text())
     assert len(keys['shards']['fresh']) == 2
     assert len(launch.calls) == 1  # no dirty-tree verifier or hidden retry
-    assert set(launch.status()['evidence_hashes']) == {'gpu-proof.json', 'test/gpu-proof-header-keys.json'}
+    assert set(launch.status()['evidence_hashes']) == {
+        'gpu-proof.json', 'test/gpu-proof-header-keys.json', launcher.TIER_TABLE}
+    # The tier table names the receipt, so the launcher regenerates it with the evidence.
+    assert (launch.root / launcher.TIER_TABLE).read_text() == '.. generated\n\ntable for new\n'
+    assert launcher.tier_table_is_current()
 
 
 @pytest.mark.parametrize('outcome', [
@@ -393,8 +401,12 @@ def test_finalize_real_git_evidence_transition(tmp_path, monkeypatch):
         'import pathlib, sys\n'
         'assert sys.argv[1] == "--check-manifest"\n'
         'assert pathlib.Path(sys.argv[2]).read_text() == "required\\n"\n')
+    table = root / launcher.TIER_TABLE
+    table.parent.mkdir(parents=True)
+    table.write_text('header\n\nrows of the last receipt\n')
+    monkeypatch.setattr('test.receipt_integrity.tier_table', lambda table=None, *, root: 'rows\n')
     git('add', 'source.py', 'gpu-proof.json', 'test/gpu-proof-header-keys.json',
-        'test/gpu-proof-tests.txt', 'test/run_split_suite.py')
+        'test/gpu-proof-tests.txt', 'test/run_split_suite.py', launcher.TIER_TABLE)
     git('commit', '-qm', 'Candidate')
     out = tmp_path / 'run'
     monkeypatch.setattr(launcher, 'ROOT', root)
@@ -423,21 +435,23 @@ def test_finalize_real_git_evidence_transition(tmp_path, monkeypatch):
     assert json.loads((out / 'state.json').read_text())['status'] == 'awaiting-evidence-commit'
     with pytest.raises(ValueError, match='clean'):
         launcher.finalize(out)
+    # The launcher regenerated the tier table with the receipt; it is evidence too.
+    assert table.read_text() == 'header\n\nrows\n'
     git('add', 'gpu-proof.json', 'test/gpu-proof-header-keys.json')
-    git('commit', '-qm', 'Evidence')
+    git('commit', '-qm', 'Evidence without the table')
+    with pytest.raises(ValueError, match='clean'):
+        launcher.finalize(out)
+    git('add', launcher.TIER_TABLE); git('commit', '-qm', 'Tier table')
     launcher.finalize(out)
     assert calls == ['driver', 'verify']
     assert json.loads((out / 'state.json').read_text())['status'] == 'verified'
-    # The evidence commit may also carry the regenerated tier table, and only that.
-    table = root / launcher.TIER_TABLE
-    table.parent.mkdir(parents=True)
-    table.write_text('header\n\nrows\n')
-    git('add', launcher.TIER_TABLE); git('commit', '-qm', 'Tier table')
-    current = [False]
-    monkeypatch.setattr(launcher, 'tier_table_is_current', lambda: current[0])
+    # A table edited by hand after the recording is refused.
+    table.write_text('header\n\nrows by hand\n')
+    git('add', launcher.TIER_TABLE); git('commit', '-qm', 'Hand edit')
     with pytest.raises(ValueError, match='Tier table'):
         launcher.finalize(out)
-    current[0] = True
+    table.write_text('header\n\nrows\n')
+    git('add', launcher.TIER_TABLE); git('commit', '-qm', 'Restore the table')
     launcher.finalize(out)
     calls.pop()
     # A clean source edit still must not pass the finalization gate.

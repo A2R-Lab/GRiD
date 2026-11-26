@@ -143,8 +143,11 @@ class ShardSpec:
 
 # ─── warm manifest ───────────────────────────────────────────────────────────
 # module -> list of warm_robot kwarg dicts (cache-key-relevant kwargs only).
-# URDFs resolve through grid_assets.robot_urdf at runtime. Modules NOT listed (or
-# listed with []) still run in Phase B — they are just not pre-warmed:
+# URDFs resolve through grid_assets.robot_urdf at runtime. A module not listed
+# here is warmed from the build requests recorded on its last clean run
+# (test/build_ledger.py, see module_warm), so this table only matters for a
+# module's first run on a machine. Modules with neither still run in Phase B,
+# they are just not pre-warmed:
 #   * a module that tests the forced rebuild path (force_rebuild=True)
 #     rebuilds in-test regardless (none does today);
 #   * test_subset_build* use isolated tmp cache_dirs;
@@ -1140,8 +1143,12 @@ WRAPPER_HELPER_PATHS = {
                                  "test/cuda_equivalents/free_body_contract.urdf"],
     "test_release_numerics": ["tools/check_installed_numerics.py"],
     "test_consumer_artifact": ["bindings/examples/consumer_artifact_migration.py"],
-    "test_armature_identification": ["test/cuda_equivalents/cuda_armature_identification_runner.cu"],
-    "test_armature_composition": ["test/cuda_equivalents/cuda_runtime_energy_runner.cu"],
+    "test_armature_identification": ["test/cuda_equivalents/cuda_armature_identification_runner.cu",
+                                     "test/cuda_equivalents/command_cache.py",
+                                     "test/cuda_equivalents/cuda_harness.py"],
+    "test_armature_composition": ["test/cuda_equivalents/cuda_runtime_energy_runner.cu",
+                                  "test/cuda_equivalents/command_cache.py",
+                                  "test/cuda_equivalents/cuda_harness.py"],
     "test_planar_root_families": ["test/python_wrappers/planar_root_model.py",
                                   "test/cuda_equivalents/cuda_collision_complete_runner.cu",
                                   "test/cuda_equivalents/executable_cache.py",
@@ -1221,23 +1228,39 @@ def drift_guard(modules: list[str]) -> list[str]:
             )
             for n in ast.walk(tree)
         )
-        warmed = len(WARM_MANIFEST.get(mod, []))
+        warmed = len(module_warm(mod))
         force_rebuild = "force_rebuild=True" in src
         if warmed == 0 and calls > 0 and not force_rebuild and mod not in (
                 "test_any_thread_count",
                 "test_subset_build", "test_subset_build_jax", "test_subset_build_torch"):
             warnings.append(
-                f"{mod}: {calls} register_robot site(s), none warmed and not "
-                f"force_rebuild/exempt — extend WARM_MANIFEST?")
+                f"{mod}: {calls} register_robot site(s), none listed or recorded yet; "
+                f"its robots build in the shard this run and in the pool on the next")
     return warnings
 
 
 def _warm_desc(entry: dict) -> str:
     kw = dict(entry)
     robot = kw.pop("robot")
+    kw.pop("urdf_string", None)  # a recorded model: its hash is in the robot label
     return robot + "".join(
         f",{k}={v}" for k, v in sorted(kw.items()) if k != "max_batch_size"
     ) + f",mb={kw.get('max_batch_size', 256)}"
+
+
+def module_warm(mod: str) -> list[dict]:
+    """A module's warm entries: those listed in WARM_MANIFEST, then the build
+    requests recorded on its last clean run (test/build_ledger.py). The record
+    is what keeps a module with computed options out of its own shard's compile
+    time without a hand-kept list."""
+    import build_ledger  # noqa: PLC0415
+    entries = list(WARM_MANIFEST.get(mod, []))
+    seen = {_warm_desc(e) for e in entries}
+    for entry in build_ledger.entries(mod, WRAPPERS_DIR / f"{mod}.py"):
+        if _warm_desc(entry) not in seen:
+            seen.add(_warm_desc(entry))
+            entries.append(entry)
+    return entries
 
 
 def warm_entries(modules: list[str] | None = None) -> list[tuple[str, dict]]:
@@ -1247,10 +1270,9 @@ def warm_entries(modules: list[str] | None = None) -> list[tuple[str, dict]]:
     rest and report them as POOL-FAIL)."""
     seen: set[str] = set()
     out: list[tuple[str, dict]] = []
-    for mod, entries in sorted(WARM_MANIFEST.items()):
-        if modules is not None and mod not in modules:
-            continue
-        for e in entries:
+    names = set(WARM_MANIFEST) | set(discover_modules()) if modules is None else set(modules)
+    for mod in sorted(names):
+        for e in module_warm(mod):
             desc = _warm_desc(e)
             if desc in seen:
                 continue
@@ -1269,6 +1291,10 @@ def _warm_one_entry(desc: str, entry: dict) -> tuple[str, float, str]:
     robot = kw.pop("robot")
     t0 = time.monotonic()
     try:
+        if "urdf_string" in kw:  # a recorded request for a model the test wrote itself
+            key, _so_path, _meta = grid_rbd.warm_robot(name=f"__split_warm_{robot}", **kw)
+            dt = time.monotonic() - t0
+            return ("HIT" if dt < 5.0 else "BUILT"), dt, key[:12]
         urdf = robot_urdf(robot)
         if not urdf.exists():
             return "SKIP", 0.0, f"no urdf: {urdf}"
@@ -1809,7 +1835,7 @@ def build_compile_pool(out_dir: Path, *, warm: bool, cuda_shards: list,
             desc_to_job[desc] = name
         for mod in modules:
             names = []
-            for e in WARM_MANIFEST.get(mod, []):
+            for e in module_warm(mod):
                 jn = desc_to_job.get(_warm_desc(e))
                 if jn:
                     names.append(jn)
@@ -2035,11 +2061,41 @@ def _launch_shard(spec: ShardSpec, out_dir: Path, receipts: bool,
             keys_path = out_dir / "receipts" / f"{spec.name}.header_keys.jsonl"
             keys_path.unlink(missing_ok=True)
             env["GRID_HEADER_KEYS_OUT"] = str(keys_path)
+    else:
+        # The module's build requests, for the pool on the next run. Fresh file
+        # per attempt, like the header keys above.
+        record_path = _build_record_path(out_dir, spec)
+        record_path.unlink(missing_ok=True)
+        env[_build_record_env()] = str(record_path)
     log = open(log_path, "w")
     proc = subprocess.Popen(cmd, cwd=REPO_ROOT, stdout=log,
                             stderr=subprocess.STDOUT,
                             start_new_session=True, env=env)
     return _ShardRun(spec, proc, log, log_path, xml_path)
+
+
+def _build_record_env() -> str:
+    import build_ledger  # noqa: PLC0415
+    return build_ledger.RECORD_ENV
+
+
+def _build_record_path(out_dir: Path, spec: ShardSpec) -> Path:
+    return out_dir / "builds" / f"{spec.name}.jsonl"
+
+
+def _store_build_requests(spec: ShardSpec, out_dir: Path) -> None:
+    """After a clean wrapper shard: keep what it asked the shared cache to build."""
+    import build_ledger  # noqa: PLC0415
+    if spec.domain != "wrappers" or len(spec.targets) != 1:
+        return
+    module_path = REPO_ROOT / spec.targets[0]  # the shard's name may be a recycled one
+    if not module_path.is_file():
+        return
+    try:
+        build_ledger.store(module_path.stem, module_path,
+                           build_ledger.read_records(_build_record_path(out_dir, spec)))
+    except OSError as exc:  # the record is a hint: never fail a green shard over it
+        print(f"  build record for {spec.name} not stored: {exc}", flush=True)
 
 
 def _finish_shard(run: _ShardRun, rc, results: list[dict], out_dir: Path) -> None:
@@ -2088,6 +2144,8 @@ def _finish_shard(run: _ShardRun, rc, results: list[dict], out_dir: Path) -> Non
                    skipped=s, failed=failed, fresh=True)
     results.append(row)
     _write_ledger(out_dir, results)
+    if row["kind"] == "OK":
+        _store_build_requests(spec, out_dir)
     est = (f", est {spec.est_secs / 60:.0f}min vs {dt / 60:.0f}min"
            if spec.domain == "cuda" and spec.est_secs else "")
     print(f"[{datetime.now():%H:%M:%S}] {spec.name}: {row['kind']} "
