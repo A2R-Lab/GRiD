@@ -44,6 +44,8 @@ def kit(tmp_path, monkeypatch):
     monkeypatch.setenv("FAKE_NVCC_LOG", str(log))
     monkeypatch.setenv("GRID_CUDA_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.delenv("GRID_CUDA_DISABLE_CACHE", raising=False)
+    for implicit in ("CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "NVCC_PREPEND_FLAGS", "NVCC_APPEND_FLAGS"):
+        monkeypatch.delenv(implicit, raising=False)
     for knob in ("FAKE_NVCC_FAIL", "FAKE_NVCC_SLEEP", "FAKE_NVCC_VERSION", "FAKE_NVCC_STAMP"):
         monkeypatch.delenv(knob, raising=False)
     shared = tmp_path / "shared"
@@ -151,6 +153,23 @@ def test_the_switch_and_an_unkeyable_command_run_unchanged(kit, monkeypatch):
     assert command_cache_key(no_output, folder) is None
     monkeypatch.setenv("GRID_CUDA_DISABLE_CACHE", "1")
     kit.run("a")
+    kit.run("a")
+    assert kit.builds() == 2 and kit.entries() == []
+
+
+@pytest.mark.parametrize("variable", ["CPATH", "CPLUS_INCLUDE_PATH", "NVCC_APPEND_FLAGS"])
+def test_a_header_reached_through_the_environment_is_never_served_stale(kit, monkeypatch, variable):
+    """The compiler can find a header through CPATH that the include walk does
+    not see. Two contents of that header at one path must not share an entry,
+    so such a command is not cached at all."""
+    hidden = kit.root / "hidden"
+    hidden.mkdir()
+    (hidden / "extra.h").write_text("// v1\n")
+    monkeypatch.setenv(variable, str(hidden))
+    folder = kit.tree("a")
+    assert command_cache_key(kit.command(folder), folder) is None
+    kit.run("a")
+    (hidden / "extra.h").write_text("// v2\n")
     kit.run("a")
     assert kit.builds() == 2 and kit.entries() == []
 
