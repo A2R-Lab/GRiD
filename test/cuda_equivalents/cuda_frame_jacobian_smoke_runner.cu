@@ -173,6 +173,14 @@ void run() {
     grid::robotModel<T> *d_robotModel = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();
 
+    // One launch runs every sample on stdin; a NEXT_SAMPLE line separates their
+    // outputs, so the output of a single sample is unchanged.
+    for (int sample_index = 0; ; ++sample_index) {
+    if (sample_index > 0) {
+        std::cin >> std::ws;
+        if (std::cin.peek() == std::char_traits<char>::eof()) break;
+        std::cout << "NEXT_SAMPLE\n";
+    }
     int target_jid;
     if (!(std::cin >> target_jid)) { std::cerr << "read fail target_jid\n"; std::exit(2); }
     std::vector<T> h_q(NQ), h_qd(NV);
@@ -258,6 +266,11 @@ void run() {
     dcopy_out("L_world", o_lw, 6, 6);
     dcopy_out("L_lwa", o_lx, 6, 6);
 #endif
+    for (T *buffer : {g_q, g_qd, o_jl, o_jw, o_jx, o_dl, o_dw, o_dx}) cudaFree(buffer);
+#ifndef GRID_FRAME_JAC_MIMIC
+    for (T *buffer : {o_ll, o_lw, o_lx}) cudaFree(buffer);
+#endif
+    }  // samples
 
     grid::close_grid<T>(streams, d_robotModel, hd_data);
 }

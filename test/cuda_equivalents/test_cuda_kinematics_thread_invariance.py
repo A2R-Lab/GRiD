@@ -54,8 +54,7 @@ from test.cuda_equivalents.cuda_harness import (
     _ee_gimbal_lock_leaves,
     _expected_output,
     _generate_grid_header,
-    _parse_runner_output,
-    _run_runner,
+    _run_samples,
     _sample_to_stdin,
 )
 from test.cuda_equivalents import test_cuda_frame_jacobian as fj
@@ -190,6 +189,14 @@ def _floating_emit_only(names):
             os.environ[key] = prev
 
 
+def _assert_answers_sample(output, sample, label):
+    """A batched launch must answer the samples it was sent, in order."""
+    np.testing.assert_allclose(
+        np.asarray(output["input_q"], dtype=np.float64).reshape(-1),
+        np.asarray(sample.q, dtype=np.float32), rtol=0.0, atol=1e-5,
+        err_msg=f"{label}: runner output is not for sample {sample.name}")
+
+
 def _assert_thread_invariant(baseline, candidate, label):
     """Same-input, different-thread-count outputs must agree to ~machine-float32.
     A larger gap is a thread-count-dependent race (missing __syncthreads), never a
@@ -284,21 +291,20 @@ def test_ee_pose_thread_invariance(tmp_path, robot_id, base_mode, batch_size, re
 def _run_ee_invariance_loop(samples, thread_counts, executable, compile_cmd,
                             reference_model, project_model, robot_id, base_mode, n_leaves):
     failures = []
+    stdins = [_sample_to_stdin(sample) for sample in samples]
+    gimbal, expected = [], []
     for sample in samples:
-        stdin = _sample_to_stdin(sample)
-        gimbal = {
-            name: _ee_gimbal_lock_leaves(reference_model, project_model, sample)
+        gimbal.append(_ee_gimbal_lock_leaves(reference_model, project_model, sample))
+        expected.append({
+            name: np.asarray(_expected_output(reference_model, project_model, sample, name), dtype=np.float64)
             for name in _EE_ALGORITHMS
-        }
-        expected = {}
-        for name in _EE_ALGORITHMS:
-            ev = _expected_output(reference_model, project_model, sample, name)
-            expected[name] = np.asarray(ev, dtype=np.float64)
-        baseline = {}
-        for threads in thread_counts:
-            cuda = _parse_runner_output(
-                _run_runner(executable, stdin, compile_cmd, num_threads=threads)
-            )
+        })
+    baseline = [{} for _ in samples]
+    # One launch per thread count answers every sample, in order.
+    for threads in thread_counts:
+        outputs = _run_samples(executable, compile_cmd, stdins, num_threads=threads)
+        for index, (sample, cuda) in enumerate(zip(samples, outputs)):
+            _assert_answers_sample(cuda, sample, f"{robot_id}-{base_mode}/threads={threads}")
             for name in _EE_ALGORITHMS:
                 if name not in cuda:
                     continue
@@ -306,21 +312,21 @@ def _run_ee_invariance_loop(samples, thread_counts, executable, compile_cmd,
                 tag = f"{robot_id}-{base_mode}/{sample.name}/{name}/threads={threads}"
                 # (1) oracle equivalence — skip if the reference is undefined here
                 # (e.g. rpy gimbal lock makes the orientation derivative non-finite).
-                if np.all(np.isfinite(expected[name])):
+                if np.all(np.isfinite(expected[index][name])):
                     try:
                         _assert_close(
-                            tag, actual, expected[name],
+                            tag, actual, expected[index][name],
                             robot_id=robot_id, algorithm=name,
-                            n_leaves=n_leaves, gimbal_lock_leaves=gimbal[name],
+                            n_leaves=n_leaves, gimbal_lock_leaves=gimbal[index],
                         )
                     except AssertionError as exc:
                         failures.append(str(exc))
                 # (2) cross-thread invariance vs the 32-thread baseline.
                 if threads == _INVARIANCE_BASELINE_THREADS:
-                    baseline[name] = np.asarray(actual, dtype=np.float64)
-                elif name in baseline:
+                    baseline[index][name] = np.asarray(actual, dtype=np.float64)
+                elif name in baseline[index]:
                     try:
-                        _assert_thread_invariant(baseline[name], actual, tag)
+                        _assert_thread_invariant(baseline[index][name], actual, tag)
                     except AssertionError as exc:
                         failures.append(str(exc))
     return failures
@@ -370,33 +376,37 @@ def test_frame_jacobian_thread_invariance(tmp_path, robot_id, base_mode, batch_s
         )
 
     failures = []
+    stdins, J_refs = [], []
     for sample in samples:
         q = np.asarray(sample.q, np.float64)
         qd = np.asarray(sample.qd, np.float64)
-        stdin = fj._stdin(leaf_id, q, qd)
-        J_ref = {
+        stdins.append(fj._stdin(leaf_id, q, qd))
+        J_refs.append({
             ref_frame: np.asarray(
                 project_model.frame_jacobian(q, leaf_name, ref_frame), dtype=np.float64
             )
             for _, ref_frame in _REF_FRAMES
-        }
-        baseline = {}
-        for threads in thread_counts:
-            out = _parse_runner_output(_run_runner(executable, stdin, cmd, num_threads=threads))
+        })
+    baseline = [{} for _ in samples]
+    # One launch per thread count answers every sample, in order.
+    for threads in thread_counts:
+        outputs = _run_samples(executable, cmd, stdins, num_threads=threads)
+        for index, (sample, out) in enumerate(zip(samples, outputs)):
+            _assert_answers_sample(out, sample, f"{robot_id}-{base_mode}/threads={threads}")
             for jblk, ref_frame in _REF_FRAMES:
                 actual = out[jblk].reshape(6, nv, order="F")
                 tag = f"{robot_id}-{base_mode}/{sample.name}/frame_jacobian/{ref_frame}/threads={threads}"
                 # (1) oracle equivalence (analytic vs analytic, tight float32 bucket).
                 try:
-                    close(actual, J_ref[ref_frame], f"J {tag}")
+                    close(actual, J_refs[index][ref_frame], f"J {tag}")
                 except AssertionError as exc:
                     failures.append(str(exc))
                 # (2) cross-thread invariance vs the 32-thread baseline.
                 if threads == _INVARIANCE_BASELINE_THREADS:
-                    baseline[ref_frame] = np.asarray(actual, dtype=np.float64)
-                elif ref_frame in baseline:
+                    baseline[index][ref_frame] = np.asarray(actual, dtype=np.float64)
+                elif ref_frame in baseline[index]:
                     try:
-                        _assert_thread_invariant(baseline[ref_frame], actual, tag)
+                        _assert_thread_invariant(baseline[index][ref_frame], actual, tag)
                     except AssertionError as exc:
                         failures.append(str(exc))
 

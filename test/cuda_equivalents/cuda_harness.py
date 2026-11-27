@@ -1017,6 +1017,20 @@ def _run_runner(executable: Path, sample_input: str, compile_cmd: list[str], num
     return result.stdout
 
 
+def _run_samples(executable: Path, compile_cmd: list[str], stdins: list[str], num_threads: int | None = None,
+                 env: dict | None = None, config=None) -> list[dict]:
+    """The parsed runner output of each input, from one process.
+
+    The runner reads samples until its input ends and prints NEXT_SAMPLE between
+    them, so a case creates one CUDA context per thread count, not one per sample."""
+    stdout = _run_runner(executable, "".join(stdins), compile_cmd, num_threads=num_threads,
+                         env=env, config=config)
+    blocks = stdout.split("NEXT_SAMPLE\n")
+    assert len(blocks) == len(stdins), (
+        f"the runner answered {len(blocks)} of {len(stdins)} samples")
+    return [_parse_runner_output(block) for block in blocks]
+
+
 def _thread_counts() -> tuple[int, ...]:
     """Block thread counts to sweep each CUDA equivalence case over.
 

@@ -33,6 +33,7 @@ from test.cuda_equivalents.cuda_harness import (
     _detect_cuda_arch,
     _parse_runner_output,
     _run_runner,
+    _run_samples,
     _sample_to_stdin,
     _thread_counts,
 )
@@ -258,18 +259,6 @@ def _build_case(project_model, tmp_path, label, tier=None, *, inspect_only=False
 def _sample_stdin_with_dt(sample, dt: float) -> str:
     base = _sample_to_stdin(sample)
     return base + f" {dt}\n"
-
-
-def _run_samples(executable, compile_cmd, stdins, num_threads=None):
-    """The parsed runner output of each input, from one process.
-
-    The runner reads samples until its input ends and prints NEXT_SAMPLE between
-    them, so a case creates one CUDA context per thread count, not one per sample."""
-    stdout = _run_runner(executable, "".join(stdins), compile_cmd, num_threads=num_threads)
-    blocks = stdout.split("NEXT_SAMPLE\n")
-    assert len(blocks) == len(stdins), (
-        f"the runner answered {len(blocks)} of {len(stdins)} samples")
-    return [_parse_runner_output(block) for block in blocks]
 
 
 def _assert_close_scaled(actual, expected, rtol, atol, err_msg, norm_rtol=None):
