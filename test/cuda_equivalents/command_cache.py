@@ -100,8 +100,17 @@ def _include_closure(sources, include_dirs) -> list[tuple[str, str]]:
     return sorted(entries)
 
 
+# Variables through which the compiler finds headers or flags the command does
+# not name. The include walk cannot see them, so a command run under one of
+# them is not cached.
+IMPLICIT_INPUT_ENV = ("CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH",
+                      "NVCC_PREPEND_FLAGS", "NVCC_APPEND_FLAGS")
+
+
 def command_cache_key(cmd, cwd=None) -> tuple[str, dict, Path] | None:
     """(key, payload, output path), or None when the command cannot be keyed."""
+    if any(os.environ.get(name) for name in IMPLICIT_INPUT_ENV):
+        return None
     cwd = Path(cwd) if cwd is not None else Path.cwd()
     flags, include_dirs, sources, binaries, output = _split_command(cmd, cwd)
     if output is None or not sources or not all(src.is_file() for src in sources + binaries):

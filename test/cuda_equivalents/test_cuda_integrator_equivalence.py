@@ -33,6 +33,7 @@ from test.cuda_equivalents.cuda_harness import (
     _detect_cuda_arch,
     _parse_runner_output,
     _run_runner,
+    _assert_order_independent,
     _run_samples,
     _sample_to_stdin,
     _thread_counts,
@@ -370,6 +371,7 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode,
     stdins = [_sample_stdin_with_dt(sample, dt) for dt, sample in cases]
     for num_threads in _thread_counts():
         outputs = _run_samples(executable, compile_cmd, stdins, num_threads=num_threads)
+        _assert_order_independent(executable, compile_cmd, stdins, outputs, num_threads=num_threads)
         for (dt, sample), actual in zip(cases, outputs):
             # The runner must answer the sample it was sent, in order.
             np.testing.assert_allclose(
@@ -471,10 +473,17 @@ def test_cuda_integrator_fext_matches_python_reference(tmp_path, monkeypatch):
     atol = 5e-4
 
     cases = [(dt, sample) for dt in dts for sample in samples]
-    outputs = _run_samples(
-        executable, compile_cmd, [_sample_stdin_with_dt(sample, dt) + f_ext_str for dt, sample in cases])
+    stdins = [_sample_stdin_with_dt(sample, dt) + f_ext_str for dt, sample in cases]
+    outputs = _run_samples(executable, compile_cmd, stdins)
+    _assert_order_independent(executable, compile_cmd, stdins, outputs)
     for (dt, sample), actual in zip(cases, outputs):
             u = sample.qdd  # the control torque (see _torque_driven)
+            # The runner must answer the sample it was sent, in order.
+            np.testing.assert_allclose(
+                np.asarray(actual["input_q"], dtype=np.float64).reshape(-1),
+                np.asarray(sample.q, dtype=np.float32), rtol=0.0, atol=1e-5,
+                err_msg=f"runner output is not for sample {sample.name}")
+            assert abs(float(actual["input_dt"][0, 0]) - dt) <= 1e-6 * max(1.0, abs(dt))
             # The runner must have actually received the f_ext we fed it.
             echoed = np.asarray(actual["input_f_ext"], dtype=np.float64).reshape(-1)
             np.testing.assert_allclose(

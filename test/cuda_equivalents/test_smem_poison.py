@@ -50,10 +50,12 @@ def test_equivalence_survives_smem_poison(selector, tmp_path):
     # Reuse the parent's compiled-runner cache (poison is runtime-only -> same exe).
     env.setdefault("GRID_CUDA_CACHE_DIR", str(REPO_ROOT / ".grid_build_cache/cuda"))
 
+    report = tmp_path / "nested.xml"
     cmd = [
         sys.executable, "-m", "pytest", str(EQUIV_TEST),
         "-k", selector, "-q",
         "-p", "no:cacheprovider",
+        "--junitxml", str(report),
     ]
     # cwd=tmp_path isolates the nested run's gpu-proof.json receipt from the repo.
     result = subprocess.run(cmd, env=env, cwd=str(tmp_path), capture_output=True, text=True)
@@ -71,3 +73,36 @@ def test_equivalence_survives_smem_poison(selector, tmp_path):
         f"-> a device fn reads caller-carved smem before writing it "
         f"(read-before-write / beta==0-output; see docs §1p).\n{tail}"
     )
+    # Exit 0 is not enough: a nested run whose cells all skip also exits 0.
+    robot, base = selector.split(" and ")
+    problems = nested_verdict(report.read_text(), robot, base)
+    assert not problems, f"poison run for {selector!r} proved nothing: {problems}\n{tail}"
+
+
+# The only skip a poison run may contain: a gradient cell outside the value subset.
+_UNSELECTED = "flagship algorithm selection"
+
+
+def nested_verdict(junit_xml: str, robot: str, base: str) -> list[str]:
+    """Require all six poisoned value cells at the selected width."""
+    import xml.etree.ElementTree as ET
+
+    value_cells = ("inverse_dynamics", "minv", "forward_dynamics", "aba", "crba", "end_effector_pose")
+    expected = {
+        f"test_{base}_base_generated_cuda_matches_python_reference[{robot}-{base}-{cell}-threads32]"
+        for cell in value_cells
+    }
+    passed = set()
+    problems = []
+    for case in ET.fromstring(junit_xml).iter("testcase"):
+        name = case.get("name", "")
+        skipped = case.find("skipped")
+        if case.find("failure") is not None or case.find("error") is not None:
+            problems.append(f"{name}: failed")
+        elif skipped is None:
+            passed.add(name)
+        elif _UNSELECTED not in (skipped.get("message") or "") + (skipped.text or ""):
+            problems.append(f"{name}: skipped ({skipped.get('message')})")
+    if expected - passed:
+        problems.append(f"missing required passes: {sorted(expected - passed)}")
+    return problems

@@ -4591,3 +4591,25 @@ to under 829 s together with the polynomial coupling module. Two things to
 check when a runner gains the loop: state that one sample leaves for the next
 (the shared runner zeroes the external force again before each later sample),
 and buffers allocated per sample, which must be freed inside the loop.
+
+A runner that gains the sample loop also stops tolerating input after its
+sample. `test_cuda_fd_du_output_spill` appended 400 zeros to its one sample,
+which the shared runner had never read. The looping runner took them as a
+second sample and exited 2 with "Failed to read input value", and the first
+full receipt after the change failed 15 of that module's 18 tests (0.7.3,
+2026-11-27). The change had been checked on the modules it edited and on part
+of the flagship module, not on every caller of the runner. Before changing how
+a shared runner reads its input, list every file that starts it (grep the
+runner's file name under `test/`) and run each of those modules.
+
+The other three spill cases (iiwa14, rizon4 and gen3, all floating) consume
+40 scalars per sample. The padding supplied ten complete extra samples and
+the old parser accepted the first reply. Check both the process exit code
+and the reply count. For batch state leaks, rerun the last, first and last
+samples in a fresh process at the same width and compare each named output
+with the original. This checks equality at the precision printed by the runner.
+
+For the shared-memory poison smoke test, inspect the nested JUnit results.
+Each robot should pass all six selected value cells at 32 threads. A dynamics
+gradient produces both q and qd blocks from one launch, so count launches by
+enabled algorithm when checking how many times shared memory was poisoned.
