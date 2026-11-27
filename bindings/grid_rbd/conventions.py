@@ -16,8 +16,11 @@ Pinocchio
 
 MuJoCo
     ``q_to_mujoco``, ``v_to_mujoco`` and their inverses convert the floating
-    base block. Every other entry is the same in both libraries when the
-    joints are in the same order, which these functions assume.
+    base block and nothing else. Every scalar joint entry is the same in both
+    libraries when the joints are in the same order, which these functions
+    assume. A spherical joint is not converted: GRiD stores its quaternion as
+    ``xyzw`` and a MuJoCo ball joint as ``wxyz``, so reorder those four entries
+    yourself.
 
 All functions take and return one state: 1-D float64 arrays.
 """
@@ -286,7 +289,10 @@ def _row(value, name):
 
 
 def q_to_mujoco(q, floating_base=True):
-    """GRiD's configuration with the base quaternion reordered to ``wxyz``."""
+    """GRiD's configuration with the base quaternion reordered to ``wxyz``.
+
+    Only the floating base is converted. The quaternion of a spherical joint
+    is returned as given (``xyzw``)."""
     return _mujoco.q_pin_to_mjx(_row(q, "q"), floating_base)[0]
 
 

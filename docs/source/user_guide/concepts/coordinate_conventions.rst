@@ -132,7 +132,10 @@ Jacobian of the configuration map. A handle's ``model_descriptor`` property
 works in place of ``describe_model``.
 
 For MuJoCo, ``q_to_mujoco``, ``q_from_mujoco``, ``v_to_mujoco`` and
-``v_from_mujoco`` convert the floating base block of one state. To get
+``v_from_mujoco`` convert the floating base block of one state. Both configuration
+helpers preserve the input order of a spherical joint quaternion. Reorder those
+entries separately when converting between GRiD's ``[x, y, z, w]`` and a MuJoCo
+ball joint's ``[w, x, y, z]``. To get
 GRiD's outputs in the MuJoCo convention, use ``handle.mujoco`` or
 ``output_convention="mujoco"`` instead: the generated kernels have
 MuJoCo-convention twins and need no conversion in user code
