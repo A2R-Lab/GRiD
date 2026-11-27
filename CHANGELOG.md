@@ -10,6 +10,50 @@ Rigid Body Dynamics with Analytical Gradients*. That implementation is preserved
 in the archival [robot-acceleration/GRiD](https://github.com/robot-acceleration/GRiD)
 repository. Everything below describes the packaged A2R-Lab releases.
 
+## [0.7.3] — 2026-11-27
+
+Output changes from 0.7.2: for a floating root and for a root joined to the
+world through prismatic joints only (a planar root, a translation root, a robot
+on a rail), `idsva_so`, `fdsva_so`, `coriolis_matrix`, `ccrba`, `dccrba` and
+`cmm_time_variation` now return the same single-precision bits at any distance
+of the base from the world origin, so their results away from the origin differ
+from 0.7.2. A fixed-base robot with a revolute first joint is unchanged.
+
+- Make single-precision dynamics independent of the base's distance from the
+  world origin. The root's 6x6 transform carried the base position, so the
+  kernels that compose it down the tree lost accuracy with the square of that
+  distance: floating iiwa14 `fdsva_so` was off by 3.3e-2 at 30 m and 3.1e-1 at
+  100 m. The transform is now evaluated with the base position at zero. Inverse
+  and forward dynamics, the mass matrix, first-order gradients and the
+  integrator gradient never depended on the offset.
+- Add `grid_rbd.conventions`: `PinocchioMap` converts configurations,
+  velocities, accelerations and generalized forces between GRiD and Pinocchio
+  for continuous, planar, floating and mimic joints, and `q_to_mujoco`,
+  `q_from_mujoco`, `v_to_mujoco` and `v_from_mujoco` convert a floating base to
+  and from MuJoCo. A new concepts page compares the three conventions and
+  states the maps.
+- Raise `RuntimeError` when one model is loaded from two cache directories in
+  one process. PyTorch aborted the interpreter on the second registration of
+  the same operator namespace. The error names both paths; the check and the
+  load hold one lock, so two threads cannot both pass it.
+- Refuse `USE_DA_DF_SPILL` at compile time on robots whose
+  `inverse_dynamics_gradient_inner` has no selective band (mimic joints, skew
+  axes, spherical joints). A consumer that composed the inners with the flag
+  wrote out of bounds in shared memory with no diagnostic. The header emits
+  `GRID_ID_DU_SELECTIVE_SPILL_AVAILABLE`.
+- Compile the native CUDA tests, the examples, the benchmark and the documented
+  commands with the flag list of the wrapper, held in
+  `grid_codegen/nvcc_flags.py`. `grid-generate --print-nvcc-flags` prints it and
+  `GRID_NVCC_FP_FLAGS` overrides the floating-point flags for experiments.
+  Benchmark timings from before and after this change should not be mixed.
+- Validation infrastructure: the receipt launcher gains `--print-resources`,
+  memory cap, slot and unit options and an experimental `adaptive` resource
+  profile; finalize accepts the regenerated tier table; the tests' own nvcc
+  commands go through a content cache and wrapper builds recorded on a clean
+  run are replayed in the compile pool; the integrator and kinematics
+  thread-invariance runners take all samples of one thread count in one launch;
+  wrapper tests no longer force rebuilds.
+
 ## [0.7.2] — 2026-11-22
 
 Output changes from 0.7.1: generated device code computes in T throughout, so
@@ -864,6 +908,7 @@ update on top of that, organised here by theme:
 - Closed kinematic loops are unsupported.
 - No Windows, macOS, Jetson or precompiled-robot wheels.
 
+[0.7.3]: https://github.com/A2R-Lab/GRiD/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/A2R-Lab/GRiD/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/A2R-Lab/GRiD/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/A2R-Lab/GRiD/compare/v0.6.0...v0.7.0
