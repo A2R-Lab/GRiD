@@ -33,6 +33,7 @@ from test.cuda_equivalents.cuda_harness import (
     _detect_cuda_arch,
     _parse_runner_output,
     _run_runner,
+    _run_samples,
     _sample_to_stdin,
     _thread_counts,
 )
@@ -260,11 +261,6 @@ def _sample_stdin_with_dt(sample, dt: float) -> str:
     return base + f" {dt}\n"
 
 
-def _run_sample(executable, compile_cmd, sample, dt: float, num_threads=None):
-    stdout = _run_runner(executable, _sample_stdin_with_dt(sample, dt), compile_cmd, num_threads=num_threads)
-    return _parse_runner_output(stdout)
-
-
 def _assert_close_scaled(actual, expected, rtol, atol, err_msg, norm_rtol=None):
     """assert_allclose with the absolute floor raised to rtol*max|expected|.
 
@@ -370,10 +366,17 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode,
         return cache[key]
 
     assert len({sample.name for sample in samples}) == len(samples), "sample names must be distinct"
+    cases = [(dt, sample) for dt in dts for sample in samples]
+    stdins = [_sample_stdin_with_dt(sample, dt) for dt, sample in cases]
     for num_threads in _thread_counts():
-      for dt in dts:
-        for sample in samples:
-            actual = _run_sample(executable, compile_cmd, sample, dt, num_threads=num_threads)
+        outputs = _run_samples(executable, compile_cmd, stdins, num_threads=num_threads)
+        for (dt, sample), actual in zip(cases, outputs):
+            # The runner must answer the sample it was sent, in order.
+            np.testing.assert_allclose(
+                np.asarray(actual["input_q"], dtype=np.float64).reshape(-1),
+                np.asarray(sample.q, dtype=np.float32), rtol=0.0, atol=1e-5,
+                err_msg=f"runner output is not for sample {sample.name}")
+            assert abs(float(actual["input_dt"][0, 0]) - dt) <= 1e-6 * max(1.0, abs(dt))
             for prefix, integrator_type, has_gradient, fixed_base_only in _INTEGRATORS:
                 # Retain the per-row scope flag for future restricted schemes.
                 if fixed_base_only and base_mode != "fixed":
@@ -467,11 +470,11 @@ def test_cuda_integrator_fext_matches_python_reference(tmp_path, monkeypatch):
     rtol = 5e-4
     atol = 5e-4
 
-    for dt in dts:
-        for sample in samples:
+    cases = [(dt, sample) for dt in dts for sample in samples]
+    outputs = _run_samples(
+        executable, compile_cmd, [_sample_stdin_with_dt(sample, dt) + f_ext_str for dt, sample in cases])
+    for (dt, sample), actual in zip(cases, outputs):
             u = sample.qdd  # the control torque (see _torque_driven)
-            stdin = _sample_stdin_with_dt(sample, dt) + f_ext_str
-            actual = _parse_runner_output(_run_runner(executable, stdin, compile_cmd))
             # The runner must have actually received the f_ext we fed it.
             echoed = np.asarray(actual["input_f_ext"], dtype=np.float64).reshape(-1)
             np.testing.assert_allclose(

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <iomanip>
@@ -412,6 +413,20 @@ void run() {
                      g_poison_bytes, g_poison_numSMs);
     }
 
+    // One launch runs every sample on stdin: a CUDA context per sample costs far
+    // more than the kernels. A NEXT_SAMPLE line separates the samples' outputs,
+    // so the output of a single sample is unchanged.
+    for (int sample_index = 0; ; ++sample_index) {
+    if (sample_index > 0) {
+        std::cin >> std::ws;
+        if (std::cin.peek() == std::char_traits<char>::eof()) break;
+        std::cout << "NEXT_SAMPLE\n";
+        // An external force read for the previous sample must not reach this
+        // sample's outputs without one.
+        std::fill(hd_data->h_f_ext, hd_data->h_f_ext + 6 * grid::NUM_BODIES, static_cast<T>(0));
+        gpuErrchk(cudaMemcpy(hd_data->d_f_ext, hd_data->h_f_ext,
+                             6 * grid::NUM_BODIES * sizeof(T), cudaMemcpyHostToDevice));
+    }
 #if GRID_CUDA_FLOATING_BASE
     std::vector<T> h_q(grid::NUM_JOINTS);
     std::vector<T> h_qd(grid::NUM_VEL);
@@ -1045,6 +1060,7 @@ void run() {
 #endif
     }
 #endif
+    }  // samples
 
     grid::close_grid<T>(streams, d_robot_model, hd_data);
 }

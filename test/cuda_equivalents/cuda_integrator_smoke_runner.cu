@@ -143,6 +143,15 @@ void run() {
     const int nq = grid::NUM_POS;
     const int nv = grid::NUM_VEL;
     std::vector<T> h_q(nq), h_qd(nv), h_u(nv);
+    // One process serves every sample on stdin, so a case pays for one CUDA
+    // context per thread count instead of one per sample. Each sample after the
+    // first is announced by a NEXT_SAMPLE line; a single sample prints as before.
+    for (int sample_index = 0; ; ++sample_index) {
+    if (sample_index > 0) {
+        std::cin >> std::ws;
+        if (std::cin.peek() == std::char_traits<char>::eof()) break;
+        std::cout << "NEXT_SAMPLE\n";
+    }
     read_vector(h_q.data(), nq);
     read_vector(h_qd.data(), nv);
     read_vector(h_u.data(), nv);
@@ -212,6 +221,7 @@ void run() {
     // full value+gradient+both path like the other single-stage integrators.
     run_one<T, grid::IntegratorType::CONSTANT_ACCELERATION>("integrator_constant_acceleration",
         hd_data, d_robotModel, streams, block_dimms, thread_dimms, original.data(), gravity, dt);
+    }
 
     grid::close_grid<T>(streams, d_robotModel, hd_data);
 }

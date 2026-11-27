@@ -4578,3 +4578,16 @@ lines of a second run before trusting a cache, and
 Not every slow module is a compile. The kinematics thread-invariance module
 starts one process per sample and thread count (1792 launches at batch 256),
 and each launch creates a CUDA context. Its time is execution.
+
+The fix for that is one launch per thread count. A runner loops over the
+samples on its input until the input ends and prints a `NEXT_SAMPLE` line
+before each sample after the first, so the output of a single sample is
+unchanged and every other user of the runner is unaffected. The test sends all
+samples with `_run_samples` (`test/cuda_equivalents/cuda_harness.py`) and
+checks that each block echoes the `input_q` it was sent. On the RTX 5090 the
+kinematics thread-invariance module went from about 2270 s to under 134 s
+together with the frame Jacobian module, and the integrator module from 3605 s
+to under 829 s together with the polynomial coupling module. Two things to
+check when a runner gains the loop: state that one sample leaves for the next
+(the shared runner zeroes the external force again before each later sample),
+and buffers allocated per sample, which must be freed inside the loop.
