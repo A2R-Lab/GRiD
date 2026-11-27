@@ -140,8 +140,12 @@ __global__ void poison_smem_kernel(int nbytes) {
 bool   g_poison_on    = false;
 int    g_poison_bytes = 0;
 int    g_poison_numSMs = 0;
+// Poison launches of the current sample. The runner reports the count so a test
+// can tell a poisoned run from one that only set the flag.
+int    g_poison_launches = 0;
 static inline void maybe_poison_smem() {
     if (!g_poison_on) return;
+    ++g_poison_launches;
     poison_smem_kernel<<<8 * g_poison_numSMs, 256, g_poison_bytes>>>(g_poison_bytes);
     gpuErrchk(cudaPeekAtLastError());
     gpuErrchk(cudaDeviceSynchronize());
@@ -869,6 +873,7 @@ void run() {
 
 #if RUN_INVERSE_DYNAMICS
     const dim3 thr_inverse_dynamics = grid_runner_launch_dims(static_cast<grid_runner_id_kernel_t<T>>(&grid::inverse_dynamics_kernel<T>), "inverse_dynamics");
+    maybe_poison_smem();
     grid::inverse_dynamics<T, false, true>(
         hd_data, d_robot_model, gravity, 1, block_dimms, thr_inverse_dynamics, streams
     );
@@ -878,6 +883,7 @@ void run() {
 
 #if RUN_MINV
     const dim3 thr_minv = grid_runner_launch_dims(grid::minv_kernel<T>, "minv");
+    maybe_poison_smem();
     grid::minv<T, true>(
         hd_data, d_robot_model, 1, block_dimms, thr_minv, streams
     );
@@ -889,6 +895,7 @@ void run() {
 
 #if RUN_FORWARD_DYNAMICS
     const dim3 thr_forward_dynamics = grid_runner_launch_dims(grid::forward_dynamics_kernel<T>, "forward_dynamics");
+    maybe_poison_smem();
     grid::forward_dynamics<T>(
         hd_data, d_robot_model, gravity, 1, block_dimms, thr_forward_dynamics, streams
     );
@@ -904,6 +911,7 @@ void run() {
 #if !GRID_RUNNER_SKIP_GRADIENTS
 #if RUN_INVERSE_DYNAMICS_GRADIENT
     const dim3 thr_inverse_dynamics_gradient = grid_runner_launch_dims(static_cast<grid_runner_grad_kernel_t<T>>(&grid::inverse_dynamics_gradient_kernel<T>), "inverse_dynamics_gradient");
+    maybe_poison_smem();
     grid::inverse_dynamics_gradient<T, false, true>(
         hd_data, d_robot_model, gravity, 1, block_dimms, thr_inverse_dynamics_gradient, streams
     );
@@ -924,6 +932,7 @@ void run() {
 
 #if RUN_FORWARD_DYNAMICS_GRADIENT
     const dim3 thr_forward_dynamics_gradient = grid_runner_launch_dims(static_cast<grid_runner_grad_kernel_t<T>>(&grid::forward_dynamics_gradient_kernel<T>), "forward_dynamics_gradient");
+    maybe_poison_smem();
     grid::forward_dynamics_gradient<T, false>(
         hd_data, d_robot_model, gravity, 1, block_dimms, thr_forward_dynamics_gradient, streams
     );
@@ -945,6 +954,7 @@ void run() {
 
 #if RUN_ABA
     const dim3 thr_aba = grid_runner_launch_dims(grid::aba_kernel<T>, "aba");
+    maybe_poison_smem();
     grid::aba<T>(
         hd_data, d_robot_model, gravity, 1, block_dimms, thr_aba, streams
     );
@@ -954,6 +964,7 @@ void run() {
 
 #if RUN_CRBA
     const dim3 thr_crba = grid_runner_launch_dims(grid::crba_kernel<T>, "crba");
+    maybe_poison_smem();
     grid::crba<T, true>(
         hd_data, d_robot_model, gravity, 1, block_dimms, thr_crba, streams
     );
@@ -965,6 +976,7 @@ void run() {
 
 #if RUN_END_EFFECTOR_POSE
     const dim3 thr_end_effector_pose = grid_runner_launch_dims(grid::end_effector_pose_kernel<T>, "end_effector_pose");
+    maybe_poison_smem();
     grid::end_effector_pose<T>(
         hd_data, d_robot_model, 1, block_dimms, thr_end_effector_pose, streams
     );
@@ -975,6 +987,7 @@ void run() {
 #if !GRID_RUNNER_SKIP_EEPOSE_GRADIENTS
 #if RUN_END_EFFECTOR_POSE_GRADIENT
     const dim3 thr_end_effector_pose_gradient = grid_runner_launch_dims(grid::end_effector_pose_gradient_kernel<T>, "end_effector_pose_gradient");
+    maybe_poison_smem();
     grid::end_effector_pose_gradient<T>(
         hd_data, d_robot_model, 1, block_dimms, thr_end_effector_pose_gradient, streams
     );
@@ -987,6 +1000,7 @@ void run() {
 
 #if RUN_END_EFFECTOR_POSE_HESSIAN
     const dim3 thr_end_effector_pose_hessian = grid_runner_launch_dims(grid::end_effector_pose_hessian_kernel<T>, "end_effector_pose_hessian");
+    maybe_poison_smem();
     grid::end_effector_pose_hessian<T>(
         hd_data, d_robot_model, 1, block_dimms, thr_end_effector_pose_hessian, streams
     );
@@ -1010,6 +1024,7 @@ void run() {
         print_vector("input_f_ext", hd_data->h_f_ext, 6 * grid::NUM_BODIES);
 
 #if RUN_INVERSE_DYNAMICS
+        maybe_poison_smem();
         grid::inverse_dynamics<T, false, true>(
             hd_data, d_robot_model, gravity, 1, block_dimms, thr_inverse_dynamics, streams
         );
@@ -1018,6 +1033,7 @@ void run() {
 #endif
 
 #if RUN_FORWARD_DYNAMICS
+        maybe_poison_smem();
         grid::forward_dynamics<T>(
             hd_data, d_robot_model, gravity, 1, block_dimms, thr_forward_dynamics, streams
         );
@@ -1026,6 +1042,7 @@ void run() {
 #endif
 
 #if RUN_ABA
+        maybe_poison_smem();
         grid::aba<T>(
             hd_data, d_robot_model, gravity, 1, block_dimms, thr_aba, streams
         );
@@ -1035,6 +1052,7 @@ void run() {
 
 #if !GRID_RUNNER_SKIP_GRADIENTS
 #if RUN_INVERSE_DYNAMICS_GRADIENT
+        maybe_poison_smem();
         grid::inverse_dynamics_gradient<T, false, true>(
             hd_data, d_robot_model, gravity, 1, block_dimms, thr_inverse_dynamics_gradient, streams
         );
@@ -1047,6 +1065,7 @@ void run() {
 #endif
 
 #if RUN_FORWARD_DYNAMICS_GRADIENT
+        maybe_poison_smem();
         grid::forward_dynamics_gradient<T, false>(
             hd_data, d_robot_model, gravity, 1, block_dimms, thr_forward_dynamics_gradient, streams
         );
@@ -1060,6 +1079,10 @@ void run() {
 #endif
     }
 #endif
+    if (g_poison_on) {
+        std::cout << "BEGIN poison_launches 1 1\n" << g_poison_launches << "\nEND poison_launches\n";
+        g_poison_launches = 0;
+    }
     }  // samples
 
     grid::close_grid<T>(streams, d_robot_model, hd_data);

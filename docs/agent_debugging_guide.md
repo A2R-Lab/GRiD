@@ -4601,3 +4601,15 @@ full receipt after the change failed 15 of that module's 18 tests (0.7.3,
 of the flagship module, not on every caller of the runner. Before changing how
 a shared runner reads its input, list every file that starts it (grep the
 runner's file name under `test/`) and run each of those modules.
+
+The other three spill cases (iiwa14, rizon4 and gen3, all floating) consume
+40 scalars per sample. The padding supplied ten complete extra samples and
+the old parser accepted the first reply. Check both the process exit code
+and the reply count. For batch state leaks, rerun the last, first and last
+samples in a fresh process at the same width and compare each named output
+with the original. This checks equality at the precision printed by the runner.
+
+For the shared-memory poison smoke test, inspect the nested JUnit results.
+Each robot should pass all six selected value cells at 32 threads. A dynamics
+gradient produces both q and qd blocks from one launch, so count launches by
+enabled algorithm when checking how many times shared memory was poisoned.

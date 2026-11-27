@@ -137,14 +137,22 @@ def _run(exe, q, qd, u, nthreads):
     # default 32 threads.
     res = subprocess.run([str(exe), str(nthreads)], input=stdin, capture_output=True, text=True)
 
-    def parse(name):
-        m = re.search(rf"BEGIN {name} (\d+) (\d+)\n(.*?)\nEND {name}", res.stdout, re.S)
-        if not m:
-            pytest.fail(f"runner produced no {name}.\nstderr:\n{res.stderr[-2000:]}")
-        return np.array([float(x) for x in m.group(3).split()], dtype=np.float64)
-
     assert res.returncode == 0, f"runner exited {res.returncode}: {res.stderr[-1500:]}"
-    return parse("forward_dynamics_gradient_q"), parse("forward_dynamics_gradient_qd")
+    return _one_reply(res.stdout)
+
+
+def _one_reply(stdout):
+    """The two gradient blocks of the runner's single reply.
+
+    The runner answers every complete sample on its input, so more than one
+    reply means the input carried more than the one sample this test sends."""
+    out = []
+    for name in ("forward_dynamics_gradient_q", "forward_dynamics_gradient_qd"):
+        found = re.findall(rf"BEGIN {name} (\d+) (\d+)\n(.*?)\nEND {name}", stdout, re.S)
+        assert "NEXT_SAMPLE" not in stdout and len(found) == 1, (
+            f"expected one {name} reply from one sample, got {len(found)}")
+        out.append(np.array([float(x) for x in found[0][2].split()], dtype=np.float64))
+    return tuple(out)
 
 
 @pytest.mark.cuda_equivalence

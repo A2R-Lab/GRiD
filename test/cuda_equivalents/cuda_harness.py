@@ -1031,6 +1031,28 @@ def _run_samples(executable: Path, compile_cmd: list[str], stdins: list[str], nu
     return [_parse_runner_output(block) for block in blocks]
 
 
+def _assert_order_independent(executable: Path, compile_cmd: list[str], stdins: list[str], outputs: list[dict],
+                              num_threads: int | None = None, env: dict | None = None, config=None) -> None:
+    """A sample's reply must not depend on the samples the process ran before it.
+
+    A batched launch keeps one process, one CUDA context and the runner's
+    buffers for all samples. This reruns the first and the last sample as
+    last, first, last. Every named block must have the same parsed numeric
+    values as the original reply. Matching NaNs and signed zeros compare equal."""
+    if len(stdins) < 2:
+        return
+    order = (len(stdins) - 1, 0, len(stdins) - 1)
+    replies = _run_samples(executable, compile_cmd, [stdins[i] for i in order],
+                           num_threads=num_threads, env=env, config=config)
+    for position, (index, reply) in enumerate(zip(order, replies)):
+        assert reply.keys() == outputs[index].keys(), (
+            f"sample {index} at position {position}: blocks differ from its batched reply")
+        for name, block in reply.items():
+            assert np.array_equal(block, outputs[index][name], equal_nan=True), (
+                f"sample {index} at position {position} of the reordered launch: {name} differs "
+                f"from the batched launch")
+
+
 def _thread_counts() -> tuple[int, ...]:
     """Block thread counts to sweep each CUDA equivalence case over.
 
@@ -1819,6 +1841,16 @@ def _run_flagship_split_cell(spec, base_mode, cell, num_threads, tmp_path, reque
     )
 
 
+def _assert_poison_launches(cuda, run_tokens):
+    # A dynamics gradient emits both q and qd from one algorithm launch.
+    expected = len(run_tokens) if run_tokens else sum(
+        any(name in cuda for name in cell.compare_algorithms) for cell in FLAGSHIP_SPLIT_CELLS
+    )
+    assert expected > 0, "no algorithm launch to check under GRID_POISON_SMEM"
+    np.testing.assert_array_equal(cuda["poison_launches"], [[expected]],
+                                  err_msg="unexpected number of shared-memory poison launches")
+
+
 def _run_cuda_equivalence_case(
     spec,
     base_mode,
@@ -2020,6 +2052,9 @@ def _run_cuda_equivalence_case(
             rtol=0.0,
             atol=1e-7,
         )
+
+        if os.environ.get("GRID_POISON_SMEM") is not None:
+            _assert_poison_launches(cuda, run_tokens)
 
         if "minv" in cuda:
             cuda["minv"] = _normalize_cuda_minv(cuda["minv"])

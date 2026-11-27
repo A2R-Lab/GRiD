@@ -54,6 +54,7 @@ from test.cuda_equivalents.cuda_harness import (
     _ee_gimbal_lock_leaves,
     _expected_output,
     _generate_grid_header,
+    _assert_order_independent,
     _run_samples,
     _sample_to_stdin,
 )
@@ -80,11 +81,18 @@ _INVARIANCE_ATOL = 1e-5
 
 
 def _thread_counts() -> tuple[int, ...]:
+    """The sweep, baseline first.
+
+    Every other count is compared with the baseline's output, so the baseline
+    has to run before them. It is added to a list that leaves it out: a sweep
+    without it would compare nothing across thread counts."""
     raw = os.environ.get("GRID_CUDA_KIN_THREADS")
-    if not raw:
-        return _DEFAULT_THREAD_COUNTS
-    counts = tuple(int(p.strip()) for p in raw.split(",") if p.strip())
-    return tuple(dict.fromkeys(counts)) or _DEFAULT_THREAD_COUNTS
+    counts = tuple(int(p.strip()) for p in raw.split(",") if p.strip()) if raw else ()
+    return _baseline_first(counts or _DEFAULT_THREAD_COUNTS)
+
+
+def _baseline_first(counts) -> tuple[int, ...]:
+    return tuple(dict.fromkeys((_INVARIANCE_BASELINE_THREADS, *counts)))
 
 
 def _batch_sizes() -> tuple[int, ...]:
@@ -303,10 +311,14 @@ def _run_ee_invariance_loop(samples, thread_counts, executable, compile_cmd,
     # One launch per thread count answers every sample, in order.
     for threads in thread_counts:
         outputs = _run_samples(executable, compile_cmd, stdins, num_threads=threads)
+        if threads == _INVARIANCE_BASELINE_THREADS:
+            _assert_order_independent(executable, compile_cmd, stdins, outputs, num_threads=threads)
         for index, (sample, cuda) in enumerate(zip(samples, outputs)):
             _assert_answers_sample(cuda, sample, f"{robot_id}-{base_mode}/threads={threads}")
             for name in _EE_ALGORITHMS:
                 if name not in cuda:
+                    failures.append(f"{robot_id}-{base_mode}/{sample.name}/threads={threads}: "
+                                    f"the runner printed no {name}")
                     continue
                 actual = cuda[name]
                 tag = f"{robot_id}-{base_mode}/{sample.name}/{name}/threads={threads}"
@@ -391,6 +403,8 @@ def test_frame_jacobian_thread_invariance(tmp_path, robot_id, base_mode, batch_s
     # One launch per thread count answers every sample, in order.
     for threads in thread_counts:
         outputs = _run_samples(executable, cmd, stdins, num_threads=threads)
+        if threads == _INVARIANCE_BASELINE_THREADS:
+            _assert_order_independent(executable, cmd, stdins, outputs, num_threads=threads)
         for index, (sample, out) in enumerate(zip(samples, outputs)):
             _assert_answers_sample(out, sample, f"{robot_id}-{base_mode}/threads={threads}")
             for jblk, ref_frame in _REF_FRAMES:
