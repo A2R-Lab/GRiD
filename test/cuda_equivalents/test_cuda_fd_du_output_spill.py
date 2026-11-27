@@ -128,8 +128,9 @@ def _compile(build_dir, arch, floating):
 
 
 def _run(exe, q, qd, u, nthreads):
-    stdin = ("\n".join(" ".join(f"{x:.9g}" for x in v) for v in (q, qd, u))
-             + "\n" + ("0 " * max(6 * len(q), 400)) + "\n")
+    # Exactly one sample: the runner reads samples until its input ends, so
+    # anything after u is taken as the start of another sample.
+    stdin = "\n".join(" ".join(f"{x:.9g}" for x in v) for v in (q, qd, u)) + "\n"
     # The runner takes the block thread count as argv[1] (an explicit count is
     # launched as requested). Until 2026-10-15 this passed a GRID_NTHREADS variable
     # the runner never read, so the thread sweep below ran every build at the
